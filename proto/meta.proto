@@ -1,0 +1,61 @@
+/**
+ * Meta
+ */
+syntax = "proto3";
+package woodpecker.proto.meta;
+option go_package = "github.com/milvus-io/Woodpecker/proto";
+
+/**
+ * Unbounded Log meta info.
+ */
+message LogMeta{
+  int64 logId = 1;
+  int64 max_segment_roll_time_seconds = 2;
+  int64 max_segment_roll_size_bytes = 3;
+  int64 compaction_buffer_size_bytes = 4;
+  int64 max_compaction_file_count = 5;
+  fixed64 creation_timestamp = 6;
+  fixed64 modification_timestamp = 7;
+}
+
+/**
+ * SegmentState defines the state of a log segment.
+ */
+enum SegmentState{
+  Truncated = 0;
+  Sealed = 1;
+  Active = 2;
+}
+
+/**
+ * SegmentMetadata defines a log segment meta info.
+ */
+message SegmentMetadata{
+  int64 segNo = 1;
+  optional int64 completionTime = 2;
+  optional int64 lastEntryId = 3;
+  SegmentState state = 4;
+  optional int64 quorumId = 5;
+  repeated int32 offset = 6;
+}
+
+/**
+ * Version defines the version of meta.
+ */
+message Version{
+  int32 major = 1;
+  int32 minor = 2;
+}
+
+/**
+ * Quorum defines a quorum information.
+ */
+message QuorumInfo{
+  int64 id = 1;
+  int32 es = 2;
+  int32 wq = 3;
+  int32 aq = 4;
+  repeated string nodes = 5;
+}
+
+
