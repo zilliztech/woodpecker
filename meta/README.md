@@ -1,7 +1,7 @@
 ### Meta in Etcd
 - `root`: the prefix used for prefixing all the keys used for storing the metadata. The `root` default value is `woodpecker`.
 - `root`/logs: key for storing log instances.
-- `root`/logs/`<log_name>`: key for storing unbounded log stream instance.
+- `root`/logs/`<log_name>`: key for storing unbounded log stream instance meta.
 - `root`/logs/`<log_name>`/segments: key for storing segments of the log instance.
 - `root`/logs/`<log_name>`/segments/`<segment_id>`: key for id a segment of the log.
 - `root`/quorums: the prefix used for prefixing all the quorum keys.
@@ -9,6 +9,9 @@
 - `root`/quorums/idgen: key for generating quorum id.
 - `root`/logstores: the prefix used for storing LogStores instances.
 - `root`/logstores/`<logstore_id>`: key for registering LogStore.
+- `root`/instance: key for current cluster instance.
+- `root`/logidgen: key for logId Generator.
+- `root`/quorumidgen: key for quorumId Generator.
 
 #### Registration Manager
 

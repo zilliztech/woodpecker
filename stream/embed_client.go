@@ -10,21 +10,13 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-func NewWoodpeckerEmbedClient(ctx context.Context) WoodpeckerClient {
-	instance := server.NewLogStore(context.Background(), nil)
-	return &woodpeckerEmbedClient{
-		Metadata:      meta.NewMetadataProviderMemory(),
-		embedLogStore: instance,
-	}
-}
-
-func NewWoodpeckerEmbedClientWithEtcd(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
+func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
 	instance := server.NewLogStore(context.Background(), etcdCli)
 	instance.SetAddress("127.0.0.1")
 	instance.Register(ctx)
 
 	c := woodpeckerEmbedClient{
-		Metadata:      meta.NewMetadataProviderEtcd(ctx, etcdCli),
+		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
 		embedLogStore: instance,
 	}
 	initErr := c.initClient(ctx)

@@ -86,6 +86,7 @@ func (m *Version) CloneVT() *Version {
 	r := new(Version)
 	r.Major = m.Major
 	r.Minor = m.Minor
+	r.Patch = m.Patch
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -209,6 +210,9 @@ func (this *Version) EqualVT(that *Version) bool {
 		return false
 	}
 	if this.Minor != that.Minor {
+		return false
+	}
+	if this.Patch != that.Patch {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -437,6 +441,11 @@ func (m *Version) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if m.Patch != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Patch))
+		i--
+		dAtA[i] = 0x18
+	}
 	if m.Minor != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Minor))
 		i--
@@ -586,6 +595,9 @@ func (m *Version) SizeVT() (n int) {
 	}
 	if m.Minor != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Minor))
+	}
+	if m.Patch != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.Patch))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -1073,6 +1085,25 @@ func (m *Version) UnmarshalVT(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.Minor |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Patch", wireType)
+			}
+			m.Patch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Patch |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1712,6 +1743,25 @@ func (m *Version) UnmarshalVTUnsafe(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.Minor |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Patch", wireType)
+			}
+			m.Patch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Patch |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

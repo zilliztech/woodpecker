@@ -4,14 +4,17 @@ import "fmt"
 
 const (
 	// ServicePrefix prefix for this log service
-	ServicePrefix   = "/woodpecker"
-	ServiceInstance = ServicePrefix + "/instance"
+	ServicePrefix      = "woodpecker"
+	ServiceInstanceKey = ServicePrefix + "/instance"
 
-	LogsPrefix     = ServicePrefix + "/logs"
-	logIdGenerator = LogsPrefix + "/idgen"
+	VersionMajor, VersionMinor, VersionPatch = 1, 0, 0
+	VersionKey                               = ServicePrefix + "/version"
 
-	QuorumsPrefix     = ServicePrefix + "/quorums"
-	QuorumIdGenerator = QuorumsPrefix + "/idgen"
+	LogsPrefix        = ServicePrefix + "/logs"
+	LogIdGeneratorKey = ServicePrefix + "/logidgen"
+
+	QuorumsPrefix        = ServicePrefix + "/quorums"
+	QuorumIdGeneratorKey = ServicePrefix + "/quorumidgen"
 
 	NodesPrefix = ServicePrefix + "logstores"
 )

@@ -73,8 +73,8 @@ func TestE2EWrite(t *testing.T) {
 		return
 	}
 
-	//client, err := NewWoodpeckerClientWithEtcd(context.Background(), etcdCli)
-	client, err := NewWoodpeckerEmbedClientWithEtcd(context.Background(), etcdCli)
+	//client, err := NewWoodpeckerClient(context.Background(), etcdCli)
+	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -125,16 +125,23 @@ func TestE2EWrite(t *testing.T) {
 
 // TestWrite example to show how to use woodpecker client to write msg to  unbounded log
 func TestWrite(t *testing.T) {
-	client := NewWoodpeckerClient(context.Background())
+	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
+	if err != nil {
+		t.Error(err)
+	}
+	client, err := NewWoodpeckerClient(context.Background(), etcdCli)
+	if err != nil {
+		t.Error(err)
+	}
 	createErr := client.CreateLog(context.Background(), "hello_log")
 	if createErr != nil {
 		fmt.Printf("Create log failed, err:%v\n", createErr)
-		panic(createErr)
+		t.Error(createErr)
 	}
 	logHandle, openErr := client.OpenLog(context.Background(), "hello_log")
 	if openErr != nil {
 		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
+		t.Error(openErr)
 	}
 	writer, openWriterErr := logHandle.OpenLogWriter(context.Background())
 	if openWriterErr != nil {

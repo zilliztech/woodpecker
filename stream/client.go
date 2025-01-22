@@ -19,15 +19,9 @@ type WoodpeckerClient interface {
 	GetMetadataProvider() meta.MetadataProvider
 }
 
-func NewWoodpeckerClient(ctx context.Context) WoodpeckerClient {
-	return &woodpeckerClient{
-		Metadata: meta.NewMetadataProviderMemory(),
-	}
-}
-
-func NewWoodpeckerClientWithEtcd(ctx context.Context, etcdClient *clientv3.Client) (WoodpeckerClient, error) {
+func NewWoodpeckerClient(ctx context.Context, etcdClient *clientv3.Client) (WoodpeckerClient, error) {
 	c := &woodpeckerClient{
-		Metadata: meta.NewMetadataProviderEtcd(ctx, etcdClient),
+		Metadata: meta.NewMetadataProvider(ctx, etcdClient),
 	}
 	err := c.initClient(ctx)
 	if err != nil {
@@ -77,16 +71,13 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 }
 
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
-	//TODO implement me
-	panic("implement me")
+	return c.Metadata.CheckExists(ctx, logName)
 }
 
 func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
-	//TODO implement me
-	panic("implement me")
+	return c.Metadata.ListLogs(ctx)
 }
 
 func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
-	//TODO implement me
-	panic("implement me")
+	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 }
