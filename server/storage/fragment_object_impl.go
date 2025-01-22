@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/minio/minio-go/v7"
 	"hash/crc32"
+
+	"github.com/minio/minio-go/v7"
 )
 
 // FragmentObject uses MinIO for object storage.

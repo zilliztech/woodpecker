@@ -3,8 +3,9 @@ package storage
 import (
 	"context"
 	"errors"
-	"github.com/milvus-io/woodpecker/proto"
 	"io"
+
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 // Constants for sizes

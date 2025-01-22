@@ -2,12 +2,13 @@ package client
 
 import (
 	"fmt"
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/pkg/errors"
-	"google.golang.org/grpc"
 	"io"
 	"sync"
 
+	"github.com/pkg/errors"
+	"google.golang.org/grpc"
+
+	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server"
 )
 

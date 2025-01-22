@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/milvus-io/woodpecker/proto"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	pb "google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {

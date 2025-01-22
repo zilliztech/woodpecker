@@ -1,8 +1,9 @@
 package commitlog
 
 import (
-	"github.com/milvus-io/woodpecker/proto"
 	"io"
+
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 type CommitLog interface {

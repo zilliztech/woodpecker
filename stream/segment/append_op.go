@@ -2,11 +2,12 @@ package segment
 
 import (
 	"context"
+	"sync"
+
 	"github.com/milvus-io/woodpecker/common/bitset"
 	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server/client"
 	"github.com/milvus-io/woodpecker/server/segment"
-	"sync"
 )
 
 type AppendOp struct {

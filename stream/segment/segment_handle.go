@@ -4,9 +4,9 @@ import (
 	"container/list"
 	"context"
 	"errors"
-	"github.com/milvus-io/woodpecker/common/bitset"
 	"sync"
 
+	"github.com/milvus-io/woodpecker/common/bitset"
 	"github.com/milvus-io/woodpecker/meta"
 	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server/client"

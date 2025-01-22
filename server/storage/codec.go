@@ -2,8 +2,9 @@
 package storage
 
 import (
-	"github.com/cockroachdb/errors"
 	"hash/crc32"
+
+	"github.com/cockroachdb/errors"
 )
 
 var (

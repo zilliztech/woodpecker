@@ -2,8 +2,9 @@ package meta
 
 import (
 	"context"
-	"github.com/milvus-io/woodpecker/proto"
 	"io"
+
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 type MetadataProvider interface {

@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/proto"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"google.golang.org/grpc"
+	"github.com/milvus-io/woodpecker/common/minio"
+	"github.com/milvus-io/woodpecker/meta"
 	"net"
 	"sync"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
+
+	"github.com/milvus-io/woodpecker/common/etcd"
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 type Server struct {
@@ -27,12 +31,16 @@ func NewServer(ctx context.Context) *Server {
 	if err != nil {
 		panic(err)
 	}
+	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
+	if err != nil {
+		panic(err)
+	}
 	s := &Server{
 		ctx:         ctx,
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
 	}
-	s.logStore = NewLogStore(ctx, etcdCli)
+	s.logStore = NewLogStore(ctx, etcdCli, minioCli)
 	return s
 }
 

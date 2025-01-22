@@ -3,15 +3,17 @@ package meta
 import (
 	"context"
 	"fmt"
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/proto"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	pb "google.golang.org/protobuf/proto"
-	"strings"
-	"testing"
-	"time"
+
+	"github.com/milvus-io/woodpecker/common/etcd"
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 func TestInitIfNecessary(t *testing.T) {

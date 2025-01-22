@@ -2,19 +2,23 @@ package stream
 
 import (
 	"context"
+	"github.com/milvus-io/woodpecker/common/minio"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+
 	"github.com/milvus-io/woodpecker/meta"
 	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server"
 	"github.com/milvus-io/woodpecker/server/client"
 	"github.com/milvus-io/woodpecker/stream/log"
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
-	instance := server.NewLogStore(context.Background(), etcdCli)
-	instance.SetAddress("127.0.0.1")
-	instance.Register(ctx)
-
+	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
+	if err != nil {
+		return nil, err
+	}
+	instance := server.NewLogStore(context.Background(), etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
 		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
 		embedLogStore: instance,
@@ -23,7 +27,6 @@ func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (cl
 	if initErr != nil {
 		return nil, initErr
 	}
-
 	return &c, nil
 }
 
@@ -38,7 +41,13 @@ type woodpeckerEmbedClient struct {
 }
 
 func (c *woodpeckerEmbedClient) initClient(ctx context.Context) error {
-	return c.Metadata.InitIfNecessary(ctx)
+	initMeta := c.Metadata.InitIfNecessary(ctx)
+	if initMeta != nil {
+		return initMeta
+	}
+	c.embedLogStore.SetAddress("127.0.0.1:59456")
+	embedLogStoreStartErr := c.embedLogStore.Start()
+	return embedLogStoreStartErr
 }
 
 func (c *woodpeckerEmbedClient) GetMetadataProvider() meta.MetadataProvider {
@@ -55,11 +64,6 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	return nil
 }
 
-func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
 	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
 	if err != nil {
@@ -68,17 +72,19 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPoolLocal(c.embedLogStore)), nil
 }
 
-func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (bool, error) {
+func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (bool, error) {
+	return c.Metadata.CheckExists(ctx, logName)
 }
 
 func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error) {
-	//TODO implement me
-	panic("implement me")
+	return c.Metadata.ListLogs(ctx)
 }
 
 func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
-	//TODO implement me
-	panic("implement me")
+	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 }

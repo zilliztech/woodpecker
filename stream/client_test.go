@@ -3,13 +3,15 @@ package stream
 import (
 	"context"
 	"fmt"
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/meta"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"log"
 	"strings"
 	"testing"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/milvus-io/woodpecker/common/etcd"
+	"github.com/milvus-io/woodpecker/meta"
+	"github.com/milvus-io/woodpecker/stream/log"
 )
 
 // TestShowEtcd Test only for debug etcd
@@ -19,7 +21,7 @@ func TestShowEtcd(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 	defer cli.Close()
 
@@ -30,10 +32,11 @@ func TestShowEtcd(t *testing.T) {
 	printDirContents(ctx, cli, directoryPrefix, "")
 }
 
+// Test only
 func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, indent string) {
 	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
-		log.Fatalf("fatal %v", err)
+		fmt.Printf("fatal %v", err)
 	}
 
 	for _, kv := range resp.Kvs {
@@ -47,13 +50,14 @@ func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, 
 	}
 }
 
+// Test only
 func TestClear(t *testing.T) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 	defer cli.Close()
 
@@ -61,9 +65,9 @@ func TestClear(t *testing.T) {
 	defer cancel()
 	_, err = cli.Delete(ctx, meta.ServicePrefix, clientv3.WithPrefix())
 	if err != nil {
-		log.Fatalf("fatal %v", err)
+		t.Fatalf("fatal %v", err)
 	}
-	log.Printf("clear finished")
+	fmt.Printf("clear finished")
 }
 
 func TestE2EWrite(t *testing.T) {
@@ -73,7 +77,6 @@ func TestE2EWrite(t *testing.T) {
 		return
 	}
 
-	//client, err := NewWoodpeckerClient(context.Background(), etcdCli)
 	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
 	if err != nil {
 		fmt.Println(err)
@@ -107,24 +110,16 @@ func TestE2EWrite(t *testing.T) {
 		panic(writeResult.Err)
 	}
 	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-	//writeResult := logWriter.Write(context.Background(), []byte("hello world 1"))
-	//if writeResult.Err != nil {
-	//	fmt.Println(writeResult.Err)
-	//	panic(writeResult.Err)
-	//}
-	//fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-
 	writeResult = logWriter.Write(context.Background(), []byte("hello world 2"))
 	if writeResult.Err != nil {
 		fmt.Println(writeResult.Err)
 		panic(writeResult.Err)
 	}
 	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-
 }
 
 // TestWrite example to show how to use woodpecker client to write msg to  unbounded log
-func TestWrite(t *testing.T) {
+func TestWriteThroughput(t *testing.T) {
 	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
 	if err != nil {
 		t.Error(err)
@@ -148,13 +143,19 @@ func TestWrite(t *testing.T) {
 		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
 		panic(openWriterErr)
 	}
-	for i := 0; i < 10; i++ {
-		writeResult := writer.Write(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
+
+	resultChan := make([]<-chan *log.WriteResult, 0)
+	for i := 0; i < 1000000; i++ {
+		writeResultChan := writer.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
+		resultChan = append(resultChan, writeResultChan)
+	}
+	for i := 0; i < 1000000; i++ {
+		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
-			fmt.Printf("write failed, err:%v\n", writeResult.Err)
-			panic(writeResult.Err)
+			t.Error(writeResult.Err)
+		} else {
+			fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
 		}
-		fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
 	}
 
 	closeErr := writer.Close(context.Background())

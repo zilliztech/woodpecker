@@ -3,11 +3,12 @@ package segment
 import (
 	"context"
 	"fmt"
-	"github.com/milvus-io/woodpecker/server/storage"
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
+
+	"github.com/minio/minio-go/v7"
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/milvus-io/woodpecker/server/storage"
 )
 
 // SegmentProcessor for segment processing in server side
@@ -18,26 +19,26 @@ type SegmentProcessor interface {
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 }
 
-func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli *clientv3.Client) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
 	log.Printf("new segment processor with logId: %d, segId: %d", logId, segId)
 	return &segmentProcessor{
-		logId:   logId,
-		segId:   segId,
-		etcdCli: etcdCli,
+		logId:       logId,
+		segId:       segId,
+		etcdCli:     etcdCli,
+		minioClient: minioCli,
 	}
 }
 
 var _ SegmentProcessor = (*segmentProcessor)(nil)
 
 type segmentProcessor struct {
-	logId   int64
-	segId   int64
-	etcdCli *clientv3.Client
+	logId       int64
+	segId       int64
+	etcdCli     *clientv3.Client
+	minioClient *minio.Client
 
 	currentLogFileId     uint64
 	currentLogFileWriter storage.LogFile
-
-	minioClient *minio.Client
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -71,7 +72,7 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	if s.currentLogFileWriter == nil {
 		// get logfile id from meta/storage
 		s.currentLogFileId = 0
-		s.currentLogFileWriter = storage.NewObjectStorageLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.getMinioClient())
+		s.currentLogFileWriter = storage.NewObjectStorageLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
 		log.Printf("createLogFileWriter with logId: %d, segId: %d", s.logId, s.segId)
 	}
 	return s.currentLogFileWriter, nil
@@ -85,51 +86,4 @@ func (s *segmentProcessor) getInstanceBucket() string {
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {
 	return fmt.Sprintf("%d/%d", s.logId, s.segId)
-}
-
-func (s *segmentProcessor) getMinioClient() *minio.Client {
-	if s.minioClient == nil {
-		newMinioCli, err := s.newMinioClient(context.Background())
-		if err != nil {
-			panic(err)
-		}
-		s.minioClient = newMinioCli
-	}
-	return s.minioClient
-}
-
-// TODO move to common package
-func (s *segmentProcessor) newMinioClient(ctx context.Context) (*minio.Client, error) {
-	var creds *credentials.Credentials
-	creds = credentials.NewStaticV4("minioadmin", "minioadmin", "")
-	minioClient, err := minio.New("localhost:9000", &minio.Options{
-		Creds:  creds,
-		Secure: false,
-	})
-	// options nil or invalid formatted endpoint, don't need to retry
-	if err != nil {
-		return nil, err
-	}
-
-	var bucketExists bool
-	// check valid in first query
-	checkBucketFn := func() error {
-		bucketExists, err = minioClient.BucketExists(ctx, s.getInstanceBucket())
-		if err != nil {
-			return err
-		}
-		if !bucketExists {
-			err := minioClient.MakeBucket(ctx, s.getInstanceBucket(), minio.MakeBucketOptions{})
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	// check and create root bucket if not exists
-	err = checkBucketFn()
-	if err != nil {
-		return nil, err
-	}
-	return minioClient, nil
 }

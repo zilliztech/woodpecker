@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+
 	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server"
 	"github.com/milvus-io/woodpecker/server/segment"

@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/cockroachdb/errors"
-	"github.com/edsrzf/mmap-go"
 	"hash/crc32"
 	"os"
 	"sync"
+
+	"github.com/cockroachdb/errors"
+	"github.com/edsrzf/mmap-go"
 )
 
 // FragmentFile manages file-based fragments.

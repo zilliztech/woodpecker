@@ -2,11 +2,12 @@ package log
 
 import (
 	"context"
+	"sync"
+
 	"github.com/milvus-io/woodpecker/meta"
 	"github.com/milvus-io/woodpecker/proto"
 	"github.com/milvus-io/woodpecker/server/client"
 	"github.com/milvus-io/woodpecker/stream/segment"
-	"sync"
 )
 
 type LogHandle interface {

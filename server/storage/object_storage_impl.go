@@ -3,8 +3,9 @@ package storage
 import (
 	"context"
 	"fmt"
-	"github.com/minio/minio-go/v7"
 	"sync"
+
+	"github.com/minio/minio-go/v7"
 )
 
 type objectStorageLogFile struct {

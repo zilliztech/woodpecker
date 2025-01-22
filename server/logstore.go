@@ -2,33 +2,42 @@ package server
 
 import (
 	"context"
-	"github.com/milvus-io/woodpecker/server/segment"
-	clientv3 "go.etcd.io/etcd/client/v3"
+	"github.com/minio/minio-go/v7"
 	"log"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/milvus-io/woodpecker/server/segment"
 )
 
 type LogStore struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	etcdCli *clientv3.Client
-	address string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	etcdCli  *clientv3.Client
+	minioCli *minio.Client
+	address  string
 
 	segmentProcessors map[int64][]segment.SegmentProcessor
 }
 
-func NewLogStore(ctx context.Context, etcdCli *clientv3.Client) *LogStore {
+func NewLogStore(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio.Client) *LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	return &LogStore{
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
+		minioCli:          minioCli,
 		segmentProcessors: make(map[int64][]segment.SegmentProcessor),
 	}
 }
 
 func (l *LogStore) Start() error {
+	// TODO start service
+	//
 
-	return nil
+	// register to etcd and keep alive
+	registerErr := l.Register(context.Background())
+	return registerErr
 }
 func (l *LogStore) Stop() error {
 	return nil
@@ -81,7 +90,7 @@ func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 			}
 		}
 	}
-	s := segment.NewSegmentProcessor(ctx, logId, segmentId, l.etcdCli)
+	s := segment.NewSegmentProcessor(ctx, logId, segmentId, l.etcdCli, l.minioCli)
 	l.segmentProcessors[logId] = append(l.segmentProcessors[logId], s)
 	return s, nil
 }

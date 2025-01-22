@@ -1,8 +1,9 @@
 package commitlog
 
 import (
-	"github.com/milvus-io/woodpecker/proto"
 	"sync"
+
+	"github.com/milvus-io/woodpecker/proto"
 )
 
 const (
