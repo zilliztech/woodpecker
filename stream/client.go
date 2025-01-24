@@ -6,10 +6,10 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/woodpecker/meta"
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server/client"
-	"github.com/milvus-io/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/client"
+	"github.com/zilliztech/woodpecker/stream/log"
 )
 
 type WoodpeckerClient interface {

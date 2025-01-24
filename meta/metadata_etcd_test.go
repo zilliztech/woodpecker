@@ -13,8 +13,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	pb "google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 func TestInitIfNecessary(t *testing.T) {

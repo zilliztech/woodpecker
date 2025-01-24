@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // Constants for sizes

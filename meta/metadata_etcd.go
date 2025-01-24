@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.etcd.io/etcd/client/v3/concurrency"
 	"log"
 	"strconv"
 	"strings"
@@ -13,9 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	pb "google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {

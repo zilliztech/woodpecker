@@ -1,4 +1,4 @@
-module github.com/milvus-io/woodpecker
+module github.com/zilliztech/woodpecker
 
 go 1.23.3
 

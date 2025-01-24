@@ -3,7 +3,7 @@ package commitlog
 import (
 	"sync"
 
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 const (

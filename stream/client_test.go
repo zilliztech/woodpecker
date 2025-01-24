@@ -9,9 +9,9 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/meta"
-	"github.com/milvus-io/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/stream/log"
 )
 
 // TestShowEtcd Test only for debug etcd

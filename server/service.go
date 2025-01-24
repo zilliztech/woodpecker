@@ -2,16 +2,16 @@ package server
 
 import (
 	"context"
-	"github.com/milvus-io/woodpecker/common/minio"
-	"github.com/milvus-io/woodpecker/meta"
 	"net"
 	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/woodpecker/common/etcd"
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 type Server struct {

@@ -2,16 +2,16 @@ package stream
 
 import (
 	"context"
-	"github.com/milvus-io/woodpecker/common/minio"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/woodpecker/meta"
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server"
-	"github.com/milvus-io/woodpecker/server/client"
-	"github.com/milvus-io/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server"
+	"github.com/zilliztech/woodpecker/server/client"
+	"github.com/zilliztech/woodpecker/stream/log"
 )
 
 func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {

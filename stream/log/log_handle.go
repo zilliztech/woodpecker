@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/woodpecker/meta"
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server/client"
-	"github.com/milvus-io/woodpecker/stream/segment"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/client"
+	"github.com/zilliztech/woodpecker/stream/segment"
 )
 
 type LogHandle interface {

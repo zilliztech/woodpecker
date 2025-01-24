@@ -6,7 +6,7 @@ syntax = "proto3";
 
 package woodpecker.proto.logstore;
 
-option go_package = "github.com/milvus-io/woodpecker/proto";
+option go_package = "github.com/zilliztech/woodpecker/proto";
 
 
 /**

@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/milvus-io/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 type MetadataProvider interface {

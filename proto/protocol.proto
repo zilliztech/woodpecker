@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package woodpecker.proto.protocol;
 
-option go_package = "github.com/milvus-io/woodpecker/proto";
+option go_package = "github.com/zilliztech/woodpecker/proto";
 
 message EntryId {
   int64 term = 1;

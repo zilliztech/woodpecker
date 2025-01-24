@@ -8,7 +8,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 // SegmentProcessor for segment processing in server side

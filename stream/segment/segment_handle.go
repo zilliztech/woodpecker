@@ -8,11 +8,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/milvus-io/woodpecker/common/bitset"
-	"github.com/milvus-io/woodpecker/meta"
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server/client"
-	"github.com/milvus-io/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/common/bitset"
+	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/client"
+	"github.com/zilliztech/woodpecker/server/segment"
 )
 
 type SegmentHandle interface {

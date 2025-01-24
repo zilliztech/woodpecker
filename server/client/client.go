@@ -3,9 +3,9 @@ package client
 import (
 	"context"
 
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server"
-	"github.com/milvus-io/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server"
+	"github.com/zilliztech/woodpecker/server/segment"
 )
 
 type LogStoreClient interface {

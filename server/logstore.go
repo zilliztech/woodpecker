@@ -9,7 +9,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/segment"
 )
 
 type LogStore struct {

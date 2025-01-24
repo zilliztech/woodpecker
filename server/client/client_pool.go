@@ -8,8 +8,8 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/woodpecker/proto"
-	"github.com/milvus-io/woodpecker/server"
+	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server"
 )
 
 type LogStoreClientPool interface {

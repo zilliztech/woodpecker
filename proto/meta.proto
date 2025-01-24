@@ -3,7 +3,7 @@
  */
 syntax = "proto3";
 package woodpecker.proto.meta;
-option go_package = "github.com/milvus-io/Woodpecker/proto";
+option go_package = "github.com/zilliztech/Woodpecker/proto";
 
 /**
  * Unbounded Log meta info.
