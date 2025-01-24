@@ -48,6 +48,9 @@ type LogFile interface {
 	// Returns a future that will receive the result of the append operation.
 	Append(ctx context.Context, data []byte) error
 
+	// AppendAsync adds an entry to the log file asynchronously
+	AppendAsync(ctx context.Context, data []byte) (int, <-chan int)
+
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)
 

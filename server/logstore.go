@@ -63,11 +63,6 @@ func (l *LogStore) Register(ctx context.Context) error {
 }
 
 func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
-	// 1. add to commitLog, which stores WAL for this node
-	// TODO Get wal for this logId, and write entry to it. (zero disk mode skip this step)
-
-	// 2. add to logfile, which stores entry data
-	// Get logfile for this logId, and write entry to it, then return the entryId if success
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
 		return -1, err
@@ -79,10 +74,6 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 	if err != nil {
 		return -1, err
 	}
-
-	// 3. add to EntryBuffer
-	// TODO add entry to EntryBuffer, trigger async flush if necessary
-
 	log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
 	return entryId, nil
 }

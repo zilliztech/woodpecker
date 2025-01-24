@@ -10,6 +10,8 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+var _ Fragment = (*FragmentObject)(nil)
+
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
 	client    *minio.Client

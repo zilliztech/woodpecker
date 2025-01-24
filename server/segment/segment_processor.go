@@ -62,16 +62,37 @@ func (s *segmentProcessor) SetFenced() {
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, error) {
+	// 1. add to commitLog, which stores WAL for this node
+	// TODO Get wal for this logId, and write entry to it. (zero disk mode skip this step)
+
+	// 2. add to logfile, which stores entry data
+	// Get logfile for this logId, and write entry to it, then return the entryId if success
 	logFileWriter, err := s.getOrCreateLogFileWriter(ctx)
 	if err != nil {
 		return -1, err
 	}
-	// TODO
-	err = logFileWriter.Append(ctx, entry.Data)
-	if err != nil {
-		return -1, err
+
+	//err = logFileWriter.Append(ctx, entry.Data)
+	//if err != nil {
+	//	return -1, err
+	//}
+	bufferedSeqNo, syncedCh := logFileWriter.AppendAsync(ctx, entry.Data)
+	if bufferedSeqNo == -1 {
+		return -1, fmt.Errorf("failed to append to log file")
 	}
-	// TODO
+
+	// wait for log file to be synced
+	syncedSeqNo := <-syncedCh
+	if syncedSeqNo == -1 {
+		return -1, fmt.Errorf("failed to append to log file")
+	}
+
+	if syncedSeqNo != bufferedSeqNo {
+		return -1, fmt.Errorf("failed to append to log file")
+	}
+
+	// 3. add to EntryBuffer
+	// TODO add entry to EntryBuffer, trigger async flush if necessary
 	return entry.EntryId, nil
 }
 
@@ -92,8 +113,7 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 
 // TODO move to common package for config
 func (s *segmentProcessor) getInstanceBucket() string {
-	// TODO get from instance id from meta
-	return fmt.Sprintf("woodpecker")
+	return "woodpecker"
 }
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {

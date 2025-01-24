@@ -29,52 +29,52 @@ type Buffer struct {
 	buffer []byte // Buffer to store entries (a flat byte slice)
 	codec  *Codec // Codec for encoding and decoding entries.
 
-	entryIdx []int // Indices of each entry in the buffer (for tracking purposes), the start index of each entry in buffer
+	entryOffsets []int // Indices of each entry in the buffer (for tracking purposes), the start index of each entry in buffer
 
 	// track the sequence number of the last entry written to the buffer, the global sequence number = bufferStartOffset + lastSequenceNum
-	bufferStartOffset uint64 // Start offset of the buffer, used to calculate the offset of each entry in buffer
-	lastSequenceNum   uint32 // Last sequence number written to the buffer, starts from 0
+	bufferStartOffset int // Start offset of the buffer, used to calculate the offset of each entry in buffer
+	startSeqNum       int // Start sequence number of the buffer, used to calculate the global sequence number of each entry in buffer
+	lastSequenceNum   int // Last sequence number written to the buffer, starts from 0
+
 }
 
 // NewBuffer initializes a new Buffer with the maximum size.
-func NewBuffer(bufferSize int, bufferStartOffset uint64) *Buffer {
+func NewBuffer(bufferStartOffset int, startSeqNum int) *Buffer {
 	return &Buffer{
-		buffer:            make([]byte, 0, bufferSize),
-		entryIdx:          make([]int, 0),
+		buffer:            make([]byte, 0),
+		entryOffsets:      make([]int, 0),
 		bufferStartOffset: bufferStartOffset,
 		codec:             NewCodec(),
+		lastSequenceNum:   0,
+		startSeqNum:       startSeqNum,
 	}
 }
 
 // WriteEntry writes a new entry into the buffer.
-func (b *Buffer) WriteEntry(payload []byte) error {
+func (b *Buffer) WriteEntry(payload []byte) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	encodedEntry, err := b.codec.EncodeEntry(payload)
 	if err != nil {
-		return err
-	}
-
-	// Check if there's enough space to append the new entry
-	if len(b.buffer)+len(encodedEntry) > MaxBufferSize {
-		return ErrTooMuchDataToWrite
+		return -1
 	}
 
 	// Append the entry to the buffer and track its index
 	b.buffer = append(b.buffer, encodedEntry...)
-	if len(b.entryIdx) == 0 {
-		b.entryIdx = append(b.entryIdx, len(encodedEntry))
+	if len(b.entryOffsets) == 0 {
+		b.entryOffsets = append(b.entryOffsets, len(encodedEntry))
 	} else {
-		b.entryIdx = append(b.entryIdx, b.entryIdx[len(b.entryIdx)-1]+len(encodedEntry))
+		b.entryOffsets = append(b.entryOffsets, b.entryOffsets[len(b.entryOffsets)-1]+len(encodedEntry))
 	}
 	b.lastSequenceNum++
 
-	return nil
+	// return the sequenceNum of the last entry written to the buffer
+	return b.lastSequenceNum + b.startSeqNum
 }
 
 // ReadEntry reads and decodes the next entry in the buffer.
-func (b *Buffer) ReadEntry(entrySeqNum int) (*[]byte, uint64, error) {
+func (b *Buffer) ReadEntry(entrySeqNum int) (*[]byte, int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -82,13 +82,15 @@ func (b *Buffer) ReadEntry(entrySeqNum int) (*[]byte, uint64, error) {
 		return nil, 0, ErrIsEmpty
 	}
 
-	if entrySeqNum >= int(b.lastSequenceNum) {
+	if entrySeqNum >= b.lastSequenceNum+b.startSeqNum {
 		return nil, 0, ErrInvalidSequenceNumber
 	}
 
+	entrySeqNum = entrySeqNum - b.startSeqNum
+
 	// Fetch the entry index and sequence number
-	entryStartIdx := b.entryIdx[entrySeqNum]
-	encodedEntry := b.buffer[entryStartIdx:]
+	entryStartOffset := b.entryOffsets[entrySeqNum]
+	encodedEntry := b.buffer[entryStartOffset:]
 
 	// Decode the entry
 	payload, err := b.codec.DecodeEntry(encodedEntry)
@@ -96,14 +98,14 @@ func (b *Buffer) ReadEntry(entrySeqNum int) (*[]byte, uint64, error) {
 		return nil, 0, err
 	}
 
-	return &payload, b.bufferStartOffset + uint64(entrySeqNum), nil
+	return &payload, b.bufferStartOffset + entrySeqNum, nil
 }
 
-func (b *Buffer) GetLastSequenceNum() uint32 {
-	return b.lastSequenceNum
+func (b *Buffer) GetLastSequenceNum() int {
+	return b.lastSequenceNum + b.startSeqNum
 }
 
-func (b *Buffer) ReadBytesFromSeqToLast(seqNum uint32) ([]byte, error) {
+func (b *Buffer) ReadBytesFromSeqToLast(seqNum int) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -119,7 +121,7 @@ func (b *Buffer) ReadBytesFromSeqToLast(seqNum uint32) ([]byte, error) {
 }
 
 // ReadBytesFromSeqRange reads bytes from the buffer starting from the startSeqNum to the endSeqNum (inclusive).
-func (b *Buffer) ReadBytesFromSeqRange(startSeqNum, endSeqNum uint32) ([]byte, error) {
+func (b *Buffer) ReadBytesFromSeqRange(startSeqNum, endSeqNum int) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -132,17 +134,17 @@ func (b *Buffer) ReadBytesFromSeqRange(startSeqNum, endSeqNum uint32) ([]byte, e
 	}
 
 	// Calculate the start and end indices of the range
-	var startIdx, endIdx int
+	var startOffset, endOffset int
 	if startSeqNum == 0 {
-		startIdx = 0
+		startOffset = 0
 	} else {
-		startIdx = b.entryIdx[startSeqNum-1]
+		startOffset = b.entryOffsets[startSeqNum-1]
 	}
-	endIdx = b.entryIdx[endSeqNum]
+	endOffset = b.entryOffsets[endSeqNum]
 
 	// Extract the bytes from the buffer
-	ret := make([]byte, endIdx-startIdx)
-	copy(ret, b.buffer[startIdx:endIdx])
+	ret := make([]byte, endOffset-startOffset)
+	copy(ret, b.buffer[startOffset:endOffset])
 	return ret, nil
 }
 
@@ -152,6 +154,6 @@ func (b *Buffer) Reset() {
 	defer b.mu.Unlock()
 
 	b.buffer = b.buffer[:0]
-	b.entryIdx = b.entryIdx[:0]
+	b.entryOffsets = b.entryOffsets[:0]
 	b.lastSequenceNum = 0
 }

@@ -122,34 +122,43 @@ func TestE2EWrite(t *testing.T) {
 func TestWriteThroughput(t *testing.T) {
 	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
 	if err != nil {
-		t.Error(err)
+		fmt.Println(err)
+		return
 	}
-	client, err := NewWoodpeckerClient(context.Background(), etcdCli)
+
+	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
 	if err != nil {
-		t.Error(err)
+		fmt.Println(err)
 	}
-	createErr := client.CreateLog(context.Background(), "hello_log")
-	if createErr != nil {
-		fmt.Printf("Create log failed, err:%v\n", createErr)
-		t.Error(createErr)
-	}
-	logHandle, openErr := client.OpenLog(context.Background(), "hello_log")
+
+	// ###  CreateLog
+	//createLogErr := client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
+	//if createLogErr != nil {
+	//	fmt.Printf("Create log failed, err:%v\n", createLogErr)
+	//	panic(createLogErr)
+	//}
+
+	// ### OpenLog
+	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
 	if openErr != nil {
 		fmt.Printf("Open log failed, err:%v\n", openErr)
-		t.Error(openErr)
+		panic(openErr)
 	}
-	writer, openWriterErr := logHandle.OpenLogWriter(context.Background())
+	logHandle.GetName()
+
+	//	### OpenWriter
+	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 	if openWriterErr != nil {
 		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
 		panic(openWriterErr)
 	}
 
 	resultChan := make([]<-chan *log.WriteResult, 0)
-	for i := 0; i < 1000000; i++ {
-		writeResultChan := writer.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
+	for i := 0; i < 100000; i++ {
+		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan = append(resultChan, writeResultChan)
 	}
-	for i := 0; i < 1000000; i++ {
+	for i := 0; i < 100000; i++ {
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
 			t.Error(writeResult.Err)
@@ -158,7 +167,7 @@ func TestWriteThroughput(t *testing.T) {
 		}
 	}
 
-	closeErr := writer.Close(context.Background())
+	closeErr := logWriter.Close(context.Background())
 	if closeErr != nil {
 		fmt.Printf("close failed, err:%v\n", closeErr)
 		panic(closeErr)

@@ -23,20 +23,21 @@ type AppendOp struct {
 	ackSet     *bitset.BitSet
 	quorumInfo *proto.QuorumInfo
 	completed  bool
+	err        error
 }
 
 func (op *AppendOp) Execute() {
 	// 获取ES/WQ/AQ
 	quorumInfo, err := op.handle.GetQuorumInfo(context.Background())
 	if err != nil {
-		op.callback(op.segmentId, op.entryId, err)
+		op.handle.SendAppendErrorCallbacks(err)
 		return
 	}
 	// 根据clientPool获得client, 执行 WQ次 append操作 不同的 server
 	for i := 0; i < len(quorumInfo.Nodes); i++ {
 		client, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
 		if clientErr != nil {
-			op.callback(op.segmentId, op.entryId, clientErr)
+			op.handle.SendAppendErrorCallbacks(err)
 			return
 		}
 		go op.sendWriteRequest(client, i)

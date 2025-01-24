@@ -3,10 +3,14 @@ package storage
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
+
+var _ LogFile = (*objectStorageLogFile)(nil)
 
 type objectStorageLogFile struct {
 	id               uint64
@@ -15,20 +19,69 @@ type objectStorageLogFile struct {
 	segmentKeyPrefix string
 	bucket           string
 	mu               sync.Mutex
+
+	// write buffer
+	buffer         *Buffer
+	bufferSnapshot *Buffer
+	maxBufferSize  int
+	maxIntervalMs  int
+	fileClose      chan struct{}
+
+	// synced seqNum
+	synedChan map[int]chan int
 }
 
 func NewObjectStorageLogFile(logFileId uint64, segmentKeyPrefix string, bucket string, objectCli *minio.Client) LogFile {
-	return &objectStorageLogFile{
+	objFile := &objectStorageLogFile{
 		id:               logFileId,
 		client:           objectCli,
 		segmentKeyPrefix: segmentKeyPrefix,
 		bucket:           bucket,
 		fragments:        make([]*FragmentObject, 0),
+
+		buffer:        NewBuffer(0, 0),
+		maxBufferSize: 16 * 1024 * 1024,
+		maxIntervalMs: 1000,
+		fileClose:     make(chan struct{}),
+		synedChan:     make(map[int]chan int),
+	}
+	go objFile.run()
+	return objFile
+}
+
+// Like OS file fsync dirty pageCache periodically, objectStoreFile will sync buffer to object storage periodically
+func (f *objectStorageLogFile) run() {
+	ticker := time.NewTicker(time.Duration(f.maxIntervalMs))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			err := f.Sync(context.Background())
+			if err != nil {
+				log.Printf("sync error:", err)
+			}
+		case <-f.fileClose:
+			err := f.Sync(context.Background())
+			if err != nil {
+				fmt.Println("sync error:", err)
+			}
+			log.Printf("logfile done")
+			return
+		}
 	}
 }
 
 func (f *objectStorageLogFile) GetId() uint64 {
 	return f.id
+}
+
+func (f *objectStorageLogFile) AppendAsync(ctx context.Context, data []byte) (int, <-chan int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seqNo := f.buffer.WriteEntry(data)
+	ch := make(chan int)
+	f.synedChan[seqNo] = ch
+	return seqNo, ch
 }
 
 func (f *objectStorageLogFile) Append(ctx context.Context, data []byte) error {
@@ -62,11 +115,7 @@ func (f *objectStorageLogFile) NewReader(ctx context.Context, opt ReaderOpt) (Re
 }
 
 func (f *objectStorageLogFile) LastOffset() uint64 {
-	//f.mu.Lock() TODO should be reentrant able
-	//defer f.mu.Unlock()
-
 	if len(f.fragments) == 0 {
-		// -1 is overflows for uint64
 		return 0
 	}
 	return uint64(f.fragments[len(f.fragments)-1].lastEntrySequence)
@@ -74,10 +123,51 @@ func (f *objectStorageLogFile) LastOffset() uint64 {
 
 func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 	// Implement sync logic, e.g., flush to persistent storage
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	entryCount := len(f.buffer.entryOffsets)
+	if entryCount == 0 {
+		return nil
+	}
+
+	f.bufferSnapshot = f.buffer
+	f.buffer = NewBuffer(0, f.bufferSnapshot.GetLastSequenceNum())
+
+	entryData := f.bufferSnapshot.buffer
+	indexData := f.bufferSnapshot.entryOffsets
+	fragmentData := make([]byte, 0)
+	fragmentData = append(fragmentData, intToBytes(len(indexData), 4)...) // 4 bytes for index data length
+	for _, i := range indexData {
+		fragmentData = append(fragmentData, intToBytes(i, 4)...) // 4 byte for entryId
+	}
+	fragmentData = append(fragmentData, intToBytes(len(entryData), 4)...) // 4 bytes for entry data length
+	fragmentData = append(fragmentData, entryData...)
+
+	// write to fragment Object
+	offset := f.LastOffset() + 1 // fragment id
+	key := f.getFragmentKey(offset)
+	fragment := NewObjectStorageFragment(f.client, f.bucket, key)
+	err := fragment.Write(ctx, fragmentData)
+	if err != nil {
+		return err
+	}
+	f.fragments = append(f.fragments, fragment)
+
+	// notify all waiting channels
+	for seqNo, ch := range f.synedChan {
+		if seqNo <= f.bufferSnapshot.GetLastSequenceNum() {
+			ch <- seqNo
+			delete(f.synedChan, seqNo)
+		}
+	}
+
+	//
 	return nil
 }
 
 func (f *objectStorageLogFile) Close() error {
 	// Implement close logic, e.g., release resources
+	f.fileClose <- struct{}{}
 	return nil
 }

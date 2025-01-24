@@ -12,6 +12,8 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
+var _ Fragment = (*FragmentFile)(nil)
+
 // FragmentFile manages file-based fragments.
 type FragmentFile struct {
 	mu       sync.RWMutex
