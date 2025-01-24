@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/milvus-io/woodpecker/meta"
 	"github.com/milvus-io/woodpecker/proto"
@@ -12,22 +13,26 @@ import (
 
 type LogHandle interface {
 	GetName() string
-	GetSegments(context.Context) ([]*proto.SegmentMetadata, error)
+	GetSegments(context.Context) (map[int64]*proto.SegmentMetadata, error)
 	OpenLogWriter(context.Context) (LogWriter, error)
 	OpenLogReader(context.Context, int64) (LogReader, error)
 	GetLastRecordId(context.Context) (*LogMessageId, error)
 	Truncate(context.Context, int64) error
 }
 
-func NewLogHandle(name string, logMeta *proto.LogMeta, segments []*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
+func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
+	// default 10min or 64MB rollover segment
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(600_000, 64_000_000)
 	return &logHandleImpl{
-		Name:              name,
-		logMetaCache:      logMeta,
-		SegmentsCache:     segments,
-		SegmentHandles:    make(map[int64]segment.SegmentHandle),
-		WritableSegmentId: -1,
-		Metadata:          meta,
-		ClientPool:        clientPool,
+		Name:               name,
+		logMetaCache:       logMeta,
+		SegmentsCache:      segments,
+		SegmentHandles:     make(map[int64]segment.SegmentHandle),
+		WritableSegmentId:  -1,
+		Metadata:           meta,
+		ClientPool:         clientPool,
+		lastRolloverTimeMs: -1,
+		rollingPolicy:      defaultRollingPolicy,
 	}
 }
 
@@ -38,12 +43,16 @@ type logHandleImpl struct {
 
 	Name           string
 	logMetaCache   *proto.LogMeta
-	SegmentsCache  []*proto.SegmentMetadata
+	SegmentsCache  map[int64]*proto.SegmentMetadata
 	SegmentHandles map[int64]segment.SegmentHandle
 	// active writable segment handle index
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
 	ClientPool        client.LogStoreClientPool
+
+	// rolling policy
+	lastRolloverTimeMs int64
+	rollingPolicy      segment.RollingPolicy
 }
 
 func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, error) {
@@ -55,7 +64,7 @@ func (l *logHandleImpl) GetName() string {
 	return l.Name
 }
 
-func (l *logHandleImpl) GetSegments(ctx context.Context) ([]*proto.SegmentMetadata, error) {
+func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.SegmentMetadata, error) {
 	return l.SegmentsCache, nil
 }
 
@@ -71,13 +80,27 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 
 func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
-	if writableExists {
-		return writeableSegmentHandle, nil
+
+	// create new segment handle if not exists
+	if !writableExists {
+		return l.createAndCacheNewSegmentHandle(ctx)
 	}
-	return l.createWritableSegmentHandle(ctx)
+
+	// check if writable segment handle should be closed and create new segment handle
+	if l.shouldCloseAndCreateNewSegment(ctx, writeableSegmentHandle) {
+		// close old writable segment handle
+		newSeg, err := l.doCloseAndCreateNewSegment(ctx, writeableSegmentHandle)
+		if err != nil {
+			return nil, err
+		}
+		return newSeg, nil
+	}
+
+	// return existing writable segment handle
+	return writeableSegmentHandle, nil
 }
 
-func (l *logHandleImpl) createWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
 	newSegMeta, err := l.createNewSegmentMeta()
 	if err != nil {
 		return nil, err
@@ -88,24 +111,74 @@ func (l *logHandleImpl) createWritableSegmentHandle(ctx context.Context) (segmen
 	return newSegHandle, nil
 }
 
+func (l *logHandleImpl) shouldCloseAndCreateNewSegment(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
+	size := segmentHandle.GetSize(ctx)
+	last := max(l.lastRolloverTimeMs, l.SegmentsCache[segmentHandle.GetId(ctx)].CreateTime)
+	return l.rollingPolicy.ShouldRollover(size, last)
+}
+
+// doCloseAndCreateNewSegment fast close segment and create new segment, no need to wait for segment async compaction
+func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
+	// 1. close segmentHandle,
+	//  it will send fence request to logStores
+	//  and error out all pendingAppendOps with segmentCloseError
+	err := oldSegmentHandle.Close(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = oldSegmentHandle.Fence(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. select one logStore to async compact segment
+	err = oldSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. create new segMeta(active)
+	newSegmentHandle, err := l.createAndCacheNewSegmentHandle(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. return new segmentHandle
+	return newSegmentHandle, nil
+}
+
+func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentId int64, err error) {
+	// TODO update meta or retry if failed
+}
+
 func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	// construct new segment metadata
-	lastEntryId := int64(-1)
-	quorumId := int64(0)
-	segmentNo := int64(len(l.SegmentsCache) + 1)
+	segmentNo := l.getNextSegmentId()
 	newSegmentMeta := &proto.SegmentMetadata{
-		SegNo:       segmentNo,
-		LastEntryId: &lastEntryId,
-		State:       proto.SegmentState_Active,
-		QuorumId:    &quorumId,
-		Offset:      make([]int32, 0),
+		SegNo:      segmentNo,
+		CreateTime: time.Now().UnixMilli(),
+		QuorumId:   -1,
+		State:      proto.SegmentState_Active,
+		Size:       0,
+		Offset:     make([]int32, 0),
 	}
 	// create segment metadata
 	l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
 	// update local segment metadata cache
-	l.SegmentsCache = append(l.SegmentsCache, newSegmentMeta)
+	l.SegmentsCache[segmentNo] = newSegmentMeta
 	// return
 	return newSegmentMeta, nil
+}
+
+// getNextSegmentId get the next id according to max seq No
+func (l *logHandleImpl) getNextSegmentId() int64 {
+	maxSeqNo := int64(0)
+	for _, seg := range l.SegmentsCache {
+		if seg.SegNo > maxSeqNo {
+			maxSeqNo = seg.SegNo
+		}
+	}
+	return maxSeqNo + 1
 }
 
 func (l *logHandleImpl) OpenLogReader(ctx context.Context, fromEntryId int64) (LogReader, error) {

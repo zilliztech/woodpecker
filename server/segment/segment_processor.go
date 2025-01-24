@@ -17,6 +17,8 @@ type SegmentProcessor interface {
 	GetSegmentId() int64
 	AddEntry(context.Context, *SegmentEntry) (int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
+	IsFenced() bool
+	SetFenced()
 }
 
 func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
@@ -26,6 +28,7 @@ func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli 
 		segId:       segId,
 		etcdCli:     etcdCli,
 		minioClient: minioCli,
+		fenced:      false,
 	}
 }
 
@@ -39,6 +42,7 @@ type segmentProcessor struct {
 
 	currentLogFileId     uint64
 	currentLogFileWriter storage.LogFile
+	fenced               bool
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -47,6 +51,14 @@ func (s *segmentProcessor) GetLogId() int64 {
 
 func (s *segmentProcessor) GetSegmentId() int64 {
 	return s.segId
+}
+
+func (s *segmentProcessor) IsFenced() bool {
+	return s.fenced
+}
+
+func (s *segmentProcessor) SetFenced() {
+	s.fenced = true
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, error) {

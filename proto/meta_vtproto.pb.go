@@ -50,19 +50,12 @@ func (m *SegmentMetadata) CloneVT() *SegmentMetadata {
 	}
 	r := new(SegmentMetadata)
 	r.SegNo = m.SegNo
+	r.CreateTime = m.CreateTime
+	r.QuorumId = m.QuorumId
 	r.State = m.State
-	if rhs := m.CompletionTime; rhs != nil {
-		tmpVal := *rhs
-		r.CompletionTime = &tmpVal
-	}
-	if rhs := m.LastEntryId; rhs != nil {
-		tmpVal := *rhs
-		r.LastEntryId = &tmpVal
-	}
-	if rhs := m.QuorumId; rhs != nil {
-		tmpVal := *rhs
-		r.QuorumId = &tmpVal
-	}
+	r.CompletionTime = m.CompletionTime
+	r.LastEntryId = m.LastEntryId
+	r.Size = m.Size
 	if rhs := m.Offset; rhs != nil {
 		tmpContainer := make([]int32, len(rhs))
 		copy(tmpContainer, rhs)
@@ -169,16 +162,22 @@ func (this *SegmentMetadata) EqualVT(that *SegmentMetadata) bool {
 	if this.SegNo != that.SegNo {
 		return false
 	}
-	if p, q := this.CompletionTime, that.CompletionTime; (p == nil && q != nil) || (p != nil && (q == nil || *p != *q)) {
+	if this.CreateTime != that.CreateTime {
 		return false
 	}
-	if p, q := this.LastEntryId, that.LastEntryId; (p == nil && q != nil) || (p != nil && (q == nil || *p != *q)) {
+	if this.QuorumId != that.QuorumId {
 		return false
 	}
 	if this.State != that.State {
 		return false
 	}
-	if p, q := this.QuorumId, that.QuorumId; (p == nil && q != nil) || (p != nil && (q == nil || *p != *q)) {
+	if this.CompletionTime != that.CompletionTime {
+		return false
+	}
+	if this.LastEntryId != that.LastEntryId {
+		return false
+	}
+	if this.Size != that.Size {
 		return false
 	}
 	if len(this.Offset) != len(that.Offset) {
@@ -381,10 +380,20 @@ func (m *SegmentMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		}
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(pksize2))
 		i--
-		dAtA[i] = 0x32
+		dAtA[i] = 0x42
 	}
-	if m.QuorumId != nil {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(*m.QuorumId))
+	if m.Size != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Size))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.LastEntryId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LastEntryId))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.CompletionTime != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.CompletionTime))
 		i--
 		dAtA[i] = 0x28
 	}
@@ -393,13 +402,13 @@ func (m *SegmentMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x20
 	}
-	if m.LastEntryId != nil {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(*m.LastEntryId))
+	if m.QuorumId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.QuorumId))
 		i--
 		dAtA[i] = 0x18
 	}
-	if m.CompletionTime != nil {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(*m.CompletionTime))
+	if m.CreateTime != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.CreateTime))
 		i--
 		dAtA[i] = 0x10
 	}
@@ -561,17 +570,23 @@ func (m *SegmentMetadata) SizeVT() (n int) {
 	if m.SegNo != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.SegNo))
 	}
-	if m.CompletionTime != nil {
-		n += 1 + protohelpers.SizeOfVarint(uint64(*m.CompletionTime))
+	if m.CreateTime != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.CreateTime))
 	}
-	if m.LastEntryId != nil {
-		n += 1 + protohelpers.SizeOfVarint(uint64(*m.LastEntryId))
+	if m.QuorumId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.QuorumId))
 	}
 	if m.State != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.State))
 	}
-	if m.QuorumId != nil {
-		n += 1 + protohelpers.SizeOfVarint(uint64(*m.QuorumId))
+	if m.CompletionTime != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.CompletionTime))
+	}
+	if m.LastEntryId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.LastEntryId))
+	}
+	if m.Size != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.Size))
 	}
 	if len(m.Offset) > 0 {
 		l = 0
@@ -847,9 +862,9 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CompletionTime", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CreateTime", wireType)
 			}
-			var v int64
+			m.CreateTime = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -859,17 +874,16 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.CreateTime |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.CompletionTime = &v
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LastEntryId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field QuorumId", wireType)
 			}
-			var v int64
+			m.QuorumId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -879,12 +893,11 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.QuorumId |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.LastEntryId = &v
 		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field State", wireType)
@@ -906,9 +919,9 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 			}
 		case 5:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field QuorumId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CompletionTime", wireType)
 			}
-			var v int64
+			m.CompletionTime = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -918,13 +931,50 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.CompletionTime |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.QuorumId = &v
 		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastEntryId", wireType)
+			}
+			m.LastEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Size", wireType)
+			}
+			m.Size = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Size |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
 			if wireType == 0 {
 				var v int32
 				for shift := uint(0); ; shift += 7 {
@@ -1505,9 +1555,9 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CompletionTime", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CreateTime", wireType)
 			}
-			var v int64
+			m.CreateTime = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -1517,17 +1567,16 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.CreateTime |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.CompletionTime = &v
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LastEntryId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field QuorumId", wireType)
 			}
-			var v int64
+			m.QuorumId = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -1537,12 +1586,11 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.QuorumId |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.LastEntryId = &v
 		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field State", wireType)
@@ -1564,9 +1612,9 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 			}
 		case 5:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field QuorumId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CompletionTime", wireType)
 			}
-			var v int64
+			m.CompletionTime = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -1576,13 +1624,50 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int64(b&0x7F) << shift
+				m.CompletionTime |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.QuorumId = &v
 		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastEntryId", wireType)
+			}
+			m.LastEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Size", wireType)
+			}
+			m.Size = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Size |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
 			if wireType == 0 {
 				var v int32
 				for shift := uint(0); ; shift += 7 {

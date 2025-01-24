@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
-	"github.com/minio/minio-go/v7"
+	"errors"
+	"fmt"
 	"log"
 
+	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/woodpecker/server/segment"
@@ -70,6 +72,9 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 	if err != nil {
 		return -1, err
 	}
+	if segmentProcessor.IsFenced() {
+		return -1, errors.New(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
+	}
 	entryId, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
 		return -1, err
@@ -100,5 +105,18 @@ func (l *LogStore) GetEntry(ctx context.Context, logId int64, segmentId int64, e
 }
 
 func (l *LogStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	if processors, ok := l.segmentProcessors[logId]; ok {
+		for _, processor := range processors {
+			if processor.GetSegmentId() == segmentId {
+				processor.SetFenced()
+			}
+		}
+	}
+	return nil
+}
+
+// CompactSegment merge all files in a segment into one file
+func (l *LogStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) error {
+	// TODO compact segment
 	return nil
 }

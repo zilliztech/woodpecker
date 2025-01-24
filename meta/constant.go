@@ -19,18 +19,22 @@ const (
 	NodesPrefix = ServicePrefix + "logstores"
 )
 
-func BuildLogPath(logName string) string {
+func BuildLogKey(logName string) string {
 	return fmt.Sprintf("%s/%s", LogsPrefix, logName)
 }
 
-func BuildSegmentInstancePath(logName string, segmentId string) string {
+func BuildLogLockKey(logName string) string {
+	return fmt.Sprintf("%s/%s/lock", LogsPrefix, logName)
+}
+
+func BuildSegmentInstanceKey(logName string, segmentId string) string {
 	return fmt.Sprintf("%s/%s/segments/%s", LogsPrefix, logName, segmentId)
 }
 
-func BuildQuorumInfoPath(quorumId string) string {
+func BuildQuorumInfoKey(quorumId string) string {
 	return fmt.Sprintf("%s/%s", QuorumsPrefix, quorumId)
 }
 
-func BuildNodePath(nodeId string) string {
+func BuildNodeKey(nodeId string) string {
 	return fmt.Sprintf("%s/%s", NodesPrefix, nodeId)
 }

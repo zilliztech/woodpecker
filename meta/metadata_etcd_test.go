@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"fmt"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"strings"
 	"testing"
 	"time"
@@ -111,7 +112,7 @@ func TestCreateLogAndOpen(t *testing.T) {
 
 	// check test_log exists
 	{
-		logPath := BuildLogPath(logName)
+		logPath := BuildLogKey(logName)
 		logResp, err := etcdCli.Get(context.Background(), logPath)
 		require.NoError(t, err, "get log failed")
 		require.Len(t, logResp.Kvs, 1)
@@ -171,6 +172,17 @@ func TestCreateLogAndOpen(t *testing.T) {
 		assert.Equal(t, 1, len(logNames))
 		assert.Equal(t, logName, logNames[0])
 	}
+}
+
+func TestShowOnly(t *testing.T) {
+	// init&start etcd server
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
+		DialTimeout: 5 * time.Second,
+	})
+	assert.NoError(t, err)
+	defer cli.Close()
+	printDirContents(t, context.Background(), cli, "", "")
 }
 
 // printDirContents show all exists keys
@@ -271,7 +283,61 @@ func TestStoreSegmentMeta(t *testing.T) {
 		segmentMetaList, listErr := provider.GetAllSegmentMetadata(context.Background(), logName)
 		assert.NoError(t, listErr)
 		assert.Equal(t, 1, len(segmentMetaList))
-		assert.Equal(t, segmentMeta.SegNo, segmentMetaList[0].SegNo)
-		assert.Equal(t, segmentMeta.Offset, segmentMetaList[0].Offset)
+		assert.Equal(t, segmentMeta.SegNo, segmentMetaList[segmentMeta.SegNo].SegNo)
+		assert.Equal(t, segmentMeta.Offset, segmentMetaList[segmentMeta.SegNo].Offset)
+	}
+}
+
+func TestLogWriterLock(t *testing.T) {
+	// init&start etcd server
+	err := etcd.InitEtcdServer(true, "", "/tmp/TestLogWriterLock", "/tmp/TestLogWriterLock.log", "info")
+	assert.NoError(t, err)
+	defer etcd.StopEtcdServer()
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	defer provider.Close()
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+	logName := "test_log" + time.Now().Format("20060102150405")
+
+	// lock success
+	getLockErr := provider.AcquireLogWriterLock(context.Background(), logName)
+	assert.NoError(t, getLockErr)
+
+	// reentrant lock success
+	getLockErr = provider.AcquireLogWriterLock(context.Background(), logName)
+	assert.NoError(t, getLockErr)
+
+	// test lock fail from another session
+	{
+		newSession, newSessionErr := concurrency.NewSession(etcdCli, concurrency.WithTTL(5))
+		assert.NoError(t, newSessionErr)
+		lockKey := BuildLogLockKey(logName)
+		mutex1 := concurrency.NewMutex(newSession, lockKey)
+		lockErr := mutex1.TryLock(context.Background())
+		assert.Error(t, lockErr)
+		assert.ErrorContainsf(t, lockErr, "Locked by another session", "unexpected error: %s", lockErr.Error())
+		newSession.Close()
+	}
+
+	// release lock
+	releaseLockErr := provider.ReleaseLogWriterLock(context.Background(), logName)
+	assert.NoError(t, releaseLockErr)
+
+	// test lock success from another session after release
+	{
+		newSession, newSessionErr := concurrency.NewSession(etcdCli, concurrency.WithTTL(5))
+		assert.NoError(t, newSessionErr)
+		lockKey := BuildLogLockKey(logName)
+		mutex1 := concurrency.NewMutex(newSession, lockKey)
+		lockErr := mutex1.TryLock(context.Background())
+		assert.NoError(t, lockErr)
+		newSession.Close()
 	}
 }

@@ -11,6 +11,8 @@ import (
 type LogStoreClient interface {
 	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error)
 	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error)
+	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
+	RequestCompaction(ctx context.Context, logId int64, segmentId int64) error
 }
 
 func NewLogStoreClientLocal(store *server.LogStore) LogStoreClient {
@@ -33,18 +35,36 @@ func (l *LogStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmen
 	return l.store.GetEntry(ctx, logId, segmentId, entryId)
 }
 
+func (l *LogStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	return l.store.FenceSegment(ctx, logId, segmentId)
+}
+
+func (l *LogStoreClientLocal) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
+	return l.store.CompactSegment(ctx, logId, segmentId)
+}
+
 var _ LogStoreClient = (*LogStoreClientRemote)(nil)
 
 type LogStoreClientRemote struct {
 	innerClient proto.LogStoreClient
 }
 
-func (l LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
+func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l LogStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error) {
+func (l *LogStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (l *LogStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (l *LogStoreClientRemote) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
 	//TODO implement me
 	panic("implement me")
 }

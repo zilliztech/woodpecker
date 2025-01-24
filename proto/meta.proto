@@ -22,9 +22,11 @@ message LogMeta{
  * SegmentState defines the state of a log segment.
  */
 enum SegmentState{
-  Truncated = 0;
-  Sealed = 1;
-  Active = 2;
+  Active = 0;
+  InRecovery = 1;
+  Completed = 2;
+  Sealed = 3;
+  Truncated = 4;
 }
 
 /**
@@ -32,11 +34,13 @@ enum SegmentState{
  */
 message SegmentMetadata{
   int64 segNo = 1;
-  optional int64 completionTime = 2;
-  optional int64 lastEntryId = 3;
+  int64 createTime = 2;
+  int64 quorumId = 3;
   SegmentState state = 4;
-  optional int64 quorumId = 5;
-  repeated int32 offset = 6;
+  int64 completionTime = 5;
+  int64 lastEntryId = 6;
+  int64 size = 7;
+  repeated int32 offset = 8;
 }
 
 /**

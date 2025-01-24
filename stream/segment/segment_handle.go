@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/milvus-io/woodpecker/common/bitset"
 	"github.com/milvus-io/woodpecker/meta"
@@ -42,17 +44,21 @@ type SegmentHandle interface {
 	SendAppendSuccessCallbacks()
 	// SendAppendErrorCallbacks called when an appendOp operation fails
 	SendAppendErrorCallbacks(err error)
+	// GetSize get the size of the segment
+	GetSize(context.Context) int64
+	// RequestCompactionAsync request compaction for the segment asynchronously
+	RequestCompactionAsync(context.Context, func(int64, int64, error)) error
+	// Fence the segment in all nodes
+	Fence(context.Context) error
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool) SegmentHandle {
-	return &segmentHandleImpl{
+	segmentHandle := &segmentHandleImpl{
 		logId:            logId,
 		logName:          logName,
 		segmentMetaCache: segmentMeta,
 		metadata:         metadata,
 		ClientPool:       clientPool,
-		lastPushed:       *segmentMeta.LastEntryId,
-		lastAddConfirmed: *segmentMeta.LastEntryId,
 		appendOpsQueue:   list.New(),
 		quorumInfo: &proto.QuorumInfo{ // TODO: get from metadata in cluster mode
 			Id: 1,
@@ -64,6 +70,10 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 			},
 		},
 	}
+	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
+	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
+	segmentHandle.size.Store(segmentMeta.Size)
+	return segmentHandle
 }
 
 var _ SegmentHandle = (*segmentHandleImpl)(nil)
@@ -77,9 +87,10 @@ type segmentHandleImpl struct {
 	quorumInfo       *proto.QuorumInfo
 
 	sync.RWMutex
-	lastPushed       int64
-	lastAddConfirmed int64
+	lastPushed       atomic.Int64
+	lastAddConfirmed atomic.Int64
 	appendOpsQueue   *list.List
+	size             atomic.Int64
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -90,32 +101,32 @@ func (s *segmentHandleImpl) GetId(ctx context.Context) int64 {
 	return s.segmentMetaCache.SegNo
 }
 
+// Deprecated: use AppendAsync instead
 func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, error) {
 	// write data to quorum
-	quorunInfo, err := s.GetQuorumInfo(ctx)
+	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		return 0, err
 	}
 
-	if len(quorunInfo.Nodes) != 1 || quorunInfo.Wq != 1 || quorunInfo.Aq != 1 || quorunInfo.Es != 1 {
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return -1, errors.New("Currently only support embed standalone mode")
 	}
 
-	client, err := s.ClientPool.GetLogStoreClient(quorunInfo.Nodes[0])
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return -1, err
 	}
 	segmentEntry := &segment.SegmentEntry{
 		SegmentId: s.segmentMetaCache.SegNo,
-		EntryId:   s.lastPushed + 1,
+		EntryId:   s.lastPushed.Add(1),
 		Data:      bytes,
 	}
 	entryId, err := client.AppendEntry(ctx, s.logId, segmentEntry)
 	if err != nil {
 		return -1, err
 	}
-	s.lastPushed = s.lastPushed + 1
-	s.lastAddConfirmed = s.lastPushed
+	s.size.Add(int64(len(bytes)))
 	return entryId, nil
 }
 
@@ -137,7 +148,7 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 	pendingAppendOp := &AppendOp{
 		logId:      s.logId,
 		segmentId:  s.GetId(ctx),
-		entryId:    s.lastPushed + 1,
+		entryId:    s.lastPushed.Add(1),
 		value:      bytes,
 		callback:   callback,
 		handle:     s,
@@ -146,7 +157,6 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		quorumInfo: s.quorumInfo,
 		completed:  false,
 	}
-	s.lastPushed = s.lastPushed + 1
 	return pendingAppendOp
 }
 
@@ -158,13 +168,13 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks() {
 			break
 		}
 		// Check if it is the next entry in the sequence.
-		if op.entryId != s.lastAddConfirmed+1 {
+		if op.entryId != s.lastAddConfirmed.Load()+1 {
 			break
 		}
 
 		s.appendOpsQueue.Remove(e)
 		// update lac
-		s.lastAddConfirmed = op.entryId
+		s.lastAddConfirmed.Store(op.entryId)
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
@@ -189,13 +199,11 @@ func (s *segmentHandleImpl) BatchRead(ctx context.Context, i int64, i2 int32, i3
 }
 
 func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, error) {
-	//TODO implement me
-	panic("implement me")
+	return s.lastAddConfirmed.Load(), nil
 }
 
 func (s *segmentHandleImpl) GetLastAddPushed(ctx context.Context) (int64, error) {
-	//TODO implement me
-	panic("implement me")
+	return s.lastPushed.Load(), nil
 }
 
 func (s *segmentHandleImpl) GetMetadata(ctx context.Context) (*proto.SegmentMetadata, error) {
@@ -223,11 +231,63 @@ func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInf
 }
 
 func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
-	//TODO implement me
-	panic("implement me")
+	return s.segmentMetaCache.State >= proto.SegmentState_Completed, nil
 }
 
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
+	// error out all pending append operations
+	s.SendAppendErrorCallbacks(errors.New("segment closed"))
+
+	// update metadata as completed
+	s.segmentMetaCache.State = proto.SegmentState_Completed
+	s.segmentMetaCache.Size = s.size.Load()
+	s.segmentMetaCache.LastEntryId = s.lastAddConfirmed.Load()
+	s.segmentMetaCache.CompletionTime = time.Now().UnixMilli()
+	return s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+}
+
+func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
+	return s.size.Load()
+}
+
+func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback func(int64, int64, error)) error {
+	// select one node to compact segment asynchronously
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return errors.New("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return err
+	}
+
+	// TODO should maintain a async compactions queue
+	go func() {
+		err = client.RequestCompaction(ctx, s.logId, s.segmentMetaCache.SegNo)
+		callback(s.logId, s.segmentMetaCache.SegNo, err)
+	}()
+	return nil
+}
+
+func (s *segmentHandleImpl) Fence(ctx context.Context) error {
+	// fence segment, prevent new append operations
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return errors.New("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return err
+	}
+	err = client.FenceSegment(ctx, s.logId, s.segmentMetaCache.SegNo)
+	if err != nil {
+		return err
+	}
+	return nil
 }

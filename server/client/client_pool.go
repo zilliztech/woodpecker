@@ -64,7 +64,7 @@ func (p *logStoreClientPool) GetLogStoreClient(target string) (LogStoreClient, e
 	if err != nil {
 		return nil, err
 	}
-	return LogStoreClientRemote{
+	return &LogStoreClientRemote{
 		innerClient: proto.NewLogStoreClient(cnx),
 	}, nil
 }

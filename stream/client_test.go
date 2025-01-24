@@ -83,14 +83,14 @@ func TestE2EWrite(t *testing.T) {
 	}
 
 	// ###  CreateLog
-	//createLogErr := client.GetMetadataProvider().CreateLog(context.Background(), "test_my_log")
+	//createLogErr := client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
 	//if createLogErr != nil {
 	//	fmt.Printf("Create log failed, err:%v\n", createLogErr)
 	//	panic(createLogErr)
 	//}
 
 	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_my_log")
+	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
 	if openErr != nil {
 		fmt.Printf("Open log failed, err:%v\n", openErr)
 		panic(openErr)

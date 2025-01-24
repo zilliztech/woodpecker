@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -50,11 +51,13 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 }
 
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
-	a := int64(0)
 	c.Metadata.StoreSegmentMetadata(ctx, logName, &proto.SegmentMetadata{
-		SegNo:    0,
-		State:    proto.SegmentState_Active,
-		QuorumId: &a,
+		SegNo:      0,
+		CreateTime: time.Now().UnixMilli(),
+		QuorumId:   -1,
+		State:      proto.SegmentState_Active,
+		Size:       0,
+		Offset:     make([]int32, 0),
 	})
 	return nil
 }

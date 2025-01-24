@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"log"
 	"strconv"
 	"strings"
@@ -19,7 +20,8 @@ import (
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {
 	return &metadataProviderEtcd{
-		client: client,
+		client:         client,
+		logWriterLocks: make(map[string]*concurrency.Mutex),
 	}
 }
 
@@ -28,6 +30,9 @@ var _ MetadataProvider = (*metadataProviderEtcd)(nil)
 type metadataProviderEtcd struct {
 	sync.Mutex
 	client *clientv3.Client
+
+	session        *concurrency.Session
+	logWriterLocks map[string]*concurrency.Mutex
 }
 
 // InitIfNecessary initializes the metadata provider if necessary.
@@ -128,7 +133,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	}
 
 	// check if logName exists
-	checkExistsResp, err := e.client.Get(ctx, BuildLogPath(logName), clientv3.WithPrefix())
+	checkExistsResp, err := e.client.Get(ctx, BuildLogKey(logName), clientv3.WithPrefix())
 	if err != nil {
 		return fmt.Errorf("failed to get next logId: %w", err)
 	}
@@ -162,7 +167,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		clientv3.Compare(clientv3.Value(LogIdGeneratorKey), "=", currentID),
 	).Then(
 		// Create logs/<logName> with logValue
-		clientv3.OpPut(BuildLogPath(logName), string(logMetaValue)),
+		clientv3.OpPut(BuildLogKey(logName), string(logMetaValue)),
 		// Update logs/idgen to nextID
 		clientv3.OpPut(LogIdGeneratorKey, fmt.Sprintf("%d", nextID)),
 	).Commit()
@@ -188,7 +193,7 @@ func atoi(s string) int {
 
 func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error) {
 	// Get log meta for the path = logs/<logName>
-	logResp, err := e.client.Get(ctx, BuildLogPath(logName))
+	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +207,7 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 	return logMeta, nil
 }
 
-func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*proto.LogMeta, []*proto.SegmentMetadata, error) {
+func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error) {
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.GetLogMeta(ctx, logName)
 	if err != nil {
@@ -221,7 +226,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 
 func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) (bool, error) {
 	// Get log meta for the path = logs/<logName>
-	logResp, err := e.client.Get(ctx, BuildLogPath(logName))
+	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
 	if err != nil {
 		return false, err
 	}
@@ -236,7 +241,7 @@ func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 }
 
 func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
-	logResp, err := e.client.Get(ctx, BuildLogPath(logNamePrefix), clientv3.WithPrefix())
+	logResp, err := e.client.Get(ctx, BuildLogKey(logNamePrefix), clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
@@ -271,8 +276,37 @@ func extractLogName(path string) (string, error) {
 	return parts[2], nil
 }
 
+func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) error {
+	e.Lock()
+	defer e.Unlock()
+	if e.session == nil {
+		newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(5))
+		if err != nil {
+			return err
+		}
+		e.session = newSession
+	}
+	if l, exists := e.logWriterLocks[logName]; exists {
+		return l.TryLock(ctx)
+	}
+	lockKey := BuildLogLockKey(logName)
+	lock := concurrency.NewMutex(e.session, lockKey)
+	e.logWriterLocks[logName] = lock
+	return lock.TryLock(ctx)
+}
+
+func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName string) error {
+	e.Lock()
+	defer e.Unlock()
+	if l, exists := e.logWriterLocks[logName]; exists {
+		e.logWriterLocks[logName] = nil
+		return l.Unlock(ctx)
+	}
+	return nil
+}
+
 func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
-	segmentKey := BuildSegmentInstancePath(logName, fmt.Sprintf("%d", metadata.GetSegNo()))
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.GetSegNo()))
 	segmentMetadata, err := pb.Marshal(metadata)
 	if err != nil {
 		return err
@@ -301,7 +335,7 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 }
 
 func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*proto.SegmentMetadata, error) {
-	segmentKey := BuildSegmentInstancePath(logName, fmt.Sprintf("%d", segmentId))
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
 	getResp, getErr := e.client.Get(ctx, segmentKey)
 	if getErr != nil {
 		return nil, getErr
@@ -316,31 +350,31 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	return segmentMetadata, nil
 }
 
-func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logName string) ([]*proto.SegmentMetadata, error) {
-	segmentKey := BuildSegmentInstancePath(logName, "")
+func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*proto.SegmentMetadata, error) {
+	segmentKey := BuildSegmentInstanceKey(logName, "")
 	getResp, getErr := e.client.Get(ctx, segmentKey, clientv3.WithPrefix())
 	if getErr != nil {
 		return nil, getErr
 	}
 
+	segmentMetaMap := make(map[int64]*proto.SegmentMetadata)
 	if len(getResp.Kvs) == 0 {
 		log.Printf("There is no segments for log:%s ", logName)
-		return []*proto.SegmentMetadata{}, nil
+		return segmentMetaMap, nil
 	}
 
-	segmentMetaList := make([]*proto.SegmentMetadata, 0, len(getResp.Kvs))
 	for _, kv := range getResp.Kvs {
 		segmentMeta := &proto.SegmentMetadata{}
 		if err := pb.Unmarshal(kv.Value, segmentMeta); err != nil {
 			return nil, err
 		}
-		segmentMetaList = append(segmentMetaList, segmentMeta)
+		segmentMetaMap[segmentMeta.SegNo] = segmentMeta
 	}
-	return segmentMetaList, nil
+	return segmentMetaMap, nil
 }
 
 func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error {
-	quorumKey := BuildQuorumInfoPath(fmt.Sprintf("%d", info.Id))
+	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", info.Id))
 	quorumInfoValue, err := pb.Marshal(info)
 	if err != nil {
 		return err
@@ -370,7 +404,7 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 }
 
 func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error) {
-	quorumKey := BuildQuorumInfoPath(fmt.Sprintf("%d", quorumId))
+	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", quorumId))
 	getResp, getErr := e.client.Get(ctx, quorumKey)
 	if getErr != nil {
 		return nil, getErr
@@ -387,6 +421,21 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 }
 
 func (e *metadataProviderEtcd) Close() error {
+	e.Lock()
+	defer e.Unlock()
+	for logName, lock := range e.logWriterLocks {
+		if lock == nil {
+			continue
+		}
+		err := lock.Unlock(context.Background())
+		if err != nil {
+			log.Printf("Failed to unlock %s writer lock, err:%v", logName, err)
+		}
+	}
+	if e.session != nil {
+		err := e.session.Close()
+		log.Printf("etcd metadata provider session closed err: %v", err)
+	}
 	log.Printf("etcd metadata provider closed")
 	return nil
 }
