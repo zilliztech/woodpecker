@@ -306,6 +306,8 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 }
 
 func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+	e.Lock()
+	defer e.Unlock()
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.GetSegNo()))
 	segmentMetadata, err := pb.Marshal(metadata)
 	if err != nil {
@@ -331,6 +333,36 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 		return fmt.Errorf("segment metadata already exists for logName:%s segmentId:%d", logName, metadata.SegNo)
 	}
 
+	return nil
+}
+
+func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+	e.Lock()
+	defer e.Unlock()
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.SegNo))
+	segmentMetadata, err := pb.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	// Start a transaction
+	txn := e.client.Txn(ctx)
+
+	// Update segmentKey if it exists
+	txnResp, err := txn.If(
+		// Ensure segmentKey exists
+		clientv3.Compare(clientv3.ModRevision(segmentKey), ">", 0), // TODO: check if this is correct
+	).Then(
+		// Update segmentKey with segmentMetadata
+		clientv3.OpPut(segmentKey, string(segmentMetadata)),
+	).Commit()
+
+	if err != nil {
+		return fmt.Errorf("transaction failed: %w", err)
+	}
+
+	if !txnResp.Succeeded {
+		return fmt.Errorf("segment metadata not found for logName:%s segmentId:%d", logName, metadata.SegNo)
+	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -108,6 +109,7 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 	newSegHandle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, newSegMeta, l.Metadata, l.ClientPool)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.SegNo
+	l.lastRolloverTimeMs = newSegMeta.CreateTime
 	return newSegHandle, nil
 }
 
@@ -189,4 +191,37 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, fromEntryId int64) (L
 func (l *logHandleImpl) Truncate(ctx context.Context, minEntryIdToKeep int64) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Context) error {
+	l.Lock()
+	defer l.Unlock()
+
+	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
+	if !writableExists {
+		return nil
+	}
+	// 1. close segmentHandle,
+	//  it will send fence request to logStores
+	//  and error out all pendingAppendOps with segmentCloseError
+	err := writeableSegmentHandle.Close(ctx)
+	if err != nil {
+		fmt.Println("close segment failed", err)
+		return err
+	}
+	err = writeableSegmentHandle.Fence(ctx)
+	if err != nil {
+		fmt.Println("fence segment failed", err)
+		return err
+	}
+
+	// 2. select one logStore to async compact segment
+	err = writeableSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
+	if err != nil {
+		fmt.Println("request compaction failed", err)
+	}
+
+	// 3. clear cache
+	l.WritableSegmentId = -1
+	return nil
 }

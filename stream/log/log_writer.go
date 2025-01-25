@@ -102,8 +102,7 @@ func (l *logWriterImpl) Truncate(ctx context.Context, id *LogMessageId) error {
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
+	return l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
 }
 
 type WriteResult struct {

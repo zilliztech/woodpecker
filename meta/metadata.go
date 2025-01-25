@@ -24,6 +24,7 @@ type MetadataProvider interface {
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
 
 	StoreSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error
+	UpdateSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error
 	GetSegmentMetadata(context.Context, string, int64) (*proto.SegmentMetadata, error)
 	GetAllSegmentMetadata(context.Context, string) (map[int64]*proto.SegmentMetadata, error)
 

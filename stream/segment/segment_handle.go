@@ -180,21 +180,27 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks() {
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
-	for e := s.appendOpsQueue.Front(); e != nil; {
-		op := e.Value.(*AppendOp)
-		if !op.completed {
-			break
-		}
-		// Check if it is the next entry in the sequence.
-		if op.entryId != s.lastAddConfirmed.Load()+1 {
-			break
-		}
+	for {
+		e := s.appendOpsQueue.Front()
+		if e != nil {
+			op := e.Value.(*AppendOp)
+			if !op.completed {
+				break
+			}
+			// Check if it is the next entry in the sequence.
+			if op.entryId != s.lastAddConfirmed.Load()+1 {
+				break
+			}
 
-		s.appendOpsQueue.Remove(e)
-		// update lac
-		s.lastAddConfirmed.Store(op.entryId)
-		// callback
-		op.callback(op.segmentId, op.entryId, nil)
+			s.appendOpsQueue.Remove(e)
+			// update lac
+			s.lastAddConfirmed.Store(op.entryId)
+			// callback
+			op.callback(op.segmentId, op.entryId, nil)
+		} else {
+			fmt.Printf("list queue front error : %v", e)
+			break
+		}
 	}
 }
 
@@ -263,7 +269,7 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	s.segmentMetaCache.Size = s.size.Load()
 	s.segmentMetaCache.LastEntryId = s.lastAddConfirmed.Load()
 	s.segmentMetaCache.CompletionTime = time.Now().UnixMilli()
-	return s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	return s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
