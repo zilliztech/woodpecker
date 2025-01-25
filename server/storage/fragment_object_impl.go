@@ -19,15 +19,16 @@ type FragmentObject struct {
 	objectKey string
 
 	footer            Footer
-	lastEntrySequence uint32 // Last entry sequence number, starts from 0 that corresponds to the first index item
+	lastEntrySequence int // Last entry sequence number, starts from 0 that corresponds to the first index item
 }
 
 // NewObjectStorageFragment initializes a new FragmentObject.
-func NewObjectStorageFragment(client *minio.Client, bucket, objectKey string) *FragmentObject {
+func NewObjectStorageFragment(client *minio.Client, bucket, objectKey string, lastEntrySequence int) *FragmentObject {
 	return &FragmentObject{
-		client:    client,
-		bucket:    bucket,
-		objectKey: objectKey,
+		client:            client,
+		bucket:            bucket,
+		objectKey:         objectKey,
+		lastEntrySequence: lastEntrySequence,
 	}
 }
 

@@ -51,7 +51,7 @@ func NewObjectStorageLogFile(logFileId uint64, segmentKeyPrefix string, bucket s
 
 // Like OS file fsync dirty pageCache periodically, objectStoreFile will sync buffer to object storage periodically
 func (f *objectStorageLogFile) run() {
-	ticker := time.NewTicker(time.Duration(f.maxIntervalMs))
+	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	for {
 		select {
@@ -84,13 +84,14 @@ func (f *objectStorageLogFile) AppendAsync(ctx context.Context, data []byte) (in
 	return seqNo, ch
 }
 
+// Deprecated: use AppendAsync instead
 func (f *objectStorageLogFile) Append(ctx context.Context, data []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	offset := f.LastOffset() + 1
 	key := f.getFragmentKey(offset)
-	fragment := NewObjectStorageFragment(f.client, f.bucket, key)
+	fragment := NewObjectStorageFragment(f.client, f.bucket, key, 0)
 	err := fragment.Write(ctx, data)
 	if err != nil {
 		return err
@@ -100,7 +101,7 @@ func (f *objectStorageLogFile) Append(ctx context.Context, data []byte) error {
 }
 
 func (f *objectStorageLogFile) getFragmentKey(fragmentOffset uint64) string {
-	return fmt.Sprintf("%s/%d/objectKey-%d", f.segmentKeyPrefix, f.id, fragmentOffset)
+	return fmt.Sprintf("%s/%d/%d.frag", f.segmentKeyPrefix, f.id, fragmentOffset)
 }
 
 func (f *objectStorageLogFile) NewReader(ctx context.Context, opt ReaderOpt) (Reader, error) {
@@ -147,12 +148,13 @@ func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 	// write to fragment Object
 	offset := f.LastOffset() + 1 // fragment id
 	key := f.getFragmentKey(offset)
-	fragment := NewObjectStorageFragment(f.client, f.bucket, key)
+	fragment := NewObjectStorageFragment(f.client, f.bucket, key, f.bufferSnapshot.GetLastSequenceNum())
 	err := fragment.Write(ctx, fragmentData)
 	if err != nil {
 		return err
 	}
 	f.fragments = append(f.fragments, fragment)
+	fmt.Println("synced to object storage ")
 
 	// notify all waiting channels
 	for seqNo, ch := range f.synedChan {

@@ -3,6 +3,9 @@ package stream
 import (
 	"context"
 	"fmt"
+	"github.com/google/gops/agent"
+	"net/http"
+	"net/http/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -118,8 +121,25 @@ func TestE2EWrite(t *testing.T) {
 	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
 }
 
+func startGopsAgent() {
+	// start gops agent
+	if err := agent.Listen(agent.Options{}); err != nil {
+		panic(err)
+	}
+	http.HandleFunc("/pprof/cmdline", pprof.Cmdline)
+	http.HandleFunc("/pprof/profile", pprof.Profile)
+	http.HandleFunc("/pprof/symbol", pprof.Symbol)
+	http.HandleFunc("/pprof/trace", pprof.Trace)
+	go func() {
+		fmt.Println("Starting gops agent on :6060")
+		http.ListenAndServe(":6060", nil)
+	}()
+}
+
 // TestWrite example to show how to use woodpecker client to write msg to  unbounded log
 func TestWriteThroughput(t *testing.T) {
+	startGopsAgent()
+
 	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
 	if err != nil {
 		fmt.Println(err)
@@ -158,7 +178,9 @@ func TestWriteThroughput(t *testing.T) {
 		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan = append(resultChan, writeResultChan)
 	}
+	
 	for i := 0; i < 100000; i++ {
+		fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
 			t.Error(writeResult.Err)

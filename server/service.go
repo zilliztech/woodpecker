@@ -117,6 +117,7 @@ func (s *Server) Stop() error {
 	return nil
 }
 
+// TODO should use unary-stream or stream-stream to impl async add request
 func (s *Server) AddEntry(ctx context.Context, request *proto.AddEntryRequest) (*proto.AddEntryResponse, error) {
 	//TODO implement me
 	panic("implement me")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -13,6 +14,7 @@ import (
 )
 
 type LogStore struct {
+	sync.RWMutex
 	ctx      context.Context
 	cancel   context.CancelFunc
 	etcdCli  *clientv3.Client
@@ -62,23 +64,25 @@ func (l *LogStore) Register(ctx context.Context) error {
 	return nil
 }
 
-func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
+func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error) {
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
-		return -1, err
+		return -1, -1, nil, err
 	}
 	if segmentProcessor.IsFenced() {
-		return -1, errors.New(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
+		return -1, -1, nil, errors.New(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
 	}
-	entryId, err := segmentProcessor.AddEntry(ctx, entry)
+	syncSeqNo, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
-		return -1, err
+		return -1, -1, nil, err
 	}
 	log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
-	return entryId, nil
+	return entry.EntryId, syncSeqNo, syncedCh, nil
 }
 
 func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
+	l.Lock()
+	defer l.Unlock()
 	if processors, ok := l.segmentProcessors[logId]; ok {
 		for _, processor := range processors {
 			if processor.GetSegmentId() == segmentId {

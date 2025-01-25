@@ -2,6 +2,7 @@ package segment
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
@@ -40,26 +41,34 @@ func (op *AppendOp) Execute() {
 			op.handle.SendAppendErrorCallbacks(err)
 			return
 		}
-		go op.sendWriteRequest(client, i)
+		op.sendWriteRequest(client, i)
 	}
 }
 
 func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex int) {
-	id, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
-	op.receivedAckCallback(id, err, serverIndex)
+	fmt.Printf("send  %d request to server:%d \n", op.entryId, serverIndex)
+	// order request
+	entryId, seqNo, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
+	// async received ack without order
+	go op.receivedAckCallback(entryId, seqNo, syncedCh, err, serverIndex)
 }
 
-func (op *AppendOp) receivedAckCallback(entryId int64, err error, serverIndex int) {
-	if err == nil {
-		// set ackSet
-		op.ackSet.Set(serverIndex)
-	}
-	if err != nil {
-		op.handle.SendAppendErrorCallbacks(err)
-	}
-	if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
-		op.completed = true
-		op.handle.SendAppendSuccessCallbacks()
+func (op *AppendOp) receivedAckCallback(entryId int64, seqNo int, syncedCh <-chan int, err error, serverIndex int) {
+	for {
+		select {
+		case syncedNo, ok := <-syncedCh:
+			if !ok {
+				op.handle.SendAppendErrorCallbacks(err)
+			}
+			if syncedNo != -1 && syncedNo >= seqNo {
+				op.ackSet.Set(serverIndex)
+				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
+					op.completed = true
+					op.handle.SendAppendSuccessCallbacks()
+				}
+				return
+			}
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,10 +70,12 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 				"127.0.0.1",
 			},
 		},
+		orderExecutor: NewOrderExecutor(10000),
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
 	segmentHandle.size.Store(segmentMeta.Size)
+	segmentHandle.orderExecutor.Start(1)
 	return segmentHandle
 }
 
@@ -91,6 +94,8 @@ type segmentHandleImpl struct {
 	lastAddConfirmed atomic.Int64
 	appendOpsQueue   *list.List
 	size             atomic.Int64
+
+	orderExecutor *OrderExecutor
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -122,12 +127,22 @@ func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, er
 		EntryId:   s.lastPushed.Add(1),
 		Data:      bytes,
 	}
-	entryId, err := client.AppendEntry(ctx, s.logId, segmentEntry)
+	entryId, seqNo, syncedCh, err := client.AppendEntry(ctx, s.logId, segmentEntry)
 	if err != nil {
 		return -1, err
 	}
-	s.size.Add(int64(len(bytes)))
-	return entryId, nil
+	for {
+		select {
+		case syncedNo, ok := <-syncedCh:
+			if !ok {
+				return entryId, errors.New("synced channel closed")
+			}
+			if syncedNo >= seqNo {
+				s.size.Add(int64(len(bytes)))
+				return entryId, nil
+			}
+		}
+	}
 }
 
 func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) {
@@ -140,8 +155,9 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	}
 	// Create pending append operation and execute asynchronously
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
+	fmt.Printf("pushed %d \n", appendOp.entryId)
 	s.appendOpsQueue.PushBack(appendOp)
-	appendOp.Execute()
+	s.orderExecutor.Submit(appendOp)
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -161,6 +177,8 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 }
 
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks() {
+	s.Lock()
+	defer s.Unlock()
 	// success executed one by one in sequence
 	for e := s.appendOpsQueue.Front(); e != nil; {
 		op := e.Value.(*AppendOp)
@@ -181,6 +199,8 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks() {
 }
 
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(err error) {
+	s.Lock()
+	defer s.Unlock()
 	// fail, and call pendingAppendOps callback(nil,err)
 	for e := s.appendOpsQueue.Front(); e != nil; {
 		element := s.appendOpsQueue.Remove(e)

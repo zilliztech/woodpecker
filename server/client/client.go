@@ -9,7 +9,7 @@ import (
 )
 
 type LogStoreClient interface {
-	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error)
+	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error)
 	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error)
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
 	RequestCompaction(ctx context.Context, logId int64, segmentId int64) error
@@ -27,7 +27,7 @@ type LogStoreClientLocal struct {
 	store *server.LogStore
 }
 
-func (l *LogStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
+func (l *LogStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error) {
 	return l.store.AddEntry(ctx, logId, entry)
 }
 
@@ -49,7 +49,7 @@ type LogStoreClientRemote struct {
 	innerClient proto.LogStoreClient
 }
 
-func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, error) {
+func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error) {
 	//TODO implement me
 	panic("implement me")
 }
