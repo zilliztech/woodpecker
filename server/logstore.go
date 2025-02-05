@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/minio/minio-go/v7"
@@ -76,7 +75,7 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 	if err != nil {
 		return -1, -1, nil, err
 	}
-	log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
+	//log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
 	return entry.EntryId, syncSeqNo, syncedCh, nil
 }
 

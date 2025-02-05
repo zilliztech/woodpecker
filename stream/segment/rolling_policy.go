@@ -1,6 +1,9 @@
 package segment
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type RollingPolicy interface {
 	// ShouldRollover returns true if the current segment should be rolled over.
@@ -24,10 +27,12 @@ type DefaultRollingPolicy struct {
 func (p *DefaultRollingPolicy) ShouldRollover(currentSegmentSize int64, lastRolloverTimeMs int64) bool {
 	// If the current segment is already larger than the rollover size, or if the last rollover time is more than the rollover interval, roll over.
 	if currentSegmentSize >= p.rolloverSizeBytes {
+		fmt.Printf("ShouldRollover: true case by size=%d \n", currentSegmentSize)
 		return true
 	}
 	// If the current segment is not empty, and the last rollover time is more than the rollover interval, roll over.
-	if currentSegmentSize > 0 && (time.Now().UnixNano()-lastRolloverTimeMs) >= p.rolloverIntervalMs {
+	if currentSegmentSize > 0 && (time.Now().UnixMilli()-lastRolloverTimeMs) >= p.rolloverIntervalMs {
+		fmt.Printf("ShouldRollover: true case by time interval %d , size=%d \n", (time.Now().UnixMilli() - lastRolloverTimeMs), currentSegmentSize)
 		return true
 	}
 	// Otherwise, do not roll over.

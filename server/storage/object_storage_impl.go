@@ -154,7 +154,7 @@ func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 		return err
 	}
 	f.fragments = append(f.fragments, fragment)
-	fmt.Println("synced to object storage ")
+	fmt.Println("synced to object storage: ", f.id)
 
 	// notify all waiting channels
 	for seqNo, ch := range f.synedChan {
@@ -164,7 +164,7 @@ func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 		}
 	}
 
-	//
+	fmt.Println("synced to object storage completed: ", f.id)
 	return nil
 }
 

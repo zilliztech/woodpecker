@@ -42,9 +42,9 @@ type SegmentHandle interface {
 	// Close the segment
 	Close(context.Context) error
 	// SendAppendSuccessCallbacks called when an appendOp operation is successful
-	SendAppendSuccessCallbacks()
+	SendAppendSuccessCallbacks(int64)
 	// SendAppendErrorCallbacks called when an appendOp operation fails
-	SendAppendErrorCallbacks(err error)
+	SendAppendErrorCallbacks(int64, error)
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
 	// RequestCompactionAsync request compaction for the segment asynchronously
@@ -94,6 +94,7 @@ type segmentHandleImpl struct {
 	lastAddConfirmed atomic.Int64
 	appendOpsQueue   *list.List
 	size             atomic.Int64
+	pendingSize      atomic.Int64
 
 	orderExecutor *OrderExecutor
 }
@@ -155,9 +156,10 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	}
 	// Create pending append operation and execute asynchronously
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
-	fmt.Printf("pushed %d \n", appendOp.entryId)
+	//fmt.Printf("pushed %d \n", appendOp.entryId)
 	s.appendOpsQueue.PushBack(appendOp)
 	s.orderExecutor.Submit(appendOp)
+	s.pendingSize.Add(int64(len(bytes)))
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -176,41 +178,49 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 	return pendingAppendOp
 }
 
-func (s *segmentHandleImpl) SendAppendSuccessCallbacks() {
+func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
-	for {
-		e := s.appendOpsQueue.Front()
-		if e != nil {
-			op := e.Value.(*AppendOp)
-			if !op.completed {
-				break
-			}
-			// Check if it is the next entry in the sequence.
-			if op.entryId != s.lastAddConfirmed.Load()+1 {
-				break
-			}
-
-			s.appendOpsQueue.Remove(e)
-			// update lac
-			s.lastAddConfirmed.Store(op.entryId)
-			// callback
-			op.callback(op.segmentId, op.entryId, nil)
-		} else {
-			fmt.Printf("list queue front error : %v", e)
+	elementsToRemove := []*list.Element{} // 新增：用于存储需要删除的元素
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		op := e.Value.(*AppendOp)
+		if !op.completed {
 			break
 		}
+		// Check if it is the next entry in the sequence.
+		if op.entryId != s.lastAddConfirmed.Load()+1 {
+			break
+		}
+
+		elementsToRemove = append(elementsToRemove, e) // 新增：将需要删除的元素添加到切片中
+		// update lac
+		s.lastAddConfirmed.Store(op.entryId)
+		// update size
+		s.size.Add(int64(len(op.value)))
+		fmt.Printf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.size.Load())
+		// callback
+		op.callback(op.segmentId, op.entryId, nil)
+	}
+	for _, element := range elementsToRemove { // 新增：遍历切片并删除元素
+		s.appendOpsQueue.Remove(element)
 	}
 }
 
-func (s *segmentHandleImpl) SendAppendErrorCallbacks(err error) {
+func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
 	// fail, and call pendingAppendOps callback(nil,err)
-	for e := s.appendOpsQueue.Front(); e != nil; {
-		element := s.appendOpsQueue.Remove(e)
-		element.(*AppendOp).callback(s.segmentMetaCache.SegNo, -1, err)
+	fmt.Printf("entryId %d append error: %v\n", triggerEntryId, err)
+	elementsToRemove := []*list.Element{}
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		element := e
+		op := element.Value.(*AppendOp)
+		op.callback(s.segmentMetaCache.SegNo, op.entryId, err)
+		elementsToRemove = append(elementsToRemove, element)
+	}
+	for _, element := range elementsToRemove {
+		s.appendOpsQueue.Remove(element)
 	}
 }
 
@@ -262,7 +272,7 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	// error out all pending append operations
-	s.SendAppendErrorCallbacks(errors.New("segment closed"))
+	s.SendAppendErrorCallbacks(-1, errors.New("segment closed"))
 
 	// update metadata as completed
 	s.segmentMetaCache.State = proto.SegmentState_Completed
@@ -273,7 +283,8 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
-	return s.size.Load()
+	//return s.size.Load()
+	return s.pendingSize.Load()
 }
 
 func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback func(int64, int64, error)) error {

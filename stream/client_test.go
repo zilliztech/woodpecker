@@ -173,22 +173,23 @@ func TestWriteThroughput(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	resultChan := make([]<-chan *log.WriteResult, 100000)
-	for i := 0; i < 100000; i++ {
+	resultChan := make([]<-chan *log.WriteResult, 1000000)
+	for i := 0; i < 1000000; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan[i] = writeResultChan
 	}
 
-	for i := 0; i < 100000; i++ {
-		fmt.Printf("wait %d\n", i)
+	for i := 0; i < 1000000; i++ {
+		//fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
 			t.Error(writeResult.Err)
 		} else {
-			fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+			//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
 		}
 	}
 
+	fmt.Printf("start close log writer \n")
 	closeErr := logWriter.Close(context.Background())
 	if closeErr != nil {
 		fmt.Printf("close failed, err:%v\n", closeErr)
