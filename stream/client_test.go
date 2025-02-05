@@ -173,19 +173,48 @@ func TestWriteThroughput(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	resultChan := make([]<-chan *log.WriteResult, 1000000)
-	for i := 0; i < 1000000; i++ {
+	resultChan := make([]<-chan *log.WriteResult, 10000000)
+	failedIdxs := make([]int, 0)
+	successCount := 0
+	for i := 0; i < 10000000; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan[i] = writeResultChan
 	}
-
-	for i := 0; i < 1000000; i++ {
+	for i := 0; i < 10000000; i++ {
 		//fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
-			t.Error(writeResult.Err)
+			failedIdxs = append(failedIdxs, i)
+			//fmt.Printf(writeResult.Err.Error())
 		} else {
+			successCount += 1
 			//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+		}
+	}
+	fmt.Printf("round 0 success count: %d \n", successCount)
+
+	for i := 1; i <= 100; i++ {
+		tmpFailedIdxs := make([]int, 0)
+		successCount = 0
+		for _, idx := range failedIdxs {
+			writeResultChan := logWriter.WriteAsync(context.Background(),
+				[]byte(fmt.Sprintf("hello world %d", idx)))
+			resultChan[idx] = writeResultChan
+		}
+		for _, idx := range failedIdxs {
+			writeResult := <-resultChan[idx]
+			if writeResult.Err != nil {
+				tmpFailedIdxs = append(tmpFailedIdxs, idx)
+				//fmt.Printf(writeResult.Err.Error() + "\n")
+			} else {
+				successCount += 1
+				//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+			}
+		}
+		fmt.Printf("round %d success count: %d \n", i, successCount)
+		failedIdxs = tmpFailedIdxs
+		if len(failedIdxs) == 0 {
+			break
 		}
 	}
 

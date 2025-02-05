@@ -198,7 +198,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
 		s.size.Add(int64(len(op.value)))
-		fmt.Printf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.size.Load())
+		//fmt.Printf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.size.Load())
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
