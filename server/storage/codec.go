@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"encoding/binary"
 	"hash/crc32"
 
 	"github.com/cockroachdb/errors"
@@ -73,6 +74,12 @@ func intToBytes(value int, size int) []byte {
 	return buf
 }
 
+func int64ToBytes(value int64) []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(value))
+	return buf
+}
+
 // bytesToInt converts a byte slice to an integer.
 func bytesToInt(data []byte) int {
 	result := 0
@@ -80,4 +87,9 @@ func bytesToInt(data []byte) int {
 		result |= int(data[i]) << (8 * i)
 	}
 	return result
+}
+
+func bytesToInt64(data []byte) int64 {
+	result := binary.BigEndian.Uint64(data)
+	return int64(result)
 }

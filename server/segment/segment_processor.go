@@ -17,7 +17,7 @@ import (
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
-	AddEntry(context.Context, *SegmentEntry) (int, <-chan int, error)
+	AddEntry(context.Context, *SegmentEntry) (int64, <-chan int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	IsFenced() bool
 	SetFenced()
@@ -45,7 +45,7 @@ type segmentProcessor struct {
 	etcdCli     *clientv3.Client
 	minioClient *minio.Client
 
-	currentLogFileId     uint64
+	currentLogFileId     int64
 	currentLogFileWriter storage.LogFile
 	fenced               bool
 
@@ -68,7 +68,7 @@ func (s *segmentProcessor) SetFenced() {
 	s.fenced = true
 }
 
-func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int, <-chan int, error) {
+func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, <-chan int64, error) {
 	// 1. add to commitLog, which stores WAL for this node
 	// TODO Get wal for this logId, and write entry to it. (zero disk mode skip this step)
 
@@ -83,7 +83,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	//if err != nil {
 	//	return -1, err
 	//}
-	bufferedSeqNo, syncedCh := logFileWriter.AppendAsync(ctx, entry.Data)
+	bufferedSeqNo, syncedCh := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
 	if bufferedSeqNo == -1 {
 		return -1, syncedCh, fmt.Errorf("failed to append to log file")
 	}
@@ -105,9 +105,33 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	return bufferedSeqNo, syncedCh, nil
 }
 
-func (s *segmentProcessor) ReadEntry(ctx context.Context, i int64) (*SegmentEntry, error) {
-	//TODO implement me
-	panic("implement me")
+func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {
+	logFileReader, err := s.getOrCreateLogFileReader(ctx, entryId)
+	if err != nil {
+		return nil, err
+	}
+	r, err := logFileReader.NewReader(ctx, storage.ReaderOpt{
+		StartSequenceNum: entryId,
+		EndSequenceNum:   entryId + 1,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !r.HasNext() {
+		return nil, fmt.Errorf("entry not found")
+	}
+
+	e, err := r.ReadNext()
+	if err != nil {
+		return nil, err
+	}
+
+	return &SegmentEntry{
+		SegmentId: s.segId,
+		EntryId:   e.EntryId,
+		Data:      e.Values,
+	}, nil
 }
 
 func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storage.LogFile, error) {
@@ -120,6 +144,15 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 		log.Printf("createLogFileWriter with logId: %d, segId: %d", s.logId, s.segId)
 	}
 	return s.currentLogFileWriter, nil
+}
+
+func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId int64) (storage.LogFile, error) {
+	s.Lock()
+	defer s.Unlock()
+	// TODO get logFile Id according entryId
+	currentLogFileId := int64(0)
+	currentLogFileReader := storage.NewObjectStorageLogFile(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+	return currentLogFileReader, nil
 }
 
 // TODO move to common package for config

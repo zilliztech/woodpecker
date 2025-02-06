@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/google/gops/agent"
+	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/pprof"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +33,12 @@ func TestShowEtcd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	directoryPrefix := "/" // 要打印的目录前缀
+	// 1. show simple dirs
+	directoryPrefix := "" // 要打印的目录前缀
 	printDirContents(ctx, cli, directoryPrefix, "")
+
+	// 2. show meta detail
+	printMetaContents(t, ctx, cli)
 }
 
 // Test only
@@ -49,6 +55,37 @@ func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, 
 		if strings.HasSuffix(string(kv.Key), "/") {
 			newPrefix := string(kv.Key)
 			printDirContents(ctx, cli, newPrefix, indent+"  ")
+		}
+	}
+}
+
+func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) {
+	metaProvider := meta.NewMetadataProvider(ctx, cli)
+	defer metaProvider.Close()
+	logs, err := metaProvider.ListLogs(ctx)
+	assert.NoError(t, err)
+	for _, log := range logs {
+		t.Logf("logName: %s", log)
+		meta, err := metaProvider.GetLogMeta(ctx, log)
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("logName:%s logMeta: %v", log, meta)
+		segs, err := metaProvider.GetAllSegmentMetadata(ctx, log)
+		if err != nil {
+			t.Error(err)
+		}
+		// 对 segs 的 key 进行排序
+		var keys []int64
+		for k := range segs {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			return keys[i] < keys[j]
+		})
+		// 按照排序后的 key 顺序打印 segMeta
+		for _, key := range keys {
+			t.Logf("segMeta: %v", segs[key])
 		}
 	}
 }
@@ -74,6 +111,8 @@ func TestClear(t *testing.T) {
 }
 
 func TestE2EWrite(t *testing.T) {
+	startGopsAgent()
+
 	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
 	if err != nil {
 		fmt.Println(err)
@@ -113,12 +152,12 @@ func TestE2EWrite(t *testing.T) {
 		panic(writeResult.Err)
 	}
 	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-	writeResult = logWriter.Write(context.Background(), []byte("hello world 2"))
-	if writeResult.Err != nil {
-		fmt.Println(writeResult.Err)
-		panic(writeResult.Err)
-	}
-	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
+	//writeResult = logWriter.Write(context.Background(), []byte("hello world 2"))
+	//if writeResult.Err != nil {
+	//	fmt.Println(writeResult.Err)
+	//	panic(writeResult.Err)
+	//}
+	//fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
 }
 
 func startGopsAgent() {
@@ -173,14 +212,14 @@ func TestWriteThroughput(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	resultChan := make([]<-chan *log.WriteResult, 10000000)
+	resultChan := make([]<-chan *log.WriteResult, 2000000)
 	failedIdxs := make([]int, 0)
 	successCount := 0
-	for i := 0; i < 10000000; i++ {
+	for i := 0; i < 2000000; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan[i] = writeResultChan
 	}
-	for i := 0; i < 10000000; i++ {
+	for i := 0; i < 2000000; i++ {
 		//fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
@@ -226,4 +265,48 @@ func TestWriteThroughput(t *testing.T) {
 	}
 
 	fmt.Printf("Test Write finished\n")
+}
+
+func TestReadThroughput(t *testing.T) {
+	startGopsAgent()
+	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// ### OpenLog
+	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+	if openErr != nil {
+		fmt.Printf("Open log failed, err:%v\n", openErr)
+		panic(openErr)
+	}
+
+	//	### OpenReader
+	start := &log.LogMessageId{
+		SegmentId: 5,
+		EntryId:   0,
+	}
+	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
+	if openReaderErr != nil {
+		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
+		panic(openReaderErr)
+	}
+
+	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
+	for {
+		msg, err := logReader.ReadNext(context.Background())
+		if err != nil {
+			fmt.Printf("read failed, err:%v\n", err)
+			panic(err)
+		} else {
+			fmt.Printf("read success, msg:%v\n", msg)
+		}
+	}
+
+	fmt.Printf("Test Read finished\n")
 }

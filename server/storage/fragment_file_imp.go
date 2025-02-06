@@ -107,23 +107,23 @@ func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, e
 
 	// Ensure the range is within the available sequences
 	// If the end sequence is greater than the last sequence, adjust the end sequence
-	if opt.EndSequenceNum >= uint64(ff.lastSequenceNum)+ff.fileStartOffset {
-		opt.EndSequenceNum = uint64(ff.lastSequenceNum) + ff.fileStartOffset - 1
+	if opt.EndSequenceNum >= int64(ff.lastSequenceNum)+int64(ff.fileStartOffset) {
+		opt.EndSequenceNum = int64(ff.lastSequenceNum) + int64(ff.fileStartOffset) - 1
 	}
 
 	// Ensure the start sequence is within the available sequences
-	if opt.StartSequenceNum >= uint64(ff.lastSequenceNum)+ff.fileStartOffset {
+	if opt.StartSequenceNum >= int64(ff.lastSequenceNum)+int64(ff.fileStartOffset) {
 		return nil, fmt.Errorf("start sequence %d exceeds the available range", opt.StartSequenceNum)
 	}
 
 	// Determine the starting and ending index
-	startIndex := opt.StartSequenceNum - ff.fileStartOffset
-	endIndex := opt.EndSequenceNum - ff.fileStartOffset + 1
+	startIndex := opt.StartSequenceNum - int64(ff.fileStartOffset)
+	endIndex := opt.EndSequenceNum - int64(ff.fileStartOffset) + 1
 
 	// Collect the entries within the range
 	entries := make([]*LogEntry, 0, endIndex-startIndex)
 	for i := startIndex; i < endIndex; i++ {
-		if i >= uint64(len(ff.footer.EntryOffset)) {
+		if i >= int64(len(ff.footer.EntryOffset)) {
 			panic("index out of range, should not happen")
 		}
 
@@ -147,13 +147,13 @@ func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, e
 
 		// Verify CRC
 		if crc != crc32.ChecksumIEEE(payload) {
-			return nil, fmt.Errorf("CRC mismatch at sequence %d", ff.fileStartOffset+i)
+			return nil, fmt.Errorf("CRC mismatch at sequence %d", int64(ff.fileStartOffset)+i)
 		}
 
 		// Create the log entry
 		entry := &LogEntry{
 			Payload:     payload,
-			SequenceNum: ff.fileStartOffset + i,
+			SequenceNum: ff.fileStartOffset + uint64(i),
 			CRC:         crc,
 		}
 

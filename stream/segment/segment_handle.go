@@ -27,14 +27,12 @@ type SegmentHandle interface {
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
 	// Read range entries from the segment
 	Read(context.Context, int64, int64) ([]*segment.SegmentEntry, error)
-	// BatchRead entries from the segment
-	BatchRead(context.Context, int64, int32, int32) ([]*segment.SegmentEntry, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
 	GetLastAddPushed(context.Context) (int64, error)
 	// GetMetadata of the segment
-	GetMetadata(context.Context) (*proto.SegmentMetadata, error)
+	GetMetadata(context.Context) *proto.SegmentMetadata
 	// GetQuorumInfo of the segment if it's a active segment
 	GetQuorumInfo(context.Context) (*proto.QuorumInfo, error)
 	// IsClosed check if the segment is closed
@@ -74,7 +72,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
-	segmentHandle.size.Store(segmentMeta.Size)
+	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	segmentHandle.orderExecutor.Start(1)
 	return segmentHandle
 }
@@ -93,7 +91,7 @@ type segmentHandleImpl struct {
 	lastPushed       atomic.Int64
 	lastAddConfirmed atomic.Int64
 	appendOpsQueue   *list.List
-	size             atomic.Int64
+	commitedSize     atomic.Int64
 	pendingSize      atomic.Int64
 
 	orderExecutor *OrderExecutor
@@ -128,18 +126,18 @@ func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, er
 		EntryId:   s.lastPushed.Add(1),
 		Data:      bytes,
 	}
-	entryId, seqNo, syncedCh, err := client.AppendEntry(ctx, s.logId, segmentEntry)
+	entryId, syncedCh, err := client.AppendEntry(ctx, s.logId, segmentEntry)
 	if err != nil {
 		return -1, err
 	}
 	for {
 		select {
-		case syncedNo, ok := <-syncedCh:
+		case syncedId, ok := <-syncedCh:
 			if !ok {
 				return entryId, errors.New("synced channel closed")
 			}
-			if syncedNo >= seqNo {
-				s.size.Add(int64(len(bytes)))
+			if syncedId >= entryId {
+				s.commitedSize.Add(int64(len(bytes)))
 				return entryId, nil
 			}
 		}
@@ -179,6 +177,7 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 }
 
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
+	fmt.Printf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId)
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
@@ -186,10 +185,12 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed {
+			//fmt.Printf("SendAppendSuccessCallbacks not compeleted by: %d \n", op.entryId)
 			break
 		}
 		// Check if it is the next entry in the sequence.
 		if op.entryId != s.lastAddConfirmed.Load()+1 {
+			//fmt.Printf("SendAppendSuccessCallbacks not the next lac by: %d \n", op.entryId)
 			break
 		}
 
@@ -197,12 +198,13 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 		// update lac
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
-		s.size.Add(int64(len(op.value)))
+		s.commitedSize.Add(int64(len(op.value)))
 		//fmt.Printf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.size.Load())
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
 	for _, element := range elementsToRemove { // 新增：遍历切片并删除元素
+		//fmt.Printf("SendAppendSuccessCallbacks remove: %v \n", element)
 		s.appendOpsQueue.Remove(element)
 	}
 }
@@ -224,14 +226,39 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	}
 }
 
-func (s *segmentHandleImpl) Read(ctx context.Context, i int64, i2 int64) ([]*segment.SegmentEntry, error) {
-	//TODO implement me
-	panic("implement me")
-}
+func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*segment.SegmentEntry, error) {
+	// write data to quorum
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-func (s *segmentHandleImpl) BatchRead(ctx context.Context, i int64, i2 int32, i3 int32) ([]*segment.SegmentEntry, error) {
-	//TODO implement me
-	panic("implement me")
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return nil, errors.New("Currently only support embed standalone mode")
+	}
+
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	if from > to {
+		return nil, errors.New("from must be less than to")
+	}
+
+	if from == to {
+		segmentEntry, err := client.ReadEntry(ctx, s.logId, s.segmentMetaCache.SegNo, from)
+		if err != nil {
+			return nil, err
+		}
+		return []*segment.SegmentEntry{segmentEntry}, nil
+	}
+
+	segmentEntryList, err := client.ReadBatchEntries(ctx, s.logId, s.segmentMetaCache.SegNo, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return segmentEntryList, nil
 }
 
 func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, error) {
@@ -242,8 +269,8 @@ func (s *segmentHandleImpl) GetLastAddPushed(ctx context.Context) (int64, error)
 	return s.lastPushed.Load(), nil
 }
 
-func (s *segmentHandleImpl) GetMetadata(ctx context.Context) (*proto.SegmentMetadata, error) {
-	return s.segmentMetaCache, nil
+func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetadata {
+	return s.segmentMetaCache
 }
 
 func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error) {
@@ -276,7 +303,7 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 
 	// update metadata as completed
 	s.segmentMetaCache.State = proto.SegmentState_Completed
-	s.segmentMetaCache.Size = s.size.Load()
+	s.segmentMetaCache.Size = s.commitedSize.Load()
 	s.segmentMetaCache.LastEntryId = s.lastAddConfirmed.Load()
 	s.segmentMetaCache.CompletionTime = time.Now().UnixMilli()
 	return s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)

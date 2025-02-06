@@ -24,10 +24,10 @@ const (
 // ReaderOpt represents the options for creating a reader.
 type ReaderOpt struct {
 	// StartSequenceNum is the fileLastOffset to start reading from.
-	StartSequenceNum uint64
+	StartSequenceNum int64
 
 	// EndSequenceNum is the fileLastOffset to stop reading at.
-	EndSequenceNum uint64
+	EndSequenceNum int64
 }
 
 // Reader is an interface to read log entries sequentially.
@@ -42,14 +42,14 @@ type Reader interface {
 // LogFile represents a log file interface with read and write operations.
 type LogFile interface {
 	// GetId returns the unique log file id.
-	GetId() uint64
+	GetId() int64
 
 	// Append adds an entry to the log file synchronously.
 	// Returns a future that will receive the result of the append operation.
 	Append(ctx context.Context, data []byte) error
 
 	// AppendAsync adds an entry to the log file asynchronously
-	AppendAsync(ctx context.Context, data []byte) (int, <-chan int)
+	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64)
 
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)

@@ -24,6 +24,7 @@ const (
 // entry is tracked, starting from 0 that corresponds to the first entry in the buffer
 // and equal with the entry index in the buffer.
 
+// Deprecated
 type Buffer struct {
 	mu     sync.Mutex
 	buffer []byte // Buffer to store entries (a flat byte slice)
@@ -35,7 +36,6 @@ type Buffer struct {
 	bufferStartOffset int // Start offset of the buffer, used to calculate the offset of each entry in buffer
 	startSeqNum       int // Start sequence number of the buffer, used to calculate the global sequence number of each entry in buffer
 	lastSequenceNum   int // Last sequence number written to the buffer, starts from 0
-
 }
 
 // NewBuffer initializes a new Buffer with the maximum size.

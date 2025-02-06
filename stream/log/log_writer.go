@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 )
@@ -77,7 +78,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, bytes []byte) <-chan *Wr
 	defer l.Unlock()
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		//fmt.Println("callback segmentId: ", segmentId, " entryId: ", entryId, " err: ", err)
+		fmt.Println("callback segmentId: ", segmentId, " entryId: ", entryId, " err: ", err)
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,

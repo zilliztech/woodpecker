@@ -47,19 +47,19 @@ func (op *AppendOp) Execute() {
 func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex int) {
 	//fmt.Printf("send  %d request to server:%d \n", op.entryId, serverIndex)
 	// order request
-	entryId, seqNo, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
+	entryId, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
 	// async received ack without order
-	go op.receivedAckCallback(entryId, seqNo, syncedCh, err, serverIndex)
+	go op.receivedAckCallback(entryId, syncedCh, err, serverIndex)
 }
 
-func (op *AppendOp) receivedAckCallback(entryId int64, seqNo int, syncedCh <-chan int, err error, serverIndex int) {
+func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
 	for {
 		select {
-		case syncedNo, ok := <-syncedCh:
+		case syncedId, ok := <-syncedCh:
 			if !ok {
 				op.handle.SendAppendErrorCallbacks(entryId, err)
 			}
-			if syncedNo != -1 && syncedNo >= seqNo {
+			if syncedId != -1 && syncedId >= entryId {
 				op.ackSet.Set(serverIndex)
 				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
 					op.completed = true

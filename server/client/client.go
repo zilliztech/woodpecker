@@ -9,8 +9,9 @@ import (
 )
 
 type LogStoreClient interface {
-	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error)
-	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error)
+	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error)
+	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error)
+	ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error)
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
 	RequestCompaction(ctx context.Context, logId int64, segmentId int64) error
 }
@@ -27,12 +28,16 @@ type LogStoreClientLocal struct {
 	store *server.LogStore
 }
 
-func (l *LogStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error) {
+func (l *LogStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
 	return l.store.AddEntry(ctx, logId, entry)
 }
 
-func (l *LogStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error) {
+func (l *LogStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	return l.store.GetEntry(ctx, logId, segmentId, entryId)
+}
+
+func (l *LogStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+	panic("to implemented me")
 }
 
 func (l *LogStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
@@ -49,14 +54,18 @@ type LogStoreClientRemote struct {
 	innerClient proto.LogStoreClient
 }
 
-func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, int, <-chan int, error) {
+func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LogStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) ([]byte, error) {
+func (l *LogStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (l *LogStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+	panic("to implemented me")
 }
 
 func (l *LogStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {

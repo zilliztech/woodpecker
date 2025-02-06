@@ -16,7 +16,7 @@ type LogHandle interface {
 	GetName() string
 	GetSegments(context.Context) (map[int64]*proto.SegmentMetadata, error)
 	OpenLogWriter(context.Context) (LogWriter, error)
-	OpenLogReader(context.Context, int64) (LogReader, error)
+	OpenLogReader(context.Context, *LogMessageId) (LogReader, error)
 	GetLastRecordId(context.Context) (*LogMessageId, error)
 	Truncate(context.Context, int64) error
 }
@@ -103,6 +103,24 @@ func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (s
 	return writeableSegmentHandle, nil
 }
 
+func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	l.Lock()
+	defer l.Unlock()
+	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
+	// create readable segment handle if not exists
+	if !exists {
+		segmentMeta, metaExists := l.SegmentsCache[segmentId]
+		if !metaExists {
+			return nil, fmt.Errorf("segment %d not found", segmentId)
+		}
+		// create a readonly segmentHandle and cache it
+		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+		l.SegmentHandles[segmentId] = handle
+		return handle, nil
+	}
+	return readableSegmentHandle, nil
+}
+
 func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
 	newSegMeta, err := l.createNewSegmentMeta()
 	if err != nil {
@@ -165,12 +183,13 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	// construct new segment metadata
 	segmentNo := l.getNextSegmentId()
 	newSegmentMeta := &proto.SegmentMetadata{
-		SegNo:      segmentNo,
-		CreateTime: time.Now().UnixMilli(),
-		QuorumId:   -1,
-		State:      proto.SegmentState_Active,
-		Size:       0,
-		Offset:     make([]int32, 0),
+		SegNo:       segmentNo,
+		CreateTime:  time.Now().UnixMilli(),
+		QuorumId:    -1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+		Size:        0,
+		Offset:      make([]int32, 0),
 	}
 	// create segment metadata
 	l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
@@ -191,9 +210,12 @@ func (l *logHandleImpl) getNextSegmentId() int64 {
 	return maxSeqNo + 1
 }
 
-func (l *logHandleImpl) OpenLogReader(ctx context.Context, fromEntryId int64) (LogReader, error) {
-	//TODO implement me
-	panic("implement me")
+func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId) (LogReader, error) {
+	readableSegmentHandle, err := l.getOrCreateReadonlySegmentHandle(ctx, from.SegmentId)
+	if err != nil {
+		return nil, err
+	}
+	return NewLogReader(ctx, l, readableSegmentHandle, from), nil
 }
 
 func (l *logHandleImpl) Truncate(ctx context.Context, minEntryIdToKeep int64) error {
