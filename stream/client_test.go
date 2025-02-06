@@ -212,14 +212,14 @@ func TestWriteThroughput(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	resultChan := make([]<-chan *log.WriteResult, 2000000)
+	resultChan := make([]<-chan *log.WriteResult, 10000000)
 	failedIdxs := make([]int, 0)
 	successCount := 0
-	for i := 0; i < 2000000; i++ {
+	for i := 0; i < 10000000; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
 		resultChan[i] = writeResultChan
 	}
-	for i := 0; i < 2000000; i++ {
+	for i := 0; i < 10000000; i++ {
 		//fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {

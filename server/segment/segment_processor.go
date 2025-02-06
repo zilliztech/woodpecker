@@ -151,7 +151,7 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	defer s.Unlock()
 	// TODO get logFile Id according entryId
 	currentLogFileId := int64(0)
-	currentLogFileReader := storage.NewObjectStorageLogFile(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+	currentLogFileReader := storage.NewObjectStorageLogFileReadonly(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
 	return currentLogFileReader, nil
 }
 

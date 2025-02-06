@@ -3,8 +3,7 @@ package log
 import (
 	"context"
 	"fmt"
-	"sort"
-
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/stream/segment"
 )
 
@@ -17,18 +16,19 @@ func NewLogReader(ctx context.Context, logHandle *logHandleImpl, segmentHandle s
 	return &logReaderImpl{
 		logHandle:            logHandle,
 		currentSegmentHandle: segmentHandle,
-		currentSegmentId:     from.SegmentId,
-		currentEntryId:       from.EntryId,
+		pendingReadSegmentId: from.SegmentId,
+		pendingReadEntryId:   from.EntryId,
 	}
 }
 
 var _ LogReader = (*logReaderImpl)(nil)
 
 type logReaderImpl struct {
-	logHandle            *logHandleImpl
+	logHandle *logHandleImpl
+
+	pendingReadSegmentId int64
+	pendingReadEntryId   int64
 	currentSegmentHandle segment.SegmentHandle
-	currentSegmentId     int64
-	currentEntryId       int64
 }
 
 func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
@@ -36,54 +36,43 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		return nil, fmt.Errorf("log handle is not initialized")
 	}
 
-	if l.currentSegmentHandle == nil || l.currentEntryId >= l.currentSegmentHandle.GetMetadata(ctx).LastEntryId {
-		segments, err := l.logHandle.GetSegments(ctx)
+	if l.currentSegmentHandle == nil {
+		segmentHandle, err := l.logHandle.getOrCreateReadonlySegmentHandle(ctx, l.pendingReadSegmentId)
 		if err != nil {
 			return nil, err
 		}
-
-		// Sort segments by their ID
-		var segmentIds []int64
-		for id := range segments {
-			segmentIds = append(segmentIds, id)
+		l.currentSegmentHandle = segmentHandle
+	}
+	if l.currentSegmentHandle.GetMetadata(ctx).State != proto.SegmentState_Active &&
+		l.pendingReadEntryId >= l.currentSegmentHandle.GetMetadata(ctx).LastEntryId {
+		// read from next segment
+		segmentHandle, err := l.logHandle.getOrCreateReadonlySegmentHandle(ctx, l.pendingReadSegmentId+1)
+		if err != nil {
+			return nil, err
 		}
-		sort.Slice(segmentIds, func(i, j int) bool {
-			return segmentIds[i] < segmentIds[j]
-		})
-
-		foundNext := false
-		for _, segId := range segmentIds {
-			if segId > l.currentSegmentId {
-				l.currentSegmentId = segId
-				segmentMeta := segments[segId]
-				segmentHandle, err := l.logHandle.getOrCreateReadonlySegmentHandle(ctx, segmentMeta.SegNo)
-				if err != nil {
-					return nil, err
-				}
-				l.currentSegmentHandle = segmentHandle
-				l.currentEntryId = 0
-				foundNext = true
-				break
-			}
-		}
-
-		if !foundNext {
-			return nil, nil // No more entries
-		}
+		l.pendingReadSegmentId = l.pendingReadSegmentId + 1
+		l.pendingReadEntryId = 0
+		l.currentSegmentHandle = segmentHandle
 	}
 
-	entry, err := l.currentSegmentHandle.Read(ctx, l.currentEntryId, l.currentEntryId)
+	entries, err := l.currentSegmentHandle.Read(ctx, l.pendingReadEntryId, l.pendingReadEntryId)
 	if err != nil {
 		return nil, err
 	}
-	l.currentEntryId++
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if len(entries) > 1 {
+		return nil, fmt.Errorf("read more than one entry")
+	}
 
+	l.pendingReadEntryId++
 	return &LogMessage{
 		Id: &LogMessageId{
-			SegmentId: entry[0].SegmentId,
-			EntryId:   entry[0].EntryId,
+			SegmentId: entries[0].SegmentId,
+			EntryId:   entries[0].EntryId,
 		},
-		Payload: entry[0].Data,
+		Payload: entries[0].Data,
 	}, nil
 }
 

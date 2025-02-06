@@ -177,7 +177,7 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 }
 
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
-	fmt.Printf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId)
+	//fmt.Printf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId)
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence

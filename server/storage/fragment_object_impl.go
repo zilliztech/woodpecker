@@ -162,6 +162,19 @@ func (osf *FragmentObject) Load(ctx context.Context) error {
 	return nil
 }
 
+func (osf *FragmentObject) GetLastEntryId() (int64, error) {
+	if !osf.loaded && osf.uploaded {
+		err := osf.Load(context.Background())
+		if err != nil {
+			return -1, err
+		}
+	}
+	if !osf.loaded {
+		return -1, errors.New("fragment no data to load")
+	}
+	return osf.lastEntryId, nil
+}
+
 func (osf *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 	if !osf.loaded && osf.uploaded {
 		err := osf.Load(context.Background())
