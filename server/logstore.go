@@ -36,13 +36,13 @@ func NewLogStore(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio.
 
 func (l *LogStore) Start() error {
 	// TODO start service
-	//
 
 	// register to etcd and keep alive
 	registerErr := l.Register(context.Background())
 	return registerErr
 }
 func (l *LogStore) Stop() error {
+	l.cancel()
 	return nil
 }
 

@@ -13,28 +13,18 @@ import (
 )
 
 type LogHandle interface {
+	// GetName returns the name of the log.
 	GetName() string
+	// GetSegments retrieves the segment metadata for the log.
 	GetSegments(context.Context) (map[int64]*proto.SegmentMetadata, error)
+	// OpenLogWriter opens a writer for the log.
 	OpenLogWriter(context.Context) (LogWriter, error)
+	// OpenLogReader opens a reader for the log with the specified log message ID.
 	OpenLogReader(context.Context, *LogMessageId) (LogReader, error)
+	// GetLastRecordId returns the last record ID of the log.
 	GetLastRecordId(context.Context) (*LogMessageId, error)
+	// Truncate truncates the log to the specified offset.
 	Truncate(context.Context, int64) error
-}
-
-func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
-	// default 10min or 64MB rollover segment
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(10_000, 128_000_000)
-	return &logHandleImpl{
-		Name:               name,
-		logMetaCache:       logMeta,
-		SegmentsCache:      segments,
-		SegmentHandles:     make(map[int64]segment.SegmentHandle),
-		WritableSegmentId:  -1,
-		Metadata:           meta,
-		ClientPool:         clientPool,
-		lastRolloverTimeMs: -1,
-		rollingPolicy:      defaultRollingPolicy,
-	}
 }
 
 var _ LogHandle = (*logHandleImpl)(nil)
@@ -54,6 +44,22 @@ type logHandleImpl struct {
 	// rolling policy
 	lastRolloverTimeMs int64
 	rollingPolicy      segment.RollingPolicy
+}
+
+func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
+	// default 10min or 64MB rollover segment
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(10_000, 128_000_000)
+	return &logHandleImpl{
+		Name:               name,
+		logMetaCache:       logMeta,
+		SegmentsCache:      segments,
+		SegmentHandles:     make(map[int64]segment.SegmentHandle),
+		WritableSegmentId:  -1,
+		Metadata:           meta,
+		ClientPool:         clientPool,
+		lastRolloverTimeMs: -1,
+		rollingPolicy:      defaultRollingPolicy,
+	}
 }
 
 func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, error) {

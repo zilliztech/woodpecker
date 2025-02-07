@@ -32,7 +32,7 @@ type logStoreClientPoolLocal struct {
 }
 
 func (p *logStoreClientPoolLocal) GetLogStoreClient(target string) (LogStoreClient, error) {
-	return &LogStoreClientLocal{
+	return &logStoreClientLocal{
 		store: p.innerLogStore,
 	}, nil
 }
@@ -64,7 +64,7 @@ func (p *logStoreClientPool) GetLogStoreClient(target string) (LogStoreClient, e
 	if err != nil {
 		return nil, err
 	}
-	return &LogStoreClientRemote{
+	return &logStoreClientRemote{
 		innerClient: proto.NewLogStoreClient(cnx),
 	}, nil
 }

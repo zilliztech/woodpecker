@@ -68,12 +68,12 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 				"127.0.0.1",
 			},
 		},
-		orderExecutor: NewOrderExecutor(10000),
+		executor: NewSequentialExecutor(10000),
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Size)
-	segmentHandle.orderExecutor.Start(1)
+	segmentHandle.executor.Start()
 	return segmentHandle
 }
 
@@ -94,7 +94,7 @@ type segmentHandleImpl struct {
 	commitedSize     atomic.Int64
 	pendingSize      atomic.Int64
 
-	orderExecutor *OrderExecutor
+	executor *SequentialExecutor
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -117,7 +117,7 @@ func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, er
 		return -1, errors.New("Currently only support embed standalone mode")
 	}
 
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return -1, err
 	}
@@ -126,7 +126,7 @@ func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, er
 		EntryId:   s.lastPushed.Add(1),
 		Data:      bytes,
 	}
-	entryId, syncedCh, err := client.AppendEntry(ctx, s.logId, segmentEntry)
+	entryId, syncedCh, err := cli.AppendEntry(ctx, s.logId, segmentEntry)
 	if err != nil {
 		return -1, err
 	}
@@ -156,7 +156,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
 	//fmt.Printf("pushed %d \n", appendOp.entryId)
 	s.appendOpsQueue.PushBack(appendOp)
-	s.orderExecutor.Submit(appendOp)
+	s.executor.Submit(appendOp)
 	s.pendingSize.Add(int64(len(bytes)))
 }
 
@@ -181,7 +181,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
-	elementsToRemove := []*list.Element{} // 新增：用于存储需要删除的元素
+	elementsToRemove := []*list.Element{}
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed {
@@ -203,7 +203,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
-	for _, element := range elementsToRemove { // 新增：遍历切片并删除元素
+	for _, element := range elementsToRemove {
 		//fmt.Printf("SendAppendSuccessCallbacks remove: %v \n", element)
 		s.appendOpsQueue.Remove(element)
 	}

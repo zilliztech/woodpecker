@@ -3,10 +3,12 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/err"
 	"sync"
 	"sync/atomic"
 )
 
+// SequentialBuffer is a buffer that stores entries in a sequential manner.
 type SequentialBuffer struct {
 	mu       sync.Mutex
 	values   [][]byte
@@ -99,11 +101,11 @@ func (b *SequentialBuffer) GetExpectedNextEntryId() int64 {
 
 func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([][]byte, error) {
 	if len(b.values) == 0 {
-		return nil, ErrIsEmpty
+		return nil, err.ErrBufferIsEmpty
 	}
 
 	if fromEntryId < b.firstEntryId || fromEntryId > b.firstEntryId+b.maxSize {
-		return nil, ErrInvalidEntryId
+		return nil, err.ErrInvalidEntryId
 	}
 
 	if fromEntryId == b.firstEntryId+b.maxSize {
@@ -119,11 +121,11 @@ func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64
 	defer b.mu.Unlock()
 
 	if startEntryId >= b.firstEntryId+b.maxSize || startEntryId < b.firstEntryId {
-		return nil, ErrInvalidSequenceNumber
+		return nil, err.ErrInvalidEntryId
 	}
 
 	if endEntryId > b.firstEntryId+b.maxSize || endEntryId < startEntryId {
-		return nil, ErrInvalidSequenceNumber
+		return nil, err.ErrInvalidEntryId
 	}
 
 	// Extract the bytes from the buffer

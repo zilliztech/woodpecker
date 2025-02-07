@@ -18,13 +18,6 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {
-	return &metadataProviderEtcd{
-		client:         client,
-		logWriterLocks: make(map[string]*concurrency.Mutex),
-	}
-}
-
 var _ MetadataProvider = (*metadataProviderEtcd)(nil)
 
 type metadataProviderEtcd struct {
@@ -33,6 +26,13 @@ type metadataProviderEtcd struct {
 
 	session        *concurrency.Session
 	logWriterLocks map[string]*concurrency.Mutex
+}
+
+func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {
+	return &metadataProviderEtcd{
+		client:         client,
+		logWriterLocks: make(map[string]*concurrency.Mutex),
+	}
 }
 
 // InitIfNecessary initializes the metadata provider if necessary.

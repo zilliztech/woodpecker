@@ -7,9 +7,20 @@ import (
 )
 
 type LogWriter interface {
+	// Write writes a log message synchronously and returns a WriteResult.
+	// It takes a context and a byte slice representing the log message.
 	Write(context.Context, []byte) *WriteResult
+
+	// WriteAsync writes a log message asynchronously and returns a channel that will receive a WriteResult.
+	// It takes a context and a byte slice representing the log message.
 	WriteAsync(context.Context, []byte) <-chan *WriteResult
+
+	// Truncate truncates the log to the specified log message ID.
+	// It takes a context and a LogMessageId.
 	Truncate(context.Context, *LogMessageId) error
+
+	// Close closes the log writer.
+	// It takes a context and returns an error if any occurs.
 	Close(context.Context) error
 }
 

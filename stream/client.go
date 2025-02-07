@@ -13,12 +13,19 @@ import (
 )
 
 type WoodpeckerClient interface {
+	// CreateLog creates a new log with the specified name.
 	CreateLog(context.Context, string) error
+	// OpenLog opens an existing log with the specified name and returns a log handle.
 	OpenLog(context.Context, string) (log.LogHandle, error)
+	// DeleteLog deletes the log with the specified name.
 	DeleteLog(context.Context, string) error
+	// LogExists checks if a log with the specified name exists.
 	LogExists(context.Context, string) (bool, error)
+	// GetAllLogs retrieves all log names.
 	GetAllLogs(context.Context) ([]string, error)
+	// GetLogsWithPrefix retrieves log names that start with the specified prefix.
 	GetLogsWithPrefix(context.Context, string) ([]string, error)
+	// GetMetadataProvider returns the metadata provider associated with the client.
 	GetMetadataProvider() meta.MetadataProvider
 }
 
@@ -35,9 +42,7 @@ func NewWoodpeckerClient(ctx context.Context, etcdClient *clientv3.Client) (Wood
 
 var _ WoodpeckerClient = (*woodpeckerClient)(nil)
 
-/**
- * Implementation of the client interface for Distributed mode.
- */
+// Implementation of the client interface for Distributed mode.
 type woodpeckerClient struct {
 	Metadata meta.MetadataProvider
 }
@@ -50,7 +55,9 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 	return c.Metadata
 }
 
+// CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
+	// Store segment metadata with detailed comments
 	c.Metadata.StoreSegmentMetadata(ctx, logName, &proto.SegmentMetadata{
 		SegNo:      0,
 		CreateTime: time.Now().UnixMilli(),
@@ -62,7 +69,9 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 	return nil
 }
 
+// OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
+	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
 	if err != nil {
 		return nil, err
@@ -70,19 +79,26 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPool()), nil
 }
 
+// DeleteLog deletes the log with the specified name.
 func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error {
-	//TODO implement me
+	// Implement the DeleteLog method
 	panic("implement me")
 }
 
+// LogExists checks if a log with the specified name exists.
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
+	// Check if log exists with detailed comments
 	return c.Metadata.CheckExists(ctx, logName)
 }
 
+// GetAllLogs retrieves all log names.
 func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
+	// Retrieve all logs with detailed comments
 	return c.Metadata.ListLogs(ctx)
 }
 
+// GetLogsWithPrefix retrieves log names that start with the specified prefix.
 func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
+	// Retrieve logs with the given prefix with detailed comments
 	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 }

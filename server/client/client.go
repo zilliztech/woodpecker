@@ -9,71 +9,74 @@ import (
 )
 
 type LogStoreClient interface {
+	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error)
+	// ReadEntry reads an entry from the specified log segment by entry ID and returns the entry and an error if any.
 	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error)
+	// ReadBatchEntries reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
 	ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error)
+	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
+	// RequestCompaction requests compaction for the specified log segment and returns an error if any.
 	RequestCompaction(ctx context.Context, logId int64, segmentId int64) error
 }
 
-func NewLogStoreClientLocal(store *server.LogStore) LogStoreClient {
-	return &LogStoreClientLocal{
-		store: store,
-	}
-}
+var _ LogStoreClient = (*logStoreClientLocal)(nil)
 
-var _ LogStoreClient = (*LogStoreClientLocal)(nil)
-
-type LogStoreClientLocal struct {
+// logStoreClientLocal is a local implementation of LogStoreClient,
+// which will directly interact with the local LogStore instance.
+type logStoreClientLocal struct {
 	store *server.LogStore
 }
 
-func (l *LogStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
 	return l.store.AddEntry(ctx, logId, entry)
 }
 
-func (l *LogStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	return l.store.GetEntry(ctx, logId, segmentId, entryId)
 }
 
-func (l *LogStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
-	panic("to implemented me")
+func (l *logStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+	panic("implement me")
 }
 
-func (l *LogStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
 	return l.store.FenceSegment(ctx, logId, segmentId)
 }
 
-func (l *LogStoreClientLocal) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientLocal) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
 	return l.store.CompactSegment(ctx, logId, segmentId)
 }
 
-var _ LogStoreClient = (*LogStoreClientRemote)(nil)
+var _ LogStoreClient = (*logStoreClientRemote)(nil)
 
-type LogStoreClientRemote struct {
+// logStoreClientRemote is a remote implementation of LogStoreClient,
+// which will interact with a remote LogStoreClient instance using gRPC.
+type logStoreClientRemote struct {
 	innerClient proto.LogStoreClient
 }
 
-func (l *LogStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LogStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LogStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
-	panic("to implemented me")
+func (l *logStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+	panic("implement me")
 }
 
-func (l *LogStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *LogStoreClientRemote) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientRemote) RequestCompaction(ctx context.Context, logId int64, segmentId int64) error {
 	//TODO implement me
 	panic("implement me")
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/minio/minio-go/v7"
+	"github.com/zilliztech/woodpecker/common/codec"
 	"io"
 )
 
@@ -62,7 +63,7 @@ func NewObjectStorageFragment(client *minio.Client, bucket string, fragmentId ui
 }
 
 // NewReader retrieves the object from MinIO.
-func (osf *FragmentObject) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, error) {
+func (fo *FragmentObject) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, error) {
 	//object, err := osf.client.GetObject(ctx, osf.bucket, osf.objectKey, minio.GetObjectOptions{})
 	//if err != nil {
 	//	return nil, fmt.Errorf("failed to get object: %w", err)
@@ -74,39 +75,39 @@ func (osf *FragmentObject) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry
 	// 2. find the fileLastOffset of the data in the object
 	// Seek to the specified fileLastOffset
 	//return object, nil
-	panic("to implement me")
+	panic("implement me")
 }
 
 // Write uploads the data to MinIO.
-func (osf *FragmentObject) Write(ctx context.Context, data []byte) error {
-	if !osf.loaded {
+func (f *FragmentObject) Write(ctx context.Context, data []byte) error {
+	if !f.loaded {
 		return fmt.Errorf("fragment is empty")
 	}
 	fullData := make([]byte, 0)
-	fullData = append(fullData, int64ToBytes(1)...)
-	fullData = append(fullData, int64ToBytes(osf.firstEntryId)...)
-	fullData = append(fullData, int64ToBytes(osf.lastEntryId)...)
-	fullData = append(fullData, osf.indexes...)
-	fullData = append(fullData, osf.entriesData...)
+	fullData = append(fullData, codec.Int64ToBytes(1)...)
+	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
+	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
+	fullData = append(fullData, f.indexes...)
+	fullData = append(fullData, f.entriesData...)
 
-	_, err := osf.client.PutObject(ctx, osf.bucket, osf.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
+	_, err := f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
-	osf.uploaded = true
+	f.uploaded = true
 	return nil
 }
 
-func (osf *FragmentObject) Load(ctx context.Context) error {
-	if osf.loaded {
+func (f *FragmentObject) Load(ctx context.Context) error {
+	if f.loaded {
 		// already loaded, no need to load again
 		return nil
 	}
-	if !osf.uploaded {
+	if !f.uploaded {
 		return fmt.Errorf("fragment is not uploaded")
 	}
 
-	fragObject, err := osf.client.GetObject(ctx, osf.bucket, osf.fragmentKey, minio.GetObjectOptions{})
+	fragObject, err := f.client.GetObject(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
@@ -152,69 +153,69 @@ func (osf *FragmentObject) Load(ctx context.Context) error {
 	entriesData := buf.Bytes()
 
 	// Reset the buffer with the loaded data
-	osf.entriesData = entriesData
-	osf.indexes = indexes
-	osf.firstEntryId = int64(firstEntryID)
-	osf.lastEntryId = int64(lastEntryId)
+	f.entriesData = entriesData
+	f.indexes = indexes
+	f.firstEntryId = int64(firstEntryID)
+	f.lastEntryId = int64(lastEntryId)
 
 	//
-	osf.loaded = true
+	f.loaded = true
 	return nil
 }
 
-func (osf *FragmentObject) GetLastEntryId() (int64, error) {
-	if !osf.loaded && osf.uploaded {
-		err := osf.Load(context.Background())
+func (f *FragmentObject) GetLastEntryId() (int64, error) {
+	if !f.loaded && f.uploaded {
+		err := f.Load(context.Background())
 		if err != nil {
 			return -1, err
 		}
 	}
-	if !osf.loaded {
+	if !f.loaded {
 		return -1, errors.New("fragment no data to load")
 	}
-	return osf.lastEntryId, nil
+	return f.lastEntryId, nil
 }
 
-func (osf *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
-	if !osf.loaded && osf.uploaded {
-		err := osf.Load(context.Background())
+func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
+	if !f.loaded && f.uploaded {
+		err := f.Load(context.Background())
 		if err != nil {
 			return nil, err
 		}
 	}
-	if !osf.loaded {
+	if !f.loaded {
 		return nil, errors.New("fragment no data to load")
 	}
-	relatedIdx := (entryId - osf.firstEntryId) * 8
-	entryOffset := binary.BigEndian.Uint32(osf.indexes[relatedIdx : relatedIdx+4])
-	entryLength := binary.BigEndian.Uint32(osf.indexes[relatedIdx+4 : relatedIdx+8])
-	return osf.entriesData[entryOffset : entryOffset+entryLength], nil
+	relatedIdx := (entryId - f.firstEntryId) * 8
+	entryOffset := binary.BigEndian.Uint32(f.indexes[relatedIdx : relatedIdx+4])
+	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
+	return f.entriesData[entryOffset : entryOffset+entryLength], nil
 }
 
-func (osf *FragmentObject) Release() error {
-	if !osf.loaded {
+func (f *FragmentObject) Release() error {
+	if !f.loaded {
 		// empty, no need to release again
 		return nil
 	}
-	osf.indexes = nil
-	osf.entriesData = nil
-	osf.loaded = false
+	f.indexes = nil
+	f.entriesData = nil
+	f.loaded = false
 	return nil
 }
 
-func (osf *FragmentObject) Close() error {
+func (f *FragmentObject) Close() error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (osf *FragmentObject) Flush(ctx context.Context) error {
+func (f *FragmentObject) Flush(ctx context.Context) error {
 	//TODO implement me
 	panic("implement me")
 }
 
 // Footer serialization to bytes
 // TODO reduce memory copy, directly write to the file
-func (osf *FragmentObject) encodeFooter() ([]byte, error) {
+func (f *FragmentObject) encodeFooter() ([]byte, error) {
 	//var buf bytes.Buffer
 	//if err := binary.Write(&buf, binary.LittleEndian, osf.footer.EntryOffset); err != nil {
 	//	return nil, err

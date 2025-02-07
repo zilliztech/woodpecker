@@ -14,6 +14,14 @@ import (
 	"github.com/zilliztech/woodpecker/stream/log"
 )
 
+var _ WoodpeckerClient = (*woodpeckerEmbedClient)(nil)
+
+// Implementation of the client interface for Z'eembed mode.
+type woodpeckerEmbedClient struct {
+	Metadata      meta.MetadataProvider
+	embedLogStore *server.LogStore
+}
+
 func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
 	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
 	if err != nil {
@@ -31,16 +39,6 @@ func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (cl
 	return &c, nil
 }
 
-var _ WoodpeckerClient = (*woodpeckerEmbedClient)(nil)
-
-/**
- * Implementation of the client interface for embed mode.
- */
-type woodpeckerEmbedClient struct {
-	Metadata      meta.MetadataProvider
-	embedLogStore *server.LogStore
-}
-
 func (c *woodpeckerEmbedClient) initClient(ctx context.Context) error {
 	initMeta := c.Metadata.InitIfNecessary(ctx)
 	if initMeta != nil {
@@ -55,6 +53,8 @@ func (c *woodpeckerEmbedClient) GetMetadataProvider() meta.MetadataProvider {
 	return c.Metadata
 }
 
+// CreateLog creates a new log with the specified name.
+// It stores segment metadata for the new log.
 func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) error {
 	c.Metadata.StoreSegmentMetadata(ctx, logName, &proto.SegmentMetadata{
 		SegNo:      0,
@@ -67,6 +67,8 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	return nil
 }
 
+// OpenLog opens an existing log with the specified name and returns a log handle.
+// It retrieves the log metadata and segments metadata, then creates a new log handle.
 func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
 	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
 	if err != nil {
@@ -75,19 +77,27 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPoolLocal(c.embedLogStore)), nil
 }
 
+// DeleteLog deletes the log with the specified name.
+// It should remove the log and its associated metadata.
 func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) error {
 	//TODO implement me
 	panic("implement me")
 }
 
+// LogExists checks if a log with the specified name exists.
+// It returns true if the log exists, otherwise false.
 func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (bool, error) {
 	return c.Metadata.CheckExists(ctx, logName)
 }
 
+// GetAllLogs retrieves all log names.
+// It returns a slice containing all log names.
 func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	return c.Metadata.ListLogs(ctx)
 }
 
+// GetLogsWithPrefix retrieves log names that start with the specified prefix.
+// It returns a slice containing log names that match the prefix.
 func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 }

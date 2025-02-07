@@ -8,7 +8,11 @@ import (
 )
 
 type LogReader interface {
+	// ReadNext reads the next log message from the log, blocking until a message
+	// is available. It returns the log message and an error if any occurs.
 	ReadNext(context.Context) (*LogMessage, error)
+	// Close closes the log reader.
+	// It returns an error if any occurs during the closing process.
 	Close(context.Context) error
 }
 

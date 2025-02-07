@@ -2,14 +2,17 @@ package segment
 
 import (
 	"context"
-	"sync"
-
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
 	"github.com/zilliztech/woodpecker/server/segment"
 )
 
+// AppendOp represents an operation to append data to a log segment.
+// Once all LogStores have successfully acknowledged the append operation,
+// it checks if it is at the head of the pending adds queue.
+// If it is, it sends an acknowledgment back to the application.
+// If a LogStore fails, it retries multiple times.
 type AppendOp struct {
 	logId     int64
 	segmentId int64
@@ -17,13 +20,13 @@ type AppendOp struct {
 	value     []byte
 	callback  func(segmentId int64, entryId int64, err error)
 
-	sync.RWMutex
 	clientPool client.LogStoreClientPool
 	handle     SegmentHandle
 	ackSet     *bitset.BitSet
 	quorumInfo *proto.QuorumInfo
-	completed  bool
-	err        error
+
+	completed bool
+	err       error
 }
 
 func (op *AppendOp) Execute() {

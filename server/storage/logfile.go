@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"io"
 
 	"github.com/zilliztech/woodpecker/proto"
@@ -43,30 +42,17 @@ type Reader interface {
 type LogFile interface {
 	// GetId returns the unique log file id.
 	GetId() int64
-
 	// Append adds an entry to the log file synchronously.
 	// Returns a future that will receive the result of the append operation.
 	Append(ctx context.Context, data []byte) error
-
 	// AppendAsync adds an entry to the log file asynchronously
 	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64)
-
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)
-
 	// LastOffset returns the fileLastOffset of the last entry.
 	LastOffset() uint64
-
 	// Sync ensures all buffered data is written to persistent storage.
 	Sync(ctx context.Context) error
-
 	// Closer closes the log file.
 	io.Closer
 }
-
-// Define custom errors
-var (
-	ErrInvalidEntryId = errors.New("invalid entry id")
-	ErrReadFailure    = errors.New("failed to read from log file")
-	ErrWriteFailure   = errors.New("failed to write to log file")
-)

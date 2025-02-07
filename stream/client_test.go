@@ -3,8 +3,6 @@ package stream
 import (
 	"context"
 	"fmt"
-	"github.com/google/gops/agent"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/pprof"
 	"sort"
@@ -12,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/gops/agent"
+	"github.com/stretchr/testify/assert"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/etcd"
@@ -288,7 +288,7 @@ func TestReadThroughput(t *testing.T) {
 
 	//	### OpenReader
 	start := &log.LogMessageId{
-		SegmentId: 5,
+		SegmentId: 15,
 		EntryId:   0,
 	}
 	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)

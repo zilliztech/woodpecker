@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/err"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -102,7 +103,7 @@ func (f *objectStorageLogFile) GetId() int64 {
 
 func (f *objectStorageLogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64) {
 	ch := make(chan int64, 1)
-	// first check buffer size,trigger flush if necessary
+	// first check buffer size, trigger flush if necessary
 	if f.buffer.expectedNextEntryId.Load()+1 >= int64(f.buffer.firstEntryId+f.buffer.maxSize) {
 		fmt.Println("buffer full, trigger flush, case")
 		err := f.Sync(ctx)
@@ -159,7 +160,7 @@ func (f *objectStorageLogFile) getFragmentForReader(entryId int64) *FragmentObje
 			return fragment
 		}
 	}
-	// try next fragment which has bean uploaded in objectStorage
+	// try next fragment which has been uploaded in objectStorage
 	nextFragmentId := f.LastOffset() + 1
 	nextFragmentKey := f.getFragmentKey(nextFragmentId)
 	exists, err := f.objectExists(context.Background(), nextFragmentKey)
@@ -189,7 +190,7 @@ func (f *objectStorageLogFile) NewReader(ctx context.Context, opt ReaderOpt) (Re
 	defer f.mu.Unlock()
 
 	if opt.StartSequenceNum < 0 || opt.StartSequenceNum >= f.getLastEntryId() {
-		return nil, ErrInvalidEntryId
+		return nil, err.ErrInvalidEntryId
 	}
 
 	reader := NewObjectStorageLogFileReader(opt, f)
@@ -293,6 +294,7 @@ func (f *objectStorageLogFile) prefetchFragmentInfos() {
 		fragKey := f.getFragmentKey(fragId)
 		exists, err := f.objectExists(context.Background(), fragKey)
 		if err != nil {
+			// indicates that the prefetching of fragments has completed.
 			fmt.Println("object storage read fragment err: ", err)
 			return
 		}
