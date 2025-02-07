@@ -288,7 +288,7 @@ func TestReadThroughput(t *testing.T) {
 
 	//	### OpenReader
 	start := &log.LogMessageId{
-		SegmentId: 15,
+		SegmentId: 18,
 		EntryId:   0,
 	}
 	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)

@@ -25,7 +25,7 @@ func TestWoodpeckerError(t *testing.T) {
 	assert.Equal(t, retryable, testErr.IsRetryable())
 
 	// Test Is() method
-	sameErr := newWoodpeckerError(errMsg, errCode, retryable)
+	sameErr := newWoodpeckerError("test error 2", errCode, retryable)
 	assert.True(t, testErr.Is(sameErr))
 	differentErr := newWoodpeckerError("different error", int32(2002), retryable)
 	assert.False(t, testErr.Is(differentErr))

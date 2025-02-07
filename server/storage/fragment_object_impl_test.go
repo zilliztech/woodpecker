@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	minio2 "github.com/zilliztech/woodpecker/common/minio"
 )
 
@@ -45,7 +46,7 @@ func TestWriteAndLoad(t *testing.T) {
 
 	// Test writing when fragment is not loaded
 	fragment.loaded = false
-	err = fragment.Write(context.Background(), []byte("data"))
+	err = fragment.Flush(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, "fragment is empty", err.Error())
 
@@ -53,7 +54,7 @@ func TestWriteAndLoad(t *testing.T) {
 	fragment.loaded = true
 
 	//
-	err = fragment.Write(context.Background(), nil)
+	err = fragment.Flush(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, fragment.uploaded)
 

@@ -2,10 +2,76 @@ package err
 
 import "github.com/cockroachdb/errors"
 
+const (
+	// Ok means no errors
+	Ok = iota
+	// UnknownError means unknown error happened on broker
+	UnknownError
+	// InvalidConfiguration means invalid configuration
+	InvalidConfiguration
+	// TimeoutError means operation timed out
+	TimeoutError
+	// ConnectError means failed to connect to broker
+	ConnectError
+	// ReadError means failed to read from socket
+	ReadError
+	// MetadataError failed in updating metadata
+	MetadataError
+	// PersistenceError failed to persist entry
+	PersistenceError
+	// ChecksumError corrupt message checksum failure
+	ChecksumError
+	// NotConnectedError producer/consumer is not currently connected to broker
+	NotConnectedError
+	// AlreadyClosedError producer/consumer is already closed and not accepting any operation
+	AlreadyClosedError
+	// InvalidEntryId entry id is invalid
+	InvalidEntryId
+	// ReaderNotInitialized reader is not initialized
+	ReaderNotInitialized
+	// WriterNotInitialized writer is not initialized
+	WriterNotInitialized
+	// TooManyAppendOpsException too many concurrent AppendOps
+	TooManyAppendOpsException
+	// InvalidLogName means invalid Log name
+	InvalidLogName
+	// InvalidURL means Client Initialized with Invalid LogStore Url
+	InvalidURL
+	// OperationNotSupported operation not supported
+	OperationNotSupported
+	// WriterBlockedQuotaExceededException writer is getting exception
+	WriterBlockedQuotaExceededException
+	// WriterQueueIsFull producer queue is full
+	WriterQueueIsFull
+	// MessageTooBig trying to send a messages exceeding the max size
+	MessageTooBig
+	// EntryNotFound entry not found
+	EntryNotFound
+	// UnsupportedVersionError when an older client/version doesn't support a required feature
+	UnsupportedVersionError
+	// ReaderClosed means reader already been closed
+	ReaderClosed
+	// WriterClosed means writer already been closed
+	WriterClosed
+	// InvalidStatus means the component status is not as expected.
+	InvalidStatus
+	// MemoryBufferIsFull limited buffer is full
+	MemoryBufferIsFull
+	// SegmentFenced When a segment asks and fail to get exclusive writer access,
+	// or loses the exclusive status after a reconnection, the segmentHandle will
+	// use this error to indicate that this segment is now permanently
+	// fenced.
+	SegmentFenced
+	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
+	// has been reached. This means that no additional operations can be started until some
+	// of the current operations complete.
+	MaxConcurrentOperationsReached
+)
+
 var (
-	ErrInvalidEntryId = newWoodpeckerError("Invalid EntryId", 1, false)
-	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", 2, false)
-	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", 3, false)
+	ErrInvalidEntryId = newWoodpeckerError("Invalid EntryId", InvalidEntryId, false)
+	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsFull, true)
+	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.

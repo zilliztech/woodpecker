@@ -262,7 +262,7 @@ func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 	fragId := f.LastOffset() + 1 // fragment id
 	key := f.getFragmentKey(fragId)
 	fragment := NewObjectStorageFragment(f.client, f.bucket, fragId, key, toFlushData, toFlushDataFirstEntryId, true, false)
-	err = fragment.Write(ctx, nil)
+	err = fragment.Flush(ctx)
 	if err != nil {
 		log.Printf("Call Sync, but fragment write err : %v", err)
 		return err
@@ -295,7 +295,7 @@ func (f *objectStorageLogFile) prefetchFragmentInfos() {
 		exists, err := f.objectExists(context.Background(), fragKey)
 		if err != nil {
 			// indicates that the prefetching of fragments has completed.
-			fmt.Println("object storage read fragment err: ", err)
+			//fmt.Println("object storage read fragment err: ", err)
 			return
 		}
 		if exists {

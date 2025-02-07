@@ -6,12 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/minio/minio-go/v7"
-	"github.com/zilliztech/woodpecker/common/codec"
 	"io"
-)
 
-var _ Fragment = (*FragmentObject)(nil)
+	"github.com/minio/minio-go/v7"
+
+	"github.com/zilliztech/woodpecker/common/codec"
+)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
@@ -62,24 +62,8 @@ func NewObjectStorageFragment(client *minio.Client, bucket string, fragmentId ui
 	}
 }
 
-// NewReader retrieves the object from MinIO.
-func (fo *FragmentObject) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, error) {
-	//object, err := osf.client.GetObject(ctx, osf.bucket, osf.objectKey, minio.GetObjectOptions{})
-	//if err != nil {
-	//	return nil, fmt.Errorf("failed to get object: %w", err)
-	//}
-
-	//1. read index data from tail of the object
-	//offset := int64(0)
-
-	// 2. find the fileLastOffset of the data in the object
-	// Seek to the specified fileLastOffset
-	//return object, nil
-	panic("implement me")
-}
-
-// Write uploads the data to MinIO.
-func (f *FragmentObject) Write(ctx context.Context, data []byte) error {
+// Flush uploads the data to MinIO.
+func (f *FragmentObject) Flush(ctx context.Context) error {
 	if !f.loaded {
 		return fmt.Errorf("fragment is empty")
 	}
@@ -98,6 +82,7 @@ func (f *FragmentObject) Write(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// Load reads the data from MinIO.
 func (f *FragmentObject) Load(ctx context.Context) error {
 	if f.loaded {
 		// already loaded, no need to load again
@@ -192,6 +177,7 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 	return f.entriesData[entryOffset : entryOffset+entryLength], nil
 }
 
+// Release releases the memory used by the fragment.
 func (f *FragmentObject) Release() error {
 	if !f.loaded {
 		// empty, no need to release again
@@ -201,35 +187,4 @@ func (f *FragmentObject) Release() error {
 	f.entriesData = nil
 	f.loaded = false
 	return nil
-}
-
-func (f *FragmentObject) Close() error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (f *FragmentObject) Flush(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-// Footer serialization to bytes
-// TODO reduce memory copy, directly write to the file
-func (f *FragmentObject) encodeFooter() ([]byte, error) {
-	//var buf bytes.Buffer
-	//if err := binary.Write(&buf, binary.LittleEndian, osf.footer.EntryOffset); err != nil {
-	//	return nil, err
-	//}
-	//
-	//osf.footer.CRC = crc32.ChecksumIEEE(buf.Bytes())
-	//if err := binary.Write(&buf, binary.LittleEndian, osf.footer.CRC); err != nil {
-	//	return nil, err
-	//}
-	//
-	//if err := binary.Write(&buf, binary.LittleEndian, osf.footer.IndexSize); err != nil {
-	//	return nil, err
-	//}
-	//return buf.Bytes(), nil
-	//TODO implement me
-	panic("implement me")
 }
