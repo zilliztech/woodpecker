@@ -3,9 +3,10 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/err"
 	"sync"
 	"sync/atomic"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
@@ -101,11 +102,11 @@ func (b *SequentialBuffer) GetExpectedNextEntryId() int64 {
 
 func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([][]byte, error) {
 	if len(b.values) == 0 {
-		return nil, err.ErrBufferIsEmpty
+		return nil, werr.ErrBufferIsEmpty
 	}
 
 	if fromEntryId < b.firstEntryId || fromEntryId > b.firstEntryId+b.maxSize {
-		return nil, err.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId
 	}
 
 	if fromEntryId == b.firstEntryId+b.maxSize {
@@ -121,11 +122,11 @@ func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64
 	defer b.mu.Unlock()
 
 	if startEntryId >= b.firstEntryId+b.maxSize || startEntryId < b.firstEntryId {
-		return nil, err.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId
 	}
 
 	if endEntryId > b.firstEntryId+b.maxSize || endEntryId < startEntryId {
-		return nil, err.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId
 	}
 
 	// Extract the bytes from the buffer

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/proto"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	minio2 "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 func TestNewObjectStorageLogFile(t *testing.T) {

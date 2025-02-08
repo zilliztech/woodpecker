@@ -2,12 +2,11 @@ package stream
 
 import (
 	"context"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
-	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
 	"github.com/zilliztech/woodpecker/stream/log"
 )
@@ -35,7 +34,7 @@ func NewWoodpeckerClient(ctx context.Context, etcdClient *clientv3.Client) (Wood
 	}
 	err := c.initClient(ctx)
 	if err != nil {
-		return nil, err
+		return nil, werr.ErrInitClient.WithCauseErr(err)
 	}
 	return c, nil
 }
@@ -58,15 +57,7 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 // CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
 	// Store segment metadata with detailed comments
-	c.Metadata.StoreSegmentMetadata(ctx, logName, &proto.SegmentMetadata{
-		SegNo:      0,
-		CreateTime: time.Now().UnixMilli(),
-		QuorumId:   -1,
-		State:      proto.SegmentState_Active,
-		Size:       0,
-		Offset:     make([]int32, 0),
-	})
-	return nil
+	return c.Metadata.CreateLog(ctx, logName)
 }
 
 // OpenLog opens an existing log with the specified name and returns a log handle.

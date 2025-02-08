@@ -2,7 +2,6 @@ package meta
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"go.etcd.io/etcd/client/v3/concurrency"
 	pb "google.golang.org/protobuf/proto"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -55,7 +55,8 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 
 	resp, err := e.client.Txn(ctx).If().Then(ops...).Commit()
 	if err != nil || !resp.Succeeded {
-		return err
+		log.Printf("init service metadata failed, %v", err)
+		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	initOps := make([]clientv3.Op, 0, 4)
 	for index, rp := range resp.Responses {
@@ -72,7 +73,8 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				}
 				data, encodeErr := pb.Marshal(v)
 				if encodeErr != nil {
-					return encodeErr
+					log.Printf("encode version failed, %v", encodeErr)
+					return werr.ErrMetadataEncode.WithCauseErr(encodeErr)
 				}
 				initOps = append(initOps, clientv3.OpPut(keys[index], string(data)))
 			} else {
@@ -89,13 +91,13 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	} else if len(initOps) != len(keys) {
 		// cluster already initialized partially, but not all
 		log.Printf("init operation failed, some keys already exists")
-		return errors.New("init operation failed, some keys already exists")
+		return werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
 	}
 	// cluster not initialized, initialize it
 	_, initErr := e.client.Txn(ctx).If().Then(initOps...).Commit()
 	if initErr != nil || !resp.Succeeded {
-		log.Printf("init operation failed, %v", initErr)
-		return initErr
+		log.Printf("fail to put metadata failed when init service meta, %v", initErr)
+		return werr.ErrMetadataInit.WithCauseErr(initErr)
 	}
 	// cluster initialized successfully
 	log.Printf("cluster initialized successfully")
@@ -105,15 +107,16 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Version, error) {
 	getResp, getErr := e.client.Get(ctx, VersionKey)
 	if getErr != nil {
-		return nil, getErr
+		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
-		return nil, errors.New("version not found")
+		return nil, werr.ErrMetadataRead.WithCauseErrMsg("version not found")
 	}
 	expectedVersion := &proto.Version{}
 	decodedErr := pb.Unmarshal(getResp.Kvs[0].Value, expectedVersion)
 	if decodedErr != nil {
-		return nil, decodedErr
+		log.Printf("decode version failed, %v", decodedErr)
+		return nil, werr.ErrMetadataDecode.WithCauseErr(decodedErr)
 	}
 	return expectedVersion, nil
 }
@@ -125,25 +128,30 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	// Get the current id value from logIdGenerator
 	resp, err := e.client.Get(ctx, LogIdGeneratorKey)
 	if err != nil {
-		return fmt.Errorf("failed to get next logId: %w", err)
+		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 
 	if len(resp.Kvs) == 0 {
-		return fmt.Errorf("%s key not found", LogIdGeneratorKey)
+		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("%s key not found", LogIdGeneratorKey))
 	}
 
 	// check if logName exists
 	checkExistsResp, err := e.client.Get(ctx, BuildLogKey(logName), clientv3.WithPrefix())
 	if err != nil {
-		return fmt.Errorf("failed to get next logId: %w", err)
+		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(checkExistsResp.Kvs) > 0 {
-		return errors.New(fmt.Sprintf("%s already exists", logName))
+		return werr.ErrCreateLogMetadata.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 
 	// create a New Log with default Options
-	currentID := string(resp.Kvs[0].Value)
-	nextID := atoi(currentID) + 1
+	currentIdStr := string(resp.Kvs[0].Value)
+	currentID, err := atoi(currentIdStr)
+	if err != nil {
+		log.Printf("failed to convert string to int: %v", err)
+		return werr.ErrMetadataDecode.WithCauseErr(err)
+	}
+	nextID := currentID + 1
 	logMeta := &proto.LogMeta{
 		LogId:                     int64(nextID),
 		MaxSegmentRollTimeSeconds: 60,
@@ -156,7 +164,8 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	// Serialize to binary
 	logMetaValue, err := pb.Marshal(logMeta)
 	if err != nil {
-		log.Fatalf("Failed to serialize LogMeta: %v", err)
+		log.Printf("Failed to serialize LogMeta: %v", err)
+		return werr.ErrCreateLogMetadata.WithCauseErr(err)
 	}
 	// Start a transaction
 	txn := e.client.Txn(ctx)
@@ -173,36 +182,37 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	).Commit()
 
 	if err != nil {
-		return fmt.Errorf("transaction failed: %w", err)
+		log.Printf("Failed to execute create log transaction: %v", err)
+		return werr.ErrCreateLogMetadata.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
-		return fmt.Errorf("transaction failed due to idgen mismatch")
+		return werr.ErrCreateLogMetadata.WithCauseErrMsg("transaction failed due to idgen mismatch")
 	}
 	return nil
 }
 
 // atoi converts string to int with error handling
-func atoi(s string) int {
+func atoi(s string) (int, error) {
 	value, err := strconv.Atoi(s)
 	if err != nil {
-		log.Fatalf("failed to convert string to int: %v", err)
+		return 0, err
 	}
-	return value
+	return value, nil
 }
 
 func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error) {
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
 	if err != nil {
-		return nil, err
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
-		return nil, fmt.Errorf("log not found: %s", logName)
+		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
 	}
 	logMeta := &proto.LogMeta{}
-	if err := pb.Unmarshal(logResp.Kvs[0].Value, logMeta); err != nil {
-		return nil, err
+	if err = pb.Unmarshal(logResp.Kvs[0].Value, logMeta); err != nil {
+		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	return logMeta, nil
 }
@@ -228,10 +238,10 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
 	if err != nil {
-		return false, err
+		return false, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
-		return false, fmt.Errorf("log not found: %s", logName)
+		return false, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
 	}
 	return true, nil
 }
@@ -243,7 +253,7 @@ func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	logResp, err := e.client.Get(ctx, BuildLogKey(logNamePrefix), clientv3.WithPrefix())
 	if err != nil {
-		return nil, err
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
 		return []string{}, nil
@@ -253,6 +263,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 		logName, extractErr := extractLogName(string(path.Key))
 		if extractErr != nil {
 			log.Printf("failed to extract log name from path %s: %v", string(path.Key), extractErr)
+			return nil, werr.ErrMetadataRead.WithCauseErr(extractErr)
 		}
 		logs[logName] = 1
 	}
@@ -269,7 +280,8 @@ func extractLogName(path string) (string, error) {
 
 	// Check if the path has at least 4 parts
 	if len(parts) < 3 {
-		return "", fmt.Errorf("extract logName failed, invalid path format: %s", path)
+		return "", werr.ErrMetadataDecode.WithCauseErrMsg(
+			fmt.Sprintf("extract logName failed, invalid path format: %s", path))
 	}
 
 	// Return the third part
@@ -311,7 +323,7 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.GetSegNo()))
 	segmentMetadata, err := pb.Marshal(metadata)
 	if err != nil {
-		return err
+		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 	// Start a transaction
 	txn := e.client.Txn(ctx)
@@ -326,11 +338,12 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	).Commit()
 
 	if err != nil {
-		return fmt.Errorf("transaction failed: %w", err)
+		return werr.ErrCreateSegmentMetadata.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
-		return fmt.Errorf("segment metadata already exists for logName:%s segmentId:%d", logName, metadata.SegNo)
+		return werr.ErrCreateSegmentMetadata.WithCauseErrMsg(
+			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, metadata.SegNo))
 	}
 
 	return nil
@@ -342,7 +355,7 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.SegNo))
 	segmentMetadata, err := pb.Marshal(metadata)
 	if err != nil {
-		return err
+		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 	// Start a transaction
 	txn := e.client.Txn(ctx)
@@ -357,11 +370,12 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	).Commit()
 
 	if err != nil {
-		return fmt.Errorf("transaction failed: %w", err)
+		return werr.ErrUpdateSegmentMetadata.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
-		return fmt.Errorf("segment metadata not found for logName:%s segmentId:%d", logName, metadata.SegNo)
+		return werr.ErrUpdateSegmentMetadata.WithCauseErrMsg(
+			fmt.Sprintf("segment metadata not found for logName:%s segmentId:%d", logName, metadata.SegNo))
 	}
 	return nil
 }
@@ -370,14 +384,15 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
 	getResp, getErr := e.client.Get(ctx, segmentKey)
 	if getErr != nil {
-		return nil, getErr
+		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
-		return nil, errors.New(fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
+		return nil, werr.ErrMetadataRead.WithCauseErrMsg(
+			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}
 	segmentMetadata := &proto.SegmentMetadata{}
 	if err := pb.Unmarshal(getResp.Kvs[0].Value, segmentMetadata); err != nil {
-		return nil, err
+		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	return segmentMetadata, nil
 }
@@ -386,7 +401,7 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	segmentKey := BuildSegmentInstanceKey(logName, "")
 	getResp, getErr := e.client.Get(ctx, segmentKey, clientv3.WithPrefix())
 	if getErr != nil {
-		return nil, getErr
+		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 
 	segmentMetaMap := make(map[int64]*proto.SegmentMetadata)
@@ -398,7 +413,7 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	for _, kv := range getResp.Kvs {
 		segmentMeta := &proto.SegmentMetadata{}
 		if err := pb.Unmarshal(kv.Value, segmentMeta); err != nil {
-			return nil, err
+			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 		}
 		segmentMetaMap[segmentMeta.SegNo] = segmentMeta
 	}
@@ -409,7 +424,7 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", info.Id))
 	quorumInfoValue, err := pb.Marshal(info)
 	if err != nil {
-		return err
+		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
 	// Start a transaction
@@ -425,11 +440,12 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 	).Commit()
 
 	if err != nil {
-		return fmt.Errorf("transaction failed: %w", err)
+		return werr.ErrUpdateQuorumInfoMetadata.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
-		return fmt.Errorf("quorum info already exists for id:%d", info.Id)
+		return werr.ErrUpdateQuorumInfoMetadata.WithCauseErrMsg(
+			fmt.Sprintf("quorum info already exists for id:%d", info.Id))
 	}
 
 	return nil
@@ -439,15 +455,15 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", quorumId))
 	getResp, getErr := e.client.Get(ctx, quorumKey)
 	if getErr != nil {
-		return nil, getErr
+		return nil, werr.ErrMetadataEncode.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
-		return nil, errors.New(fmt.Sprintf("quorum info not found for id:%d", quorumId))
+		return nil, werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf("quorum info not found for id:%d", quorumId))
 	}
 
 	quorumInfo := &proto.QuorumInfo{}
 	if err := pb.Unmarshal(getResp.Kvs[0].Value, quorumInfo); err != nil {
-		return nil, err
+		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	return quorumInfo, nil
 }

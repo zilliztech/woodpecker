@@ -2,13 +2,12 @@ package stream
 
 import (
 	"context"
-	"time"
+	"github.com/zilliztech/woodpecker/common/werr"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/meta"
-	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/server/client"
 	"github.com/zilliztech/woodpecker/stream/log"
@@ -25,7 +24,7 @@ type woodpeckerEmbedClient struct {
 func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
 	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
 	if err != nil {
-		return nil, err
+		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
 	instance := server.NewLogStore(context.Background(), etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
@@ -34,7 +33,7 @@ func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (cl
 	}
 	initErr := c.initClient(ctx)
 	if initErr != nil {
-		return nil, initErr
+		return nil, werr.ErrInitClient.WithCauseErr(initErr)
 	}
 	return &c, nil
 }
@@ -56,15 +55,7 @@ func (c *woodpeckerEmbedClient) GetMetadataProvider() meta.MetadataProvider {
 // CreateLog creates a new log with the specified name.
 // It stores segment metadata for the new log.
 func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) error {
-	c.Metadata.StoreSegmentMetadata(ctx, logName, &proto.SegmentMetadata{
-		SegNo:      0,
-		CreateTime: time.Now().UnixMilli(),
-		QuorumId:   -1,
-		State:      proto.SegmentState_Active,
-		Size:       0,
-		Offset:     make([]int32, 0),
-	})
-	return nil
+	return c.Metadata.CreateLog(ctx, logName)
 }
 
 // OpenLog opens an existing log with the specified name and returns a log handle.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/err"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -190,7 +190,7 @@ func (f *objectStorageLogFile) NewReader(ctx context.Context, opt ReaderOpt) (Re
 	defer f.mu.Unlock()
 
 	if opt.StartSequenceNum < 0 || opt.StartSequenceNum >= f.getLastEntryId() {
-		return nil, err.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId
 	}
 
 	reader := NewObjectStorageLogFileReader(opt, f)

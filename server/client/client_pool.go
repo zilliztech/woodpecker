@@ -5,9 +5,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
 )
@@ -97,7 +97,7 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 	options := []grpc.DialOption{}
 	cnx, err := grpc.NewClient(target, options...)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error connecting to %s", target)
+		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
 	return cnx, nil
 }

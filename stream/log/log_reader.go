@@ -2,7 +2,7 @@ package log
 
 import (
 	"context"
-	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/stream/segment"
 )
@@ -37,7 +37,7 @@ type logReaderImpl struct {
 
 func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 	if l.logHandle == nil {
-		return nil, fmt.Errorf("log handle is not initialized")
+		return nil, werr.ErrInternalError.WithCauseErrMsg("log handle is not initialized")
 	}
 
 	if l.currentSegmentHandle == nil {
@@ -61,13 +61,13 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 
 	entries, err := l.currentSegmentHandle.Read(ctx, l.pendingReadEntryId, l.pendingReadEntryId)
 	if err != nil {
-		return nil, err
+		return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 	}
 	if len(entries) == 0 {
 		return nil, nil
 	}
 	if len(entries) > 1 {
-		return nil, fmt.Errorf("read more than one entry")
+		return nil, werr.ErrSegmentReadException.WithCauseErrMsg("read more than one entry")
 	}
 
 	l.pendingReadEntryId++

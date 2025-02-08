@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -114,7 +115,7 @@ func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, er
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return -1, errors.New("Currently only support embed standalone mode")
+		return -1, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
@@ -234,7 +235,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return nil, errors.New("Currently only support embed standalone mode")
+		return nil, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
 	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
@@ -243,7 +244,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 	}
 
 	if from > to {
-		return nil, errors.New("from must be less than to")
+		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg("from must be less than to")
 	}
 
 	if from == to {
@@ -299,7 +300,7 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	// error out all pending append operations
-	s.SendAppendErrorCallbacks(-1, errors.New("segment closed"))
+	s.SendAppendErrorCallbacks(-1, werr.ErrSegmentClosed)
 
 	// update metadata as completed
 	s.segmentMetaCache.State = proto.SegmentState_Completed
@@ -321,7 +322,7 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback
 		return err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return errors.New("currently only support embed standalone mode")
+		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
@@ -343,7 +344,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 		return err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return errors.New("currently only support embed standalone mode")
+		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {

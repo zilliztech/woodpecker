@@ -191,7 +191,7 @@ func TestWriteThroughput(t *testing.T) {
 	}
 
 	// ###  CreateLog
-	//createLogErr := client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
+	//createLogErr := client.CreateLog(context.Background(), "test_log")
 	//if createLogErr != nil {
 	//	fmt.Printf("Create log failed, err:%v\n", createLogErr)
 	//	panic(createLogErr)
@@ -288,7 +288,7 @@ func TestReadThroughput(t *testing.T) {
 
 	//	### OpenReader
 	start := &log.LogMessageId{
-		SegmentId: 18,
+		SegmentId: 21,
 		EntryId:   0,
 	}
 	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)

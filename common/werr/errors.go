@@ -1,22 +1,44 @@
-package err
+package werr
 
-import "github.com/cockroachdb/errors"
+import (
+	"github.com/cockroachdb/errors"
+)
 
 const (
 	// Ok means no errors
 	Ok = iota
 	// UnknownError means unknown error happened on broker
 	UnknownError
+	// InternalError means internal error
+	InternalError
 	// InvalidConfiguration means invalid configuration
 	InvalidConfiguration
 	// TimeoutError means operation timed out
 	TimeoutError
 	// ConnectError means failed to connect to broker
 	ConnectError
+	// ClientInitError means failed to initialize client
+	ClientInitError
 	// ReadError means failed to read from socket
 	ReadError
-	// MetadataError failed in updating metadata
-	MetadataError
+	// MetadataInitError failed to initialize service metadata
+	MetadataInitError
+	// MetadataEncodeError failed in encode metadata
+	MetadataEncodeError
+	// MetadataDecodeError failed in decode metadata
+	MetadataDecodeError
+	// MetadataReadError failed in decode metadata
+	MetadataReadError
+	// MetadataCreateLogError failed in create log metadata
+	MetadataCreateLogError
+	// MetadataCreateSegmentError failed in create segment metadata
+	MetadataCreateSegmentError
+	// MetadataUpdateSegmentError failed in update segment metadata
+	MetadataUpdateSegmentError
+	// MetadataUpdateQuorumError failed in update quorum metadata
+	MetadataUpdateQuorumError
+	// MetadataSegmentNotFound means segment not found
+	MetadataSegmentNotFound
 	// PersistenceError failed to persist entry
 	PersistenceError
 	// ChecksumError corrupt message checksum failure
@@ -57,11 +79,19 @@ const (
 	InvalidStatus
 	// MemoryBufferIsFull limited buffer is full
 	MemoryBufferIsFull
+	// MemoryBufferIsEmpty buffer is empty
+	MemoryBufferIsEmpty
 	// SegmentFenced When a segment asks and fail to get exclusive writer access,
 	// or loses the exclusive status after a reconnection, the segmentHandle will
 	// use this error to indicate that this segment is now permanently
 	// fenced.
 	SegmentFenced
+	// SegmentClosed indicates that the segment is closed.
+	SegmentClosed
+	// SegmentReadException indicates that an exception occurred while reading a segment.
+	SegmentReadException
+	// SegmentWriteException indicates that an exception occurred while writing a segment.
+	SegmentWriteException
 	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
 	// has been reached. This means that no additional operations can be started until some
 	// of the current operations complete.
@@ -69,9 +99,32 @@ const (
 )
 
 var (
+	// Metadata related
+	ErrMetadataInit             = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
+	ErrMetadataRead             = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
+	ErrMetadataEncode           = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
+	ErrMetadataDecode           = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
+	ErrCreateLogMetadata        = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrCreateSegmentMetadata    = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
+	ErrUpdateSegmentMetadata    = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
+	ErrUpdateQuorumInfoMetadata = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
+
+	// Client related
+	ErrCreateConnection = newWoodpeckerError("failed to create connection", ConnectError, true)
+	ErrInitClient       = newWoodpeckerError("failed to init client", ClientInitError, true)
+
+	// log&segment related
+	ErrSegmentNotFound       = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
+	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
+	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
+	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
+
+	//
 	ErrInvalidEntryId = newWoodpeckerError("Invalid EntryId", InvalidEntryId, false)
-	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsFull, true)
+	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
 	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
+	ErrNotSupport     = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
+	ErrInternalError  = newWoodpeckerError("internal error", InternalError, true)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.
@@ -108,6 +161,18 @@ func (e woodpeckerError) Is(err error) bool {
 		return e.errCode == cause.errCode
 	}
 	return false
+}
+
+func (e woodpeckerError) WithCauseErr(cause error) error {
+	return e.WithCauseErrMsg(cause.Error())
+}
+
+func (e woodpeckerError) WithCauseErrMsg(msg string) error {
+	return woodpeckerError{
+		msg:       msg,
+		errCode:   e.errCode,
+		retryable: e.retryable,
+	}
 }
 
 func IsRetryableErr(err error) bool {

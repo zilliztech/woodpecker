@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"sync"
 	"time"
 
@@ -117,7 +118,7 @@ func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, se
 	if !exists {
 		segmentMeta, metaExists := l.SegmentsCache[segmentId]
 		if !metaExists {
-			return nil, fmt.Errorf("segment %d not found", segmentId)
+			return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment %d not found", segmentId))
 		}
 		// create a readonly segmentHandle and cache it
 		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
@@ -198,7 +199,10 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 		Offset:      make([]int32, 0),
 	}
 	// create segment metadata
-	l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
+	err := l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
+	if err != nil {
+		return nil, err
+	}
 	// update local segment metadata cache
 	l.SegmentsCache[segmentNo] = newSegmentMeta
 	// return
@@ -254,7 +258,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	// 2. select one logStore to async compact segment
 	err = writeableSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
 	if err != nil {
-		fmt.Println("request compaction failed", err)
+		fmt.Println("WARN: request compaction failed", err)
 	}
 
 	// 3. clear cache
