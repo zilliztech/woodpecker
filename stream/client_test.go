@@ -34,7 +34,7 @@ func TestShowEtcd(t *testing.T) {
 	defer cancel()
 
 	// 1. show simple dirs
-	directoryPrefix := "" // 要打印的目录前缀
+	directoryPrefix := "woodpecker" // 要打印的目录前缀
 	printDirContents(ctx, cli, directoryPrefix, "")
 
 	// 2. show meta detail

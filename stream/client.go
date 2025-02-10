@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"io"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -12,6 +13,7 @@ import (
 )
 
 type WoodpeckerClient interface {
+	io.Closer
 	// CreateLog creates a new log with the specified name.
 	CreateLog(context.Context, string) error
 	// OpenLog opens an existing log with the specified name and returns a log handle.
@@ -92,4 +94,9 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	// Retrieve logs with the given prefix with detailed comments
 	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
+}
+
+func (c *woodpeckerClient) Close() error {
+	//TODO implement me
+	return nil
 }

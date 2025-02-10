@@ -92,3 +92,8 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	return c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 }
+
+func (c *woodpeckerEmbedClient) Close() error {
+	// TODO
+	return nil
+}

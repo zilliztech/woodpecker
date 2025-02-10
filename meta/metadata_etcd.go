@@ -173,7 +173,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	// Create logs/<logName>  and update logs/idgen atomically
 	txnResp, err := txn.If(
 		// Ensure logs/idgen has not changed since we read it
-		clientv3.Compare(clientv3.Value(LogIdGeneratorKey), "=", currentID),
+		clientv3.Compare(clientv3.Value(LogIdGeneratorKey), "=", fmt.Sprintf("%d", currentID)),
 	).Then(
 		// Create logs/<logName> with logValue
 		clientv3.OpPut(BuildLogKey(logName), string(logMetaValue)),
@@ -241,7 +241,7 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 		return false, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
-		return false, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
+		return false, nil
 	}
 	return true, nil
 }

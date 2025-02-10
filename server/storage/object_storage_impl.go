@@ -240,7 +240,7 @@ func (f *objectStorageLogFile) Sync(ctx context.Context) error {
 
 	// get flush point to flush
 	if f.buffer.expectedNextEntryId.Load()-f.buffer.firstEntryId == 0 {
-		log.Printf("Call Sync, but no data, skip ... ")
+		//log.Printf("Call Sync, but no data, skip ... ")
 		return nil
 	}
 

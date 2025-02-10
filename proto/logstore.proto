@@ -50,7 +50,10 @@ message LogEntry {
   bytes values = 3;
 }
 
-
+message LogMessageIdData{
+  int64 segId = 1;
+  int64 entryId = 2;
+}
 
 /**
  * Represents all the possible status.
