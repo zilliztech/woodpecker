@@ -1,4 +1,4 @@
-package storage
+package objectstorage
 
 import (
 	"bytes"
@@ -31,8 +31,8 @@ type FragmentObject struct {
 	uploaded bool // If this fragment has been uploaded to MinIO
 }
 
-// NewObjectStorageFragment initializes a new FragmentObject.
-func NewObjectStorageFragment(client *minio.Client, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, loaded, uploaded bool) *FragmentObject {
+// NewFragmentObject initializes a new FragmentObject.
+func NewFragmentObject(client *minio.Client, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, loaded, uploaded bool) *FragmentObject {
 	data := make([]byte, 0)
 	index := make([]byte, 0)
 	offset := 0
@@ -127,7 +127,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	}
 
 	// Calculate the number of indexes
-	numIndexes := (lastEntryId - firstEntryID + 1)
+	numIndexes := lastEntryId - firstEntryID + 1
 	indexes := make([]byte, numIndexes*8)
 
 	// Read indexes (each index is 8 bytes)

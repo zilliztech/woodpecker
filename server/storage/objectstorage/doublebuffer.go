@@ -1,5 +1,10 @@
-package storage
+package objectstorage
 
+//
+//import (
+//	"github.com/cockroachdb/errors"
+//	"sync"
+//)
 //
 //// DoubleBuffer provides a double buffering mechanism to handle log entries.
 //// It maintains two Buffers and switches between them when the active buffer is full.

@@ -7,19 +7,6 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-// Constants for sizes
-const (
-	MagicString        = "woodpecker01"
-	VERSION            = uint32(1)
-	FileHeaderSize     = 16
-	PayloadSize        = 4
-	CrcSize            = 4
-	EntryHeaderSize    = PayloadSize + CrcSize
-	OffsetSize         = 4
-	SequenceNumberSize = 4
-	IndexItemSize      = 4
-)
-
 // ReaderOpt represents the options for creating a reader.
 type ReaderOpt struct {
 	// StartSequenceNum is the fileLastOffset to start reading from.
@@ -46,7 +33,7 @@ type LogFile interface {
 	// Returns a future that will receive the result of the append operation.
 	Append(ctx context.Context, data []byte) error
 	// AppendAsync adds an entry to the log file asynchronously
-	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64)
+	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error)
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)
 	// LastOffset returns the fileLastOffset of the last entry.

@@ -1,4 +1,4 @@
-package storage
+package objectstorage
 
 import (
 	"context"
@@ -18,7 +18,7 @@ func TestNewObjectStorageFragment(t *testing.T) {
 
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
-	fragment := NewObjectStorageFragment(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
+	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
 	assert.NotNil(t, fragment)
 	assert.Equal(t, client, fragment.client)
 	assert.Equal(t, bucket, fragment.bucket)
@@ -42,7 +42,7 @@ func TestWriteAndLoad(t *testing.T) {
 
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
-	fragment := NewObjectStorageFragment(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
+	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
 
 	// Test writing when fragment is not loaded
 	fragment.loaded = false

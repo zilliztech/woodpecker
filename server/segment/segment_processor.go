@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"log"
 	"sync"
 	"time"
@@ -84,7 +85,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	//if err != nil {
 	//	return -1, err
 	//}
-	bufferedSeqNo, syncedCh := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
+	bufferedSeqNo, syncedCh, _ := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
 	if bufferedSeqNo == -1 {
 		return -1, syncedCh, fmt.Errorf("failed to append to log file")
 	}
@@ -141,7 +142,7 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	if s.currentLogFileWriter == nil {
 		// get logfile id from meta/storage
 		s.currentLogFileId = 0
-		s.currentLogFileWriter = storage.NewObjectStorageLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+		s.currentLogFileWriter = objectstorage.NewLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
 		log.Printf("createLogFileWriter with logId: %d, segId: %d", s.logId, s.segId)
 	}
 	return s.currentLogFileWriter, nil
@@ -152,7 +153,7 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	defer s.Unlock()
 	// TODO get logFile Id according entryId
 	currentLogFileId := int64(0)
-	currentLogFileReader := storage.NewObjectStorageLogFileReadonly(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+	currentLogFileReader := objectstorage.NewROLogFile(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
 	return currentLogFileReader, nil
 }
 

@@ -1,4 +1,4 @@
-package storage
+package objectstorage
 
 import (
 	"context"
@@ -21,9 +21,9 @@ func TestNewObjectStorageLogFile(t *testing.T) {
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
 
-	logFile := NewObjectStorageLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
-	objectLogFile := logFile.(*objectStorageLogFile)
+	objectLogFile := logFile.(*LogFile)
 	assert.NotNil(t, objectLogFile)
 	assert.Equal(t, logFileId, objectLogFile.id)
 	assert.Equal(t, client, objectLogFile.client)
@@ -45,13 +45,13 @@ func TestAppendAsync(t *testing.T) {
 
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
-	logFile := NewObjectStorageLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
-	objectLogFile := logFile.(*objectStorageLogFile)
+	objectLogFile := logFile.(*LogFile)
 	assert.NotNil(t, objectLogFile)
 
 	// Test appending a valid entry
-	entryId, ch := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
+	entryId, ch, _ := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
 	assert.Equal(t, int64(0), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -62,7 +62,7 @@ func TestAppendAsync(t *testing.T) {
 	}
 
 	// Test appending another valid entry
-	entryId, ch = logFile.AppendAsync(context.Background(), 1, []byte("data1"))
+	entryId, ch, _ = logFile.AppendAsync(context.Background(), 1, []byte("data1"))
 	assert.Equal(t, int64(1), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -73,7 +73,7 @@ func TestAppendAsync(t *testing.T) {
 	}
 
 	// Test appending an entry with an invalid ID
-	entryId, ch = logFile.AppendAsync(context.Background(), 3, []byte("data3"))
+	entryId, ch, _ = logFile.AppendAsync(context.Background(), 3, []byte("data3"))
 	assert.Equal(t, int64(3), entryId)
 	assert.NotNil(t, ch)
 	var timeoutErr error
@@ -86,11 +86,11 @@ func TestAppendAsync(t *testing.T) {
 	assert.Error(t, timeoutErr)
 
 	// Test appending an entry that exceeds the buffer size
-	entryId, ch = logFile.AppendAsync(context.Background(), 2, []byte("data2"))
+	entryId, ch, _ = logFile.AppendAsync(context.Background(), 2, []byte("data2"))
 	for i := 4; i < 100_000; i++ {
 		logFile.AppendAsync(context.Background(), int64(i), []byte("data"))
 	}
-	entryId, ch = logFile.AppendAsync(context.Background(), 100_000, []byte("data"))
+	entryId, ch, _ = logFile.AppendAsync(context.Background(), 100_000, []byte("data"))
 	assert.Equal(t, int64(100_000), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -108,13 +108,13 @@ func TestNewReader(t *testing.T) {
 
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
-	logFile := NewObjectStorageLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
 
 	// Append some data to the log file
-	_, ch1 := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
-	_, ch2 := logFile.AppendAsync(context.Background(), 1, []byte("data1"))
-	_, ch3 := logFile.AppendAsync(context.Background(), 2, []byte("data2"))
+	_, ch1, _ := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
+	_, ch2, _ := logFile.AppendAsync(context.Background(), 1, []byte("data1"))
+	_, ch3, _ := logFile.AppendAsync(context.Background(), 2, []byte("data2"))
 
 	// Wait for the data to be appended
 	select {
@@ -134,7 +134,7 @@ func TestNewReader(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	reader, err := logFile.NewReader(context.Background(), ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
+	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
@@ -163,12 +163,12 @@ func TestNewReaderForManyFragments(t *testing.T) {
 
 	client, err := minio2.NewMinioClient(context.Background(), bucket)
 	assert.NoError(t, err)
-	logFile := NewObjectStorageLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
 
 	// Append some data to the log file
 	for i := 0; i < 5; i++ {
-		_, ch := logFile.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)))
+		_, ch, _ := logFile.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)))
 		select {
 		case <-ch:
 		case <-time.After(2000 * time.Millisecond):
@@ -177,7 +177,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	reader, err := logFile.NewReader(context.Background(), ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
+	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 

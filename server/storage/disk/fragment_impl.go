@@ -1,9 +1,11 @@
-package storage
+package disk
 
 import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"hash/crc32"
 	"os"
 	"sync"
@@ -12,7 +14,7 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-var _ Fragment = (*FragmentFile)(nil)
+var _ storage.Fragment = (*FragmentFile)(nil)
 
 // FragmentFile manages file-based fragments.
 type FragmentFile struct {
@@ -21,8 +23,8 @@ type FragmentFile struct {
 	basePath string
 	txnFile  *os.File
 	mmap     mmap.MMap // Memory-mapped file
-	entries  []LogEntry
-	footer   Footer
+	entries  []storage.LogEntry
+	footer   storage.Footer
 
 	fileLastOffset  uint32 // Last offset written to the fragment file
 	fileStartOffset uint64 // Start offset of the file, used to calculate the offset of each entry in fragment
@@ -86,17 +88,17 @@ func (ff *FragmentFile) openNewFragment() error {
 		return err
 	}
 
-	_, err = ff.txnFile.WriteAt([]byte(MagicString), 0)
+	_, err = ff.txnFile.WriteAt([]byte(codec.MagicString), 0)
 	if err != nil {
 		return err
 	}
-	err = binary.Write(ff.txnFile, binary.LittleEndian, VERSION)
-	ff.fileLastOffset = uint32(FileHeaderSize)
+	err = binary.Write(ff.txnFile, binary.LittleEndian, codec.VERSION)
+	ff.fileLastOffset = uint32(codec.FileHeaderSize)
 	return ff.txnFile.Sync()
 }
 
 // NewReader reads data from a file.
-func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, error) {
+func (ff *FragmentFile) Read(ctx context.Context, opt storage.ReaderOpt) ([]*storage.LogEntry, error) {
 	ff.mu.RLock()
 	defer ff.mu.RUnlock()
 
@@ -121,7 +123,7 @@ func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, e
 	endIndex := opt.EndSequenceNum - int64(ff.fileStartOffset) + 1
 
 	// Collect the entries within the range
-	entries := make([]*LogEntry, 0, endIndex-startIndex)
+	entries := make([]*storage.LogEntry, 0, endIndex-startIndex)
 	for i := startIndex; i < endIndex; i++ {
 		if i >= int64(len(ff.footer.EntryOffset)) {
 			panic("index out of range, should not happen")
@@ -130,20 +132,20 @@ func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, e
 		offset := ff.footer.EntryOffset[i]
 
 		// Read payload size
-		if offset+PayloadSize > uint32(len(ff.mmap)) {
+		if offset+codec.PayloadSize > uint32(len(ff.mmap)) {
 			return nil, fmt.Errorf("corrupted data: offset %d exceeds file size", offset)
 		}
-		payloadSize := binary.LittleEndian.Uint32(ff.mmap[offset : offset+PayloadSize])
+		payloadSize := binary.LittleEndian.Uint32(ff.mmap[offset : offset+codec.PayloadSize])
 
-		if offset+payloadSize+EntryHeaderSize > uint32(len(ff.mmap)) {
+		if offset+payloadSize+codec.EntryHeaderSize > uint32(len(ff.mmap)) {
 			return nil, fmt.Errorf("corrupted data: offset %d exceeds file size", offset)
 		}
 
 		// Read CRC (stored 4 bytes after the payload size)
-		crc := binary.LittleEndian.Uint32(ff.mmap[offset+PayloadSize : offset+EntryHeaderSize])
+		crc := binary.LittleEndian.Uint32(ff.mmap[offset+codec.PayloadSize : offset+codec.EntryHeaderSize])
 
 		// Read payload
-		payload := ff.mmap[offset+EntryHeaderSize : offset+EntryHeaderSize+payloadSize]
+		payload := ff.mmap[offset+codec.EntryHeaderSize : offset+codec.EntryHeaderSize+payloadSize]
 
 		// Verify CRC
 		if crc != crc32.ChecksumIEEE(payload) {
@@ -151,7 +153,7 @@ func (ff *FragmentFile) Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, e
 		}
 
 		// Create the log entry
-		entry := &LogEntry{
+		entry := &storage.LogEntry{
 			Payload:     payload,
 			SequenceNum: ff.fileStartOffset + uint64(i),
 			CRC:         crc,
@@ -189,7 +191,7 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 
 	// Update footer
 	ff.footer.EntryOffset = append(ff.footer.EntryOffset, ff.fileLastOffset)
-	ff.footer.IndexSize += IndexItemSize
+	ff.footer.IndexSize += codec.IndexItemSize
 	ff.lastSequenceNum++
 	return nil
 }
