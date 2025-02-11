@@ -81,13 +81,15 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		l.pendingReadSegmentId = entries[0].SegmentId
 		l.pendingReadEntryId = entries[0].EntryId + 1
 		l.currentSegmentHandle = segHandle
-		return &LogMessage{
-			Id: &LogMessageId{
-				SegmentId: segId,
-				EntryId:   entryId,
-			},
-			Payload: entries[0].Data,
-		}, nil
+		logMsg, err := unmarshalMessage(entries[0].Data)
+		if err != nil {
+			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
+		}
+		logMsg.Id = &LogMessageId{
+			SegmentId: segId,
+			EntryId:   entryId,
+		}
+		return logMsg, nil
 	}
 }
 

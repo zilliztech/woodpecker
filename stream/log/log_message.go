@@ -46,6 +46,38 @@ var LatestLogMessageID = &LogMessageId{
 
 // LogMessage represents a log message with an ID and a payload.
 type LogMessage struct {
-	Id      *LogMessageId // The unique identifier for this log message.
-	Payload []byte        // The payload of the log message.
+	Id         *LogMessageId     // The unique identifier for this log message.
+	Payload    []byte            // The payload of the log message.
+	Properties map[string]string // Properties attach application defined properties on the message
+}
+
+// WriterMessage abstraction used in LogWriter
+type WriterMessage struct {
+	Payload    []byte
+	Properties map[string]string
+}
+
+func marshalMessage(m *WriterMessage) ([]byte, error) {
+	msgLayout := &pb.LogMessageLayout{
+		Payload:    m.Payload,
+		Properties: m.Properties,
+	}
+	data, err := proto.Marshal(msgLayout)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func unmarshalMessage(data []byte) (*LogMessage, error) {
+	msgLayout := &pb.LogMessageLayout{}
+	err := proto.Unmarshal(data, msgLayout)
+	if err != nil {
+		return nil, err
+	}
+	m := &LogMessage{
+		Payload:    msgLayout.Payload,
+		Properties: msgLayout.Properties,
+	}
+	return m, nil
 }

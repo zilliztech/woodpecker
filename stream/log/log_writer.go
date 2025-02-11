@@ -9,11 +9,11 @@ import (
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	Write(context.Context, []byte) *WriteResult
+	Write(context.Context, *WriterMessage) *WriteResult
 
 	// WriteAsync writes a log message asynchronously and returns a channel that will receive a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	WriteAsync(context.Context, []byte) <-chan *WriteResult
+	WriteAsync(context.Context, *WriterMessage) <-chan *WriteResult
 
 	// Truncate truncates the log to the specified log message ID.
 	// It takes a context and a LogMessageId.
@@ -38,8 +38,15 @@ type logWriterImpl struct {
 }
 
 // Deprecated
-func (l *logWriterImpl) WriteSync(ctx context.Context, bytes []byte) *WriteResult {
+func (l *logWriterImpl) WriteSync(ctx context.Context, msg *WriterMessage) *WriteResult {
 	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
+	if err != nil {
+		return &WriteResult{
+			LogMessageId: nil,
+			Err:          err,
+		}
+	}
+	bytes, err := marshalMessage(msg)
 	if err != nil {
 		return &WriteResult{
 			LogMessageId: nil,
@@ -62,7 +69,7 @@ func (l *logWriterImpl) WriteSync(ctx context.Context, bytes []byte) *WriteResul
 	}
 }
 
-func (l *logWriterImpl) Write(ctx context.Context, bytes []byte) *WriteResult {
+func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		ch <- &WriteResult{
@@ -79,11 +86,18 @@ func (l *logWriterImpl) Write(ctx context.Context, bytes []byte) *WriteResult {
 		callback(-1, -1, err)
 		return <-ch
 	}
+	bytes, err := marshalMessage(msg)
+	if err != nil {
+		return &WriteResult{
+			LogMessageId: nil,
+			Err:          err,
+		}
+	}
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
 	return <-ch
 }
 
-func (l *logWriterImpl) WriteAsync(ctx context.Context, bytes []byte) <-chan *WriteResult {
+func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
 	l.Lock()
 	defer l.Unlock()
 	ch := make(chan *WriteResult, 1)
@@ -100,6 +114,12 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, bytes []byte) <-chan *Wr
 		close(ch)
 	}
 	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
+	if err != nil {
+		log.Printf("ERROR: get write seg handle err:" + err.Error())
+		callback(-1, -1, err)
+		return ch
+	}
+	bytes, err := marshalMessage(msg)
 	if err != nil {
 		log.Printf("ERROR: get write seg handle err:" + err.Error())
 		callback(-1, -1, err)

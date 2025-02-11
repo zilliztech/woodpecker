@@ -122,6 +122,8 @@ func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Versi
 }
 
 func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) error {
+	e.Lock()
+	defer e.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -136,11 +138,11 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	}
 
 	// check if logName exists
-	checkExistsResp, err := e.client.Get(ctx, BuildLogKey(logName), clientv3.WithPrefix())
+	exists, err := e.CheckExists(ctx, logName)
 	if err != nil {
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
-	if len(checkExistsResp.Kvs) > 0 {
+	if exists {
 		return werr.ErrCreateLogMetadata.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 

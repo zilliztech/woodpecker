@@ -41,6 +41,22 @@ func TestShowEtcd(t *testing.T) {
 	printMetaContents(t, ctx, cli)
 }
 
+func TestCheckLogExists(t *testing.T) {
+	logName := "by-dev-rootcoord-dml_1"
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaProvider := meta.NewMetadataProvider(context.Background(), cli)
+	defer metaProvider.Close()
+	exists, err := metaProvider.CheckExists(context.Background(), logName)
+	assert.NoError(t, err)
+	assert.False(t, exists)
+}
+
 // Test only
 func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, indent string) {
 	resp, err := cli.Get(ctx, prefix, clientv3.WithPrefix())
@@ -145,7 +161,11 @@ func TestE2EWrite(t *testing.T) {
 		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
 		panic(openWriterErr)
 	}
-	writeResultChan := logWriter.WriteAsync(context.Background(), []byte("hello world 1"))
+	writeResultChan := logWriter.WriteAsync(context.Background(),
+		&log.WriterMessage{
+			Payload: []byte("hello world 1"),
+		},
+	)
 	writeResult := <-writeResultChan
 	if writeResult.Err != nil {
 		fmt.Println(writeResult.Err)
@@ -216,7 +236,14 @@ func TestWriteThroughput(t *testing.T) {
 	failedIdxs := make([]int, 0)
 	successCount := 0
 	for i := 0; i < 1001; i++ {
-		writeResultChan := logWriter.WriteAsync(context.Background(), []byte(fmt.Sprintf("hello world %d", i)))
+		writeResultChan := logWriter.WriteAsync(context.Background(),
+			&log.WriterMessage{
+				Payload: []byte(fmt.Sprintf("hello world %d", i)),
+				Properties: map[string]string{
+					"key": fmt.Sprintf("value%d", i),
+				},
+			},
+		)
 		resultChan[i] = writeResultChan
 	}
 	for i := 0; i < 1001; i++ {
@@ -237,7 +264,10 @@ func TestWriteThroughput(t *testing.T) {
 		successCount = 0
 		for _, idx := range failedIdxs {
 			writeResultChan := logWriter.WriteAsync(context.Background(),
-				[]byte(fmt.Sprintf("hello world %d", idx)))
+				&log.WriterMessage{
+					Payload: []byte(fmt.Sprintf("hello world %d", idx)),
+				},
+			)
 			resultChan[idx] = writeResultChan
 		}
 		for _, idx := range failedIdxs {

@@ -55,6 +55,12 @@ message LogMessageIdData{
   int64 entryId = 2;
 }
 
+message LogMessageLayout{
+  bytes payload = 1;
+  map<string, string> properties = 2;
+}
+
+
 /**
  * Represents all the possible status.
  */

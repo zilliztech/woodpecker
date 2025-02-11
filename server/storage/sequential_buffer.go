@@ -106,7 +106,8 @@ func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([][]byte, error
 	}
 
 	if fromEntryId < b.firstEntryId || fromEntryId > b.firstEntryId+b.maxSize {
-		return nil, werr.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+			fmt.Sprintf("fromId:%d not in [%d,%d)", fromEntryId, b.firstEntryId, (b.firstEntryId + b.maxSize)))
 	}
 
 	if fromEntryId == b.firstEntryId+b.maxSize {
@@ -122,11 +123,13 @@ func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64
 	defer b.mu.Unlock()
 
 	if startEntryId >= b.firstEntryId+b.maxSize || startEntryId < b.firstEntryId {
-		return nil, werr.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+			fmt.Sprintf("startEntryId:%d not in [%d,%d)", startEntryId, b.firstEntryId, (b.firstEntryId + b.maxSize)))
 	}
 
 	if endEntryId > b.firstEntryId+b.maxSize || endEntryId < startEntryId {
-		return nil, werr.ErrInvalidEntryId
+		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+			fmt.Sprintf("endEntryId:%d not in [%d,%d)", endEntryId, startEntryId, (b.firstEntryId + b.maxSize)))
 	}
 
 	// Extract the bytes from the buffer

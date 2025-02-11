@@ -120,7 +120,7 @@ var (
 	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
 
 	//
-	ErrInvalidEntryId = newWoodpeckerError("Invalid EntryId", InvalidEntryId, false)
+	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
 	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
 	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
 	ErrNotSupport     = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
