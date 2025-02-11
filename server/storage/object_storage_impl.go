@@ -189,8 +189,11 @@ func (f *objectStorageLogFile) NewReader(ctx context.Context, opt ReaderOpt) (Re
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if opt.StartSequenceNum < 0 || opt.StartSequenceNum >= f.getLastEntryId() {
-		return nil, werr.ErrInvalidEntryId
+	lastEntryIdInFile := f.getLastEntryId()
+	if opt.StartSequenceNum < 0 || opt.StartSequenceNum > lastEntryIdInFile && lastEntryIdInFile != -1 {
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg(
+			fmt.Sprintf("startEntryId:%d must less than lastEntryId:%d of the file",
+				opt.StartSequenceNum, lastEntryIdInFile))
 	}
 
 	reader := NewObjectStorageLogFileReader(opt, f)
@@ -213,9 +216,15 @@ func (f *objectStorageLogFile) getFirstEntryId() int64 {
 }
 
 func (f *objectStorageLogFile) getLastEntryId() int64 {
+	// prefetch fragmentInfos if any new fragment created
+	f.prefetchFragmentInfos()
+
+	// load dynamic fragment
 	if len(f.fragments) == 0 {
-		return 0
+		// -1 represent no entry data yet
+		return -1
 	}
+
 	lastFrag := f.fragments[len(f.fragments)-1]
 	if !lastFrag.loaded {
 		err := lastFrag.Load(context.Background())
@@ -290,6 +299,10 @@ func (f *objectStorageLogFile) Close() error {
 
 func (f *objectStorageLogFile) prefetchFragmentInfos() {
 	fragId := uint64(1)
+	if len(f.fragments) > 0 {
+		lastFrag := f.fragments[len(f.fragments)-1]
+		fragId = lastFrag.fragmentId + 1
+	}
 	for {
 		fragKey := f.getFragmentKey(fragId)
 		exists, err := f.objectExists(context.Background(), fragKey)

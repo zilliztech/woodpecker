@@ -110,6 +110,7 @@ func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (s
 	return writeableSegmentHandle, nil
 }
 
+// Deprecated
 func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	l.Lock()
 	defer l.Unlock()
@@ -117,15 +118,70 @@ func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, se
 	// create readable segment handle if not exists
 	if !exists {
 		segmentMeta, metaExists := l.SegmentsCache[segmentId]
-		if !metaExists {
-			return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment %d not found", segmentId))
+		if metaExists {
+			// create a readonly segmentHandle and cache it
+			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+			l.SegmentHandles[segmentId] = handle
+			return handle, nil
 		}
+
+		// try to get the earliest readable segments
+		minSegId, maxSegId, err := l.getCurrentMinMaxSegmentId(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if segmentId < minSegId {
+			segmentId = minSegId
+		} else if segmentId > maxSegId && l.WritableSegmentId != -1 {
+			segmentId = l.WritableSegmentId
+		} else if segmentId > maxSegId {
+			segmentId = maxSegId + 1
+			return nil, nil
+		}
+		segmentMeta, metaExists = l.SegmentsCache[segmentId]
+		if metaExists {
+			// create a readonly segmentHandle and cache it
+			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+			l.SegmentHandles[segmentId] = handle
+			return handle, nil
+		} else {
+			return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment not found for logName:%s segmentId:%d,it may have been deleted", l.Name, segmentId))
+		}
+	}
+	return readableSegmentHandle, nil
+}
+
+func (l *logHandleImpl) getExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	l.Lock()
+	defer l.Unlock()
+	// get from cache directly
+	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
+	if exists {
+		return readableSegmentHandle, nil
+	}
+	// create from exists meta cache
+	segmentMeta, metaExists := l.SegmentsCache[segmentId]
+	if metaExists {
 		// create a readonly segmentHandle and cache it
 		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
-	return readableSegmentHandle, nil
+	// refresh meta and create handle
+	segMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
+	if err != nil && werr.ErrSegmentNotFound.Is(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if segMeta != nil {
+		l.SegmentsCache[segmentId] = segMeta
+		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+		l.SegmentHandles[segmentId] = handle
+		return handle, nil
+	}
+	return nil, nil
 }
 
 func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
@@ -188,7 +244,10 @@ func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentI
 
 func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	// construct new segment metadata
-	segmentNo := l.getNextSegmentId()
+	segmentNo, err := l.getNextSegmentId()
+	if err != nil {
+		return nil, err
+	}
 	newSegmentMeta := &proto.SegmentMetadata{
 		SegNo:       segmentNo,
 		CreateTime:  time.Now().UnixMilli(),
@@ -199,7 +258,7 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 		Offset:      make([]int32, 0),
 	}
 	// create segment metadata
-	err := l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
+	err = l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -210,22 +269,38 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 }
 
 // getNextSegmentId get the next id according to max seq No
-func (l *logHandleImpl) getNextSegmentId() int64 {
-	maxSeqNo := int64(0)
+func (l *logHandleImpl) getNextSegmentId() (int64, error) {
+	// refresh meta
+	maxSeqNo := int64(-1)
 	for _, seg := range l.SegmentsCache {
 		if seg.SegNo > maxSeqNo {
 			maxSeqNo = seg.SegNo
 		}
 	}
-	return maxSeqNo + 1
+	nextSeqNo := maxSeqNo + 1
+	// try get dynamic max seqNo
+	for {
+		meta, err := l.Metadata.GetSegmentMetadata(context.Background(), l.Name, nextSeqNo)
+		if err == nil && meta != nil {
+			l.SegmentsCache[nextSeqNo] = meta
+			nextSeqNo++
+		} else if err != nil && werr.ErrSegmentNotFound.Is(err) {
+			break
+		} else if err != nil {
+			// get meta err
+			return -1, err
+		}
+	}
+	return nextSeqNo, nil
 }
 
 func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId) (LogReader, error) {
-	readableSegmentHandle, err := l.getOrCreateReadonlySegmentHandle(ctx, from.SegmentId)
-	if err != nil {
-		return nil, err
-	}
-	return NewLogReader(ctx, l, readableSegmentHandle, from), nil
+	//readableSegmentHandle, err := l.getOrCreateReadonlySegmentHandle(ctx, from.SegmentId)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//return NewLogReader(ctx, l, readableSegmentHandle, from), nil
+	return NewLogReader(ctx, l, nil, from), nil
 }
 
 func (l *logHandleImpl) Truncate(ctx context.Context, minEntryIdToKeep int64) error {
@@ -264,4 +339,9 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	// 3. clear cache
 	l.WritableSegmentId = -1
 	return nil
+}
+
+func (l *logHandleImpl) getCurrentMinMaxSegmentId(ctx context.Context) (int64, int64, error) {
+	// TODO
+	return 0, -1, nil
 }

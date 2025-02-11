@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"io"
 
 	"github.com/minio/minio-go/v7"
@@ -172,6 +173,9 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 		return nil, errors.New("fragment no data to load")
 	}
 	relatedIdx := (entryId - f.firstEntryId) * 8
+	if relatedIdx+8 > int64(len(f.indexes)) {
+		return nil, werr.ErrEntryNotFound
+	}
 	entryOffset := binary.BigEndian.Uint32(f.indexes[relatedIdx : relatedIdx+4])
 	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
 	return f.entriesData[entryOffset : entryOffset+entryLength], nil

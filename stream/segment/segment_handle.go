@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,8 @@ type SegmentHandle interface {
 	GetLastAddPushed(context.Context) (int64, error)
 	// GetMetadata of the segment
 	GetMetadata(context.Context) *proto.SegmentMetadata
+	// RefreshAndGetMetadata of the segment
+	RefreshAndGetMetadata(context.Context) *proto.SegmentMetadata
 	// GetQuorumInfo of the segment if it's a active segment
 	GetQuorumInfo(context.Context) (*proto.QuorumInfo, error)
 	// IsClosed check if the segment is closed
@@ -272,6 +275,18 @@ func (s *segmentHandleImpl) GetLastAddPushed(ctx context.Context) (int64, error)
 
 func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetadata {
 	return s.segmentMetaCache
+}
+
+func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) *proto.SegmentMetadata {
+	s.Lock()
+	defer s.Unlock()
+	newMeta, err := s.metadata.GetSegmentMetadata(ctx, s.logName, s.segmentMetaCache.SegNo)
+	if err != nil {
+		log.Printf("refresh log:%s segmentMeta:%d error:%v", s.logName, s.segmentMetaCache.SegNo, err)
+		return s.segmentMetaCache
+	}
+	s.segmentMetaCache = newMeta
+	return newMeta
 }
 
 func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error) {

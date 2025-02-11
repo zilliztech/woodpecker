@@ -35,8 +35,8 @@ func DeserializeLogMessageId(data []byte) (*LogMessageId, error) {
 }
 
 var EarliestLogMessageID = &LogMessageId{
-	SegmentId: -1,
-	EntryId:   -1,
+	SegmentId: 0,
+	EntryId:   0,
 }
 
 var LatestLogMessageID = &LogMessageId{

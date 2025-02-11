@@ -387,7 +387,7 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
-		return nil, werr.ErrMetadataRead.WithCauseErrMsg(
+		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}
 	segmentMetadata := &proto.SegmentMetadata{}

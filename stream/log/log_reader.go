@@ -2,9 +2,11 @@ package log
 
 import (
 	"context"
+	"fmt"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/stream/segment"
+	"time"
 )
 
 type LogReader interface {
@@ -19,6 +21,7 @@ type LogReader interface {
 func NewLogReader(ctx context.Context, logHandle *logHandleImpl, segmentHandle segment.SegmentHandle, from *LogMessageId) LogReader {
 	return &logReaderImpl{
 		logHandle:            logHandle,
+		from:                 from,
 		currentSegmentHandle: segmentHandle,
 		pendingReadSegmentId: from.SegmentId,
 		pendingReadEntryId:   from.EntryId,
@@ -29,6 +32,7 @@ var _ LogReader = (*logReaderImpl)(nil)
 
 type logReaderImpl struct {
 	logHandle *logHandleImpl
+	from      *LogMessageId
 
 	pendingReadSegmentId int64
 	pendingReadEntryId   int64
@@ -40,47 +44,114 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		return nil, werr.ErrInternalError.WithCauseErrMsg("log handle is not initialized")
 	}
 
-	if l.currentSegmentHandle == nil {
-		segmentHandle, err := l.logHandle.getOrCreateReadonlySegmentHandle(ctx, l.pendingReadSegmentId)
+	for {
+		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs()
 		if err != nil {
-			return nil, err
+			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
-		l.currentSegmentHandle = segmentHandle
-	}
-	if l.currentSegmentHandle.GetMetadata(ctx).State != proto.SegmentState_Active &&
-		l.pendingReadEntryId >= l.currentSegmentHandle.GetMetadata(ctx).LastEntryId {
-		// read from next segment
-		segmentHandle, err := l.logHandle.getOrCreateReadonlySegmentHandle(ctx, l.pendingReadSegmentId+1)
+		if segHandle == nil {
+			l.pendingReadSegmentId = segId
+			l.pendingReadEntryId = entryId
+			fmt.Printf("no segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
+			// TODO sleep backoff sleep(200ms)
+			time.Sleep(1000 * time.Millisecond)
+			continue
+		}
+		entries, err := segHandle.Read(ctx, entryId, entryId)
+		if err != nil && werr.ErrEntryNotFound.Is(err) {
+			// 1) if the segmentHandle is completed, move to next segment's first entry
+			if segHandle.RefreshAndGetMetadata(ctx).State != proto.SegmentState_Active {
+				l.pendingReadSegmentId = segId + 1
+				l.pendingReadEntryId = 0
+				continue
+			}
+			// 2) if the segmentHandle is in-progress, just wait and read again
+			// TODO sleep backoff
+			fmt.Printf("no entry in the segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
+			time.Sleep(1000 * time.Millisecond)
+			continue
+		}
 		if err != nil {
-			return nil, err
+			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
-		l.pendingReadSegmentId = l.pendingReadSegmentId + 1
-		l.pendingReadEntryId = 0
-		l.currentSegmentHandle = segmentHandle
-	}
+		if len(entries) != 1 {
+			return nil, werr.ErrSegmentReadException.WithCauseErrMsg(fmt.Sprintf("should read one entry, but got %d", len(entries)))
+		}
 
-	entries, err := l.currentSegmentHandle.Read(ctx, l.pendingReadEntryId, l.pendingReadEntryId)
-	if err != nil {
-		return nil, werr.ErrSegmentReadException.WithCauseErr(err)
+		l.pendingReadSegmentId = entries[0].SegmentId
+		l.pendingReadEntryId = entries[0].EntryId + 1
+		l.currentSegmentHandle = segHandle
+		return &LogMessage{
+			Id: &LogMessageId{
+				SegmentId: segId,
+				EntryId:   entryId,
+			},
+			Payload: entries[0].Data,
+		}, nil
 	}
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	if len(entries) > 1 {
-		return nil, werr.ErrSegmentReadException.WithCauseErrMsg("read more than one entry")
-	}
-
-	l.pendingReadEntryId++
-	return &LogMessage{
-		Id: &LogMessageId{
-			SegmentId: entries[0].SegmentId,
-			EntryId:   entries[0].EntryId,
-		},
-		Payload: entries[0].Data,
-	}, nil
 }
 
 func (l *logReaderImpl) Close(ctx context.Context) error {
 	// NO-OP
 	return nil
+}
+
+func (l *logReaderImpl) getNextSegHandleAndIDs() (segment.SegmentHandle, int64, int64, error) {
+	if l.currentSegmentHandle != nil && l.currentSegmentHandle.GetId(context.Background()) == l.pendingReadSegmentId {
+		m := l.currentSegmentHandle.GetMetadata(context.Background())
+		// current completed segmentHandle
+		if m.LastEntryId > l.pendingReadEntryId {
+			return l.currentSegmentHandle, l.pendingReadSegmentId, l.pendingReadEntryId, nil
+		}
+		// current in-progress segmentHandle
+		if m.LastEntryId == -1 {
+			// Read from the segment directly because the segmentHandle is not yet completed.
+			// The writing entryId could be any value greater than pendingReadEntryId.
+			return l.currentSegmentHandle, l.pendingReadSegmentId, l.pendingReadEntryId, nil
+		}
+	}
+	// if pendingSegId is future segmentId, just return
+	latestSegmentId, err := l.logHandle.getNextSegmentId()
+	if err != nil {
+		return nil, -1, -1, err
+	}
+	if l.pendingReadSegmentId >= latestSegmentId {
+		return nil, latestSegmentId, 0, nil
+	}
+	// otherwise, move to next exits segment
+	nextSegmentId := l.pendingReadSegmentId
+	nextEntryId := l.pendingReadEntryId
+	for {
+		segHandle, err := l.logHandle.getExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
+		if err != nil {
+			return nil, -1, -1, err
+		}
+		if segHandle != nil {
+			m := segHandle.GetMetadata(context.Background())
+			// current completed segmentHandle
+			if m.LastEntryId >= nextEntryId {
+				return segHandle, nextSegmentId, nextEntryId, nil
+			}
+			// current in-progress segmentHandle
+			if m.LastEntryId == -1 {
+				// Read from the segment directly because the segmentHandle is not yet completed.
+				// The writing entryId could be any value greater than pendingReadEntryId.
+				return segHandle, nextSegmentId, nextEntryId, nil
+			}
+		} else if nextSegmentId >= latestSegmentId {
+			// no more exists segment
+			break
+		}
+
+		// move to next segment
+		nextSegmentId += 1
+		nextEntryId = 0 // reset entryId=0 as we are reading from the next segment
+	}
+
+	// move to next future segment, if no exists segment to read
+	nextSegmentId, err = l.logHandle.getNextSegmentId()
+	if err != nil {
+		return nil, -1, -1, err
+	}
+	return nil, nextSegmentId, 0, nil
 }

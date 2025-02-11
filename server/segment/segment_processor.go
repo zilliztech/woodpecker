@@ -3,6 +3,7 @@ package segment
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"log"
 	"sync"
 	"time"
@@ -119,7 +120,7 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 	}
 
 	if !r.HasNext() {
-		return nil, fmt.Errorf("entry not found")
+		return nil, werr.ErrEntryNotFound
 	}
 
 	e, err := r.ReadNext()

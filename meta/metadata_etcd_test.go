@@ -174,6 +174,51 @@ func TestCreateLogAndOpen(t *testing.T) {
 	}
 }
 
+func TestCheckExists(t *testing.T) {
+	// init&start etcd server
+	err := etcd.InitEtcdServer(true, "", "/tmp/TestCheckExists", "/tmp/TestCheckExists.log", "info")
+	assert.NoError(t, err)
+	defer etcd.StopEtcdServer()
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	// create log
+	logName := "test_log_11"
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// check idgen update to 1
+	idGenResp, err := etcdCli.Get(context.Background(), LogIdGeneratorKey)
+	require.NoError(t, err, "get LogIdGeneratorKey failed")
+	assert.Equal(t, "1", string(idGenResp.Kvs[0].Value))
+
+	{
+		exists, err := provider.CheckExists(context.Background(), "test_log_11")
+		assert.NoError(t, err)
+		assert.True(t, exists)
+	}
+
+	{
+		exists, err := provider.CheckExists(context.Background(), "test_log_1")
+		assert.NoError(t, err)
+		assert.False(t, exists)
+	}
+
+	{
+		exists, err := provider.CheckExists(context.Background(), "test_log_110")
+		assert.NoError(t, err)
+		assert.False(t, exists)
+	}
+}
+
 func TestShowOnly(t *testing.T) {
 	// init&start etcd server
 	cli, err := clientv3.New(clientv3.Config{
