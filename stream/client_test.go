@@ -2,7 +2,11 @@ package stream
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"net/http"
 	"net/http/pprof"
 	"sort"
@@ -193,6 +197,146 @@ func startGopsAgent() {
 		fmt.Println("Starting gops agent on :6060")
 		http.ListenAndServe(":6060", nil)
 	}()
+}
+
+var testMetricsRegistry prometheus.Registerer
+
+func startMetrics() {
+	testMetricsRegistry = prometheus.DefaultRegisterer
+	metrics.RegisterWoodpeckerWithRegisterer(testMetricsRegistry)
+
+	// start metrics
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.ListenAndServe(":29092", nil)
+	}()
+	//go recordMetrics()
+}
+
+//func recordMetrics() {
+//	go func() {
+//		for {
+//			metrics.WpAppendRequestsCounter.WithLabelValues("testmylog").Inc()
+//			time.Sleep(2 * time.Second)
+//		}
+//	}()
+//}
+//func TestAsyncWritePerformance2(t *testing.T) {
+//	startMetrics()
+//	for {
+//		time.Sleep(1 * time.Second)
+//	}
+//}
+
+func generateRandomBytes(length int) ([]byte, error) {
+	randomBytes := make([]byte, length)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return nil, err
+	}
+	return randomBytes, nil
+}
+
+func TestAsyncWritePerformance(t *testing.T) {
+	startGopsAgent()
+	startMetrics()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// ###  CreateLog
+	createLogErr := client.CreateLog(context.Background(), "test_log")
+	if createLogErr != nil {
+		fmt.Printf("Create log failed, err:%v\n", createLogErr)
+		panic(createLogErr)
+	}
+
+	// ### OpenLog
+	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+	if openErr != nil {
+		fmt.Printf("Open log failed, err:%v\n", openErr)
+		panic(openErr)
+	}
+	logHandle.GetName()
+
+	//	### OpenWriter
+	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+	if openWriterErr != nil {
+		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
+		panic(openWriterErr)
+	}
+
+	resultChan := make([]<-chan *log.WriteResult, 1001)
+	failedIdxs := make([]int, 0)
+	successCount := 0
+	for i := 0; i < 1001; i++ {
+		writeResultChan := logWriter.WriteAsync(context.Background(),
+			&log.WriterMessage{
+				Payload: []byte(fmt.Sprintf("hello world %d", i)),
+				Properties: map[string]string{
+					"key": fmt.Sprintf("value%d", i),
+				},
+			},
+		)
+		resultChan[i] = writeResultChan
+	}
+	for i := 0; i < 1001; i++ {
+		//fmt.Printf("wait %d\n", i)
+		writeResult := <-resultChan[i]
+		if writeResult.Err != nil {
+			failedIdxs = append(failedIdxs, i)
+			//fmt.Printf(writeResult.Err.Error())
+		} else {
+			successCount += 1
+			//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+		}
+	}
+	fmt.Printf("round 0 success count: %d \n", successCount)
+
+	for i := 1; i <= 1001; i++ {
+		tmpFailedIdxs := make([]int, 0)
+		successCount = 0
+		for _, idx := range failedIdxs {
+			writeResultChan := logWriter.WriteAsync(context.Background(),
+				&log.WriterMessage{
+					Payload: []byte(fmt.Sprintf("hello world %d", idx)),
+				},
+			)
+			resultChan[idx] = writeResultChan
+		}
+		for _, idx := range failedIdxs {
+			writeResult := <-resultChan[idx]
+			if writeResult.Err != nil {
+				tmpFailedIdxs = append(tmpFailedIdxs, idx)
+				//fmt.Printf(writeResult.Err.Error() + "\n")
+			} else {
+				successCount += 1
+				//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+			}
+		}
+		fmt.Printf("round %d success count: %d \n", i, successCount)
+		failedIdxs = tmpFailedIdxs
+		if len(failedIdxs) == 0 {
+			break
+		}
+	}
+
+	fmt.Printf("start close log writer \n")
+	closeErr := logWriter.Close(context.Background())
+	if closeErr != nil {
+		fmt.Printf("close failed, err:%v\n", closeErr)
+		panic(closeErr)
+	}
+
+	fmt.Printf("Test Write finished\n")
 }
 
 // TestWrite example to show how to use woodpecker client to write msg to  unbounded log

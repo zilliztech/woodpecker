@@ -277,7 +277,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		return err
 	}
 	f.fragments = append(f.fragments, fragment)
-	fmt.Println("synced to object storage: ", f.id)
+	//fmt.Println("synced to object storage: ", f.id)
 
 	// notify all waiting channels
 	for syncingId, ch := range f.syncedChan {
@@ -287,7 +287,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			close(ch)
 		}
 	}
-	fmt.Println("synced to object storage completed: ", f.id)
+	//fmt.Println("synced to object storage completed: ", f.id)
 	return nil
 }
 

@@ -67,7 +67,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// TODO sleep backoff
-			fmt.Printf("no entry in the segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
+			//fmt.Printf("no entry in the segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
 			time.Sleep(1000 * time.Millisecond)
 			continue
 		}
