@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 
@@ -49,6 +51,8 @@ func NewFragmentObject(client *minio.Client, bucket string, fragmentId uint64, f
 		offset = offset + len(entries[i])
 	}
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
+	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
+	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
 		client:       client,
 		bucket:       bucket,
@@ -68,6 +72,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	if !f.loaded {
 		return fmt.Errorf("fragment is empty")
 	}
+	start := time.Now()
 	fullData := make([]byte, 0)
 	fullData = append(fullData, codec.Int64ToBytes(1)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
@@ -79,6 +84,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
+	cost := time.Now().Sub(start)
+	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
+	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
 	f.uploaded = true
 	return nil
 }
@@ -146,6 +154,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 
 	//
 	f.loaded = true
+	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(entriesData) + len(indexes)))
+	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Inc()
 	return nil
 }
 
@@ -187,6 +197,8 @@ func (f *FragmentObject) Release() error {
 		// empty, no need to release again
 		return nil
 	}
+	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Sub(float64(len(f.entriesData) + len(f.indexes)))
+	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Dec()
 	f.indexes = nil
 	f.entriesData = nil
 	f.loaded = false

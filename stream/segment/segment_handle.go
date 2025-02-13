@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"log"
 	"sync"
@@ -160,6 +161,8 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
 	//fmt.Printf("pushed %d \n", appendOp.entryId)
 	s.appendOpsQueue.PushBack(appendOp)
+	metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Add(float64(len(bytes)))
+	metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 	s.executor.Submit(appendOp)
 	s.pendingSize.Add(int64(len(bytes)))
 }
@@ -210,6 +213,9 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for _, element := range elementsToRemove {
 		//fmt.Printf("SendAppendSuccessCallbacks remove: %v \n", element)
 		s.appendOpsQueue.Remove(element)
+		op := element.Value.(*AppendOp)
+		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
+		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
 }
 
@@ -227,6 +233,9 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
+		op := element.Value.(*AppendOp)
+		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
+		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
 }
 

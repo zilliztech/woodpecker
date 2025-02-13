@@ -11,6 +11,7 @@ import (
 
 	minio2 "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 func TestNewObjectStorageLogFile(t *testing.T) {

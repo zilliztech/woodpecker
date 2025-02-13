@@ -274,13 +274,17 @@ func TestAsyncWritePerformance(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	resultChan := make([]<-chan *log.WriteResult, 1001)
+	payloadStaticData, err := generateRandomBytes(512)
+	assert.NoError(t, err)
+
+	resultChan := make([]<-chan *log.WriteResult, 100000000)
 	failedIdxs := make([]int, 0)
 	successCount := 0
-	for i := 0; i < 1001; i++ {
+	for i := 0; i < 100000000; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(),
 			&log.WriterMessage{
-				Payload: []byte(fmt.Sprintf("hello world %d", i)),
+				//Payload: []byte(fmt.Sprintf("hello world %d", i)),
+				Payload: payloadStaticData,
 				Properties: map[string]string{
 					"key": fmt.Sprintf("value%d", i),
 				},
@@ -288,7 +292,7 @@ func TestAsyncWritePerformance(t *testing.T) {
 		)
 		resultChan[i] = writeResultChan
 	}
-	for i := 0; i < 1001; i++ {
+	for i := 0; i < 100000000; i++ {
 		//fmt.Printf("wait %d\n", i)
 		writeResult := <-resultChan[i]
 		if writeResult.Err != nil {
@@ -300,14 +304,13 @@ func TestAsyncWritePerformance(t *testing.T) {
 		}
 	}
 	fmt.Printf("round 0 success count: %d \n", successCount)
-
-	for i := 1; i <= 1001; i++ {
+	for i := 1; i <= 100000000; i++ {
 		tmpFailedIdxs := make([]int, 0)
 		successCount = 0
 		for _, idx := range failedIdxs {
 			writeResultChan := logWriter.WriteAsync(context.Background(),
 				&log.WriterMessage{
-					Payload: []byte(fmt.Sprintf("hello world %d", idx)),
+					Payload: payloadStaticData,
 				},
 			)
 			resultChan[idx] = writeResultChan

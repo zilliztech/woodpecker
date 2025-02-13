@@ -3,6 +3,7 @@ package objectstorage
 import (
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,7 @@ func NewSequentialBuffer(startEntryId int64, maxSize int64) *SequentialBuffer {
 		firstEntryId: startEntryId,
 	}
 	b.expectedNextEntryId.Store(startEntryId)
+	metrics.WpWriteBufferSlots.WithLabelValues("default").Set(float64(maxSize))
 	return b
 }
 
@@ -39,6 +41,7 @@ func NewSequentialBufferWithData(startEntryId int64, maxSize int64, restData [][
 		firstEntryId: startEntryId,
 	}
 	b.expectedNextEntryId.Store(startEntryId)
+	metrics.WpWriteBufferSlots.WithLabelValues("default").Set(float64(maxSize))
 	return b
 }
 
@@ -63,6 +66,7 @@ func (b *SequentialBuffer) WriteEntry(entryId int64, value []byte) (int64, error
 	for addedId := entryId; addedId < b.firstEntryId+b.maxSize; addedId++ {
 		if b.values[addedId-b.firstEntryId] != nil && addedId == b.expectedNextEntryId.Load() {
 			b.expectedNextEntryId.Add(1)
+			metrics.WpWriteBufferSlots.WithLabelValues("default").Dec()
 		} else {
 			break
 		}

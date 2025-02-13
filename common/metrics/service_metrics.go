@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"sync"
 )
 
 const (
@@ -11,30 +12,32 @@ const (
 )
 
 var (
-	WpAppendRequestsCounter = prometheus.NewGaugeVec(
+	WpRegisterOnce sync.Once
+
+	WpAppendOpRequestsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
-			Subsystem: server_namespace,
+			Subsystem: client_namespace,
 			Name:      "append_requests",
 			Help:      "The number of append requests",
 		},
 		[]string{"log_name"},
 	)
-	WpAppendEntriesCounter = prometheus.NewGaugeVec(
+	WpAppendOpEntriesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
-			Subsystem: server_namespace,
+			Subsystem: client_namespace,
 			Name:      "append_entries",
 			Help:      "The number of append entries",
 		},
 		[]string{"log_name"},
 	)
-	WpAppendBytesCounter = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	WpAppendBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
 			Name:      "append_bytes",
-			Help:      "The size of append data",
+			Help:      "bytes of append data",
 		},
 		[]string{"log_name"},
 	)
@@ -47,7 +50,7 @@ var (
 		},
 		[]string{"log_name"},
 	)
-	WpReadRequestsCounter = prometheus.NewGaugeVec(
+	WpReadRequestsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
@@ -56,7 +59,7 @@ var (
 		},
 		[]string{"log_name"},
 	)
-	WpReadEntriesCounter = prometheus.NewGaugeVec(
+	WpReadEntriesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
@@ -65,12 +68,12 @@ var (
 		},
 		[]string{"log_name"},
 	)
-	WpReadBytesCounter = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	WpReadBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
 			Name:      "read_bytes",
-			Help:      "The size of read data",
+			Help:      "bytes of read data",
 		},
 		[]string{"log_name"},
 	)
@@ -83,20 +86,76 @@ var (
 		},
 		[]string{"log_name"},
 	)
+	WpFragmentBufferBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_buffer_bytes",
+			Help:      "The Size of fragment buffer bytes",
+		},
+		[]string{"log_name"},
+	)
+	WpFragmentLoadedGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_loaded",
+			Help:      "The number of loaded fragments",
+		},
+		[]string{"log_name"},
+	)
+	WpFragmentFlushBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_flush_bytes",
+			Help:      "bytes of fragment flush data",
+		},
+		[]string{"log_name"},
+	)
+	WpFragmentFlushLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_flush_latency",
+			Help:      "The latency of fragment flush",
+		},
+		[]string{"log_name"},
+	)
+	WpWriteBufferSlots = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "write_buffer_slots",
+			Help:      "The Size of write buffer slots",
+		},
+		[]string{"log_name"},
+	)
 )
 
 func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
-	// for append
-	registerer.MustRegister(WpAppendRequestsCounter)
-	registerer.MustRegister(WpAppendEntriesCounter)
-	registerer.MustRegister(WpAppendBytesCounter)
-	registerer.MustRegister(WpAppendReqLatency)
+	WpRegisterOnce.Do(func() {
+		// for append
+		registerer.MustRegister(WpAppendOpRequestsGauge)
+		registerer.MustRegister(WpAppendOpEntriesGauge)
+		registerer.MustRegister(WpAppendBytes)
+		registerer.MustRegister(WpAppendReqLatency)
 
-	// for read
-	registerer.MustRegister(WpReadRequestsCounter)
-	registerer.MustRegister(WpReadEntriesCounter)
-	registerer.MustRegister(WpReadBytesCounter)
-	registerer.MustRegister(WpReadReqLatency)
+		// for read
+		registerer.MustRegister(WpReadRequestsGauge)
+		registerer.MustRegister(WpReadEntriesGauge)
+		registerer.MustRegister(WpReadBytes)
+		registerer.MustRegister(WpReadReqLatency)
+
+		// for fragment
+		registerer.MustRegister(WpFragmentBufferBytes)
+		registerer.MustRegister(WpFragmentLoadedGauge)
+		registerer.MustRegister(WpFragmentFlushBytes)
+		registerer.MustRegister(WpFragmentFlushLatency)
+
+		// for write buffer
+		registerer.MustRegister(WpWriteBufferSlots)
+	})
 }
 
 // RegisterWoodpecker register wp metrics

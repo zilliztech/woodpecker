@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"sync"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -64,6 +66,7 @@ func (l *LogStore) Register(ctx context.Context) error {
 }
 
 func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+	start := time.Now()
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
 		return -1, nil, err
@@ -76,6 +79,9 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 		return -1, nil, err
 	}
 	//log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
+	cost := time.Now().Sub(start)
+	metrics.WpAppendReqLatency.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(cost.Milliseconds()))
+	metrics.WpAppendBytes.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(len(entry.Data)))
 	return entryId, syncedCh, nil
 }
 
@@ -95,6 +101,14 @@ func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 }
 
 func (l *LogStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+	start := time.Now()
+	metrics.WpReadEntriesGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
+	metrics.WpReadRequestsGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
+	defer func() {
+		metrics.WpReadEntriesGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Dec()
+		metrics.WpReadRequestsGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Dec()
+	}()
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
 		return nil, err
@@ -103,6 +117,10 @@ func (l *LogStore) GetEntry(ctx context.Context, logId int64, segmentId int64, e
 	if err != nil {
 		return nil, err
 	}
+	cost := time.Now().Sub(start)
+	// record success request latency
+	metrics.WpReadReqLatency.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(cost.Milliseconds()))
+	metrics.WpReadBytes.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(len(entry.Data)))
 	return entry, nil
 }
 
