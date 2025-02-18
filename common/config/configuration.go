@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,7 +102,7 @@ type EtcdLogConfig struct {
 
 // EtcdConfig stores the ETCD configuration.
 type EtcdConfig struct {
-	Endpoints      []string       `yaml:"endpoints"`
+	Endpoints      string         `yaml:"endpoints"`
 	RootPath       string         `yaml:"rootPath"`
 	MetaSubPath    string         `yaml:"metaSubPath"`
 	KvSubPath      string         `yaml:"kvSubPath"`
@@ -111,6 +112,13 @@ type EtcdConfig struct {
 	Use            EtcdUseConfig  `yaml:"use"`
 	Data           EtcdDataConfig `yaml:"data"`
 	Auth           EtcdAuthConfig `yaml:"auth"`
+}
+
+func (etcdCfg *EtcdConfig) GetEndpoints() []string {
+	if len(etcdCfg.Endpoints) == 0 {
+		return []string{}
+	}
+	return strings.Split(etcdCfg.Endpoints, ",")
 }
 
 // MinioSslConfig stores the MinIO SSL configuration.
@@ -162,19 +170,11 @@ type Configuration struct {
 
 // NewWoodpeckerConfig reads the WoodpeckerConfig from a YAML file.
 func NewWoodpeckerConfig(filePath string) (*WoodpeckerConfig, error) {
-	wpConfig := getDefaultWoodpeckerConfig()
-	if len(filePath) == 0 {
-		return &wpConfig, nil
-	}
-	data, err := os.ReadFile(filePath)
+	cfg, err := NewConfiguration(filePath)
 	if err != nil {
 		return nil, err
 	}
-	err = yaml.Unmarshal(data, wpConfig)
-	if err != nil {
-		return nil, err
-	}
-	return &wpConfig, nil
+	return &cfg.Woodpecker, nil
 }
 
 // NewConfiguration reads the WoodpeckerConfig from a YAML file.
@@ -198,6 +198,9 @@ func NewConfiguration(filePath string) (*Configuration, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(data) == 0 {
+		return config, nil
+	}
 	err = yaml.Unmarshal(data, config)
 	if err != nil {
 		return nil, err
@@ -214,7 +217,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		Client: ClientConfig{
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     100000000,
-				MaxInterval: 600,
+				MaxInterval: 800,
 			},
 		},
 		Logstore: LogstoreConfig{
@@ -259,7 +262,7 @@ func getDefaultTraceConfig() TraceConfig {
 
 func getDefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		Endpoints:      []string{"localhost:2379"},
+		Endpoints:      "localhost:2379",
 		RootPath:       "woodpecker",
 		MetaSubPath:    "meta",
 		KvSubPath:      "kv",
@@ -272,11 +275,12 @@ func getDefaultEtcdConfig() EtcdConfig {
 
 func getDefaultMinioConfig() MinioConfig {
 	return MinioConfig{
-		Address:         "localhost:9000",
+		Address:         "localhost",
 		Port:            9000,
 		AccessKeyID:     "minioadmin",
 		SecretAccessKey: "minioadmin",
 		UseSSL:          false,
+		BucketName:      "a-bucket",
 		CreateBucket:    true,
 	}
 }

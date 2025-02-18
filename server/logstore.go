@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/config"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 type LogStore struct {
 	sync.RWMutex
+	cfg      *config.Configuration
 	ctx      context.Context
 	cancel   context.CancelFunc
 	etcdCli  *clientv3.Client
@@ -25,9 +27,10 @@ type LogStore struct {
 	segmentProcessors map[int64][]segment.SegmentProcessor
 }
 
-func NewLogStore(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio.Client) *LogStore {
+func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio.Client) *LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	return &LogStore{
+		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
@@ -38,7 +41,6 @@ func NewLogStore(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio.
 
 func (l *LogStore) Start() error {
 	// TODO start service
-
 	// register to etcd and keep alive
 	registerErr := l.Register(context.Background())
 	return registerErr
@@ -95,7 +97,7 @@ func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 			}
 		}
 	}
-	s := segment.NewSegmentProcessor(ctx, logId, segmentId, l.etcdCli, l.minioCli)
+	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.etcdCli, l.minioCli)
 	l.segmentProcessors[logId] = append(l.segmentProcessors[logId], s)
 	return s, nil
 }

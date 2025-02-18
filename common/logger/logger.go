@@ -3,9 +3,11 @@ package logger
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
-	"go.uber.org/zap"
 	"sync"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 var (

@@ -2,10 +2,11 @@ package logger
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"go.uber.org/zap"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // TestNewLogger 测试 NewLogger 函数

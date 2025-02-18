@@ -27,7 +27,7 @@ type Server struct {
 
 func NewServer(ctx context.Context, configuration *config.Configuration) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	etcdCli, err := etcd.GetRemoteEtcdClient(configuration.Etcd.Endpoints)
+	etcdCli, err := etcd.GetRemoteEtcdClient(configuration.Etcd.GetEndpoints())
 	if err != nil {
 		panic(err)
 	}
@@ -40,7 +40,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
 	}
-	s.logStore = NewLogStore(ctx, etcdCli, minioCli)
+	s.logStore = NewLogStore(ctx, configuration, etcdCli, minioCli)
 	return s
 }
 

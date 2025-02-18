@@ -89,8 +89,8 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
 	f.uploaded = true
 
-	// TODO test only , immediately release memory
-	f.Release()
+	//// TODO test only , immediately release memory
+	//f.Release()
 
 	return nil
 }

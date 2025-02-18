@@ -10,6 +10,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -26,10 +27,11 @@ type SegmentProcessor interface {
 	SetFenced()
 }
 
-func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	return &segmentProcessor{
+		cfg:         cfg,
 		logId:       logId,
 		segId:       segId,
 		etcdCli:     etcdCli,
@@ -43,6 +45,7 @@ var _ SegmentProcessor = (*segmentProcessor)(nil)
 
 type segmentProcessor struct {
 	sync.RWMutex
+	cfg         *config.Configuration
 	logId       int64
 	segId       int64
 	etcdCli     *clientv3.Client
@@ -157,11 +160,10 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	return currentLogFileReader, nil
 }
 
-// TODO move to common package for config
 func (s *segmentProcessor) getInstanceBucket() string {
-	return "woodpecker"
+	return s.cfg.Minio.BucketName
 }
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {
-	return fmt.Sprintf("%d/%d", s.logId, s.segId)
+	return fmt.Sprintf("woodpecker/%d/%d", s.logId, s.segId)
 }

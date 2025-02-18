@@ -34,10 +34,12 @@ func NewMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*
 		}
 	}
 
-	minioClient, err := minio.New(cfg.Minio.Address, &minio.Options{
-		Creds:  creds,
-		Secure: cfg.Minio.UseSSL,
-	})
+	minioClient, err := minio.New(
+		fmt.Sprintf("%s:%d", cfg.Minio.Address, cfg.Minio.Port),
+		&minio.Options{
+			Creds:  creds,
+			Secure: cfg.Minio.UseSSL,
+		})
 	// options nil or invalid formatted endpoint, don't need to retry
 	if err != nil {
 		return nil, err
@@ -71,61 +73,3 @@ func NewMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*
 	}
 	return minioClient, nil
 }
-
-//
-//// Deprecated: TestOnly TODO
-//func NewMinioClient(ctx context.Context, baseBucket string) (*minio.Client, error) {
-//	var creds *credentials.Credentials
-//	creds = credentials.NewStaticV4("minioadmin", "minioadmin", "")
-//	minioClient, err := minio.New("localhost:9000", &minio.Options{
-//		Creds:  creds,
-//		Secure: false,
-//	})
-//	// options nil or invalid formatted endpoint, don't need to retry
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	var bucketExists bool
-//	// check valid in first query
-//	checkBucketFn := func() error {
-//		bucketExists, err = minioClient.BucketExists(ctx, baseBucket)
-//		if err != nil {
-//			return err
-//		}
-//		if !bucketExists {
-//			err := minioClient.MakeBucket(ctx, baseBucket, minio.MakeBucketOptions{})
-//			if err != nil {
-//				return err
-//			}
-//		}
-//		return nil
-//	}
-//	// check and create root bucket if not exists
-//	err = checkBucketFn()
-//	if err != nil {
-//		return nil, err
-//	}
-//	return minioClient, nil
-//}
-//
-//// Deprecated: TestOnly TODO
-//func NewMinioClientWithSSL(ctx context.Context, baseBucket string) (*minio.Client, error) {
-//	var creds *credentials.Credentials
-//	creds = credentials.NewIAM("")
-//
-//	err := os.Setenv("SSL_CERT_FILE", "/path/to/public.crt")
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	minioClient, err := minio.New("s3.us-west-2.amazonaws.com", &minio.Options{
-//		Creds:  creds,
-//		Secure: true,
-//	})
-//	// options nil or invalid formatted endpoint, don't need to retry
-//	if err != nil {
-//		return nil, err
-//	}
-//	return minioClient, nil
-//}

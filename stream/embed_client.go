@@ -20,12 +20,13 @@ var _ WoodpeckerClient = (*woodpeckerEmbedClient)(nil)
 
 // Implementation of the client interface for Z'eembed mode.
 type woodpeckerEmbedClient struct {
+	cfg           *config.Configuration
 	Metadata      meta.MetadataProvider
 	embedLogStore *server.LogStore
 }
 
 func NewWoodpeckerEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client WoodpeckerClient, err error) {
-	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.Endpoints)
+	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		panic(err)
 	}
@@ -33,12 +34,13 @@ func NewWoodpeckerEmbedClientFromConfig(ctx context.Context, config *config.Conf
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
-	return NewWoodpeckerEmbedClient(ctx, etcdCli, minioCli)
+	return NewWoodpeckerEmbedClient(ctx, config, etcdCli, minioCli)
 }
 
-func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio2.Client) (client WoodpeckerClient, err error) {
-	instance := server.NewLogStore(context.Background(), etcdCli, minioCli)
+func NewWoodpeckerEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio2.Client) (client WoodpeckerClient, err error) {
+	instance := server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
+		cfg:           cfg,
 		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
 		embedLogStore: instance,
 	}
