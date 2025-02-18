@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/stream"
-	"github.com/zilliztech/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/woodpecker"
+	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
 func TestE2EWrite(t *testing.T) {
@@ -17,7 +17,7 @@ func TestE2EWrite(t *testing.T) {
 
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -64,7 +64,7 @@ func TestAsyncWritePerformance(t *testing.T) {
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
 
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -161,7 +161,7 @@ func TestWriteThroughput(t *testing.T) {
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
 
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -253,7 +253,7 @@ func TestReadThroughput(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -294,7 +294,7 @@ func TestReadFromEarliest(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -338,7 +338,7 @@ func TestReadFromLatest(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -376,7 +376,7 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
-	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
+	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}

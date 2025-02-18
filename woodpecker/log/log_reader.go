@@ -10,7 +10,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/stream/segment"
+	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
 type LogReader interface {

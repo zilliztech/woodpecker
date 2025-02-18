@@ -1,4 +1,4 @@
-package stream
+package woodpecker
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/server/client"
-	"github.com/zilliztech/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-type WoodpeckerClient interface {
+type Client interface {
 	io.Closer
 	// CreateLog creates a new log with the specified name.
 	CreateLog(context.Context, string) error
@@ -30,7 +30,7 @@ type WoodpeckerClient interface {
 	GetMetadataProvider() meta.MetadataProvider
 }
 
-func NewWoodpeckerClient(ctx context.Context, etcdClient *clientv3.Client) (WoodpeckerClient, error) {
+func NewClient(ctx context.Context, etcdClient *clientv3.Client) (Client, error) {
 	c := &woodpeckerClient{
 		Metadata: meta.NewMetadataProvider(ctx, etcdClient),
 	}
@@ -41,7 +41,7 @@ func NewWoodpeckerClient(ctx context.Context, etcdClient *clientv3.Client) (Wood
 	return c, nil
 }
 
-var _ WoodpeckerClient = (*woodpeckerClient)(nil)
+var _ Client = (*woodpeckerClient)(nil)
 
 // Implementation of the client interface for Distributed mode.
 type woodpeckerClient struct {

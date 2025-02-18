@@ -1,4 +1,4 @@
-package stream
+package woodpecker
 
 import (
 	"context"
@@ -13,10 +13,10 @@ import (
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/server/client"
-	"github.com/zilliztech/woodpecker/stream/log"
+	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-var _ WoodpeckerClient = (*woodpeckerEmbedClient)(nil)
+var _ Client = (*woodpeckerEmbedClient)(nil)
 
 // Implementation of the client interface for Z'eembed mode.
 type woodpeckerEmbedClient struct {
@@ -25,7 +25,7 @@ type woodpeckerEmbedClient struct {
 	embedLogStore *server.LogStore
 }
 
-func NewWoodpeckerEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client WoodpeckerClient, err error) {
+func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client Client, err error) {
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		panic(err)
@@ -34,10 +34,10 @@ func NewWoodpeckerEmbedClientFromConfig(ctx context.Context, config *config.Conf
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
-	return NewWoodpeckerEmbedClient(ctx, config, etcdCli, minioCli)
+	return NewEmbedClient(ctx, config, etcdCli, minioCli)
 }
 
-func NewWoodpeckerEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio2.Client) (client WoodpeckerClient, err error) {
+func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio2.Client) (client Client, err error) {
 	instance := server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
 		cfg:           cfg,

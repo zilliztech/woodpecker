@@ -13,7 +13,7 @@ import (
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
-	"github.com/zilliztech/woodpecker/stream/segment"
+	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
 type LogHandle interface {
