@@ -6,14 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"io"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/codec"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // FragmentObject uses MinIO for object storage.
@@ -88,6 +88,10 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
 	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
 	f.uploaded = true
+
+	// TODO test only , immediately release memory
+	f.Release()
+
 	return nil
 }
 

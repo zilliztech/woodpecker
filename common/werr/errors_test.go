@@ -2,6 +2,7 @@ package werr
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,4 +39,33 @@ func TestWoodpeckerError(t *testing.T) {
 	assert.True(t, errors.Is(testErr, sameErr))
 	assert.False(t, errors.Is(testErr, differentErr))
 	assert.False(t, errors.Is(testErr, errors.New("standard error")))
+}
+
+func TestMultiErrors_Is(t *testing.T) {
+	err1 := errors.New("error 1")
+	err2 := ErrEntryNotFound
+	err3 := ErrSegmentNotFound
+
+	multiErr := Combine(err1, err2, err3)
+
+	assert.True(t, multiErr.(*multiErrors).Is(err1))
+	assert.True(t, multiErr.(*multiErrors).Is(err2))
+	assert.True(t, multiErr.(*multiErrors).Is(err3))
+
+	assert.Equal(t, fmt.Sprintf("%s: %s: %s", err1.Error(), err2.Error(), err3.Error()), multiErr.Error())
+}
+
+// TestMultiErrors_Error 测试 multiErrors 的 Error 方法
+func TestMultiErrors_Error(t *testing.T) {
+	err1 := errors.New("error 1")
+	err2 := errors.New("error 2")
+	err3 := errors.New("error 3")
+
+	multiErr := Combine(err1, err2, err3)
+
+	expected := "error 1: error 2: error 3"
+	actual := multiErr.Error()
+	if actual != expected {
+		t.Errorf("Expected %v, got %v", expected, actual)
+	}
 }

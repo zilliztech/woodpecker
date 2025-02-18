@@ -2,8 +2,9 @@ package objectstorage
 
 import (
 	"errors"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"sync"
+
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 var (

@@ -2,8 +2,11 @@ package log
 
 import (
 	"context"
-	"log"
 	"sync"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 type LogWriter interface {
@@ -115,13 +118,13 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	}
 	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
-		log.Printf("ERROR: get write seg handle err:" + err.Error())
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.Name), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
 	bytes, err := marshalMessage(msg)
 	if err != nil {
-		log.Printf("ERROR: get write seg handle err:" + err.Error())
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.Name), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}

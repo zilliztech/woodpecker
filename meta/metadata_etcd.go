@@ -3,7 +3,6 @@ package meta
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,8 +11,10 @@ import (
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	"go.uber.org/zap"
 	pb "google.golang.org/protobuf/proto"
 
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -53,9 +54,10 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	log := logger.Ctx(ctx)
 	resp, err := e.client.Txn(ctx).If().Then(ops...).Commit()
 	if err != nil || !resp.Succeeded {
-		log.Printf("init service metadata failed, %v", err)
+		log.Error("init service metadata failed", zap.Error(err))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	initOps := make([]clientv3.Op, 0, 4)
@@ -73,7 +75,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				}
 				data, encodeErr := pb.Marshal(v)
 				if encodeErr != nil {
-					log.Printf("encode version failed, %v", encodeErr)
+					log.Error("encode version failed", zap.Error(encodeErr))
 					return werr.ErrMetadataEncode.WithCauseErr(encodeErr)
 				}
 				initOps = append(initOps, clientv3.OpPut(keys[index], string(data)))
@@ -81,26 +83,28 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				// idgen initial value is 0
 				initOps = append(initOps, clientv3.OpPut(keys[index], "0"))
 			}
-			log.Printf("%s not found \n", keys[index])
+			log.Warn("init service metadata warning, key not found", zap.String("key", keys[index]))
 		}
 	}
 	if len(initOps) == 0 {
 		// cluster already initialized successfully
-		log.Printf("cluster already initialized, skipping initialization")
+		log.Debug("cluster already initialized, skipping initialization")
 		return nil
 	} else if len(initOps) != len(keys) {
 		// cluster already initialized partially, but not all
-		log.Printf("init operation failed, some keys already exists")
-		return werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
+		err = werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
+		log.Error("init operation failed, some keys already exists", zap.Error(err))
+		return err
 	}
 	// cluster not initialized, initialize it
 	_, initErr := e.client.Txn(ctx).If().Then(initOps...).Commit()
 	if initErr != nil || !resp.Succeeded {
-		log.Printf("fail to put metadata failed when init service meta, %v", initErr)
-		return werr.ErrMetadataInit.WithCauseErr(initErr)
+		err = werr.ErrMetadataInit.WithCauseErr(initErr)
+		log.Error("init operation failed", zap.Error(err))
+		return err
 	}
 	// cluster initialized successfully
-	log.Printf("cluster initialized successfully")
+	log.Info("cluster initialized successfully")
 	return nil
 }
 
@@ -115,7 +119,6 @@ func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Versi
 	expectedVersion := &proto.Version{}
 	decodedErr := pb.Unmarshal(getResp.Kvs[0].Value, expectedVersion)
 	if decodedErr != nil {
-		log.Printf("decode version failed, %v", decodedErr)
 		return nil, werr.ErrMetadataDecode.WithCauseErr(decodedErr)
 	}
 	return expectedVersion, nil
@@ -150,7 +153,6 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	currentIdStr := string(resp.Kvs[0].Value)
 	currentID, err := atoi(currentIdStr)
 	if err != nil {
-		log.Printf("failed to convert string to int: %v", err)
 		return werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	nextID := currentID + 1
@@ -166,7 +168,6 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	// Serialize to binary
 	logMetaValue, err := pb.Marshal(logMeta)
 	if err != nil {
-		log.Printf("Failed to serialize LogMeta: %v", err)
 		return werr.ErrCreateLogMetadata.WithCauseErr(err)
 	}
 	// Start a transaction
@@ -184,7 +185,6 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	).Commit()
 
 	if err != nil {
-		log.Printf("Failed to execute create log transaction: %v", err)
 		return werr.ErrCreateLogMetadata.WithCauseErr(err)
 	}
 
@@ -264,7 +264,6 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 	for _, path := range logResp.Kvs {
 		logName, extractErr := extractLogName(string(path.Key))
 		if extractErr != nil {
-			log.Printf("failed to extract log name from path %s: %v", string(path.Key), extractErr)
 			return nil, werr.ErrMetadataRead.WithCauseErr(extractErr)
 		}
 		logs[logName] = 1
@@ -408,7 +407,6 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 
 	segmentMetaMap := make(map[int64]*proto.SegmentMetadata)
 	if len(getResp.Kvs) == 0 {
-		log.Printf("There is no segments for log:%s ", logName)
 		return segmentMetaMap, nil
 	}
 
@@ -479,13 +477,14 @@ func (e *metadataProviderEtcd) Close() error {
 		}
 		err := lock.Unlock(context.Background())
 		if err != nil {
-			log.Printf("Failed to unlock %s writer lock, err:%v", logName, err)
+			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
 		}
 	}
 	if e.session != nil {
 		err := e.session.Close()
-		log.Printf("etcd metadata provider session closed err: %v", err)
+		if err != nil {
+			logger.Ctx(context.Background()).Warn("Failed to close etcd session", zap.Error(err))
+		}
 	}
-	log.Printf("etcd metadata provider closed")
 	return nil
 }

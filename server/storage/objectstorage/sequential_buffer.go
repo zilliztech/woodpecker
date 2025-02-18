@@ -3,10 +3,10 @@ package objectstorage
 import (
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	"sync"
 	"sync/atomic"
 
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 

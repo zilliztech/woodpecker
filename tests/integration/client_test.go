@@ -1,25 +1,30 @@
-package stream
+package integration
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	"net/http"
 	"net/http/pprof"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/gops/agent"
+	minio2 "github.com/minio/minio-go/v7"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/stream"
 	"github.com/zilliztech/woodpecker/stream/log"
 )
 
@@ -133,13 +138,9 @@ func TestClear(t *testing.T) {
 func TestE2EWrite(t *testing.T) {
 	startGopsAgent()
 
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -201,9 +202,32 @@ func startGopsAgent() {
 
 var testMetricsRegistry prometheus.Registerer
 
+var (
+	MinioPutBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "minio",
+			Subsystem: "test",
+			Name:      "put_bytes",
+			Help:      "bytes of put data",
+		},
+		[]string{"thread_id"},
+	)
+	MinioPutLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "minio",
+			Subsystem: "test",
+			Name:      "put_latency",
+			Help:      "The latency of put operation",
+		},
+		[]string{"thread_id"},
+	)
+)
+
 func startMetrics() {
 	testMetricsRegistry = prometheus.DefaultRegisterer
 	metrics.RegisterWoodpeckerWithRegisterer(testMetricsRegistry)
+	testMetricsRegistry.MustRegister(MinioPutBytes)
+	testMetricsRegistry.MustRegister(MinioPutLatency)
 
 	// start metrics
 	go func() {
@@ -237,27 +261,146 @@ func generateRandomBytes(length int) ([]byte, error) {
 	return randomBytes, nil
 }
 
+func TestMinioReadPerformance(t *testing.T) {
+	startGopsAgent()
+	startMetrics()
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
+	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
+	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	assert.NoError(t, err)
+	concurrentCh := make(chan int, 1)
+	for i := 0; i < 1000; i++ {
+		concurrentCh <- 1
+		go func(ch chan int) {
+			start := time.Now()
+			obj, getErr := minioCli.GetObject(
+				context.Background(),
+				cfg.Minio.BucketName,
+				fmt.Sprintf("test_object_%d", i),
+				minio2.GetObjectOptions{})
+			assert.NoError(t, getErr)
+			objInfo, statErr := obj.Stat()
+			assert.NoError(t, statErr)
+			objData := make([]byte, objInfo.Size)
+			readSize, readErr := obj.Read(objData)
+			assert.Contains(t, readErr.Error(), "EOF") //
+			cost := time.Now().Sub(start)
+			fmt.Printf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
+			<-ch
+		}(concurrentCh)
+	}
+	fmt.Printf("Test Minio Finish \n")
+}
+
+func TestMinioDelete(t *testing.T) {
+	startGopsAgent()
+	startMetrics()
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
+	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
+
+	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	assert.NoError(t, err)
+	concurrentCh := make(chan int, 1)
+	for i := 0; i < 1000; i++ {
+		concurrentCh <- 1
+		go func(ch chan int) {
+			removeErr := minioCli.RemoveObject(
+				context.Background(),
+				cfg.Minio.BucketName,
+				fmt.Sprintf("test_object_%d", i),
+				minio2.RemoveObjectOptions{})
+			assert.NoError(t, removeErr)
+			if removeErr != nil {
+				fmt.Printf("remove test_object_%d failed,err:%v\n", i, removeErr)
+				return
+			}
+			fmt.Printf("remove test_object_%d completed,\n", i)
+			<-ch
+		}(concurrentCh)
+	}
+	fmt.Printf("Test Minio Finish \n")
+}
+
+var totalBytes atomic.Int64
+
+func startReporting() {
+	go func(total *atomic.Int64) {
+		ticker := time.NewTicker(time.Duration(1000 * int(time.Millisecond)))
+		defer ticker.Stop()
+		lastTime := time.Now().UnixMilli()
+		lastTotal := total.Load()
+		for {
+			select {
+			case <-ticker.C:
+				currentTime := time.Now().UnixMilli()
+				currentTotal := total.Load()
+				rate := float64(currentTotal-lastTotal) / float64(currentTime-lastTime) * 1000 / 1_000_000
+				fmt.Printf("put bytes Rate: %d MB/s \n", rate)
+			}
+		}
+
+	}(&totalBytes)
+}
+
+func TestMinioWritePerformance(t *testing.T) {
+	startGopsAgent()
+	startMetrics()
+	startReporting()
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
+	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
+	//minioCli, err := minio.NewMinioClient(context.Background(), bucketName)
+	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	assert.NoError(t, err)
+	payloadStaticData, err := generateRandomBytes(4 * 1024)
+	concurrentCh := make(chan int, 1)
+
+	for i := 0; i < 1000; i++ {
+		concurrentCh <- 1
+		go func(ch chan int) {
+			start := time.Now()
+			_, putErr := minioCli.PutObject(
+				context.Background(),
+				cfg.Minio.BucketName,
+				fmt.Sprintf("test_object_%d", i),
+				bytes.NewReader(payloadStaticData),
+				int64(len(payloadStaticData)),
+				minio2.PutObjectOptions{})
+			assert.NoError(t, putErr)
+			cost := time.Now().Sub(start)
+			fmt.Printf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
+			<-ch
+			MinioPutBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+			MinioPutLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
+			// Test only
+			totalBytes.Add(int64(len(payloadStaticData)))
+		}(concurrentCh)
+	}
+	fmt.Printf("Test Minio Finish \n")
+}
+
 func TestAsyncWritePerformance(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
 
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
 
 	// ###  CreateLog
-	createLogErr := client.CreateLog(context.Background(), "test_log")
-	if createLogErr != nil {
-		fmt.Printf("Create log failed, err:%v\n", createLogErr)
-		panic(createLogErr)
-	}
+	//createLogErr := client.CreateLog(context.Background(), "test_log")
+	//if createLogErr != nil {
+	//	fmt.Printf("Create log failed, err:%v\n", createLogErr)
+	//	panic(createLogErr)
+	//}
 
 	// ### OpenLog
 	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
@@ -274,7 +417,7 @@ func TestAsyncWritePerformance(t *testing.T) {
 		panic(openWriterErr)
 	}
 
-	payloadStaticData, err := generateRandomBytes(512)
+	payloadStaticData, err := generateRandomBytes(4 * 1024)
 	assert.NoError(t, err)
 
 	resultChan := make([]<-chan *log.WriteResult, 100000000)
@@ -345,14 +488,10 @@ func TestAsyncWritePerformance(t *testing.T) {
 // TestWrite example to show how to use woodpecker client to write msg to  unbounded log
 func TestWriteThroughput(t *testing.T) {
 	startGopsAgent()
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
 
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -446,12 +585,9 @@ func TestWriteThroughput(t *testing.T) {
 
 func TestReadThroughput(t *testing.T) {
 	startGopsAgent()
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -490,12 +626,9 @@ func TestReadThroughput(t *testing.T) {
 
 func TestReadFromEarliest(t *testing.T) {
 	startGopsAgent()
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -537,12 +670,9 @@ func TestReadFromEarliest(t *testing.T) {
 
 func TestReadFromLatest(t *testing.T) {
 	startGopsAgent()
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -578,12 +708,9 @@ func TestReadFromLatest(t *testing.T) {
 
 func TestReadFromSpecifiedPosition(t *testing.T) {
 	startGopsAgent()
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	client, err := NewWoodpeckerEmbedClient(context.Background(), etcdCli)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	client, err := stream.NewWoodpeckerEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}

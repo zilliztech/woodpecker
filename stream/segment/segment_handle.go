@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/werr"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/zilliztech/woodpecker/common/bitset"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
@@ -223,7 +225,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	s.Lock()
 	defer s.Unlock()
 	// fail, and call pendingAppendOps callback(nil,err)
-	fmt.Printf("entryId %d append error: %v\n", triggerEntryId, err)
+	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
 	elementsToRemove := []*list.Element{}
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		element := e
@@ -291,7 +293,10 @@ func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) *proto.Se
 	defer s.Unlock()
 	newMeta, err := s.metadata.GetSegmentMetadata(ctx, s.logName, s.segmentMetaCache.SegNo)
 	if err != nil {
-		log.Printf("refresh log:%s segmentMeta:%d error:%v", s.logName, s.segmentMetaCache.SegNo, err)
+		logger.Ctx(ctx).Warn("refresh segment meta failed",
+			zap.String("logName", s.logName),
+			zap.Int64("segId", s.segmentMetaCache.SegNo),
+			zap.Error(err))
 		return s.segmentMetaCache
 	}
 	s.segmentMetaCache = newMeta

@@ -2,11 +2,14 @@ package stream
 
 import (
 	"context"
-	"github.com/zilliztech/woodpecker/common/werr"
 
+	minio2 "github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/server/client"
@@ -21,11 +24,19 @@ type woodpeckerEmbedClient struct {
 	embedLogStore *server.LogStore
 }
 
-func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client) (client WoodpeckerClient, err error) {
-	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
+func NewWoodpeckerEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client WoodpeckerClient, err error) {
+	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.Endpoints)
+	if err != nil {
+		panic(err)
+	}
+	minioCli, err := minio.NewMinioClientFromConfig(ctx, config)
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
+	return NewWoodpeckerEmbedClient(ctx, etcdCli, minioCli)
+}
+
+func NewWoodpeckerEmbedClient(ctx context.Context, etcdCli *clientv3.Client, minioCli *minio2.Client) (client WoodpeckerClient, err error) {
 	instance := server.NewLogStore(context.Background(), etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
 		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
@@ -43,7 +54,7 @@ func (c *woodpeckerEmbedClient) initClient(ctx context.Context) error {
 	if initMeta != nil {
 		return initMeta
 	}
-	c.embedLogStore.SetAddress("127.0.0.1:59456")
+	c.embedLogStore.SetAddress("127.0.0.1:59456") // TODO
 	embedLogStoreStartErr := c.embedLogStore.Start()
 	return embedLogStoreStartErr
 }
@@ -94,6 +105,7 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 }
 
 func (c *woodpeckerEmbedClient) Close() error {
-	// TODO
+	c.embedLogStore.Stop()
+	c.Metadata.Close()
 	return nil
 }

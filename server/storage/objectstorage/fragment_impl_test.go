@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	minio2 "github.com/zilliztech/woodpecker/common/minio"
 )
 
@@ -16,7 +17,11 @@ func TestNewObjectStorageFragment(t *testing.T) {
 	entries := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3")}
 	firstEntryId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
+
 	assert.NoError(t, err)
 	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
 	assert.NotNil(t, fragment)
@@ -40,8 +45,12 @@ func TestWriteAndLoad(t *testing.T) {
 	entries := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3")}
 	firstEntryId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
 	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
+	assert.NoError(t, err)
+
 	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
 
 	// Test writing when fragment is not loaded

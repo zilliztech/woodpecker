@@ -1,19 +1,128 @@
 package config
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConfiguration(t *testing.T) {
-	configDefault, err := NewConfiguration("")
+// TestNewConfiguration test new Configuration
+func TestNewConfiguration(t *testing.T) {
+	tempFile, err := os.OpenFile("../../woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
-	assert.NotNil(t, configDefault)
-	assert.Equal(t, 100_000_000, configDefault.LogStore.LogFileSyncPolicy.MaxBytes)
+	// load configuration
+	config, err := NewConfiguration(tempFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to load configuration: %v", err)
+	}
 
-	configFromFile, err := NewConfiguration("../../config/woodpecker.yaml")
+	// test configuration
+	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
+	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
+	assert.Equal(t, 100000000, config.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
+	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, 1000, config.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval)
+	assert.Equal(t, 10000, config.Woodpecker.Logstore.LogFileSyncPolicy.MaxEntries)
+	assert.Equal(t, 100000000, config.Woodpecker.Logstore.LogFileSyncPolicy.MaxBytes)
+	assert.Equal(t, "info", config.Log.Level)
+	assert.Equal(t, "json", config.Log.Format)
+	assert.True(t, config.Log.Stdout)
+	assert.Equal(t, "./logs", config.Log.File.RootPath)
+	assert.Equal(t, 100, config.Log.File.MaxSize)
+	assert.Equal(t, 10, config.Log.File.MaxBackups)
+	assert.Equal(t, 30, config.Log.File.MaxAge)
+	assert.Equal(t, "jaeger", config.Trace.Exporter)
+	assert.Equal(t, 1.0, config.Trace.SampleFraction)
+	assert.Equal(t, 10, config.Trace.InitTimeout)
+	assert.Equal(t, "http://localhost:14268/api/traces", config.Trace.Jaeger.URL)
+	assert.Equal(t, "localhost:4317", config.Trace.Otlp.Endpoint)
+	assert.Equal(t, "grpc", config.Trace.Otlp.Method)
+	assert.False(t, config.Trace.Otlp.Secure)
+	assert.Equal(t, []string{"localhost:2379"}, config.Etcd.Endpoints)
+	assert.Equal(t, "woodpecker", config.Etcd.RootPath)
+	assert.Equal(t, "meta", config.Etcd.MetaSubPath)
+	assert.Equal(t, "kv", config.Etcd.KvSubPath)
+	assert.Equal(t, "info", config.Etcd.Log.Level)
+	assert.Equal(t, "./logs", config.Etcd.Log.Path)
+	assert.False(t, config.Etcd.Ssl.Enabled)
+	assert.Equal(t, 10, config.Etcd.RequestTimeout)
+	assert.False(t, config.Etcd.Use.Embed)
+	assert.Equal(t, "localhost:9000", config.Minio.Address)
+	assert.Equal(t, 9000, config.Minio.Port)
+	assert.Equal(t, "minioadmin", config.Minio.AccessKeyID)
+	assert.Equal(t, "minioadmin", config.Minio.SecretAccessKey)
+	assert.False(t, config.Minio.UseSSL)
+
+	defaultConfig, err := NewConfiguration("")
+	// test default configuration
+	assert.Equal(t, "etcd", defaultConfig.Woodpecker.Meta.Type)
+	assert.Equal(t, "woodpecker", defaultConfig.Woodpecker.Meta.Prefix)
+	assert.Equal(t, 100000000, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
+	assert.Equal(t, 600, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval)
+	assert.Equal(t, 10000, defaultConfig.Woodpecker.Logstore.LogFileSyncPolicy.MaxEntries)
+	assert.Equal(t, 100000000, defaultConfig.Woodpecker.Logstore.LogFileSyncPolicy.MaxBytes)
+	assert.Equal(t, "info", defaultConfig.Log.Level)
+	assert.Equal(t, "json", defaultConfig.Log.Format)
+	assert.True(t, defaultConfig.Log.Stdout)
+	assert.Equal(t, "./logs", defaultConfig.Log.File.RootPath)
+	assert.Equal(t, 100, defaultConfig.Log.File.MaxSize)
+	assert.Equal(t, 10, defaultConfig.Log.File.MaxBackups)
+	assert.Equal(t, 30, defaultConfig.Log.File.MaxAge)
+	assert.Equal(t, "jaeger", defaultConfig.Trace.Exporter)
+	assert.Equal(t, 1.0, defaultConfig.Trace.SampleFraction)
+	assert.Equal(t, 10, defaultConfig.Trace.InitTimeout)
+	assert.Equal(t, "http://localhost:14268/api/traces", defaultConfig.Trace.Jaeger.URL)
+	assert.Equal(t, "localhost:4317", defaultConfig.Trace.Otlp.Endpoint)
+	assert.Equal(t, "grpc", defaultConfig.Trace.Otlp.Method)
+	assert.False(t, defaultConfig.Trace.Otlp.Secure)
+	assert.Equal(t, []string{"localhost:2379"}, defaultConfig.Etcd.Endpoints)
+	assert.Equal(t, "woodpecker", defaultConfig.Etcd.RootPath)
+	assert.Equal(t, "meta", defaultConfig.Etcd.MetaSubPath)
+	assert.Equal(t, "kv", defaultConfig.Etcd.KvSubPath)
+	assert.Equal(t, "info", defaultConfig.Etcd.Log.Level)
+	assert.Equal(t, "./logs", defaultConfig.Etcd.Log.Path)
+	assert.False(t, defaultConfig.Etcd.Ssl.Enabled)
+	assert.Equal(t, 10, defaultConfig.Etcd.RequestTimeout)
+	assert.False(t, defaultConfig.Etcd.Use.Embed)
+	assert.Equal(t, "localhost:9000", defaultConfig.Minio.Address)
+	assert.Equal(t, 9000, defaultConfig.Minio.Port)
+	assert.Equal(t, "minioadmin", defaultConfig.Minio.AccessKeyID)
+	assert.Equal(t, "minioadmin", defaultConfig.Minio.SecretAccessKey)
+	assert.False(t, defaultConfig.Minio.UseSSL)
+
+}
+
+func TestNewWoodpeckerConfiguration(t *testing.T) {
+	tempFile, err := os.OpenFile("../../woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
-	assert.NotNil(t, configFromFile)
-	assert.Equal(t, 64_000_000, configFromFile.LogStore.LogFileSyncPolicy.MaxBytes)
+	// load configuration
+	config, err := NewWoodpeckerConfig(tempFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// test configuration
+	assert.Equal(t, "etcd", config.Meta.Type)
+	assert.Equal(t, "woodpecker", config.Meta.Prefix)
+	assert.Equal(t, 100000000, config.Client.SegmentRollingPolicy.MaxSize)
+	assert.Equal(t, 600, config.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, 1000, config.Logstore.LogFileSyncPolicy.MaxInterval)
+	assert.Equal(t, 10000, config.Logstore.LogFileSyncPolicy.MaxEntries)
+	assert.Equal(t, 100000000, config.Logstore.LogFileSyncPolicy.MaxBytes)
+
+	defaultConfig, err := NewWoodpeckerConfig("")
+	if err != nil {
+		t.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// test configuration
+	assert.Equal(t, "etcd", defaultConfig.Meta.Type)
+	assert.Equal(t, "woodpecker", defaultConfig.Meta.Prefix)
+	assert.Equal(t, 100000000, defaultConfig.Client.SegmentRollingPolicy.MaxSize)
+	assert.Equal(t, 600, defaultConfig.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, 1000, defaultConfig.Logstore.LogFileSyncPolicy.MaxInterval)
+	assert.Equal(t, 10000, defaultConfig.Logstore.LogFileSyncPolicy.MaxEntries)
+	assert.Equal(t, 100000000, defaultConfig.Logstore.LogFileSyncPolicy.MaxBytes)
 }

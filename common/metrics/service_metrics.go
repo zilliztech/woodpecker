@@ -131,6 +131,15 @@ var (
 		},
 		[]string{"log_name"},
 	)
+	WpSegmentRollingLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "segment_rolling_latency",
+			Help:      "The latency of segment rolling",
+		},
+		[]string{"log_name"},
+	)
 )
 
 func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
@@ -155,6 +164,9 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 
 		// for write buffer
 		registerer.MustRegister(WpWriteBufferSlots)
+
+		// for segment
+		registerer.MustRegister(WpSegmentRollingLatency)
 	})
 }
 

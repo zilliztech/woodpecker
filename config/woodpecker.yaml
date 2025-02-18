@@ -1,22 +1,21 @@
 # This file is used to configure Woodpecker service.
 
-# Configuration of Woodpecker metadata storage.
-meta:
-  type: etcd # Type of the configuration, currently only etcd is supported.
-  prefix: woodpecker # Root prefix of the key to where Woodpecker stores data in etcd.
-
-# Configuration of Woodpecker service.
-client:
-  segmentRollingPolicy:
-    maxSize: 100000000 # Maximum entries count of a segment, default is 100M
-    maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
-
-# Configuration of Woodpecker logstore.
-logstore:
-  logFileSyncPolicy:
-    maxInterval: 1000 # Maximum interval between two sync operations in milliseconds
-    maxEntries: 10000 # Maximum number of entries to sync in one operation
-    maxBytes: 64000000 # Maximum size of data to sync in bytes
+woodpecker:
+  # Configuration of Woodpecker metadata storage.
+  meta:
+    type: etcd # Type of the configuration, currently only etcd is supported.
+    prefix: woodpecker # Root prefix of the key to where Woodpecker stores data in etcd.
+  # Configuration of Woodpecker service.
+  client:
+    segmentRollingPolicy:
+      maxSize: 100000000 # Maximum entries count of a segment, default is 100M
+      maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
+  # Configuration of Woodpecker logstore.
+  logstore:
+    logFileSyncPolicy:
+      maxInterval: 1000 # Maximum interval between two sync operations in milliseconds
+      maxEntries: 10000 # Maximum number of entries to sync in one operation
+      maxBytes: 64000000 # Maximum size of data to sync in bytes
 
 # Configures the system log output.
 log:

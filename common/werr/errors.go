@@ -2,6 +2,7 @@ package werr
 
 import (
 	"github.com/cockroachdb/errors"
+	"github.com/samber/lo"
 )
 
 const (
@@ -96,6 +97,8 @@ const (
 	// has been reached. This means that no additional operations can be started until some
 	// of the current operations complete.
 	MaxConcurrentOperationsReached
+	// ConfigError indicates that an error occurred while reading the configuration.
+	ConfigError
 )
 
 var (
@@ -125,6 +128,7 @@ var (
 	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
 	ErrNotSupport     = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
 	ErrInternalError  = newWoodpeckerError("internal error", InternalError, true)
+	ErrConfigError    = newWoodpeckerError("config error", ConfigError, false)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.
@@ -180,4 +184,50 @@ func IsRetryableErr(err error) bool {
 		return err.retryable
 	}
 	return false
+}
+
+type multiErrors struct {
+	errs []error
+}
+
+func (e *multiErrors) Unwrap() error {
+	if len(e.errs) <= 1 {
+		return nil
+	}
+	// To make merr work for multi errors,
+	// we need cause of multi errors, which defined as the last error
+	if len(e.errs) == 2 {
+		return e.errs[1]
+	}
+
+	return &multiErrors{
+		errs: e.errs[1:],
+	}
+}
+
+func (e *multiErrors) Error() string {
+	final := e.errs[0]
+	for i := 1; i < len(e.errs); i++ {
+		final = errors.Wrap(e.errs[i], final.Error())
+	}
+	return final.Error()
+}
+
+func (e *multiErrors) Is(err error) bool {
+	for _, item := range e.errs {
+		if errors.Is(item, err) {
+			return true
+		}
+	}
+	return false
+}
+
+func Combine(errs ...error) error {
+	errs = lo.Filter(errs, func(err error, _ int) bool { return err != nil })
+	if len(errs) == 0 {
+		return nil
+	}
+	return &multiErrors{
+		errs,
+	}
 }

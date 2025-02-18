@@ -3,16 +3,17 @@ package segment
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
-	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
 
 // SegmentProcessor for segment processing in server side
@@ -27,7 +28,7 @@ type SegmentProcessor interface {
 
 func NewSegmentProcessor(ctx context.Context, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
-	log.Printf("%d new segment processor with logId: %d, segId: %d", ctime, logId, segId)
+	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	return &segmentProcessor{
 		logId:       logId,
 		segId:       segId,
@@ -143,7 +144,6 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 		// get logfile id from meta/storage
 		s.currentLogFileId = 0
 		s.currentLogFileWriter = objectstorage.NewLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
-		log.Printf("createLogFileWriter with logId: %d, segId: %d", s.logId, s.segId)
 	}
 	return s.currentLogFileWriter, nil
 }

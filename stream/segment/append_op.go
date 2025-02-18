@@ -2,6 +2,7 @@ package segment
 
 import (
 	"context"
+
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"

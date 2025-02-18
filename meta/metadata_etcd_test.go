@@ -3,7 +3,6 @@ package meta
 import (
 	"context"
 	"fmt"
-	"go.etcd.io/etcd/client/v3/concurrency"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/common/etcd"

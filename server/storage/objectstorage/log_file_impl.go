@@ -4,16 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage"
-	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 var _ storage.LogFile = (*LogFile)(nil)
@@ -38,6 +40,7 @@ type LogFile struct {
 }
 
 func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client) storage.LogFile {
+	logger.Ctx(context.TODO()).Debug("new LogFile created", zap.Int64("logFileId", logFileId), zap.String("segmentPrefixKey", segmentPrefixKey))
 	objFile := &LogFile{
 		id:               logFileId,
 		client:           objectCli,
@@ -84,14 +87,19 @@ func (f *LogFile) run() {
 		case <-ticker.C:
 			err := f.Sync(context.Background())
 			if err != nil {
-				log.Printf("sync error:%v", err)
+				logger.Ctx(context.TODO()).Warn("sync error",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.Int64("logFileId", f.id),
+					zap.Error(err))
 			}
 		case <-f.fileClose:
 			err := f.Sync(context.Background())
 			if err != nil {
-				log.Printf("sync error:%v", err)
+				logger.Ctx(context.TODO()).Warn("sync error",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.Int64("logFileId", f.id),
+					zap.Error(err))
 			}
-			log.Printf("logfile done")
 			f.sealed.Store(true)
 			return
 		}
@@ -105,8 +113,13 @@ func (f *LogFile) GetId() int64 {
 func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
 	ch := make(chan int64, 1)
 	// first check buffer size, trigger flush if necessary
-	if f.buffer.expectedNextEntryId.Load()+1 >= int64(f.buffer.firstEntryId+f.buffer.maxSize) {
-		fmt.Println("buffer full, trigger flush, case")
+	sizeAfterAppend := f.buffer.expectedNextEntryId.Load() + 1
+	if sizeAfterAppend >= int64(f.buffer.firstEntryId+f.buffer.maxSize) {
+		logger.Ctx(context.TODO()).Debug("buffer full, trigger flush",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Int64("sizeAfterAppend", sizeAfterAppend),
+			zap.Int64("maxSize", f.buffer.firstEntryId+f.buffer.maxSize))
 		err := f.Sync(ctx)
 		if err != nil {
 			// sync does not success
@@ -229,7 +242,11 @@ func (f *LogFile) getLastEntryId() int64 {
 	if !lastFrag.loaded {
 		err := lastFrag.Load(context.Background())
 		if err != nil {
-			log.Printf("get last entryId error:%v", err)
+			logger.Ctx(context.TODO()).Warn("get last entryId failed",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Uint64("fragId", lastFrag.fragmentId),
+				zap.Error(err))
 			return -1
 		}
 	}
@@ -243,7 +260,9 @@ func (f *LogFile) Sync(ctx context.Context) error {
 
 	entryCount := len(f.buffer.values)
 	if entryCount == 0 {
-		log.Printf("Call Sync, but empty, skip ... ")
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id))
 		return nil
 	}
 
@@ -255,29 +274,88 @@ func (f *LogFile) Sync(ctx context.Context) error {
 
 	toFlushData, err := f.buffer.ReadEntriesRange(f.buffer.firstEntryId, f.buffer.expectedNextEntryId.Load())
 	if err != nil {
-		log.Printf("Call Sync, but ReadEntriesRange err : %v", err)
+		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Error(err))
 		return err
 	}
 	toFlushDataFirstEntryId := f.buffer.firstEntryId
 	restData, err := f.buffer.ReadEntriesToLast(f.buffer.expectedNextEntryId.Load())
 	if err != nil {
-		log.Printf("Call Sync, but ReadEntriesToLast err : %v", err)
+		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLast failed",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Error(err))
 		return err
 	}
 	restDataFirstEntryId := f.buffer.expectedNextEntryId.Load()
 	f.buffer = NewSequentialBufferWithData(restDataFirstEntryId, 100_000, restData)
 
-	// write to fragment Object
-	fragId := f.LastOffset() + 1 // fragment id
-	key := f.getFragmentKey(fragId)
-	fragment := NewFragmentObject(f.client, f.bucket, fragId, key, toFlushData, toFlushDataFirstEntryId, true, false)
-	err = fragment.Flush(ctx)
-	if err != nil {
-		log.Printf("Call Sync, but fragment write err : %v", err)
-		return err
+	partitions, partitionFirstEntryIds := f.repackIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	concurrentCh := make(chan int, 4)
+	resultCh := make(chan *FragmentObject, len(partitions))
+	var concurrentWg sync.WaitGroup
+	logger.Ctx(ctx).Debug("get flush partitions finish",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id),
+		zap.Int("partitions", len(partitions)))
+	for i, partition := range partitions {
+		// TODO 记录一个 flushing的 metrics，看看并发有多少个线程在写minio
+		concurrentWg.Add(1) // 开始一个任务
+		go func() {
+			concurrentCh <- i                        // 获得一个线程执行
+			fragId := f.LastOffset() + 1 + uint64(i) // fragment id
+			logger.Ctx(ctx).Debug("start flush part of buffer as fragment",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Uint64("fragId", fragId))
+			key := f.getFragmentKey(fragId)
+			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, partition, partitionFirstEntryIds[i], true, false)
+			err = fragment.Flush(ctx)
+			if err != nil {
+				logger.Ctx(ctx).Error("flush part of buffer as fragment failed",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.Int64("logFileId", f.id),
+					zap.Uint64("fragId", fragId),
+					zap.Error(err))
+				//return err
+				//panic(err) // TODO test only
+				resultCh <- nil
+			} else {
+				//f.fragments = append(f.fragments, fragment)
+				//fmt.Println("synced to object storage: ", f.id)
+				resultCh <- fragment
+			}
+			concurrentWg.Done() // 结束一个任务
+			<-concurrentCh      // 释放一个线程
+			logger.Ctx(ctx).Debug("finish flush part of buffer as fragment",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Uint64("fragId", fragId))
+		}()
 	}
-	f.fragments = append(f.fragments, fragment)
-	//fmt.Println("synced to object storage: ", f.id)
+
+	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id))
+	concurrentWg.Wait() // 等待所有任务结束
+	close(resultCh)
+	logger.Ctx(ctx).Debug("all parts of buffer have been flushed",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id))
+	resultFrags := make([]*FragmentObject, 0)
+	for r := range resultCh {
+		if r != nil {
+			resultFrags = append(resultFrags, r)
+		} else {
+			return fmt.Errorf("flush fragment error ... ")
+		}
+	}
+	sort.Slice(resultFrags, func(i, j int) bool {
+		return resultFrags[i].fragmentId < resultFrags[j].fragmentId
+	})
+	f.fragments = append(f.fragments, resultFrags...)
 
 	// notify all waiting channels
 	for syncingId, ch := range f.syncedChan {
@@ -287,7 +365,10 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			close(ch)
 		}
 	}
-	//fmt.Println("synced to object storage completed: ", f.id)
+	logger.Ctx(ctx).Debug("Sync to object storage success",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id),
+		zap.Int("partitions", len(partitions)))
 	return nil
 }
 
@@ -295,6 +376,36 @@ func (f *LogFile) Close() error {
 	// Implement close logic, e.g., release resources
 	f.fileClose <- struct{}{}
 	return nil
+}
+
+func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
+	const maxPartitionSize = 8 * 1024 * 1024 // 每个分区最大为8MB
+	var partitions [][][]byte = make([][][]byte, 0)
+	var partition [][]byte = make([][]byte, 0)
+	var currentSize int = 0
+
+	for _, entry := range toFlushData {
+		entrySize := len(entry)
+		if currentSize+entrySize > maxPartitionSize && currentSize > 0 {
+			partitions = append(partitions, partition)
+			partition = make([][]byte, 0)
+			currentSize = 0
+		}
+		partition = append(partition, entry)
+		currentSize += entrySize
+	}
+	if len(partition) > 0 {
+		partitions = append(partitions, partition)
+	}
+
+	var partitionFirstEntryIds []int64 = make([]int64, 0)
+	offset := toFlushDataFirstEntryId
+	for _, part := range partitions {
+		partitionFirstEntryIds = append(partitionFirstEntryIds, offset)
+		offset += int64(len(part))
+	}
+
+	return partitions, partitionFirstEntryIds
 }
 
 func (f *LogFile) prefetchFragmentInfos() {

@@ -3,10 +3,13 @@ package log
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
@@ -49,7 +52,7 @@ type logHandleImpl struct {
 
 func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
 	// default 10min or 64MB rollover segment
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(10_000, 128_000_000)
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(10_000, 2_000_000_000)
 	return &logHandleImpl{
 		Name:               name,
 		logMetaCache:       logMeta,
@@ -189,12 +192,11 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("create new segment ", newSegMeta.SegNo)
 	newSegHandle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, newSegMeta, l.Metadata, l.ClientPool)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime
-	fmt.Println("create new segment handle success", newSegHandle.GetId(ctx))
+	logger.Ctx(ctx).Debug("create and cache new SegmentHandle success", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.SegNo))
 	return newSegHandle, nil
 }
 
@@ -206,7 +208,10 @@ func (l *logHandleImpl) shouldCloseAndCreateNewSegment(ctx context.Context, segm
 
 // doCloseAndCreateNewSegment fast close segment and create new segment, no need to wait for segment async compaction
 func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
-	fmt.Println("doCloseAndCreateNewSegment, start closing segment", oldSegmentHandle.GetId(ctx))
+	start := time.Now()
+	logger.Ctx(ctx).Debug("start to close segment",
+		zap.String("logName", l.Name),
+		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 1. close segmentHandle,
 	//  it will send fence request to logStores
 	//  and error out all pendingAppendOps with segmentCloseError
@@ -214,27 +219,38 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("doCloseAndCreateNewSegment, start fencing segment", oldSegmentHandle.GetId(ctx))
+	logger.Ctx(ctx).Debug("start to fence segment",
+		zap.String("logName", l.Name),
+		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	err = oldSegmentHandle.Fence(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Println("doCloseAndCreateNewSegment, request segment compaction", oldSegmentHandle.GetId(ctx))
+	logger.Ctx(ctx).Debug("request segment compaction",
+		zap.String("logName", l.Name),
+		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 2. select one logStore to async compact segment
 	err = oldSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Println("doCloseAndCreateNewSegment, create new segment")
+	logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
 	// 3. create new segMeta(active)
 	newSegmentHandle, err := l.createAndCacheNewSegmentHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	cost := time.Now()
+	metrics.WpSegmentRollingLatency.WithLabelValues(l.Name).Observe(float64(cost.Sub(start).Milliseconds()))
 	// 4. return new segmentHandle
+
+	logger.Ctx(ctx).Debug("doCloseAndCreateNewSegment success",
+		zap.String("logName", l.Name),
+		zap.Int64("oldSegmentId", oldSegmentHandle.GetId(ctx)),
+		zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
 	return newSegmentHandle, nil
 }
 
@@ -321,19 +337,28 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	//  and error out all pendingAppendOps with segmentCloseError
 	err := writeableSegmentHandle.Close(ctx)
 	if err != nil {
-		fmt.Println("close segment failed", err)
+		logger.Ctx(ctx).Warn("close segment failed",
+			zap.String("logName", l.Name),
+			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
+			zap.Error(err))
 		return err
 	}
 	err = writeableSegmentHandle.Fence(ctx)
 	if err != nil {
-		fmt.Println("fence segment failed", err)
+		logger.Ctx(ctx).Warn("fence segment failed",
+			zap.String("logName", l.Name),
+			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
+			zap.Error(err))
 		return err
 	}
 
 	// 2. select one logStore to async compact segment
 	err = writeableSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
 	if err != nil {
-		fmt.Println("WARN: request compaction failed", err)
+		logger.Ctx(ctx).Warn("request compaction failed",
+			zap.String("logName", l.Name),
+			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
+			zap.Error(err))
 	}
 
 	// 3. clear cache

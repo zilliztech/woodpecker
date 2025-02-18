@@ -1,8 +1,12 @@
 package segment
 
 import (
-	"fmt"
+	"context"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 type RollingPolicy interface {
@@ -27,12 +31,17 @@ type DefaultRollingPolicy struct {
 func (p *DefaultRollingPolicy) ShouldRollover(currentSegmentSize int64, lastRolloverTimeMs int64) bool {
 	// If the current segment is already larger than the rollover size, or if the last rollover time is more than the rollover interval, roll over.
 	if currentSegmentSize >= p.rolloverSizeBytes {
-		fmt.Printf("ShouldRollover: true case by size=%d \n", currentSegmentSize)
+		logger.Ctx(context.TODO()).Debug("Rolling by size",
+			zap.Int64("rolloverSizeBytes", p.rolloverSizeBytes),
+			zap.Int64("actualSize", currentSegmentSize))
 		return true
 	}
 	// If the current segment is not empty, and the last rollover time is more than the rollover interval, roll over.
 	if currentSegmentSize > 0 && (time.Now().UnixMilli()-lastRolloverTimeMs) >= p.rolloverIntervalMs {
-		fmt.Printf("ShouldRollover: true case by time interval %d , size=%d \n", (time.Now().UnixMilli() - lastRolloverTimeMs), currentSegmentSize)
+		logger.Ctx(context.TODO()).Debug("Rolling by time interval",
+			zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
+			zap.Int64("actualIntervalMs", time.Now().UnixMilli()-lastRolloverTimeMs),
+			zap.Int64("actualSize", currentSegmentSize))
 		return true
 	}
 	// Otherwise, do not roll over.

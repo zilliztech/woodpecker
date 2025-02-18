@@ -1,9 +1,11 @@
 package log
 
 import (
-	pb "github.com/zilliztech/woodpecker/proto"
-	"google.golang.org/protobuf/proto"
 	"math"
+
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/zilliztech/woodpecker/proto"
 )
 
 // LogMessageId represents the unique identifier for a log message.

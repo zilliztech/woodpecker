@@ -3,10 +3,14 @@ package log
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/stream/segment"
-	"time"
 )
 
 type LogReader interface {
@@ -52,7 +56,10 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		if segHandle == nil {
 			l.pendingReadSegmentId = segId
 			l.pendingReadEntryId = entryId
-			fmt.Printf("no segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
+			logger.Ctx(ctx).Debug("no segment to read, sleep 200ms.",
+				zap.String("logName", l.logHandle.Name),
+				zap.Int64("pendingReadSegmentId", segId),
+				zap.Int64("pendingReadEntryId", entryId))
 			// TODO sleep backoff sleep(200ms)
 			time.Sleep(1000 * time.Millisecond)
 			continue
@@ -67,7 +74,10 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// TODO sleep backoff
-			//fmt.Printf("no entry in the segment to read, sleep 200ms. segId:%d entryId:%d \n", segId, entryId)
+			logger.Ctx(ctx).Debug("no entry to read, sleep 200ms.",
+				zap.String("logName", l.logHandle.Name),
+				zap.Int64("pendingReadSegmentId", segId),
+				zap.Int64("pendingReadEntryId", entryId))
 			time.Sleep(1000 * time.Millisecond)
 			continue
 		}

@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"hash/crc32"
 	"os"
 	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/edsrzf/mmap-go"
+
+	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 var _ storage.Fragment = (*FragmentFile)(nil)

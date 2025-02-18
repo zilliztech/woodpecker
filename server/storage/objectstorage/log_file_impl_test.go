@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	minio2 "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -19,14 +20,17 @@ func TestNewObjectStorageLogFile(t *testing.T) {
 	bucket := "test-bucket"
 	logFileId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 
 	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
 	objectLogFile := logFile.(*LogFile)
 	assert.NotNil(t, objectLogFile)
-	assert.Equal(t, logFileId, objectLogFile.id)
+	assert.Equal(t, logFileId, objectLogFile.GetId())
 	assert.Equal(t, client, objectLogFile.client)
 	assert.Equal(t, segmentPrefixKey, objectLogFile.segmentPrefixKey)
 	assert.Equal(t, bucket, objectLogFile.bucket)
@@ -44,7 +48,11 @@ func TestAppendAsync(t *testing.T) {
 	bucket := "test-bucket"
 	logFileId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
+
 	assert.NoError(t, err)
 	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
@@ -107,7 +115,10 @@ func TestNewReader(t *testing.T) {
 	bucket := "test-bucket"
 	logFileId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)
@@ -162,7 +173,10 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	bucket := "test-bucket"
 	logFileId := int64(1)
 
-	client, err := minio2.NewMinioClient(context.Background(), bucket)
+	cfg, err := config.NewConfiguration("")
+	assert.NoError(t, err)
+	cfg.Minio.BucketName = bucket
+	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
 	assert.NotNil(t, logFile)

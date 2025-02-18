@@ -8,9 +8,9 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/minio"
-	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -25,13 +25,13 @@ type Server struct {
 	etcdCli     *clientv3.Client
 }
 
-func NewServer(ctx context.Context) *Server {
+func NewServer(ctx context.Context, configuration *config.Configuration) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	etcdCli, err := etcd.GetRemoteEtcdClient([]string{"127.0.0.1:2379"})
+	etcdCli, err := etcd.GetRemoteEtcdClient(configuration.Etcd.Endpoints)
 	if err != nil {
 		panic(err)
 	}
-	minioCli, err := minio.NewMinioClient(ctx, meta.ServicePrefix)
+	minioCli, err := minio.NewMinioClientFromConfig(ctx, configuration)
 	if err != nil {
 		panic(err)
 	}
