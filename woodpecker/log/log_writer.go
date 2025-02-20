@@ -40,38 +40,6 @@ type logWriterImpl struct {
 	logHandle *logHandleImpl
 }
 
-// Deprecated
-func (l *logWriterImpl) WriteSync(ctx context.Context, msg *WriterMessage) *WriteResult {
-	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
-	if err != nil {
-		return &WriteResult{
-			LogMessageId: nil,
-			Err:          err,
-		}
-	}
-	bytes, err := marshalMessage(msg)
-	if err != nil {
-		return &WriteResult{
-			LogMessageId: nil,
-			Err:          err,
-		}
-	}
-	entryId, err := writableSegmentHandle.Append(ctx, bytes)
-	if err != nil {
-		return &WriteResult{
-			LogMessageId: nil,
-			Err:          err,
-		}
-	}
-	return &WriteResult{
-		LogMessageId: &LogMessageId{
-			SegmentId: writableSegmentHandle.GetId(ctx),
-			EntryId:   entryId,
-		},
-		Err: err,
-	}
-}
-
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {

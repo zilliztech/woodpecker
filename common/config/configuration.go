@@ -26,9 +26,13 @@ type ClientConfig struct {
 
 // LogFileSyncPolicyConfig stores the log file sync policy configuration.
 type LogFileSyncPolicyConfig struct {
-	MaxInterval int `yaml:"maxInterval"`
-	MaxEntries  int `yaml:"maxEntries"`
-	MaxBytes    int `yaml:"maxBytes"`
+	MaxInterval     int `yaml:"maxInterval"`
+	MaxEntries      int `yaml:"maxEntries"`
+	MaxBytes        int `yaml:"maxBytes"`
+	MaxFlushRetries int `yaml:"maxFlushRetries"`
+	RetryInterval   int `yaml:"retryInterval"`
+	MaxFlushSize    int `yaml:"maxFlushSize"`
+	MaxFlushThread  int `yaml:"maxFlushThread"`
 }
 
 // LogFileConfig stores the log file configuration.
@@ -222,9 +226,13 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		},
 		Logstore: LogstoreConfig{
 			LogFileSyncPolicy: LogFileSyncPolicyConfig{
-				MaxInterval: 1000,
-				MaxEntries:  10000,
-				MaxBytes:    100000000,
+				MaxInterval:     1000,
+				MaxEntries:      10000,
+				MaxBytes:        100000000,
+				MaxFlushRetries: 3,
+				RetryInterval:   2000,
+				MaxFlushSize:    16000000,
+				MaxFlushThread:  8,
 			},
 		},
 	}
@@ -282,5 +290,18 @@ func getDefaultMinioConfig() MinioConfig {
 		UseSSL:          false,
 		BucketName:      "a-bucket",
 		CreateBucket:    true,
+		Ssl: MinioSslConfig{
+			TlsCACert: "/path/to/public.crt",
+		},
+		RootPath:           "files",
+		UseIAM:             false,
+		CloudProvider:      "aws",
+		GcpCredentialJSON:  "",
+		IamEndpoint:        "",
+		LogLevel:           "fatal",
+		Region:             "",
+		UseVirtualHost:     false,
+		RequestTimeoutMs:   1000,
+		ListObjectsMaxKeys: 0,
 	}
 }

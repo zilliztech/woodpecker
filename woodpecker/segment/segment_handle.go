@@ -3,7 +3,6 @@ package segment
 import (
 	"container/list"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -26,8 +25,6 @@ type SegmentHandle interface {
 	GetLogName() string
 	// GetId of the segment
 	GetId(context.Context) int64
-	// Append data to the segment
-	Append(context.Context, []byte) (int64, error)
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
 	// Read range entries from the segment
@@ -75,7 +72,8 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 				"127.0.0.1",
 			},
 		},
-		executor: NewSequentialExecutor(10000),
+		executor:             NewSequentialExecutor(10000),
+		failedAppendOpsQueue: list.New(),
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
@@ -102,6 +100,8 @@ type segmentHandleImpl struct {
 	pendingSize      atomic.Int64
 
 	executor *SequentialExecutor
+
+	failedAppendOpsQueue *list.List
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -112,51 +112,12 @@ func (s *segmentHandleImpl) GetId(ctx context.Context) int64 {
 	return s.segmentMetaCache.SegNo
 }
 
-// Deprecated: use AppendAsync instead
-func (s *segmentHandleImpl) Append(ctx context.Context, bytes []byte) (int64, error) {
-	// write data to quorum
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return -1, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
-	}
-
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return -1, err
-	}
-	segmentEntry := &segment.SegmentEntry{
-		SegmentId: s.segmentMetaCache.SegNo,
-		EntryId:   s.lastPushed.Add(1),
-		Data:      bytes,
-	}
-	entryId, syncedCh, err := cli.AppendEntry(ctx, s.logId, segmentEntry)
-	if err != nil {
-		return -1, err
-	}
-	for {
-		select {
-		case syncedId, ok := <-syncedCh:
-			if !ok {
-				return entryId, errors.New("synced channel closed")
-			}
-			if syncedId >= entryId {
-				s.commitedSize.Add(int64(len(bytes)))
-				return entryId, nil
-			}
-		}
-	}
-}
-
 func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) {
 	s.Lock()
 	defer s.Unlock()
 	// Check segment state
 	if s.segmentMetaCache.State != proto.SegmentState_Active {
-		callback(s.segmentMetaCache.SegNo, -1, errors.New("segment not active for write"))
+		callback(s.segmentMetaCache.SegNo, -1, werr.ErrSegmentClosed)
 		return
 	}
 	// Create pending append operation and execute asynchronously
@@ -181,12 +142,14 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 		ackSet:     &bitset.BitSet{},
 		quorumInfo: s.quorumInfo,
 		completed:  false,
+		attempt:    1,
 	}
 	return pendingAppendOp
 }
 
+// SendAppendSuccessCallbacks will do ack sequentially
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
-	//fmt.Printf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId)
+	logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
@@ -194,26 +157,26 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed {
-			//fmt.Printf("SendAppendSuccessCallbacks not compeleted by: %d \n", op.entryId)
+			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks not compeleted by: %d \n", op.entryId))
 			break
 		}
 		// Check if it is the next entry in the sequence.
 		if op.entryId != s.lastAddConfirmed.Load()+1 {
-			//fmt.Printf("SendAppendSuccessCallbacks not the next lac by: %d \n", op.entryId)
+			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks not the next lac by: %d \n", op.entryId))
 			break
 		}
 
-		elementsToRemove = append(elementsToRemove, e) // 新增：将需要删除的元素添加到切片中
+		elementsToRemove = append(elementsToRemove, e)
 		// update lac
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
 		s.commitedSize.Add(int64(len(op.value)))
-		//fmt.Printf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.size.Load())
+		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.GetSize(context.TODO())))
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
 	for _, element := range elementsToRemove {
-		//fmt.Printf("SendAppendSuccessCallbacks remove: %v \n", element)
+		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks remove: %v \n", element))
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
@@ -221,23 +184,43 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	}
 }
 
+// SendAppendErrorCallbacks will do error callback and remove from pendingAppendOps sequentially
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
-	// fail, and call pendingAppendOps callback(nil,err)
-	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
-	elementsToRemove := []*list.Element{}
+	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId), zap.Error(err))
+
+	// all after triggerEntryId will be removed
+	elementsToRemove := make([]*list.Element, 0)
+	elementsToRetry := make([]*list.Element, 0)
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		element := e
 		op := element.Value.(*AppendOp)
-		op.callback(s.segmentMetaCache.SegNo, op.entryId, err)
-		elementsToRemove = append(elementsToRemove, element)
+		if op.entryId != triggerEntryId {
+			continue
+		}
+		if op.attempt >= 3 { // TODO config retry times
+			elementsToRemove = append(elementsToRemove, element)
+		} else {
+			op.attempt++
+			elementsToRetry = append(elementsToRetry, element)
+		}
 	}
+	// fail after retry 3 times
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
+		op.callback(s.segmentMetaCache.SegNo, op.entryId, err)
+		logger.Ctx(context.Background()).Debug("append fail after retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
+	}
+	// do not remove, just resubmit to retry again
+	for _, element := range elementsToRetry {
+		s.appendOpsQueue.Remove(element)
+		op := element.Value.(*AppendOp)
+		s.executor.Submit(op)
+		logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
 	}
 }
 

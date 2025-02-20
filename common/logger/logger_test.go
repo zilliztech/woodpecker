@@ -2,10 +2,11 @@ package logger
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
+
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 

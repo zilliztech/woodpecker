@@ -6,6 +6,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/server/client"
@@ -30,8 +31,9 @@ type Client interface {
 	GetMetadataProvider() meta.MetadataProvider
 }
 
-func NewClient(ctx context.Context, etcdClient *clientv3.Client) (Client, error) {
+func NewClient(ctx context.Context, etcdClient *clientv3.Client, cfg *config.Configuration) (Client, error) {
 	c := &woodpeckerClient{
+		cfg:      cfg,
 		Metadata: meta.NewMetadataProvider(ctx, etcdClient),
 	}
 	err := c.initClient(ctx)
@@ -45,6 +47,7 @@ var _ Client = (*woodpeckerClient)(nil)
 
 // Implementation of the client interface for Distributed mode.
 type woodpeckerClient struct {
+	cfg      *config.Configuration
 	Metadata meta.MetadataProvider
 }
 
@@ -69,7 +72,7 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 	if err != nil {
 		return nil, err
 	}
-	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPool()), nil
+	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPool(), c.cfg), nil
 }
 
 // DeleteLog deletes the log with the specified name.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -36,7 +37,6 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId i
 		segId:       segId,
 		etcdCli:     etcdCli,
 		minioClient: minioCli,
-		fenced:      false,
 		createTime:  ctime,
 	}
 }
@@ -53,7 +53,7 @@ type segmentProcessor struct {
 
 	currentLogFileId     int64
 	currentLogFileWriter storage.LogFile
-	fenced               bool
+	fenced               atomic.Bool
 
 	createTime int64
 }
@@ -67,14 +67,23 @@ func (s *segmentProcessor) GetSegmentId() int64 {
 }
 
 func (s *segmentProcessor) IsFenced() bool {
-	return s.fenced
+	return s.fenced.Load()
 }
 
 func (s *segmentProcessor) SetFenced() {
-	s.fenced = true
+	s.fenced.Store(true)
+	if s.currentLogFileWriter != nil {
+		closeLogFileWriterErr := s.currentLogFileWriter.Close()
+		if closeLogFileWriterErr != nil {
+			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("logFileId", s.currentLogFileId), zap.Error(closeLogFileWriterErr))
+		}
+	}
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, <-chan int64, error) {
+	if s.IsFenced() {
+		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
+	}
 	// 1. add to commitLog, which stores WAL for this node
 	// TODO Get wal for this logId, and write entry to it. (zero disk mode skip this step)
 
@@ -89,9 +98,11 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	//if err != nil {
 	//	return -1, err
 	//}
-	bufferedSeqNo, syncedCh, _ := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
+	bufferedSeqNo, syncedCh, err := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
 	if bufferedSeqNo == -1 {
 		return -1, syncedCh, fmt.Errorf("failed to append to log file")
+	} else if err != nil {
+		return -1, syncedCh, err
 	}
 
 	//// wait for log file to be synced
@@ -145,8 +156,13 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	defer s.Unlock()
 	if s.currentLogFileWriter == nil {
 		// get logfile id from meta/storage
-		s.currentLogFileId = 0
-		s.currentLogFileWriter = objectstorage.NewLogFile(s.currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+		s.currentLogFileId = 0 // Currently, simplified support for one LogFile per Segment
+		s.currentLogFileWriter = objectstorage.NewLogFile(
+			s.currentLogFileId,
+			s.getSegmentKeyPrefix(),
+			s.getInstanceBucket(),
+			s.minioClient,
+			s.cfg)
 	}
 	return s.currentLogFileWriter, nil
 }
@@ -156,7 +172,11 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	defer s.Unlock()
 	// TODO get logFile Id according entryId
 	currentLogFileId := int64(0)
-	currentLogFileReader := objectstorage.NewROLogFile(currentLogFileId, s.getSegmentKeyPrefix(), s.getInstanceBucket(), s.minioClient)
+	currentLogFileReader := objectstorage.NewROLogFile(
+		currentLogFileId,
+		s.getSegmentKeyPrefix(),
+		s.getInstanceBucket(),
+		s.minioClient)
 	return currentLogFileReader, nil
 }
 

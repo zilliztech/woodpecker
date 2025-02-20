@@ -13,9 +13,9 @@ import (
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
 type SequentialBuffer struct {
 	mu       sync.Mutex
-	values   [][]byte
-	maxSize  int64
-	dataSize atomic.Int64
+	values   [][]byte     // values of entries
+	maxSize  int64        // max amount of entries
+	dataSize atomic.Int64 // data bytes size of entries
 
 	firstEntryId        int64
 	expectedNextEntryId atomic.Int64

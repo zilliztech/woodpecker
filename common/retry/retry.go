@@ -13,13 +13,13 @@ package retry
 
 import (
 	"context"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"time"
 
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // Do will run function with retry mechanism.

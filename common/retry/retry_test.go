@@ -14,12 +14,12 @@ package retry
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 func TestDo(t *testing.T) {

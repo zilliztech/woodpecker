@@ -26,7 +26,7 @@ func TestNewObjectStorageLogFile(t *testing.T) {
 	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 
-	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, logFile)
 	objectLogFile := logFile.(*LogFile)
 	assert.NotNil(t, objectLogFile)
@@ -36,7 +36,7 @@ func TestNewObjectStorageLogFile(t *testing.T) {
 	assert.Equal(t, bucket, objectLogFile.bucket)
 	assert.Len(t, objectLogFile.fragments, 0)
 	assert.NotNil(t, objectLogFile.buffer)
-	assert.Equal(t, int64(100_000), objectLogFile.buffer.maxSize)
+	assert.Equal(t, int64(10000), objectLogFile.buffer.maxSize)
 	assert.Equal(t, 1000, objectLogFile.maxIntervalMs)
 	assert.Len(t, objectLogFile.syncedChan, 0)
 	assert.NotNil(t, objectLogFile.fileClose)
@@ -54,7 +54,7 @@ func TestAppendAsync(t *testing.T) {
 	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 
 	assert.NoError(t, err)
-	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, logFile)
 	objectLogFile := logFile.(*LogFile)
 	assert.NotNil(t, objectLogFile)
@@ -120,7 +120,7 @@ func TestNewReader(t *testing.T) {
 	cfg.Minio.BucketName = bucket
 	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
-	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, logFile)
 
 	// Append some data to the log file
@@ -178,7 +178,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	cfg.Minio.BucketName = bucket
 	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
-	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client)
+	logFile := NewLogFile(logFileId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, logFile)
 
 	// Append some data to the log file

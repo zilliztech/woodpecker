@@ -12,7 +12,9 @@ import (
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -22,6 +24,7 @@ var _ storage.LogFile = (*LogFile)(nil)
 
 type LogFile struct {
 	mu               sync.Mutex
+	lastSync         atomic.Int64
 	client           *minio.Client
 	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
 	bucket           string // The bucket name
@@ -29,18 +32,21 @@ type LogFile struct {
 	id        int64             // LogFile Id in object storage
 	fragments []*FragmentObject // LogFile cached fragments
 	// write buffer
-	buffer        *SequentialBuffer    // Write buffer
-	maxBufferSize int                  // Max buffer size to sync buffer to object storage
-	maxIntervalMs int                  // Max interval to sync buffer to object storage
-	syncedChan    map[int64]chan int64 // Synced entryId chan map
-	fileClose     chan struct{}        // Close signal
+	buffer           *SequentialBuffer // Write buffer
+	maxBufferSize    int               // Max buffer size to sync buffer to object storage
+	maxIntervalMs    int               // Max interval to sync buffer to object storage
+	syncPolicyConfig *config.LogFileSyncPolicyConfig
+	syncedChan       map[int64]chan int64 // Synced entryId chan map
+	fileClose        chan struct{}        // Close signal
 
 	// status
 	sealed atomic.Bool // If this LogFile is sealed or growing
 }
 
-func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client) storage.LogFile {
+// NewLogFile is used to create a new LogFile, which is used to write data to object storage
+func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client, cfg *config.Configuration) storage.LogFile {
 	logger.Ctx(context.TODO()).Debug("new LogFile created", zap.Int64("logFileId", logFileId), zap.String("segmentPrefixKey", segmentPrefixKey))
+	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
 	objFile := &LogFile{
 		id:               logFileId,
 		client:           objectCli,
@@ -48,17 +54,19 @@ func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectC
 		bucket:           bucket,
 		fragments:        make([]*FragmentObject, 0),
 
-		buffer:        NewSequentialBuffer(0, 100_000),
-		maxBufferSize: 16 * 1024 * 1024,
-		maxIntervalMs: 1000,
-		fileClose:     make(chan struct{}),
-		syncedChan:    make(map[int64]chan int64),
+		buffer:           NewSequentialBuffer(0, int64(syncPolicyConfig.MaxEntries)),
+		maxBufferSize:    syncPolicyConfig.MaxBytes,
+		maxIntervalMs:    syncPolicyConfig.MaxInterval,
+		syncPolicyConfig: syncPolicyConfig,
+		fileClose:        make(chan struct{}),
+		syncedChan:       make(map[int64]chan int64),
 	}
 	objFile.sealed.Store(false)
 	go objFile.run()
 	return objFile
 }
 
+// NewROLogFile is used to read only LogFile
 func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client) storage.LogFile {
 	objFile := &LogFile{
 		id:               logFileId,
@@ -80,11 +88,16 @@ func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objec
 
 // Like OS file fsync dirty pageCache periodically, objectStoreFile will sync buffer to object storage periodically
 func (f *LogFile) run() {
-	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
+	// time ticker
+	ticker := time.NewTicker(time.Duration(f.maxIntervalMs / 4 * int(time.Millisecond)))
 	defer ticker.Stop()
+	f.lastSync.Store(time.Now().UnixMilli())
 	for {
 		select {
 		case <-ticker.C:
+			if time.Now().UnixMilli()-f.lastSync.Load() < int64(f.maxIntervalMs) {
+				continue
+			}
 			err := f.Sync(context.Background())
 			if err != nil {
 				logger.Ctx(context.TODO()).Warn("sync error",
@@ -253,133 +266,166 @@ func (f *LogFile) getLastEntryId() int64 {
 	return lastFrag.lastEntryId
 }
 
+// flushResult is the result of flush operation
+type flushResult struct {
+	target *FragmentObject
+	err    error
+}
+
 func (f *LogFile) Sync(ctx context.Context) error {
 	// Implement sync logic, e.g., flush to persistent storage
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	defer func() {
+		f.lastSync.Store(time.Now().UnixMilli())
+	}()
 
 	entryCount := len(f.buffer.values)
 	if entryCount == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int64("logFileId", f.id))
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
 		return nil
 	}
 
 	// get flush point to flush
 	if f.buffer.expectedNextEntryId.Load()-f.buffer.firstEntryId == 0 {
-		//log.Printf("Call Sync, but no data, skip ... ")
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
 		return nil
 	}
 
 	toFlushData, err := f.buffer.ReadEntriesRange(f.buffer.firstEntryId, f.buffer.expectedNextEntryId.Load())
 	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int64("logFileId", f.id),
-			zap.Error(err))
+		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Error(err))
 		return err
 	}
 	toFlushDataFirstEntryId := f.buffer.firstEntryId
-	restData, err := f.buffer.ReadEntriesToLast(f.buffer.expectedNextEntryId.Load())
-	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLast failed",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int64("logFileId", f.id),
-			zap.Error(err))
-		return err
-	}
-	restDataFirstEntryId := f.buffer.expectedNextEntryId.Load()
-	f.buffer = NewSequentialBufferWithData(restDataFirstEntryId, 100_000, restData)
 
 	partitions, partitionFirstEntryIds := f.repackIfNecessary(toFlushData, toFlushDataFirstEntryId)
-	concurrentCh := make(chan int, 4)
-	resultCh := make(chan *FragmentObject, len(partitions))
+	concurrentCh := make(chan int, f.syncPolicyConfig.MaxFlushThread)
+	flushResultCh := make(chan *flushResult, len(partitions))
 	var concurrentWg sync.WaitGroup
-	logger.Ctx(ctx).Debug("get flush partitions finish",
-		zap.String("segmentPrefixKey", f.segmentPrefixKey),
-		zap.Int64("logFileId", f.id),
-		zap.Int("partitions", len(partitions)))
+	logger.Ctx(ctx).Debug("get flush partitions finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int("partitions", len(partitions)))
+	lastFragmentId := f.LastOffset()
 	for i, partition := range partitions {
-		// TODO 记录一个 flushing的 metrics，看看并发有多少个线程在写minio
-		concurrentWg.Add(1) // 开始一个任务
+		concurrentWg.Add(1)
 		go func() {
-			concurrentCh <- i                        // 获得一个线程执行
-			fragId := f.LastOffset() + 1 + uint64(i) // fragment id
-			logger.Ctx(ctx).Debug("start flush part of buffer as fragment",
-				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("logFileId", f.id),
-				zap.Uint64("fragId", fragId))
+			concurrentCh <- i                        // take one flush goroutine to start
+			fragId := lastFragmentId + 1 + uint64(i) // fragment id
+			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 			key := f.getFragmentKey(fragId)
 			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, partition, partitionFirstEntryIds[i], true, false)
-			err = fragment.Flush(ctx)
+			err = retry.Do(ctx,
+				func() error {
+					return fragment.Flush(ctx)
+				},
+				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
+				retry.Sleep(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
+			)
 			if err != nil {
-				logger.Ctx(ctx).Error("flush part of buffer as fragment failed",
-					zap.String("segmentPrefixKey", f.segmentPrefixKey),
-					zap.Int64("logFileId", f.id),
-					zap.Uint64("fragId", fragId),
-					zap.Error(err))
-				//return err
-				//panic(err) // TODO test only
-				resultCh <- nil
-			} else {
-				//f.fragments = append(f.fragments, fragment)
-				//fmt.Println("synced to object storage: ", f.id)
-				resultCh <- fragment
+				logger.Ctx(ctx).Error("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(err))
 			}
-			concurrentWg.Done() // 结束一个任务
-			<-concurrentCh      // 释放一个线程
-			logger.Ctx(ctx).Debug("finish flush part of buffer as fragment",
-				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("logFileId", f.id),
-				zap.Uint64("fragId", fragId))
+			flushResultCh <- &flushResult{
+				target: fragment,
+				err:    err,
+			}
+			concurrentWg.Done() // finish a flush goroutine
+			<-concurrentCh      // release a flush goroutine
+			logger.Ctx(ctx).Debug("complete flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 		}()
 	}
 
-	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed",
-		zap.String("segmentPrefixKey", f.segmentPrefixKey),
-		zap.Int64("logFileId", f.id))
+	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
 	concurrentWg.Wait() // 等待所有任务结束
-	close(resultCh)
-	logger.Ctx(ctx).Debug("all parts of buffer have been flushed",
-		zap.String("segmentPrefixKey", f.segmentPrefixKey),
-		zap.Int64("logFileId", f.id))
-	resultFrags := make([]*FragmentObject, 0)
-	for r := range resultCh {
-		if r != nil {
-			resultFrags = append(resultFrags, r)
-		} else {
-			return fmt.Errorf("flush fragment error ... ")
-		}
+	close(flushResultCh)
+	logger.Ctx(ctx).Debug("all parts of buffer have been flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
+	resultFrags := make([]*flushResult, 0)
+	for r := range flushResultCh {
+		resultFrags = append(resultFrags, r)
 	}
 	sort.Slice(resultFrags, func(i, j int) bool {
-		return resultFrags[i].fragmentId < resultFrags[j].fragmentId
+		return resultFrags[i].target.fragmentId < resultFrags[j].target.fragmentId
 	})
-	f.fragments = append(f.fragments, resultFrags...)
+	successFrags := make([]*FragmentObject, 0)
+	for _, r := range resultFrags {
+		if r.err != nil {
+			logger.Ctx(ctx).Warn("flush fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
+		} else {
+			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
+			successFrags = append(successFrags, r.target)
+		}
+	}
+	f.fragments = append(f.fragments, successFrags...)
 
-	// notify all waiting channels
-	for syncingId, ch := range f.syncedChan {
-		if syncingId < restDataFirstEntryId {
+	// callback to notify all waiting append request channels
+	if len(successFrags) == len(resultFrags) {
+		restData, err := f.buffer.ReadEntriesToLast(f.buffer.expectedNextEntryId.Load())
+		if err != nil {
+			logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLast failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Error(err))
+			return err
+		}
+		restDataFirstEntryId := f.buffer.expectedNextEntryId.Load()
+		f.buffer = NewSequentialBufferWithData(restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
+
+		// notify all waiting channels
+		for syncingId, ch := range f.syncedChan {
+			if syncingId < restDataFirstEntryId {
+				ch <- syncingId
+				delete(f.syncedChan, syncingId)
+				close(ch)
+			}
+		}
+		logger.Ctx(ctx).Debug("Sync to object storage success",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Int("partitions", len(partitions)))
+	} else if len(successFrags) > 0 {
+		restDataFirstEntryId := successFrags[len(successFrags)-1].lastEntryId + 1
+		for syncingId, ch := range f.syncedChan {
+			if syncingId < restDataFirstEntryId {
+				// append success
+				ch <- syncingId
+				delete(f.syncedChan, syncingId)
+				close(ch)
+			} else {
+				// append error
+				ch <- -1
+				delete(f.syncedChan, syncingId)
+				close(ch)
+			}
+		}
+		// new a empty buffer
+		f.buffer = NewSequentialBuffer(restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries))
+	} else {
+		// no flush success, callback all append sync error
+		for syncingId, ch := range f.syncedChan {
 			ch <- syncingId
 			delete(f.syncedChan, syncingId)
 			close(ch)
 		}
+		// reset buffer as empty
+		f.buffer.Reset()
 	}
-	logger.Ctx(ctx).Debug("Sync to object storage success",
-		zap.String("segmentPrefixKey", f.segmentPrefixKey),
-		zap.Int64("logFileId", f.id),
-		zap.Int("partitions", len(partitions)))
 	return nil
 }
 
 func (f *LogFile) Close() error {
 	// Implement close logic, e.g., release resources
 	f.fileClose <- struct{}{}
+	close(f.fileClose)
+	for _, frag := range f.fragments {
+		err := frag.Release()
+		if err != nil {
+			logger.Ctx(context.TODO()).Warn("release fragment failed when LogFile closing",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Uint64("fragId", frag.fragmentId),
+				zap.Error(err))
+		}
+	}
 	return nil
 }
 
 func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
-	const maxPartitionSize = 8 * 1024 * 1024 // 每个分区最大为8MB
+	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
 	var partitions [][][]byte = make([][][]byte, 0)
 	var partition [][]byte = make([][]byte, 0)
 	var currentSize int = 0
@@ -432,6 +478,7 @@ func (f *LogFile) prefetchFragmentInfos() {
 	}
 }
 
+// NewLogFileReader creates a new LogFileReader instance.
 func NewLogFileReader(opt storage.ReaderOpt, objectFile *LogFile) storage.Reader {
 	return &logFileReader{
 		opt:                opt,

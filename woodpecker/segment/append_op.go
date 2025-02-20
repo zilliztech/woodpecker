@@ -2,8 +2,10 @@ package segment
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
 	"github.com/zilliztech/woodpecker/server/segment"
@@ -28,23 +30,27 @@ type AppendOp struct {
 
 	completed bool
 	err       error
+
+	attempt int
 }
 
 func (op *AppendOp) Execute() {
-	// 获取ES/WQ/AQ
+	// get ES/WQ/AQ
 	quorumInfo, err := op.handle.GetQuorumInfo(context.Background())
 	if err != nil {
 		op.handle.SendAppendErrorCallbacks(op.entryId, err)
 		return
 	}
-	// 根据clientPool获得client, 执行 WQ次 append操作 不同的 server
+
 	for i := 0; i < len(quorumInfo.Nodes); i++ {
-		client, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
+		// get client from clientPool according node addr
+		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
 		if clientErr != nil {
 			op.handle.SendAppendErrorCallbacks(op.entryId, err)
 			return
 		}
-		op.sendWriteRequest(client, i)
+		// send request to the node
+		op.sendWriteRequest(cli, i)
 	}
 }
 
@@ -52,16 +58,29 @@ func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex i
 	//fmt.Printf("send  %d request to server:%d \n", op.entryId, serverIndex)
 	// order request
 	entryId, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
+	// TODO to improve goroutines, maybe use chan or callback instead
 	// async received ack without order
 	go op.receivedAckCallback(entryId, syncedCh, err, serverIndex)
 }
 
 func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
+	// sync call error, return directly
+	if err != nil {
+		op.handle.SendAppendErrorCallbacks(entryId, err)
+		return
+	}
+	// async call error, wait until syncedCh closed
 	for {
 		select {
 		case syncedId, ok := <-syncedCh:
 			if !ok {
+				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced chan for log:%d seg:%d entry:%d closed", op.logId, op.segmentId, op.entryId))
+				return
+			}
+			if syncedId == -1 {
+				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
 				op.handle.SendAppendErrorCallbacks(entryId, err)
+				return
 			}
 			if syncedId != -1 && syncedId >= entryId {
 				op.ackSet.Set(serverIndex)
@@ -71,6 +90,7 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 				}
 				return
 			}
+			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced recieved:%d for log:%d seg:%d entry:%d ,kepp async waiting", syncedId, op.logId, op.segmentId, op.entryId))
 		}
 	}
 }

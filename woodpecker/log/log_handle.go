@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -48,11 +49,12 @@ type logHandleImpl struct {
 	// rolling policy
 	lastRolloverTimeMs int64
 	rollingPolicy      segment.RollingPolicy
+	cfg                *config.Configuration
 }
 
-func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool) *logHandleImpl {
+func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) *logHandleImpl {
 	// default 10min or 64MB rollover segment
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(10_000, 2_000_000_000)
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval), int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize))
 	return &logHandleImpl{
 		Name:               name,
 		logMetaCache:       logMeta,
@@ -63,6 +65,7 @@ func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto
 		ClientPool:         clientPool,
 		lastRolloverTimeMs: -1,
 		rollingPolicy:      defaultRollingPolicy,
+		cfg:                cfg,
 	}
 }
 

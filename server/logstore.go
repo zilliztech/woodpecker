@@ -2,16 +2,16 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/config"
 	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/segment"
 )
 
@@ -74,11 +74,11 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 		return -1, nil, err
 	}
 	if segmentProcessor.IsFenced() {
-		return -1, nil, errors.New(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
+		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
 	}
 	entryId, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
-		return -1, nil, err
+		return -1, nil, werr.ErrSegmentWriteException.WithCauseErr(err)
 	}
 	//log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
 	cost := time.Now().Sub(start)

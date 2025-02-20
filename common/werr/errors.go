@@ -121,6 +121,7 @@ var (
 	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
 	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
 	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
+	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
 
 	//
 	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)

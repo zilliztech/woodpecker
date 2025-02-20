@@ -78,7 +78,7 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	if err != nil {
 		return nil, err
 	}
-	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPoolLocal(c.embedLogStore)), nil
+	return log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), client.NewLogStoreClientPoolLocal(c.embedLogStore), c.cfg), nil
 }
 
 // DeleteLog deletes the log with the specified name.
