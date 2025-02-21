@@ -73,7 +73,14 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				continue
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
-			// TODO sleep backoff
+			// 2.1) if next segment exists, indicate that current segment is completed in fact
+			nextSegExists, checkErr := l.logHandle.Metadata.CheckSegmentExists(ctx, l.logHandle.Name, segId+1)
+			if checkErr == nil && nextSegExists {
+				l.pendingReadSegmentId = segId + 1
+				l.pendingReadEntryId = 0
+				continue
+			}
+			// 2.2) if no next segment exists, just wait and read again
 			logger.Ctx(ctx).Debug("no entry to read, sleep 200ms.",
 				zap.String("logName", l.logHandle.Name),
 				zap.Int64("pendingReadSegmentId", segId),

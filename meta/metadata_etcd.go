@@ -420,6 +420,17 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	return segmentMetaMap, nil
 }
 
+func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName string, segmentId int64) (bool, error) {
+	segmentResp, err := e.client.Get(ctx, BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId)))
+	if err != nil {
+		return false, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+	if len(segmentResp.Kvs) == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error {
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", info.Id))
 	quorumInfoValue, err := pb.Marshal(info)

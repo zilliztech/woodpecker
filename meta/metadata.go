@@ -27,6 +27,7 @@ type MetadataProvider interface {
 	UpdateSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error
 	GetSegmentMetadata(context.Context, string, int64) (*proto.SegmentMetadata, error)
 	GetAllSegmentMetadata(context.Context, string) (map[int64]*proto.SegmentMetadata, error)
+	CheckSegmentExists(ctx context.Context, name string, i int64) (bool, error)
 
 	StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error
 	GetQuorumInfo(context.Context, int64) (*proto.QuorumInfo, error)
