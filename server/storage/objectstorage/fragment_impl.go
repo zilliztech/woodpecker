@@ -6,15 +6,20 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage"
 	"io"
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/codec"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
+
+var _ storage.Fragment = (*FragmentObject)(nil)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
@@ -27,6 +32,8 @@ type FragmentObject struct {
 	indexes      []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
 	firstEntryId int64  // First entryId in the fragment
 	lastEntryId  int64  // Last entryId in the fragment, inclusive
+
+	lastModified int64 // last modified time
 
 	// status
 	loaded   bool // If this fragment has been loaded to memory
@@ -62,6 +69,7 @@ func NewFragmentObject(client *minio.Client, bucket string, fragmentId uint64, f
 		indexes:      index,
 		firstEntryId: firstEntryId,
 		lastEntryId:  lastEntryId,
+		lastModified: time.Now().UnixMilli(),
 		loaded:       loaded,
 		uploaded:     uploaded,
 	}
@@ -110,7 +118,11 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
 	defer fragObject.Close()
-
+	fragObjectState, getStateErr := fragObject.Stat()
+	if getStateErr != nil {
+		return fmt.Errorf("failed to get object state: %w", getStateErr)
+	}
+	f.lastModified = fragObjectState.LastModified.UnixMilli()
 	// Read the entire object into memory
 	data, err := io.ReadAll(fragObject)
 	if err != nil {
@@ -176,6 +188,20 @@ func (f *FragmentObject) GetLastEntryId() (int64, error) {
 	return f.lastEntryId, nil
 }
 
+// only for merged fragment, TODO
+func (f *FragmentObject) GetLastEntryIdDirectly() int64 {
+	return f.lastEntryId
+}
+
+// only for merged fragment, TODO
+func (f *FragmentObject) GetFirstEntryIdDirectly() int64 {
+	return f.firstEntryId
+}
+
+func (f *FragmentObject) GetLastModified() int64 {
+	return f.lastModified
+}
+
 func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 	if !f.loaded && f.uploaded {
 		err := f.Load(context.Background())
@@ -207,4 +233,83 @@ func (f *FragmentObject) Release() error {
 	f.entriesData = nil
 	f.loaded = false
 	return nil
+}
+
+// MergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
+func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject) (storage.Fragment, error) {
+	// release pending merge fragments before finish
+	defer ReleaseFragments(ctx, fragments)
+	// check args
+	if len(fragments) == 0 {
+		return nil, errors.New("no fragments to merge")
+	}
+
+	// merge
+	mergedFrag := &FragmentObject{
+		client:       fragments[0].client,
+		bucket:       fragments[0].bucket,
+		fragmentId:   mergeFragId,
+		fragmentKey:  mergedFragKey,
+		entriesData:  make([]byte, 0),
+		indexes:      make([]byte, 0),
+		firstEntryId: fragments[0].firstEntryId,
+		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
+		uploaded:     false,
+		loaded:       false,
+	}
+	expectedEntryId := int64(-1)
+	for _, fragment := range fragments {
+		err := fragment.Load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// check the order of entries
+		if expectedEntryId == -1 {
+			// the first segment
+			expectedEntryId = fragment.lastEntryId + 1
+		} else {
+			if expectedEntryId != fragment.firstEntryId {
+				return nil, errors.New("fragments are not in order")
+			}
+			expectedEntryId = fragment.lastEntryId + 1
+		}
+		// merge index
+		baseOffset := len(mergedFrag.entriesData)
+		for index := range fragment.indexes {
+			newEntryOffset := binary.BigEndian.Uint32(fragment.indexes[index:index+4]) + uint32(baseOffset)
+			entryLength := binary.BigEndian.Uint32(fragment.indexes[index+4 : index+8])
+
+			newIndex := make([]byte, 8)
+			binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
+			binary.BigEndian.PutUint32(newIndex[4:], entryLength)
+
+			mergedFrag.indexes = append(mergedFrag.indexes, newIndex...)
+		}
+		// merge data
+		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
+	}
+
+	// upload the mergedFragment
+	flushErr := mergedFrag.Flush(ctx)
+	if flushErr != nil {
+		return nil, flushErr
+	}
+
+	// release the merged fragment
+	mergedFrag.uploaded = true
+	mergedFrag.loaded = false
+	mergedFrag.entriesData = make([]byte, 0)
+	mergedFrag.indexes = make([]byte, 0)
+
+	//
+	return mergedFrag, nil
+}
+
+func ReleaseFragments(ctx context.Context, fragments []*FragmentObject) {
+	for _, fragment := range fragments {
+		err := fragment.Release()
+		if err != nil {
+			logger.Ctx(ctx).Warn("release fragment failed when LogFile closing", zap.String("fragmentKey", fragment.fragmentKey), zap.Uint64("fragmentId", fragment.fragmentId), zap.Error(err))
+		}
+	}
 }

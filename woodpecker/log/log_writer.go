@@ -3,6 +3,7 @@ package log
 import (
 	"context"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -28,16 +29,19 @@ type LogWriter interface {
 }
 
 func NewLogWriter(ctx context.Context, logHandle *logHandleImpl) LogWriter {
-	return &logWriterImpl{
+	w := &logWriterImpl{
 		logHandle: logHandle,
 	}
+	go w.runAuditor()
+	return w
 }
 
 var _ LogWriter = (*logWriterImpl)(nil)
 
 type logWriterImpl struct {
 	sync.RWMutex
-	logHandle *logHandleImpl
+	logHandle   *logHandleImpl
+	writerClose chan struct{}
 }
 
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
@@ -100,12 +104,54 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	return ch
 }
 
+func (l *logWriterImpl) runAuditor() {
+	// TODO should be config
+	ticker := time.NewTicker(time.Duration(5000 * int(time.Millisecond)))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			segs, err := l.logHandle.GetSegments(context.TODO())
+			if err != nil {
+				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Error(err))
+				continue
+			}
+			nextSegId, err := l.logHandle.getNextSegmentId()
+			if err != nil {
+				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Error(err))
+				continue
+			}
+			for _, seg := range segs {
+				if seg.SegNo >= nextSegId-1 {
+					// last segment maybe in-progress, no need to recover it
+					continue
+				}
+				recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.getRecoverableSegmentHandle(context.TODO(), seg.SegNo)
+				if getRecoverySegmentHandleErr != nil {
+					logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
+					continue
+				}
+				maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
+				if err != nil {
+					logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
+					continue
+				}
+				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo))
+			}
+		case <-l.writerClose:
+			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.Name))
+		}
+	}
+}
+
 func (l *logWriterImpl) Truncate(ctx context.Context, id *LogMessageId) error {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {
+	l.writerClose <- struct{}{}
+	close(l.writerClose)
 	return l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
 }
 

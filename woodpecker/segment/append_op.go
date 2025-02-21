@@ -6,6 +6,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
 	"github.com/zilliztech/woodpecker/server/segment"
@@ -38,6 +39,7 @@ func (op *AppendOp) Execute() {
 	// get ES/WQ/AQ
 	quorumInfo, err := op.handle.GetQuorumInfo(context.Background())
 	if err != nil {
+		op.err = err
 		op.handle.SendAppendErrorCallbacks(op.entryId, err)
 		return
 	}
@@ -46,6 +48,7 @@ func (op *AppendOp) Execute() {
 		// get client from clientPool according node addr
 		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
 		if clientErr != nil {
+			op.err = clientErr
 			op.handle.SendAppendErrorCallbacks(op.entryId, err)
 			return
 		}
@@ -66,6 +69,7 @@ func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex i
 func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
 	// sync call error, return directly
 	if err != nil {
+		op.err = err
 		op.handle.SendAppendErrorCallbacks(entryId, err)
 		return
 	}
@@ -79,7 +83,7 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 			}
 			if syncedId == -1 {
 				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-				op.handle.SendAppendErrorCallbacks(entryId, err)
+				op.handle.SendAppendErrorCallbacks(entryId, werr.ErrSegmentWriteException)
 				return
 			}
 			if syncedId != -1 && syncedId >= entryId {

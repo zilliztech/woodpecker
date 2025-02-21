@@ -221,6 +221,41 @@ func (ff *FragmentFile) writeFooter() {
 	ff.fileLastOffset += 4
 }
 
+func (ff *FragmentFile) Load(ctx context.Context) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetLastEntryId() (int64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetFirstEntryIdDirectly() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetLastEntryIdDirectly() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetLastModified() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) Release() error {
+	//TODO implement me
+	panic("implement me")
+}
+
 // Close writes the footer if it hasn't been flushed and closes the file.
 func (ff *FragmentFile) Close() error {
 	ff.mu.Lock()

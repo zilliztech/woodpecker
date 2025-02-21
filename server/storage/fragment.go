@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"io"
 )
 
 // File/Object Format Description:
@@ -22,10 +21,14 @@ import (
 
 // Fragment interface defines Read and Write operations.
 type Fragment interface {
-	io.Closer
-	Read(ctx context.Context, opt ReaderOpt) ([]*LogEntry, error)
-	Write(ctx context.Context, data []byte) error
 	Flush(ctx context.Context) error
+	Load(ctx context.Context) error
+	GetLastEntryId() (int64, error)
+	GetFirstEntryIdDirectly() int64
+	GetLastEntryIdDirectly() int64
+	GetLastModified() int64
+	GetEntry(entryId int64) ([]byte, error)
+	Release() error
 }
 
 // LogEntry represents a single log entry with payload and its metadata

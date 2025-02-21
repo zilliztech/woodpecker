@@ -12,6 +12,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/segment"
 )
 
@@ -137,8 +138,26 @@ func (l *LogStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 	return nil
 }
 
-// CompactSegment merge all files in a segment into one file
-func (l *LogStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) error {
-	// TODO compact segment
-	return nil
+// CompactSegment merge all files in a segment into bigger files
+func (l *LogStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		return nil, err
+	}
+	return segmentProcessor.Compact(ctx)
+}
+
+// RecoverySegmentFromInProgress read logFiles to get meta info
+func (l *LogStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		return nil, err
+	}
+	return segmentProcessor.Recover(ctx)
+}
+
+// RecoverySegmentFromInRecovery read logFiles to get meta info
+func (l *LogStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	// same as RecoverySegmentFromInProgress currently
+	return l.RecoverySegmentFromInProgress(ctx, logId, segmentId)
 }

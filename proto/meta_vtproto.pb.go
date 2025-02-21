@@ -56,6 +56,7 @@ func (m *SegmentMetadata) CloneVT() *SegmentMetadata {
 	r.CompletionTime = m.CompletionTime
 	r.LastEntryId = m.LastEntryId
 	r.Size = m.Size
+	r.SealedTime = m.SealedTime
 	if rhs := m.Offset; rhs != nil {
 		tmpContainer := make([]int32, len(rhs))
 		copy(tmpContainer, rhs)
@@ -188,6 +189,9 @@ func (this *SegmentMetadata) EqualVT(that *SegmentMetadata) bool {
 		if vx != vy {
 			return false
 		}
+	}
+	if this.SealedTime != that.SealedTime {
+		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
@@ -360,6 +364,11 @@ func (m *SegmentMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.SealedTime != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SealedTime))
+		i--
+		dAtA[i] = 0x48
 	}
 	if len(m.Offset) > 0 {
 		var pksize2 int
@@ -594,6 +603,9 @@ func (m *SegmentMetadata) SizeVT() (n int) {
 			l += protohelpers.SizeOfVarint(uint64(e))
 		}
 		n += 1 + protohelpers.SizeOfVarint(uint64(l)) + l
+	}
+	if m.SealedTime != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.SealedTime))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -1049,6 +1061,25 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Offset", wireType)
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
+			}
+			m.SealedTime = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SealedTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
 		default:
 			iNdEx = preIndex
@@ -1742,6 +1773,25 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Offset", wireType)
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
+			}
+			m.SealedTime = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SealedTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
 		default:
 			iNdEx = preIndex

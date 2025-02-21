@@ -174,6 +174,10 @@ func (f *LogFile) getFragmentKey(fragmentId uint64) string {
 	return fmt.Sprintf("%s/%d/%d.frag", f.segmentPrefixKey, f.id, fragmentId)
 }
 
+func (f *LogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/merged_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
+}
+
 // get the fragment for the entryId
 func (f *LogFile) getFragment(entryId int64) (*FragmentObject, error) {
 	// fragmentId: 0~n
@@ -476,6 +480,74 @@ func (f *LogFile) prefetchFragmentInfos() {
 			break
 		}
 	}
+}
+
+func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// TODO should be config
+	// file max size, default 128MB
+	fileMaxSize := 128_000_000
+	mergedFrags := make([]storage.Fragment, 0)
+	mergedFragId := uint64(0)
+
+	pendingMergeSize := 0
+	pendingMergeFrags := make([]*FragmentObject, 0)
+	// load all fragment in memory
+	for _, frag := range f.fragments {
+		loadFragErr := frag.Load(ctx)
+		if loadFragErr != nil {
+			return nil, loadFragErr
+		}
+		pendingMergeFrags = append(pendingMergeFrags, frag)
+		pendingMergeSize += len(frag.entriesData) + len(frag.indexes)
+		if pendingMergeSize >= fileMaxSize {
+			// merge immediately
+			mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+			if mergeErr != nil {
+				return nil, mergeErr
+			}
+			mergedFrags = append(mergedFrags, mergedFrag)
+			mergedFragId++
+			pendingMergeFrags = make([]*FragmentObject, 0)
+			pendingMergeSize = 0
+		}
+	}
+	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
+		// merge immediately
+		mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+		if mergeErr != nil {
+			return nil, mergeErr
+		}
+		mergedFrags = append(mergedFrags, mergedFrag)
+		mergedFragId++
+		pendingMergeFrags = make([]*FragmentObject, 0)
+		pendingMergeSize = 0
+	}
+	return mergedFrags, nil
+}
+
+func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.fragments) == 0 {
+		return 0, nil, nil
+	}
+	// TODO load fragment meta index only
+	totalSize := 0
+	for _, frag := range f.fragments {
+		loadFragErr := frag.Load(ctx)
+		if loadFragErr != nil {
+			return 0, nil, loadFragErr
+		}
+		totalSize += len(frag.entriesData) + len(frag.indexes)
+	}
+	lastFragment := f.fragments[len(f.fragments)-1]
+	loadFragErr := lastFragment.Load(ctx)
+	if loadFragErr != nil {
+		return 0, nil, loadFragErr
+	}
+	return int64(totalSize), lastFragment, nil
 }
 
 // NewLogFileReader creates a new LogFileReader instance.

@@ -87,6 +87,8 @@ const (
 	// use this error to indicate that this segment is now permanently
 	// fenced.
 	SegmentFenced
+	// SegmentStateInvalid indicates that the segment is in an invalid state for current Operation.
+	SegmentStateInvalid
 	// SegmentClosed indicates that the segment is closed.
 	SegmentClosed
 	// SegmentReadException indicates that an exception occurred while reading a segment.
@@ -122,6 +124,7 @@ var (
 	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
 	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
 	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
+	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
 
 	//
 	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)

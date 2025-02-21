@@ -50,9 +50,11 @@ type SegmentHandle interface {
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
 	// RequestCompactionAsync request compaction for the segment asynchronously
-	RequestCompactionAsync(context.Context, func(int64, int64, error)) error
+	RequestCompactionAsync(context.Context, func(int64, *proto.SegmentMetadata, error)) error
 	// Fence the segment in all nodes
 	Fence(context.Context) error
+	// RecoveryOrCompact is a recovery or compaction operation
+	RecoveryOrCompact(todo context.Context) error
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool) SegmentHandle {
@@ -102,6 +104,8 @@ type segmentHandleImpl struct {
 	executor *SequentialExecutor
 
 	failedAppendOpsQueue *list.List
+
+	doingRecoveryOrCompact atomic.Bool
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -193,16 +197,18 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
 	elementsToRetry := make([]*list.Element, 0)
-	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+	// check exists in queue currently, avoid delay ack
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() { // TODO should be faster
 		element := e
 		op := element.Value.(*AppendOp)
 		if op.entryId != triggerEntryId {
 			continue
 		}
-		if op.attempt >= 3 { // TODO config retry times
-			elementsToRemove = append(elementsToRemove, element)
-		} else {
+		if op.attempt < 3 && (op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) {
 			op.attempt++
+			elementsToRetry = append(elementsToRetry, element)
+		} else {
+			// retry max times, or encounter non-retryable error
 			elementsToRetry = append(elementsToRetry, element)
 		}
 	}
@@ -327,7 +333,7 @@ func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
 	return s.pendingSize.Load()
 }
 
-func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback func(int64, int64, error)) error {
+func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback func(int64, *proto.SegmentMetadata, error)) error {
 	// select one node to compact segment asynchronously
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -342,9 +348,14 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback
 	}
 
 	// TODO should maintain a async compactions queue
+	if s.doingRecoveryOrCompact.Load() {
+		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo))
+		return nil
+	}
 	go func() {
-		err = client.RequestCompaction(ctx, s.logId, s.segmentMetaCache.SegNo)
-		callback(s.logId, s.segmentMetaCache.SegNo, err)
+		compactSegMetaInfo, err := client.SegmentCompact(ctx, s.logId, s.segmentMetaCache.SegNo)
+		callback(s.logId, compactSegMetaInfo, err)
+		s.doingRecoveryOrCompact.Store(false)
 	}()
 	return nil
 }
@@ -367,4 +378,121 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// RecoveryOrCompact used for the auditor of this Log
+func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
+	segmentMeta := s.GetMetadata(ctx)
+	if segmentMeta.State == proto.SegmentState_Active {
+		return s.recoveryFromInProgress(ctx)
+	} else if segmentMeta.State == proto.SegmentState_Completed {
+		return s.compactToSealed(ctx)
+	} else if segmentMeta.State == proto.SegmentState_InRecovery {
+		return s.recoveryFromInRecovery(ctx)
+	}
+	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logId:%s, segId:%d", segmentMeta.State, s.logName, segmentMeta.SegNo))
+}
+
+func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
+	if s.segmentMetaCache.State != proto.SegmentState_Active {
+		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logId:%s, segId:%d", s.logName, s.segmentMetaCache.SegNo))
+	}
+	// only one recovery operation at the same time
+	if s.doingRecoveryOrCompact.Load() {
+		return nil
+	}
+	defer s.doingRecoveryOrCompact.Store(false)
+	// select one node to compact segment asynchronously
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return err
+	}
+	recoverySegMetaInfo, recoveryErr := client.SegmentRecoveryFromInProgress(ctx, s.logId, s.segmentMetaCache.SegNo)
+	if recoveryErr != nil {
+		return recoveryErr
+	}
+	// update meta
+	s.segmentMetaCache.State = recoverySegMetaInfo.State
+	s.segmentMetaCache.LastEntryId = recoverySegMetaInfo.LastEntryId
+	s.segmentMetaCache.CompletionTime = recoverySegMetaInfo.CompletionTime
+	s.segmentMetaCache.Size = recoverySegMetaInfo.Size
+	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	return updateMetaErr
+}
+
+func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
+	if s.segmentMetaCache.State != proto.SegmentState_Completed {
+		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentMetaCache.SegNo))
+	}
+	if s.doingRecoveryOrCompact.Load() {
+		return nil
+	}
+	defer s.doingRecoveryOrCompact.Store(false)
+
+	logger.Ctx(ctx).Info("compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentMetaCache.SegNo))
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return err
+	}
+	// choose on LogStore to compaction
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return err
+	}
+	// wait compaction success
+	compactSegMetaInfo, compactErr := client.SegmentCompact(ctx, s.logId, s.segmentMetaCache.SegNo)
+	if compactErr != nil {
+		return compactErr
+	}
+	// update segment state and meta
+	s.segmentMetaCache.State = compactSegMetaInfo.State
+	s.segmentMetaCache.LastEntryId = compactSegMetaInfo.LastEntryId
+	s.segmentMetaCache.CompletionTime = compactSegMetaInfo.CompletionTime
+	s.segmentMetaCache.Size = compactSegMetaInfo.Size
+	s.segmentMetaCache.Offset = compactSegMetaInfo.Offset // sparse index
+	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	return updateMetaErr
+}
+
+func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
+	if s.segmentMetaCache.State != proto.SegmentState_InRecovery {
+		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InRecovery, skip this compaction. logId:%s, segId:%d", s.logName, s.segmentMetaCache.SegNo))
+	}
+	if s.doingRecoveryOrCompact.Load() {
+		return nil
+	}
+	defer s.doingRecoveryOrCompact.Store(false)
+
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return err
+	}
+	recoverySegMetaInfo, recoveryErr := client.SegmentRecoveryFromInRecovery(ctx, s.logId, s.segmentMetaCache.SegNo)
+	if recoveryErr != nil {
+		return recoveryErr
+	}
+	// update segment state and meta
+	s.segmentMetaCache.State = recoverySegMetaInfo.State
+	s.segmentMetaCache.LastEntryId = recoverySegMetaInfo.LastEntryId
+	s.segmentMetaCache.CompletionTime = recoverySegMetaInfo.CompletionTime
+	s.segmentMetaCache.Size = recoverySegMetaInfo.Size
+	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	return updateMetaErr
 }

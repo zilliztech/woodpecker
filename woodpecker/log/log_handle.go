@@ -116,6 +116,27 @@ func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (s
 	return writeableSegmentHandle, nil
 }
 
+// getRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method
+func (l *logHandleImpl) getRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	s, err := l.getExistsReadonlySegmentHandle(ctx, segmentId)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment not found for logName:%s segmentId:%d,it may have been deleted", l.Name, segmentId))
+	}
+	// set recoverable
+	segMeta := s.GetMetadata(ctx)
+	segMeta.State = proto.SegmentState_InRecovery
+	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, segMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	//
+	return s, nil
+}
+
 // Deprecated
 func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	l.Lock()
@@ -257,7 +278,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	return newSegmentHandle, nil
 }
 
-func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentId int64, err error) {
+func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentMeta *proto.SegmentMetadata, err error) {
 	// TODO update meta or retry if failed
 }
 

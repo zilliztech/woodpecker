@@ -14,6 +14,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
@@ -26,6 +27,8 @@ type SegmentProcessor interface {
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	IsFenced() bool
 	SetFenced()
+	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
+	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 }
 
 func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
@@ -186,4 +189,57 @@ func (s *segmentProcessor) getInstanceBucket() string {
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {
 	return fmt.Sprintf("woodpecker/%d/%d", s.logId, s.segId)
+}
+
+func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
+	logFile, err := s.getOrCreateLogFileReader(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	mergedFrags, mergedErr := logFile.Merge(ctx)
+	if mergedErr != nil {
+		return nil, mergedErr
+	}
+	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
+	totalSize := int64(0)
+	mergedFragFirstEntryIds := make([]int32, 0)
+	for _, frag := range mergedFrags {
+		firstEntryId := frag.GetFirstEntryIdDirectly()
+		mergedFragFirstEntryIds = append(mergedFragFirstEntryIds, int32(firstEntryId))
+	}
+
+	return &proto.SegmentMetadata{
+		State:          proto.SegmentState_Sealed,
+		CompletionTime: lastMergedFrag.GetLastModified(),
+		SealedTime:     time.Now().UnixMilli(),
+		LastEntryId:    lastMergedFrag.GetLastEntryIdDirectly(),
+		Size:           totalSize,
+		Offset:         mergedFragFirstEntryIds,
+	}, nil
+}
+
+func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata, error) {
+	logFile, err := s.getOrCreateLogFileReader(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	size, lastFragment, err := logFile.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if lastFragment == nil {
+		return &proto.SegmentMetadata{
+			State:          proto.SegmentState_Completed,
+			CompletionTime: time.Now().UnixMilli(),
+			LastEntryId:    -1,
+			Size:           size,
+		}, nil
+	}
+
+	return &proto.SegmentMetadata{
+		State:          proto.SegmentState_Completed,
+		CompletionTime: lastFragment.GetLastModified(),
+		LastEntryId:    lastFragment.GetLastEntryIdDirectly(),
+		Size:           size,
+	}, nil
 }
