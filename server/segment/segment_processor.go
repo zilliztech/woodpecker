@@ -2,6 +2,7 @@ package segment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -170,10 +171,12 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	return s.currentLogFileWriter, nil
 }
 
+// TODO should cache logFileReader?
 func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId int64) (storage.LogFile, error) {
 	s.Lock()
 	defer s.Unlock()
-	// TODO get logFile Id according entryId
+	// TODO get logFile Id according entryId if support multi logFiles in the future.
+	// Currently, simplified support for one LogFile per Segment, so currentLogFileId is always 0.
 	currentLogFileId := int64(0)
 	currentLogFileReader := objectstorage.NewROLogFile(
 		currentLogFileId,
@@ -196,9 +199,12 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	if err != nil {
 		return nil, err
 	}
-	mergedFrags, mergedErr := logFile.Merge(ctx)
+	mergedFrags, fragsOffset, mergedErr := logFile.Merge(ctx)
 	if mergedErr != nil {
 		return nil, mergedErr
+	}
+	if len(mergedFrags) == 0 {
+		return nil, errors.New("no frags to merge")
 	}
 	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
 	totalSize := int64(0)
@@ -214,7 +220,8 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		SealedTime:     time.Now().UnixMilli(),
 		LastEntryId:    lastMergedFrag.GetLastEntryIdDirectly(),
 		Size:           totalSize,
-		Offset:         mergedFragFirstEntryIds,
+		EntryOffset:    mergedFragFirstEntryIds,
+		FragmentOffset: fragsOffset,
 	}, nil
 }
 

@@ -175,7 +175,7 @@ func (f *LogFile) getFragmentKey(fragmentId uint64) string {
 }
 
 func (f *LogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
-	return fmt.Sprintf("%s/%d/merged_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
+	return fmt.Sprintf("%s/%d/m_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
 }
 
 // get the fragment for the entryId
@@ -482,7 +482,7 @@ func (f *LogFile) prefetchFragmentInfos() {
 	}
 }
 
-func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
+func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// TODO should be config
@@ -490,6 +490,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
 	fileMaxSize := 128_000_000
 	mergedFrags := make([]storage.Fragment, 0)
 	mergedFragId := uint64(0)
+	fragmentIdOffset := make([]int32, 0)
 
 	pendingMergeSize := 0
 	pendingMergeFrags := make([]*FragmentObject, 0)
@@ -497,7 +498,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
 	for _, frag := range f.fragments {
 		loadFragErr := frag.Load(ctx)
 		if loadFragErr != nil {
-			return nil, loadFragErr
+			return nil, nil, loadFragErr
 		}
 		pendingMergeFrags = append(pendingMergeFrags, frag)
 		pendingMergeSize += len(frag.entriesData) + len(frag.indexes)
@@ -505,10 +506,11 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
 			// merge immediately
 			mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 			if mergeErr != nil {
-				return nil, mergeErr
+				return nil, nil, mergeErr
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
+			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 			pendingMergeFrags = make([]*FragmentObject, 0)
 			pendingMergeSize = 0
 		}
@@ -517,14 +519,15 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, error) {
 		// merge immediately
 		mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 		if mergeErr != nil {
-			return nil, mergeErr
+			return nil, nil, mergeErr
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
+		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 		pendingMergeFrags = make([]*FragmentObject, 0)
 		pendingMergeSize = 0
 	}
-	return mergedFrags, nil
+	return mergedFrags, fragmentIdOffset, nil
 }
 
 func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {

@@ -50,7 +50,7 @@ type SegmentHandle interface {
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
 	// RequestCompactionAsync request compaction for the segment asynchronously
-	RequestCompactionAsync(context.Context, func(int64, *proto.SegmentMetadata, error)) error
+	RequestCompactionAsync(context.Context) error
 	// Fence the segment in all nodes
 	Fence(context.Context) error
 	// RecoveryOrCompact is a recovery or compaction operation
@@ -175,7 +175,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
 		s.commitedSize.Add(int64(len(op.value)))
-		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("current Segment %d size %d \n", s.segmentMetaCache.SegNo, s.GetSize(context.TODO())))
+		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("current Segment %d size %d commitedSize %d \n", s.segmentMetaCache.SegNo, s.GetSize(context.TODO()), s.commitedSize.Load()))
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
@@ -333,7 +333,7 @@ func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
 	return s.pendingSize.Load()
 }
 
-func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback func(int64, *proto.SegmentMetadata, error)) error {
+func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 	// select one node to compact segment asynchronously
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -342,7 +342,7 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	_, err = s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return err
 	}
@@ -352,11 +352,8 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context, callback
 		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo))
 		return nil
 	}
-	go func() {
-		compactSegMetaInfo, err := client.SegmentCompact(ctx, s.logId, s.segmentMetaCache.SegNo)
-		callback(s.logId, compactSegMetaInfo, err)
-		s.doingRecoveryOrCompact.Store(false)
-	}()
+
+	go s.compactToSealed(ctx)
 	return nil
 }
 
@@ -423,7 +420,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	s.segmentMetaCache.LastEntryId = recoverySegMetaInfo.LastEntryId
 	s.segmentMetaCache.CompletionTime = recoverySegMetaInfo.CompletionTime
 	s.segmentMetaCache.Size = recoverySegMetaInfo.Size
-	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
 	return updateMetaErr
 }
 
@@ -455,12 +452,13 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		return compactErr
 	}
 	// update segment state and meta
-	s.segmentMetaCache.State = compactSegMetaInfo.State
+	s.segmentMetaCache.State = proto.SegmentState_Sealed
 	s.segmentMetaCache.LastEntryId = compactSegMetaInfo.LastEntryId
 	s.segmentMetaCache.CompletionTime = compactSegMetaInfo.CompletionTime
 	s.segmentMetaCache.Size = compactSegMetaInfo.Size
-	s.segmentMetaCache.Offset = compactSegMetaInfo.Offset // sparse index
-	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	s.segmentMetaCache.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
+	s.segmentMetaCache.FragmentOffset = compactSegMetaInfo.FragmentOffset //
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
 	return updateMetaErr
 }
 
@@ -493,6 +491,6 @@ func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
 	s.segmentMetaCache.LastEntryId = recoverySegMetaInfo.LastEntryId
 	s.segmentMetaCache.CompletionTime = recoverySegMetaInfo.CompletionTime
 	s.segmentMetaCache.Size = recoverySegMetaInfo.Size
-	updateMetaErr := s.metadata.StoreSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
 	return updateMetaErr
 }

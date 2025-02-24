@@ -57,10 +57,15 @@ func (m *SegmentMetadata) CloneVT() *SegmentMetadata {
 	r.LastEntryId = m.LastEntryId
 	r.Size = m.Size
 	r.SealedTime = m.SealedTime
-	if rhs := m.Offset; rhs != nil {
+	if rhs := m.EntryOffset; rhs != nil {
 		tmpContainer := make([]int32, len(rhs))
 		copy(tmpContainer, rhs)
-		r.Offset = tmpContainer
+		r.EntryOffset = tmpContainer
+	}
+	if rhs := m.FragmentOffset; rhs != nil {
+		tmpContainer := make([]int32, len(rhs))
+		copy(tmpContainer, rhs)
+		r.FragmentOffset = tmpContainer
 	}
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
@@ -181,17 +186,26 @@ func (this *SegmentMetadata) EqualVT(that *SegmentMetadata) bool {
 	if this.Size != that.Size {
 		return false
 	}
-	if len(this.Offset) != len(that.Offset) {
+	if this.SealedTime != that.SealedTime {
 		return false
 	}
-	for i, vx := range this.Offset {
-		vy := that.Offset[i]
+	if len(this.EntryOffset) != len(that.EntryOffset) {
+		return false
+	}
+	for i, vx := range this.EntryOffset {
+		vy := that.EntryOffset[i]
 		if vx != vy {
 			return false
 		}
 	}
-	if this.SealedTime != that.SealedTime {
+	if len(this.FragmentOffset) != len(that.FragmentOffset) {
 		return false
+	}
+	for i, vx := range this.FragmentOffset {
+		vy := that.FragmentOffset[i]
+		if vx != vy {
+			return false
+		}
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
@@ -365,19 +379,14 @@ func (m *SegmentMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if m.SealedTime != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SealedTime))
-		i--
-		dAtA[i] = 0x48
-	}
-	if len(m.Offset) > 0 {
+	if len(m.FragmentOffset) > 0 {
 		var pksize2 int
-		for _, num := range m.Offset {
+		for _, num := range m.FragmentOffset {
 			pksize2 += protohelpers.SizeOfVarint(uint64(num))
 		}
 		i -= pksize2
 		j1 := i
-		for _, num1 := range m.Offset {
+		for _, num1 := range m.FragmentOffset {
 			num := uint64(num1)
 			for num >= 1<<7 {
 				dAtA[j1] = uint8(uint64(num)&0x7f | 0x80)
@@ -389,7 +398,33 @@ func (m *SegmentMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		}
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(pksize2))
 		i--
-		dAtA[i] = 0x42
+		dAtA[i] = 0x52
+	}
+	if len(m.EntryOffset) > 0 {
+		var pksize4 int
+		for _, num := range m.EntryOffset {
+			pksize4 += protohelpers.SizeOfVarint(uint64(num))
+		}
+		i -= pksize4
+		j3 := i
+		for _, num1 := range m.EntryOffset {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA[j3] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j3++
+			}
+			dAtA[j3] = uint8(num)
+			j3++
+		}
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(pksize4))
+		i--
+		dAtA[i] = 0x4a
+	}
+	if m.SealedTime != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SealedTime))
+		i--
+		dAtA[i] = 0x40
 	}
 	if m.Size != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Size))
@@ -597,15 +632,22 @@ func (m *SegmentMetadata) SizeVT() (n int) {
 	if m.Size != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Size))
 	}
-	if len(m.Offset) > 0 {
+	if m.SealedTime != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.SealedTime))
+	}
+	if len(m.EntryOffset) > 0 {
 		l = 0
-		for _, e := range m.Offset {
+		for _, e := range m.EntryOffset {
 			l += protohelpers.SizeOfVarint(uint64(e))
 		}
 		n += 1 + protohelpers.SizeOfVarint(uint64(l)) + l
 	}
-	if m.SealedTime != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.SealedTime))
+	if len(m.FragmentOffset) > 0 {
+		l = 0
+		for _, e := range m.FragmentOffset {
+			l += protohelpers.SizeOfVarint(uint64(e))
+		}
+		n += 1 + protohelpers.SizeOfVarint(uint64(l)) + l
 	}
 	n += len(m.unknownFields)
 	return n
@@ -987,6 +1029,25 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 			}
 		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
+			}
+			m.SealedTime = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SealedTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
 			if wireType == 0 {
 				var v int32
 				for shift := uint(0); ; shift += 7 {
@@ -1003,7 +1064,7 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 						break
 					}
 				}
-				m.Offset = append(m.Offset, v)
+				m.EntryOffset = append(m.EntryOffset, v)
 			} else if wireType == 2 {
 				var packedLen int
 				for shift := uint(0); ; shift += 7 {
@@ -1038,8 +1099,8 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 					}
 				}
 				elementCount = count
-				if elementCount != 0 && len(m.Offset) == 0 {
-					m.Offset = make([]int32, 0, elementCount)
+				if elementCount != 0 && len(m.EntryOffset) == 0 {
+					m.EntryOffset = make([]int32, 0, elementCount)
 				}
 				for iNdEx < postIndex {
 					var v int32
@@ -1057,29 +1118,86 @@ func (m *SegmentMetadata) UnmarshalVT(dAtA []byte) error {
 							break
 						}
 					}
-					m.Offset = append(m.Offset, v)
+					m.EntryOffset = append(m.EntryOffset, v)
 				}
 			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field Offset", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field EntryOffset", wireType)
 			}
-		case 9:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
-			}
-			m.SealedTime = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
+		case 10:
+			if wireType == 0 {
+				var v int32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protohelpers.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int32(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
 				}
-				if iNdEx >= l {
+				m.FragmentOffset = append(m.FragmentOffset, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protohelpers.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return protohelpers.ErrInvalidLength
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return protohelpers.ErrInvalidLength
+				}
+				if postIndex > l {
 					return io.ErrUnexpectedEOF
 				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.SealedTime |= int64(b&0x7F) << shift
-				if b < 0x80 {
-					break
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
 				}
+				elementCount = count
+				if elementCount != 0 && len(m.FragmentOffset) == 0 {
+					m.FragmentOffset = make([]int32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return protohelpers.ErrIntOverflow
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.FragmentOffset = append(m.FragmentOffset, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field FragmentOffset", wireType)
 			}
 		default:
 			iNdEx = preIndex
@@ -1699,6 +1817,25 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 			}
 		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
+			}
+			m.SealedTime = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SealedTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
 			if wireType == 0 {
 				var v int32
 				for shift := uint(0); ; shift += 7 {
@@ -1715,7 +1852,7 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 						break
 					}
 				}
-				m.Offset = append(m.Offset, v)
+				m.EntryOffset = append(m.EntryOffset, v)
 			} else if wireType == 2 {
 				var packedLen int
 				for shift := uint(0); ; shift += 7 {
@@ -1750,8 +1887,8 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 					}
 				}
 				elementCount = count
-				if elementCount != 0 && len(m.Offset) == 0 {
-					m.Offset = make([]int32, 0, elementCount)
+				if elementCount != 0 && len(m.EntryOffset) == 0 {
+					m.EntryOffset = make([]int32, 0, elementCount)
 				}
 				for iNdEx < postIndex {
 					var v int32
@@ -1769,29 +1906,86 @@ func (m *SegmentMetadata) UnmarshalVTUnsafe(dAtA []byte) error {
 							break
 						}
 					}
-					m.Offset = append(m.Offset, v)
+					m.EntryOffset = append(m.EntryOffset, v)
 				}
 			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field Offset", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field EntryOffset", wireType)
 			}
-		case 9:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SealedTime", wireType)
-			}
-			m.SealedTime = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
+		case 10:
+			if wireType == 0 {
+				var v int32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protohelpers.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int32(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
 				}
-				if iNdEx >= l {
+				m.FragmentOffset = append(m.FragmentOffset, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protohelpers.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return protohelpers.ErrInvalidLength
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return protohelpers.ErrInvalidLength
+				}
+				if postIndex > l {
 					return io.ErrUnexpectedEOF
 				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.SealedTime |= int64(b&0x7F) << shift
-				if b < 0x80 {
-					break
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
 				}
+				elementCount = count
+				if elementCount != 0 && len(m.FragmentOffset) == 0 {
+					m.FragmentOffset = make([]int32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return protohelpers.ErrIntOverflow
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.FragmentOffset = append(m.FragmentOffset, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field FragmentOffset", wireType)
 			}
 		default:
 			iNdEx = preIndex

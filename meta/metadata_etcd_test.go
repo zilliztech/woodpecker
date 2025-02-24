@@ -308,8 +308,8 @@ func TestStoreSegmentMeta(t *testing.T) {
 
 	// store segment meta
 	segmentMeta := &proto.SegmentMetadata{
-		SegNo:  1,
-		Offset: []int32{1, 2, 3, 4, 5, 6},
+		SegNo:       1,
+		EntryOffset: []int32{1, 2, 3, 4, 5, 6},
 	}
 	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, storeErr)
@@ -320,7 +320,7 @@ func TestStoreSegmentMeta(t *testing.T) {
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
 		assert.Equal(t, segmentMeta.SegNo, segmentMeta.SegNo)
-		assert.Equal(t, segmentMeta.Offset, segmentMeta.Offset)
+		assert.Equal(t, segmentMeta.EntryOffset, segmentMeta.EntryOffset)
 	}
 
 	// test get all segmentMetas of the log
@@ -329,7 +329,7 @@ func TestStoreSegmentMeta(t *testing.T) {
 		assert.NoError(t, listErr)
 		assert.Equal(t, 1, len(segmentMetaList))
 		assert.Equal(t, segmentMeta.SegNo, segmentMetaList[segmentMeta.SegNo].SegNo)
-		assert.Equal(t, segmentMeta.Offset, segmentMetaList[segmentMeta.SegNo].Offset)
+		assert.Equal(t, segmentMeta.EntryOffset, segmentMetaList[segmentMeta.SegNo].EntryOffset)
 	}
 }
 

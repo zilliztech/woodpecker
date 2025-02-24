@@ -54,7 +54,9 @@ type logHandleImpl struct {
 
 func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) *logHandleImpl {
 	// default 10min or 64MB rollover segment
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval), int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize))
+	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
+
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize))
 	return &logHandleImpl{
 		Name:               name,
 		logMetaCache:       logMeta,
@@ -255,7 +257,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 		zap.String("logName", l.Name),
 		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 2. select one logStore to async compact segment
-	err = oldSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
+	err = oldSegmentHandle.RequestCompactionAsync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -289,13 +291,14 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 		return nil, err
 	}
 	newSegmentMeta := &proto.SegmentMetadata{
-		SegNo:       segmentNo,
-		CreateTime:  time.Now().UnixMilli(),
-		QuorumId:    -1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
-		Size:        0,
-		Offset:      make([]int32, 0),
+		SegNo:          segmentNo,
+		CreateTime:     time.Now().UnixMilli(),
+		QuorumId:       -1,
+		State:          proto.SegmentState_Active,
+		LastEntryId:    -1,
+		Size:           0,
+		EntryOffset:    make([]int32, 0),
+		FragmentOffset: make([]int32, 0),
 	}
 	// create segment metadata
 	err = l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
@@ -377,7 +380,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	}
 
 	// 2. select one logStore to async compact segment
-	err = writeableSegmentHandle.RequestCompactionAsync(ctx, l.segmentCompactionCompletedCallback)
+	err = writeableSegmentHandle.RequestCompactionAsync(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("request compaction failed",
 			zap.String("logName", l.Name),

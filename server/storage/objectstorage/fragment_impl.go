@@ -275,7 +275,7 @@ func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		}
 		// merge index
 		baseOffset := len(mergedFrag.entriesData)
-		for index := range fragment.indexes {
+		for index := 0; index < len(fragment.indexes); index = index + 8 {
 			newEntryOffset := binary.BigEndian.Uint32(fragment.indexes[index:index+4]) + uint32(baseOffset)
 			entryLength := binary.BigEndian.Uint32(fragment.indexes[index+4 : index+8])
 
@@ -290,6 +290,7 @@ func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	}
 
 	// upload the mergedFragment
+	mergedFrag.loaded = true
 	flushErr := mergedFrag.Flush(ctx)
 	if flushErr != nil {
 		return nil, flushErr

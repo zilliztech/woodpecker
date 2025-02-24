@@ -40,8 +40,9 @@ message SegmentMetadata{
   int64 completionTime = 5;
   int64 lastEntryId = 6;
   int64 size = 7;
-  repeated int32 offset = 8;
-  int64 sealedTime = 9;
+  int64 sealedTime = 8;
+  repeated int32 entryOffset = 9;
+  repeated int32 fragmentOffset = 10;
 }
 
 /**
