@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -32,16 +31,28 @@ type SegmentProcessor interface {
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	return &segmentProcessor{
 		cfg:         cfg,
 		logId:       logId,
 		segId:       segId,
-		etcdCli:     etcdCli,
 		minioClient: minioCli,
 		createTime:  ctime,
+	}
+}
+
+// NewSegmentProcessorWithLogFile TODO Test Only
+func NewSegmentProcessorWithLogFile(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler, currentLogFile storage.LogFile) SegmentProcessor {
+	return &segmentProcessor{
+		cfg:                  cfg,
+		logId:                logId,
+		segId:                segId,
+		minioClient:          minioCli,
+		createTime:           time.Now().UnixMilli(),
+		currentLogFileWriter: currentLogFile,
+		currentLogFileReader: currentLogFile,
 	}
 }
 
@@ -52,14 +63,17 @@ type segmentProcessor struct {
 	cfg         *config.Configuration
 	logId       int64
 	segId       int64
-	etcdCli     *clientv3.Client
 	minioClient minioHandler.MinioHandler
 
+	createTime int64
+
+	// for logFile writer
 	currentLogFileId     int64
 	currentLogFileWriter storage.LogFile
 	fenced               atomic.Bool
 
-	createTime int64
+	// for logFile reader
+	currentLogFileReader storage.LogFile
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -149,19 +163,19 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	return s.currentLogFileWriter, nil
 }
 
-// TODO should cache logFileReader?
 func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId int64) (storage.LogFile, error) {
 	s.Lock()
 	defer s.Unlock()
-	// TODO get logFile Id according entryId if support multi logFiles in the future.
-	// Currently, simplified support for one LogFile per Segment, so currentLogFileId is always 0.
-	currentLogFileId := int64(0)
-	currentLogFileReader := objectstorage.NewROLogFile(
-		currentLogFileId,
-		s.getSegmentKeyPrefix(),
-		s.getInstanceBucket(),
-		s.minioClient)
-	return currentLogFileReader, nil
+	if s.currentLogFileReader == nil {
+		// get logfile id from meta/storage
+		roLogFileId := int64(0) // Currently, simplified support for one LogFile per Segment
+		s.currentLogFileReader = objectstorage.NewROLogFile(
+			roLogFileId,
+			s.getSegmentKeyPrefix(),
+			s.getInstanceBucket(),
+			s.minioClient)
+	}
+	return s.currentLogFileReader, nil
 }
 
 func (s *segmentProcessor) getInstanceBucket() string {
@@ -177,7 +191,7 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	if err != nil {
 		return nil, err
 	}
-	mergedFrags, fragsOffset, mergedErr := logFile.Merge(ctx)
+	mergedFrags, entryOffset, fragsOffset, mergedErr := logFile.Merge(ctx)
 	if mergedErr != nil {
 		return nil, mergedErr
 	}
@@ -186,19 +200,13 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	}
 	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
 	totalSize := int64(0)
-	mergedFragFirstEntryIds := make([]int32, 0)
-	for _, frag := range mergedFrags {
-		firstEntryId := frag.GetFirstEntryIdDirectly()
-		mergedFragFirstEntryIds = append(mergedFragFirstEntryIds, int32(firstEntryId))
-	}
-
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Sealed,
 		CompletionTime: lastMergedFrag.GetLastModified(),
 		SealedTime:     time.Now().UnixMilli(),
 		LastEntryId:    lastMergedFrag.GetLastEntryIdDirectly(),
 		Size:           totalSize,
-		EntryOffset:    mergedFragFirstEntryIds,
+		EntryOffset:    entryOffset,
 		FragmentOffset: fragsOffset,
 	}, nil
 }

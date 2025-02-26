@@ -769,9 +769,10 @@ func TestMerge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Merge fragments
-	mergedFrags, fragmentIdOffset, err := logFile.Merge(context.Background())
+	mergedFrags, entryOffset, fragmentIdOffset, err := logFile.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
+	assert.Equal(t, []int32{0}, entryOffset)
 	assert.Equal(t, []int32{1}, fragmentIdOffset)
 	assert.Equal(t, int64(0), mergedFrags[0].GetFirstEntryIdDirectly())
 	assert.Equal(t, int64(199), mergedFrags[0].GetLastEntryIdDirectly())

@@ -115,7 +115,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 			}
 		}
 	}
-	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.etcdCli, l.minioCli)
+	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
 	l.segmentProcessors[logId] = append(l.segmentProcessors[logId], s)
 	return s, nil
 }

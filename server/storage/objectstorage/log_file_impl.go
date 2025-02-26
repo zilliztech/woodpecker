@@ -489,7 +489,7 @@ func (f *LogFile) prefetchFragmentInfos() {
 	}
 }
 
-func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error) {
+func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// TODO should be config
@@ -497,6 +497,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error
 	fileMaxSize := 128_000_000
 	mergedFrags := make([]storage.Fragment, 0)
 	mergedFragId := uint64(0)
+	entryOffset := make([]int32, 0)
 	fragmentIdOffset := make([]int32, 0)
 
 	pendingMergeSize := 0
@@ -505,7 +506,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error
 	for _, frag := range f.fragments {
 		loadFragErr := frag.Load(ctx)
 		if loadFragErr != nil {
-			return nil, nil, loadFragErr
+			return nil, nil, nil, loadFragErr
 		}
 		pendingMergeFrags = append(pendingMergeFrags, frag)
 		pendingMergeSize += len(frag.entriesData) + len(frag.indexes)
@@ -513,10 +514,11 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error
 			// merge immediately
 			mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 			if mergeErr != nil {
-				return nil, nil, mergeErr
+				return nil, nil, nil, mergeErr
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
+			entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 			pendingMergeFrags = make([]*FragmentObject, 0)
 			pendingMergeSize = 0
@@ -526,15 +528,16 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, error
 		// merge immediately
 		mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 		if mergeErr != nil {
-			return nil, nil, mergeErr
+			return nil, nil, nil, mergeErr
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
+		entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 		pendingMergeFrags = make([]*FragmentObject, 0)
 		pendingMergeSize = 0
 	}
-	return mergedFrags, fragmentIdOffset, nil
+	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
 func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {

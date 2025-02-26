@@ -41,7 +41,7 @@ type LogFile interface {
 	// Sync ensures all buffered data is written to persistent storage.
 	Sync(ctx context.Context) error
 	// Merge the log file fragments.
-	Merge(ctx context.Context) ([]Fragment, []int32, error)
+	Merge(ctx context.Context) ([]Fragment, []int32, []int32, error)
 	// Load the segment log file fragments info
 	Load(ctx context.Context) (int64, Fragment, error)
 	// Closer closes the log file.
