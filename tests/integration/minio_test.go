@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	minio2 "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/minio"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 )
 
 func TestMinioReadPerformance(t *testing.T) {
@@ -21,7 +21,7 @@ func TestMinioReadPerformance(t *testing.T) {
 	assert.NoError(t, err)
 	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
 	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
-	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
 	concurrentCh := make(chan int, 1)
 	for i := 0; i < 1000; i++ {
@@ -32,7 +32,7 @@ func TestMinioReadPerformance(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				fmt.Sprintf("test_object_%d", i),
-				minio2.GetObjectOptions{})
+				minio.GetObjectOptions{})
 			assert.NoError(t, getErr)
 			objInfo, statErr := obj.Stat()
 			assert.NoError(t, statErr)
@@ -55,7 +55,7 @@ func TestMinioDelete(t *testing.T) {
 	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
 	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
 
-	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
 	concurrentCh := make(chan int, 1)
 	for i := 0; i < 1000; i++ {
@@ -65,7 +65,7 @@ func TestMinioDelete(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				fmt.Sprintf("test_object_%d", i),
-				minio2.RemoveObjectOptions{})
+				minio.RemoveObjectOptions{})
 			assert.NoError(t, removeErr)
 			if removeErr != nil {
 				fmt.Printf("remove test_object_%d failed,err:%v\n", i, removeErr)
@@ -87,7 +87,7 @@ func TestMinioWritePerformance(t *testing.T) {
 	cfg.Minio.BucketName = "zilliz-aws-us-west-2-wdxlw6gkyo"
 	cfg.Minio.IamEndpoint = "s3.us-west-2.amazonaws.com"
 	//minioCli, err := minio.NewMinioClient(context.Background(), bucketName)
-	minioCli, err := minio.NewMinioClientFromConfig(context.Background(), cfg)
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
 	payloadStaticData, err := generateRandomBytes(4 * 1024)
 	concurrentCh := make(chan int, 1)
@@ -102,7 +102,7 @@ func TestMinioWritePerformance(t *testing.T) {
 				fmt.Sprintf("test_object_%d", i),
 				bytes.NewReader(payloadStaticData),
 				int64(len(payloadStaticData)),
-				minio2.PutObjectOptions{})
+				minio.PutObjectOptions{})
 			assert.NoError(t, putErr)
 			cost := time.Now().Sub(start)
 			fmt.Printf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())

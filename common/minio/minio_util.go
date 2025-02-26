@@ -19,7 +19,7 @@ const (
 	CheckBucketRetryAttempts = 20
 )
 
-func NewMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*minio.Client, error) {
+func newMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*minio.Client, error) {
 	var creds *credentials.Credentials
 	if cfg.Minio.UseIAM {
 		creds = credentials.NewIAM(cfg.Minio.IamEndpoint)

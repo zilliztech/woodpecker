@@ -1,106 +1,143 @@
 package objectstorage
 
 import (
+	"bytes"
 	"context"
 	"testing"
+	"time"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
-	"github.com/zilliztech/woodpecker/common/config"
-	minio2 "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/codec"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 )
 
-func TestNewObjectStorageFragment(t *testing.T) {
-	bucket := "test-bucket"
-	fragmentId := uint64(1)
-	fragmentKey := "test-key"
-	entries := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3")}
-	firstEntryId := int64(1)
-
-	cfg, err := config.NewConfiguration("")
-	assert.NoError(t, err)
-	cfg.Minio.BucketName = bucket
-	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
-
-	assert.NoError(t, err)
-	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
+func TestNewFragmentObject(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
 	assert.NotNil(t, fragment)
-	assert.Equal(t, client, fragment.client)
-	assert.Equal(t, bucket, fragment.bucket)
-	assert.Equal(t, fragmentId, fragment.fragmentId)
-	assert.Equal(t, fragmentKey, fragment.fragmentKey)
-	assert.Equal(t, entries[0], fragment.entriesData[:len(entries[0])])
-	assert.Equal(t, entries[1], fragment.entriesData[len(entries[0]):len(entries[0])+len(entries[1])])
-	assert.Equal(t, entries[2], fragment.entriesData[len(entries[0])+len(entries[1]):])
-	assert.Equal(t, firstEntryId, fragment.firstEntryId)
-	assert.Equal(t, firstEntryId+int64(len(entries))-1, fragment.lastEntryId)
-	assert.True(t, fragment.loaded)
-	assert.False(t, fragment.uploaded)
+	assert.Equal(t, "test-bucket", fragment.bucket)
+	assert.Equal(t, "test-key", fragment.fragmentKey)
+	assert.Equal(t, int64(100), fragment.firstEntryId)
+	assert.Equal(t, int64(101), fragment.lastEntryId)
+	assert.Equal(t, true, fragment.loaded)
+	assert.Equal(t, false, fragment.uploaded)
 }
 
-func TestWriteAndLoad(t *testing.T) {
-	bucket := "test-bucket"
-	fragmentId := uint64(1)
-	fragmentKey := "test-key"
-	entries := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3")}
-	firstEntryId := int64(1)
-
-	cfg, err := config.NewConfiguration("")
+func TestFragmentObject_Flush(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", "test-key", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	err := fragment.Flush(context.Background())
 	assert.NoError(t, err)
-	cfg.Minio.BucketName = bucket
-	client, err := minio2.NewMinioClientFromConfig(context.Background(), cfg)
-	assert.NoError(t, err)
+	assert.Equal(t, true, fragment.uploaded)
+	client.AssertExpectations(t)
+}
 
-	fragment := NewFragmentObject(client, bucket, fragmentId, fragmentKey, entries, firstEntryId, true, false)
-
-	// Test writing when fragment is not loaded
-	fragment.loaded = false
-	err = fragment.Flush(context.Background())
+func TestFragmentObject_Flush_EmptyFragment(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{}, 100, false, false)
+	err := fragment.Flush(context.Background())
 	assert.Error(t, err)
-	assert.Equal(t, "fragment is empty", err.Error())
+	assert.True(t, werr.ErrFragmentEmpty.Is(err))
+}
 
-	// Test writing when fragment is loaded
-	fragment.loaded = true
+func TestFragmentObject_Load(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{}, 100, false, true)
+	data := make([]byte, 0)
+	data = append(data, codec.Int64ToBytes(1)...)
+	data = append(data, codec.Int64ToBytes(100)...)
+	data = append(data, codec.Int64ToBytes(101)...)
+	data = append(data, []byte{0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 6}...)
+	data = append(data, []byte("entry1entry2")...)
 
-	//
-	err = fragment.Flush(context.Background())
+	lastModifiedTime := time.Now().UnixMilli()
+	client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-key", mock.Anything).Return(bytes.NewReader(data), lastModifiedTime, nil)
+	err := fragment.Load(context.Background())
 	assert.NoError(t, err)
-	assert.True(t, fragment.uploaded)
+	assert.Equal(t, true, fragment.loaded)
+	assert.Equal(t, []byte("entry1entry2"), fragment.entriesData)
+	assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 6}, fragment.indexes)
+	assert.Equal(t, int64(100), fragment.firstEntryId)
+	assert.Equal(t, int64(101), fragment.lastEntryId)
+	client.AssertExpectations(t)
+}
 
-	// Test Load
-	fragment2 := &FragmentObject{
-		client:      client,
-		bucket:      bucket,
-		fragmentId:  fragmentId,
-		fragmentKey: fragmentKey,
-		loaded:      false,
-		uploaded:    true,
-	}
-	err = fragment2.Load(context.Background())
-	assert.NoError(t, err)
-	assert.True(t, fragment2.loaded)
-	assert.Equal(t, firstEntryId, fragment2.firstEntryId)
-	assert.Equal(t, firstEntryId+int64(len(entries))-1, fragment.lastEntryId)
-	assert.Equal(t, []byte("data1data2data3"), fragment2.entriesData)
-	assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 5}, fragment2.indexes[:8])
-	assert.Equal(t, []byte{0, 0, 0, 5, 0, 0, 0, 5}, fragment2.indexes[8:16])
-	assert.Equal(t, []byte{0, 0, 0, 10, 0, 0, 0, 5}, fragment2.indexes[16:24])
+func TestFragmentObject_Load_NotUploaded(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{}, 100, false, false)
+	err := fragment.Load(context.Background())
+	assert.Error(t, err)
+	assert.True(t, werr.ErrFragmentNotUploaded.Is(err))
+}
 
-	// test release
-	err = fragment.Release()
+func TestFragmentObject_GetLastEntryId(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
+	lastEntryId, err := fragment.GetLastEntryId()
 	assert.NoError(t, err)
-	assert.Nil(t, fragment.indexes)
+	assert.Equal(t, int64(101), lastEntryId)
+}
+
+func TestFragmentObject_GetEntry(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
+	entry, err := fragment.GetEntry(100)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("entry1"), entry)
+
+	entry, err = fragment.GetEntry(101)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("entry2"), entry)
+}
+
+func TestFragmentObject_GetEntry_NotFound(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
+	entry, err := fragment.GetEntry(102)
+	assert.Error(t, err)
+	assert.Equal(t, werr.ErrEntryNotFound, err)
+	assert.Nil(t, entry)
+}
+
+func TestFragmentObject_Release(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	fragment := NewFragmentObject(client, "test-bucket", 1, "test-key", [][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false)
+	err := fragment.Release()
+	assert.NoError(t, err)
+	assert.Equal(t, false, fragment.loaded)
 	assert.Nil(t, fragment.entriesData)
-	assert.False(t, fragment.loaded)
+	assert.Nil(t, fragment.indexes)
+}
 
-	// test GetEntry
-	entry, err := fragment.GetEntry(1)
+func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
+	client := mocks_minio.NewMinioHandler(t)
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+	fragment1 := NewFragmentObject(client, "test-bucket", 1, "test-key1", [][]byte{[]byte("entry1")}, 100, true, false)
+	fragment2 := NewFragmentObject(client, "test-bucket", 2, "test-key2", [][]byte{[]byte("entry2")}, 101, true, false)
+	fragments := []*FragmentObject{fragment1, fragment2}
+
+	mergedFragment, err := MergeFragmentsAndReleaseAfterCompleted(context.Background(), "merged-key", 3, fragments)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte("data1"), entry)
-	entry, err = fragment.GetEntry(2)
+	assert.NotNil(t, mergedFragment)
+	assert.Equal(t, int64(100), mergedFragment.GetFirstEntryIdDirectly())
+	assert.Equal(t, int64(101), mergedFragment.GetLastEntryIdDirectly())
+
+	entry, err := mergedFragment.GetEntry(100)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte("data2"), entry)
-	entry, err = fragment.GetEntry(3)
+	assert.Equal(t, []byte("entry1"), entry)
+
+	entry, err = mergedFragment.GetEntry(101)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte("data3"), entry)
+	assert.Equal(t, []byte("entry2"), entry)
+
+	entry, err = mergedFragment.GetEntry(102)
+	assert.Error(t, err)
+	assert.Equal(t, werr.ErrEntryNotFound, err)
+	assert.Nil(t, entry)
 }

@@ -3,7 +3,6 @@ package woodpecker
 import (
 	"context"
 
-	minio2 "github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -22,7 +21,7 @@ var _ Client = (*woodpeckerEmbedClient)(nil)
 type woodpeckerEmbedClient struct {
 	cfg           *config.Configuration
 	Metadata      meta.MetadataProvider
-	embedLogStore *server.LogStore
+	embedLogStore server.LogStore
 }
 
 func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client Client, err error) {
@@ -30,14 +29,14 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	if err != nil {
 		panic(err)
 	}
-	minioCli, err := minio.NewMinioClientFromConfig(ctx, config)
+	minioCli, err := minio.NewMinioHandler(ctx, config)
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
 	return NewEmbedClient(ctx, config, etcdCli, minioCli)
 }
 
-func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio2.Client) (client Client, err error) {
+func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler) (client Client, err error) {
 	instance := server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
 		cfg:           cfg,

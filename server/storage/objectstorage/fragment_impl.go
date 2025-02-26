@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage"
 	"io"
 	"time"
 
@@ -16,14 +15,20 @@ import (
 	"github.com/zilliztech/woodpecker/common/codec"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/server/storage"
+)
+
+const (
+	FragmentVersion = 1
 )
 
 var _ storage.Fragment = (*FragmentObject)(nil)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
-	client      *minio.Client
+	client      minioHandler.MinioHandler
 	bucket      string
 	fragmentId  uint64
 	fragmentKey string
@@ -41,7 +46,7 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client *minio.Client, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, loaded, uploaded bool) *FragmentObject {
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, loaded, uploaded bool) *FragmentObject {
 	data := make([]byte, 0)
 	index := make([]byte, 0)
 	offset := 0
@@ -78,17 +83,19 @@ func NewFragmentObject(client *minio.Client, bucket string, fragmentId uint64, f
 // Flush uploads the data to MinIO.
 func (f *FragmentObject) Flush(ctx context.Context) error {
 	if !f.loaded {
-		return fmt.Errorf("fragment is empty")
+		return werr.ErrFragmentEmpty
 	}
-	start := time.Now()
-	fullData := make([]byte, 0)
-	fullData = append(fullData, codec.Int64ToBytes(1)...)
-	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
-	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
-	fullData = append(fullData, f.indexes...)
-	fullData = append(fullData, f.entriesData...)
 
-	_, err := f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
+	if len(f.entriesData) == 0 {
+		return werr.ErrFragmentEmpty
+	}
+
+	start := time.Now()
+	fullData, err := SerializeFragment(f)
+	if err != nil {
+		return err
+	}
+	_, err = f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
@@ -96,10 +103,6 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
 	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
 	f.uploaded = true
-
-	//// TODO test only , immediately release memory
-	//f.Release()
-
 	return nil
 }
 
@@ -110,67 +113,34 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return nil
 	}
 	if !f.uploaded {
-		return fmt.Errorf("fragment is not uploaded")
+		return werr.ErrFragmentNotUploaded
 	}
 
-	fragObject, err := f.client.GetObject(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
+	fragObjectReader, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
-	defer fragObject.Close()
-	fragObjectState, getStateErr := fragObject.Stat()
-	if getStateErr != nil {
-		return fmt.Errorf("failed to get object state: %w", getStateErr)
-	}
-	f.lastModified = fragObjectState.LastModified.UnixMilli()
+	f.lastModified = objLastModified
 	// Read the entire object into memory
-	data, err := io.ReadAll(fragObject)
+	data, err := io.ReadAll(fragObjectReader)
 	if err != nil {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
-
-	// Create a buffer to read from the data
-	buf := bytes.NewBuffer(data)
-
-	// Read version (4 bytes)
-	var version uint64
-	if err := binary.Read(buf, binary.BigEndian, &version); err != nil {
-		return fmt.Errorf("failed to read version: %v", err)
+	tmpFrag, deserializeErr := DeserializeFragment(data)
+	if deserializeErr != nil {
+		return deserializeErr
 	}
-
-	// Read firstEntryID (8 bytes)
-	var firstEntryID uint64
-	if err := binary.Read(buf, binary.BigEndian, &firstEntryID); err != nil {
-		return fmt.Errorf("failed to read firstEntryID: %v", err)
-	}
-
-	// Read lastEntryId (8 bytes)
-	var lastEntryId uint64
-	if err := binary.Read(buf, binary.BigEndian, &lastEntryId); err != nil {
-		return fmt.Errorf("failed to read lastEntryId: %v", err)
-	}
-
-	// Calculate the number of indexes
-	numIndexes := lastEntryId - firstEntryID + 1
-	indexes := make([]byte, numIndexes*8)
-
-	// Read indexes (each index is 8 bytes)
-	if err = binary.Read(buf, binary.BigEndian, &indexes); err != nil {
-		return fmt.Errorf("failed to read index %v", err)
-	}
-
-	// Read entriesData (remaining data)
-	entriesData := buf.Bytes()
 
 	// Reset the buffer with the loaded data
-	f.entriesData = entriesData
-	f.indexes = indexes
-	f.firstEntryId = int64(firstEntryID)
-	f.lastEntryId = int64(lastEntryId)
+	f.entriesData = tmpFrag.entriesData
+	f.indexes = tmpFrag.indexes
+	f.firstEntryId = tmpFrag.firstEntryId
+	f.lastEntryId = tmpFrag.lastEntryId
+	tmpFrag.Release() // release
 
 	//
 	f.loaded = true
-	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(entriesData) + len(indexes)))
+	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(f.entriesData) + len(f.indexes)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Inc()
 	return nil
 }
@@ -295,12 +265,8 @@ func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	if flushErr != nil {
 		return nil, flushErr
 	}
-
-	// release the merged fragment
+	// mark uploaded
 	mergedFrag.uploaded = true
-	mergedFrag.loaded = false
-	mergedFrag.entriesData = make([]byte, 0)
-	mergedFrag.indexes = make([]byte, 0)
 
 	//
 	return mergedFrag, nil
@@ -313,4 +279,60 @@ func ReleaseFragments(ctx context.Context, fragments []*FragmentObject) {
 			logger.Ctx(ctx).Warn("release fragment failed when LogFile closing", zap.String("fragmentKey", fragment.fragmentKey), zap.Uint64("fragmentId", fragment.fragmentId), zap.Error(err))
 		}
 	}
+}
+
+// SerializeFragment to object data bytes
+func SerializeFragment(f *FragmentObject) ([]byte, error) {
+	fullData := make([]byte, 0)
+	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
+	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
+	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
+	fullData = append(fullData, f.indexes...)
+	fullData = append(fullData, f.entriesData...)
+	return fullData, nil
+}
+
+// DeserializeFragment from object data bytes
+func DeserializeFragment(data []byte) (*FragmentObject, error) {
+	// Create a buffer to read from the data
+	buf := bytes.NewBuffer(data)
+
+	// Read version (4 bytes)
+	var version uint64
+	if err := binary.Read(buf, binary.BigEndian, &version); err != nil {
+		return nil, fmt.Errorf("failed to read version: %v", err)
+	}
+	if version != FragmentVersion {
+		return nil, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// Read firstEntryID (8 bytes)
+	var firstEntryID uint64
+	if err := binary.Read(buf, binary.BigEndian, &firstEntryID); err != nil {
+		return nil, fmt.Errorf("failed to read firstEntryID: %v", err)
+	}
+
+	// Read lastEntryId (8 bytes)
+	var lastEntryId uint64
+	if err := binary.Read(buf, binary.BigEndian, &lastEntryId); err != nil {
+		return nil, fmt.Errorf("failed to read lastEntryId: %v", err)
+	}
+
+	// Calculate the number of indexes
+	numIndexes := lastEntryId - firstEntryID + 1
+	indexes := make([]byte, numIndexes*8)
+
+	// Read indexes (each index is 8 bytes)
+	if err := binary.Read(buf, binary.BigEndian, &indexes); err != nil {
+		return nil, fmt.Errorf("failed to read index %v", err)
+	}
+	// Read entriesData (remaining data)
+	entriesData := buf.Bytes()
+
+	return &FragmentObject{
+		indexes:      indexes,
+		entriesData:  entriesData,
+		firstEntryId: int64(firstEntryID),
+		lastEntryId:  int64(lastEntryId),
+	}, nil
 }

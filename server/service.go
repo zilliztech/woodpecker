@@ -15,7 +15,7 @@ import (
 )
 
 type Server struct {
-	logStore    *LogStore
+	logStore    LogStore
 	grpcWG      sync.WaitGroup
 	grpcErrChan chan error
 	grpcServer  *grpc.Server
@@ -31,7 +31,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 	if err != nil {
 		panic(err)
 	}
-	minioCli, err := minio.NewMinioClientFromConfig(ctx, configuration)
+	minioCli, err := minio.NewMinioHandler(ctx, configuration)
 	if err != nil {
 		panic(err)
 	}

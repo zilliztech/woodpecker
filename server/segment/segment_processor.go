@@ -8,12 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -32,7 +32,7 @@ type SegmentProcessor interface {
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, etcdCli *clientv3.Client, minioCli *minio.Client) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	return &segmentProcessor{
@@ -53,7 +53,7 @@ type segmentProcessor struct {
 	logId       int64
 	segId       int64
 	etcdCli     *clientv3.Client
-	minioClient *minio.Client
+	minioClient minioHandler.MinioHandler
 
 	currentLogFileId     int64
 	currentLogFileWriter storage.LogFile
@@ -88,20 +88,12 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	if s.IsFenced() {
 		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
 	}
-	// 1. add to commitLog, which stores WAL for this node
-	// TODO Get wal for this logId, and write entry to it. (zero disk mode skip this step)
 
-	// 2. add to logfile, which stores entry data
-	// Get logfile for this logId, and write entry to it, then return the entryId if success
 	logFileWriter, err := s.getOrCreateLogFileWriter(ctx)
 	if err != nil {
 		return -1, nil, err
 	}
 
-	//err = logFileWriter.Append(ctx, entry.Data)
-	//if err != nil {
-	//	return -1, err
-	//}
 	bufferedSeqNo, syncedCh, err := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
 	if bufferedSeqNo == -1 {
 		return -1, syncedCh, fmt.Errorf("failed to append to log file")
@@ -109,20 +101,6 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 		return -1, syncedCh, err
 	}
 
-	//// wait for log file to be synced
-	//syncedSeqNo := <-syncedCh
-	//if syncedSeqNo == -1 {
-	//	return -1, fmt.Errorf("failed to append to log file")
-	//}
-	//
-	//if syncedSeqNo != bufferedSeqNo {
-	//	return -1, fmt.Errorf("failed to append to log file")
-	//}
-
-	// 3. add to EntryBuffer
-	// TODO add entry to EntryBuffer, trigger async flush if necessary
-
-	// 4. return syncedSeqNo, chan
 	return bufferedSeqNo, syncedCh, nil
 }
 

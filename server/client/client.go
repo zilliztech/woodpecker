@@ -30,7 +30,7 @@ var _ LogStoreClient = (*logStoreClientLocal)(nil)
 // logStoreClientLocal is a local implementation of LogStoreClient,
 // which will directly interact with the local LogStore instance.
 type logStoreClientLocal struct {
-	store *server.LogStore
+	store server.LogStore
 }
 
 func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {

@@ -95,6 +95,10 @@ const (
 	SegmentReadException
 	// SegmentWriteException indicates that an exception occurred while writing a segment.
 	SegmentWriteException
+	// FragmentEmpty indicates that the fragment is empty.
+	FragmentEmpty
+	// FragmentNotUploaded indicates that the fragment is not uploaded.
+	FragmentNotUploaded
 	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
 	// has been reached. This means that no additional operations can be started until some
 	// of the current operations complete.
@@ -125,6 +129,10 @@ var (
 	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
 	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
 	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
+
+	// LogFile related
+	ErrFragmentEmpty       = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
+	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
 	//
 	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)

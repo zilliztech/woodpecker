@@ -18,7 +18,7 @@ type LogStoreClientPool interface {
 	Clear(target string)
 }
 
-func NewLogStoreClientPoolLocal(logStore *server.LogStore) LogStoreClientPool {
+func NewLogStoreClientPoolLocal(logStore server.LogStore) LogStoreClientPool {
 	return &logStoreClientPoolLocal{
 		innerLogStore: logStore,
 	}
@@ -28,7 +28,7 @@ var _ LogStoreClientPool = (*logStoreClientPoolLocal)(nil)
 
 type logStoreClientPoolLocal struct {
 	sync.RWMutex
-	innerLogStore *server.LogStore
+	innerLogStore server.LogStore
 }
 
 func (p *logStoreClientPoolLocal) GetLogStoreClient(target string) (LogStoreClient, error) {

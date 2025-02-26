@@ -7,7 +7,7 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
-// ReaderOpt represents the options for creating a reader.
+// ReaderOpt represents the options for creating a reader. which read entries in [start,end).
 type ReaderOpt struct {
 	// StartSequenceNum is the fileLastOffset to start reading from.
 	StartSequenceNum int64

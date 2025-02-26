@@ -6,31 +6,48 @@ import (
 	"sync"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/segment"
 )
 
-type LogStore struct {
+type LogStore interface {
+	Start() error
+	Stop() error
+	SetAddress(string)
+	GetAddress() string
+	SetEtcdClient(*clientv3.Client)
+	Register(context.Context) error
+	AddEntry(context.Context, int64, *segment.SegmentEntry) (int64, <-chan int64, error)
+	GetEntry(context.Context, int64, int64, int64) (*segment.SegmentEntry, error)
+	FenceSegment(context.Context, int64, int64) error
+	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
+	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
+	RecoverySegmentFromInRecovery(context.Context, int64, int64) (*proto.SegmentMetadata, error)
+}
+
+var _ LogStore = (*logStore)(nil)
+
+type logStore struct {
 	sync.RWMutex
 	cfg      *config.Configuration
 	ctx      context.Context
 	cancel   context.CancelFunc
 	etcdCli  *clientv3.Client
-	minioCli *minio.Client
+	minioCli minioHandler.MinioHandler
 	address  string
 
 	segmentProcessors map[int64][]segment.SegmentProcessor
 }
 
-func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli *minio.Client) *LogStore {
+func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
-	return &LogStore{
+	return &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -40,35 +57,35 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *client
 	}
 }
 
-func (l *LogStore) Start() error {
+func (l *logStore) Start() error {
 	// TODO start service
 	// register to etcd and keep alive
 	registerErr := l.Register(context.Background())
 	return registerErr
 }
-func (l *LogStore) Stop() error {
+func (l *logStore) Stop() error {
 	l.cancel()
 	return nil
 }
 
-func (l *LogStore) SetAddress(address string) {
+func (l *logStore) SetAddress(address string) {
 	l.address = address
 }
 
-func (l *LogStore) GetAddress() string {
+func (l *logStore) GetAddress() string {
 	return l.address
 }
 
-func (l *LogStore) SetEtcdClient(etcdCli *clientv3.Client) {
+func (l *logStore) SetEtcdClient(etcdCli *clientv3.Client) {
 	l.etcdCli = etcdCli
 }
 
-func (l *LogStore) Register(ctx context.Context) error {
+func (l *logStore) Register(ctx context.Context) error {
 	// register this node to etcd and keep alive
 	return nil
 }
 
-func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
 	start := time.Now()
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
@@ -88,7 +105,7 @@ func (l *LogStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 	return entryId, syncedCh, nil
 }
 
-func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
+func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
 	l.Lock()
 	defer l.Unlock()
 	if processors, ok := l.segmentProcessors[logId]; ok {
@@ -103,7 +120,7 @@ func (l *LogStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 	return s, nil
 }
 
-func (l *LogStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	start := time.Now()
 	metrics.WpReadEntriesGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
 	metrics.WpReadRequestsGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
@@ -127,7 +144,7 @@ func (l *LogStore) GetEntry(ctx context.Context, logId int64, segmentId int64, e
 	return entry, nil
 }
 
-func (l *LogStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
 	if processors, ok := l.segmentProcessors[logId]; ok {
 		for _, processor := range processors {
 			if processor.GetSegmentId() == segmentId {
@@ -139,7 +156,7 @@ func (l *LogStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 }
 
 // CompactSegment merge all files in a segment into bigger files
-func (l *LogStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
 		return nil, err
@@ -148,7 +165,7 @@ func (l *LogStore) CompactSegment(ctx context.Context, logId int64, segmentId in
 }
 
 // RecoverySegmentFromInProgress read logFiles to get meta info
-func (l *LogStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
 		return nil, err
@@ -157,7 +174,7 @@ func (l *LogStore) RecoverySegmentFromInProgress(ctx context.Context, logId int6
 }
 
 // RecoverySegmentFromInRecovery read logFiles to get meta info
-func (l *LogStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (l *logStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	// same as RecoverySegmentFromInProgress currently
 	return l.RecoverySegmentFromInProgress(ctx, logId, segmentId)
 }

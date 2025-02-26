@@ -14,6 +14,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -25,7 +26,7 @@ var _ storage.LogFile = (*LogFile)(nil)
 type LogFile struct {
 	mu               sync.Mutex
 	lastSync         atomic.Int64
-	client           *minio.Client
+	client           minioHandler.MinioHandler
 	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
 	bucket           string // The bucket name
 
@@ -44,7 +45,7 @@ type LogFile struct {
 }
 
 // NewLogFile is used to create a new LogFile, which is used to write data to object storage
-func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client, cfg *config.Configuration) storage.LogFile {
+func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.LogFile {
 	logger.Ctx(context.TODO()).Debug("new LogFile created", zap.Int64("logFileId", logFileId), zap.String("segmentPrefixKey", segmentPrefixKey))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
 	objFile := &LogFile{
@@ -67,7 +68,7 @@ func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectC
 }
 
 // NewROLogFile is used to read only LogFile
-func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli *minio.Client) storage.LogFile {
+func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.LogFile {
 	objFile := &LogFile{
 		id:               logFileId,
 		client:           objectCli,
@@ -114,6 +115,7 @@ func (f *LogFile) run() {
 					zap.Error(err))
 			}
 			f.sealed.Store(true)
+			ReleaseFragments(context.Background(), f.fragments)
 			return
 		}
 	}
@@ -125,7 +127,7 @@ func (f *LogFile) GetId() int64 {
 
 func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
 	ch := make(chan int64, 1)
-	// first check buffer size, trigger flush if necessary
+	// trigger sync by max buffer entries num
 	sizeAfterAppend := f.buffer.expectedNextEntryId.Load() + 1
 	if sizeAfterAppend >= int64(f.buffer.firstEntryId+f.buffer.maxSize) {
 		logger.Ctx(context.TODO()).Debug("buffer full, trigger flush",
@@ -137,20 +139,32 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 		if err != nil {
 			// sync does not success
 			ch <- -1
+			close(ch)
 			return entryId, ch, err
 		}
 	}
 
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	// write buffer
 	id, err := f.buffer.WriteEntry(entryId, data)
 	if err != nil {
 		// sync does not success
 		ch <- -1
+		close(ch)
+		f.mu.Unlock()
 		return id, ch, err
 	}
 	f.syncedChan[id] = ch
+	f.mu.Unlock()
+
+	// trigger sync by max buffer entries bytes size
+	if f.buffer.dataSize.Load() >= int64(f.maxBufferSize) {
+		logger.Ctx(context.TODO()).Debug("reach max buffer size, trigger flush", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", f.buffer.dataSize.Load()), zap.Int64("maxSize", int64(f.maxBufferSize)))
+		syncErr := f.Sync(ctx)
+		if syncErr != nil {
+			logger.Ctx(context.TODO()).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", f.buffer.dataSize.Load()), zap.Int64("maxSize", int64(f.maxBufferSize)), zap.Error(syncErr))
+		}
+	}
 	return id, ch, nil
 }
 
@@ -240,7 +254,7 @@ func (f *LogFile) LastOffset() uint64 {
 
 func (f *LogFile) getFirstEntryId() int64 {
 	if len(f.fragments) == 0 {
-		return 0
+		return -1
 	}
 	return f.fragments[0].firstEntryId
 }
@@ -325,7 +339,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 				retry.Sleep(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
 			)
 			if err != nil {
-				logger.Ctx(ctx).Error("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(err))
+				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(err))
 			}
 			flushResultCh <- &flushResult{
 				target: fragment,
@@ -352,6 +366,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 	for _, r := range resultFrags {
 		if r.err != nil {
 			logger.Ctx(ctx).Warn("flush fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
+			// Can only succeed sequentially without holes
+			break
 		} else {
 			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
 			successFrags = append(successFrags, r.target)
@@ -401,7 +417,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 	} else {
 		// no flush success, callback all append sync error
 		for syncingId, ch := range f.syncedChan {
-			ch <- syncingId
+			// append error
+			ch <- -1
 			delete(f.syncedChan, syncingId)
 			close(ch)
 		}
@@ -415,24 +432,14 @@ func (f *LogFile) Close() error {
 	// Implement close logic, e.g., release resources
 	f.fileClose <- struct{}{}
 	close(f.fileClose)
-	for _, frag := range f.fragments {
-		err := frag.Release()
-		if err != nil {
-			logger.Ctx(context.TODO()).Warn("release fragment failed when LogFile closing",
-				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("logFileId", f.id),
-				zap.Uint64("fragId", frag.fragmentId),
-				zap.Error(err))
-		}
-	}
 	return nil
 }
 
 func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
 	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
-	var partitions [][][]byte = make([][][]byte, 0)
-	var partition [][]byte = make([][]byte, 0)
-	var currentSize int = 0
+	var partitions = make([][][]byte, 0)
+	var partition = make([][]byte, 0)
+	var currentSize = 0
 
 	for _, entry := range toFlushData {
 		entrySize := len(entry)
@@ -448,7 +455,7 @@ func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryI
 		partitions = append(partitions, partition)
 	}
 
-	var partitionFirstEntryIds []int64 = make([]int64, 0)
+	var partitionFirstEntryIds = make([]int64, 0)
 	offset := toFlushDataFirstEntryId
 	for _, part := range partitions {
 		partitionFirstEntryIds = append(partitionFirstEntryIds, offset)
