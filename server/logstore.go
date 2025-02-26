@@ -42,7 +42,7 @@ type logStore struct {
 	minioCli minioHandler.MinioHandler
 	address  string
 
-	segmentProcessors map[int64][]segment.SegmentProcessor
+	segmentProcessors map[int64]map[int64]segment.SegmentProcessor
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
@@ -53,7 +53,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *client
 		cancel:            cancel,
 		etcdCli:           etcdCli,
 		minioCli:          minioCli,
-		segmentProcessors: make(map[int64][]segment.SegmentProcessor),
+		segmentProcessors: make(map[int64]map[int64]segment.SegmentProcessor),
 	}
 }
 
@@ -108,16 +108,25 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
 	l.Lock()
 	defer l.Unlock()
-	if processors, ok := l.segmentProcessors[logId]; ok {
-		for _, processor := range processors {
-			if processor.GetSegmentId() == segmentId {
-				return processor, nil
-			}
+	if processors, logExists := l.segmentProcessors[logId]; logExists {
+		if processor, segExists := processors[segmentId]; segExists {
+			return processor, nil
 		}
 	}
 	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
-	l.segmentProcessors[logId] = append(l.segmentProcessors[logId], s)
+	segments := make(map[int64]segment.SegmentProcessor)
+	segments[segmentId] = s
+	l.segmentProcessors[logId] = segments
 	return s, nil
+}
+
+func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segment.SegmentProcessor {
+	if processors, logExists := l.segmentProcessors[logId]; logExists {
+		if processor, segExists := processors[segmentId]; segExists {
+			return processor
+		}
+	}
+	return nil
 }
 
 func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
@@ -145,14 +154,11 @@ func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, e
 }
 
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
-	if processors, ok := l.segmentProcessors[logId]; ok {
-		for _, processor := range processors {
-			if processor.GetSegmentId() == segmentId {
-				processor.SetFenced()
-			}
-		}
+	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
+		processor.SetFenced()
+		return nil
 	}
-	return nil
+	return werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
 }
 
 // CompactSegment merge all files in a segment into bigger files
