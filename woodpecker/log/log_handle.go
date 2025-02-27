@@ -149,7 +149,7 @@ func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, se
 		segmentMeta, metaExists := l.SegmentsCache[segmentId]
 		if metaExists {
 			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
 			l.SegmentHandles[segmentId] = handle
 			return handle, nil
 		}
@@ -170,7 +170,7 @@ func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, se
 		segmentMeta, metaExists = l.SegmentsCache[segmentId]
 		if metaExists {
 			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
 			l.SegmentHandles[segmentId] = handle
 			return handle, nil
 		} else {
@@ -192,7 +192,7 @@ func (l *logHandleImpl) getExistsReadonlySegmentHandle(ctx context.Context, segm
 	segmentMeta, metaExists := l.SegmentsCache[segmentId]
 	if metaExists {
 		// create a readonly segmentHandle and cache it
-		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -206,7 +206,7 @@ func (l *logHandleImpl) getExistsReadonlySegmentHandle(ctx context.Context, segm
 	}
 	if segMeta != nil {
 		l.SegmentsCache[segmentId] = segMeta
-		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool)
+		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -218,7 +218,7 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 	if err != nil {
 		return nil, err
 	}
-	newSegHandle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, newSegMeta, l.Metadata, l.ClientPool)
+	newSegHandle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime

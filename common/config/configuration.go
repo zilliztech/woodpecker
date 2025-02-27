@@ -19,8 +19,14 @@ type SegmentRollingPolicyConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
 }
 
+type SegmentAppendConfig struct {
+	QueueSize  int `yaml:"queueSize"`
+	MaxRetries int `yaml:"maxRetries"`
+}
+
 // ClientConfig stores the client configuration.
 type ClientConfig struct {
+	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 }
 
@@ -219,6 +225,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			Prefix: "woodpecker",
 		},
 		Client: ClientConfig{
+			SegmentAppend: SegmentAppendConfig{
+				QueueSize:  100,
+				MaxRetries: 2,
+			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     100000000,
 				MaxInterval: 800,

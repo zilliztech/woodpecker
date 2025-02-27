@@ -139,6 +139,64 @@ func (_c *LogStoreClient_FenceSegment_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// IsSegmentFenced provides a mock function with given fields: ctx, logId, segmentId
+func (_m *LogStoreClient) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+	ret := _m.Called(ctx, logId, segmentId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsSegmentFenced")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (bool, error)); ok {
+		return rf(ctx, logId, segmentId)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) bool); ok {
+		r0 = rf(ctx, logId, segmentId)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(ctx, logId, segmentId)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_IsSegmentFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsSegmentFenced'
+type LogStoreClient_IsSegmentFenced_Call struct {
+	*mock.Call
+}
+
+// IsSegmentFenced is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+func (_e *LogStoreClient_Expecter) IsSegmentFenced(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_IsSegmentFenced_Call {
+	return &LogStoreClient_IsSegmentFenced_Call{Call: _e.mock.On("IsSegmentFenced", ctx, logId, segmentId)}
+}
+
+func (_c *LogStoreClient_IsSegmentFenced_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_IsSegmentFenced_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_IsSegmentFenced_Call) Return(_a0 bool, _a1 error) *LogStoreClient_IsSegmentFenced_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_IsSegmentFenced_Call) RunAndReturn(run func(context.Context, int64, int64) (bool, error)) *LogStoreClient_IsSegmentFenced_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ReadBatchEntries provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, toEntryId
 func (_m *LogStoreClient) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
 	ret := _m.Called(ctx, logId, segmentId, fromEntryId, toEntryId)

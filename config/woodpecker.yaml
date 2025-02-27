@@ -7,6 +7,9 @@ woodpecker:
     prefix: woodpecker # Root prefix of the key to where Woodpecker stores data in etcd.
   # Configuration of Woodpecker service.
   client:
+    segmentAppend:
+      queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
+      maxRetries: 3 # Maximum number of retries for segment append operations
     segmentRollingPolicy:
       maxSize: 2000000000 # Maximum entries count of a segment, default is 2GB
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes

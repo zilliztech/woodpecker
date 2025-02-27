@@ -26,6 +26,7 @@ type LogStore interface {
 	AddEntry(context.Context, int64, *segment.SegmentEntry) (int64, <-chan int64, error)
 	GetEntry(context.Context, int64, int64, int64) (*segment.SegmentEntry, error)
 	FenceSegment(context.Context, int64, int64) error
+	IsSegmentFenced(context.Context, int64, int64) (bool, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	RecoverySegmentFromInRecovery(context.Context, int64, int64) (*proto.SegmentMetadata, error)
@@ -159,6 +160,13 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 		return nil
 	}
 	return werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
+}
+
+func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
+		return processor.IsFenced(), nil
+	}
+	return false, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
 }
 
 // CompactSegment merge all files in a segment into bigger files

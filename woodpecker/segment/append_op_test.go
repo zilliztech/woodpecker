@@ -2,18 +2,18 @@ package segment
 
 import (
 	"context"
-	"github.com/cockroachdb/errors"
-	"github.com/zilliztech/woodpecker/server/segment"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
-	"github.com/zilliztech/woodpecker/mocks/mocks_logstore_client"
+	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/segment"
 )
 
 func TestAppendOp_Execute_Success(t *testing.T) {

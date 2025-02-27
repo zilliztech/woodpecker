@@ -20,6 +20,8 @@ func TestNewConfiguration(t *testing.T) {
 	// test configuration
 	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", config.Woodpecker.Meta.Prefix)
+	assert.Equal(t, 10000, config.Woodpecker.Client.SegmentAppend.QueueSize)
+	assert.Equal(t, 3, config.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, 2000000000, config.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, 1000, config.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval)
@@ -78,6 +80,8 @@ func TestNewConfiguration(t *testing.T) {
 	// test default configuration
 	assert.Equal(t, "etcd", defaultConfig.Woodpecker.Meta.Type)
 	assert.Equal(t, "woodpecker", defaultConfig.Woodpecker.Meta.Prefix)
+	assert.Equal(t, 100, defaultConfig.Woodpecker.Client.SegmentAppend.QueueSize)
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, 100000000, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval)
@@ -143,6 +147,8 @@ func TestNewWoodpeckerConfiguration(t *testing.T) {
 	// test configuration
 	assert.Equal(t, "etcd", config.Meta.Type)
 	assert.Equal(t, "woodpecker", config.Meta.Prefix)
+	assert.Equal(t, 10000, config.Client.SegmentAppend.QueueSize)
+	assert.Equal(t, 3, config.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, 2000000000, config.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 600, config.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, 1000, config.Logstore.LogFileSyncPolicy.MaxInterval)
@@ -161,6 +167,8 @@ func TestNewWoodpeckerConfiguration(t *testing.T) {
 	// test configuration
 	assert.Equal(t, "etcd", defaultConfig.Meta.Type)
 	assert.Equal(t, "woodpecker", defaultConfig.Meta.Prefix)
+	assert.Equal(t, 100, defaultConfig.Client.SegmentAppend.QueueSize)
+	assert.Equal(t, 2, defaultConfig.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, 100000000, defaultConfig.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 800, defaultConfig.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, 1000, defaultConfig.Logstore.LogFileSyncPolicy.MaxInterval)

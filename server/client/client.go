@@ -17,6 +17,8 @@ type LogStoreClient interface {
 	ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
+	// IsSegmentFenced checks if the specified log segment is fenced and returns a boolean value and an error if any.
+	IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
 	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentRecoveryFromInRecovery recovers the specified log segment from the InRecovery state and returns the updated metadata and an error if any.
@@ -47,6 +49,10 @@ func (l *logStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64,
 
 func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
 	return l.store.FenceSegment(ctx, logId, segmentId)
+}
+
+func (l *logStoreClientLocal) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+	return l.store.IsSegmentFenced(ctx, logId, segmentId)
 }
 
 func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
@@ -84,6 +90,11 @@ func (l *logStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64
 }
 
 func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (l *logStoreClientRemote) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
 	//TODO implement me
 	panic("implement me")
 }

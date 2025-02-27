@@ -4,13 +4,14 @@ import (
 	"container/list"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/zilliztech/woodpecker/common/bitset"
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -53,11 +54,13 @@ type SegmentHandle interface {
 	RequestCompactionAsync(context.Context) error
 	// Fence the segment in all nodes
 	Fence(context.Context) error
+	IsFence(context.Context) (bool, error)
 	// RecoveryOrCompact is a recovery or compaction operation
 	RecoveryOrCompact(todo context.Context) error
 }
 
-func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool) SegmentHandle {
+func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) SegmentHandle {
+	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
 		logId:            logId,
 		logName:          logName,
@@ -74,13 +77,43 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 				"127.0.0.1",
 			},
 		},
-		executor:             NewSequentialExecutor(10000),
+		executor:             NewSequentialExecutor(executeRequestMaxQueueSize),
 		failedAppendOpsQueue: list.New(),
+		cfg:                  cfg,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	segmentHandle.executor.Start()
+	return segmentHandle
+}
+
+// NewSegmentHandleWithAppendOpsQueue TODO TestOnly
+func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List) SegmentHandle {
+	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
+	segmentHandle := &segmentHandleImpl{
+		logId:            logId,
+		logName:          logName,
+		segmentMetaCache: segmentMeta,
+		metadata:         metadata,
+		ClientPool:       clientPool,
+		appendOpsQueue:   testAppendOpsQueue,
+		quorumInfo: &proto.QuorumInfo{
+			Id: 1,
+			Wq: 1,
+			Aq: 1,
+			Es: 1,
+			Nodes: []string{
+				"127.0.0.1",
+			},
+		},
+		executor:             NewSequentialExecutor(executeRequestMaxQueueSize),
+		failedAppendOpsQueue: list.New(),
+		cfg:                  cfg,
+	}
+	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
+	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
+	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	return segmentHandle
 }
 
@@ -93,6 +126,7 @@ type segmentHandleImpl struct {
 	metadata         meta.MetadataProvider
 	ClientPool       client.LogStoreClientPool
 	quorumInfo       *proto.QuorumInfo
+	cfg              *config.Configuration
 
 	sync.RWMutex
 	lastPushed       atomic.Int64
@@ -121,9 +155,17 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	defer s.Unlock()
 	// Check segment state
 	if s.segmentMetaCache.State != proto.SegmentState_Active {
-		callback(s.segmentMetaCache.SegNo, -1, werr.ErrSegmentClosed)
+		callback(s.segmentMetaCache.SegNo, -1, werr.ErrSegmentStateInvalid)
 		return
 	}
+
+	// check segment is fenced
+	isFenced, _ := s.IsFence(ctx)
+	if isFenced {
+		callback(s.segmentMetaCache.SegNo, -1, werr.ErrSegmentFenced)
+		return
+	}
+
 	// Create pending append operation and execute asynchronously
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
 	//fmt.Printf("pushed %d \n", appendOp.entryId)
@@ -197,6 +239,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
 	elementsToRetry := make([]*list.Element, 0)
+	minRemoveId := int64(math.MaxInt64)
 	// check exists in queue currently, avoid delay ack
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() { // TODO should be faster
 		element := e
@@ -204,15 +247,49 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		if op.entryId != triggerEntryId {
 			continue
 		}
-		if op.attempt < 3 && (op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) {
+
+		// found the triggerEntryId
+		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries && (op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) {
 			op.attempt++
 			elementsToRetry = append(elementsToRetry, element)
 		} else {
 			// retry max times, or encounter non-retryable error
-			elementsToRetry = append(elementsToRetry, element)
+			elementsToRemove = append(elementsToRemove, element)
+			if minRemoveId == -1 || op.entryId < minRemoveId {
+				minRemoveId = op.entryId
+			}
+		}
+		break
+	}
+
+	// do not remove, just resubmit to retry again
+	for _, element := range elementsToRetry {
+		op := element.Value.(*AppendOp)
+		if op.entryId == triggerEntryId {
+			s.executor.Submit(op)
+			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
+			continue
+		}
+		if op.entryId < minRemoveId {
+			s.executor.Submit(op)
+			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
+		} else {
+			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId))
+			elementsToRemove = append(elementsToRemove, element)
 		}
 	}
-	// fail after retry 3 times
+
+	// fast fail other queue appends which Id greater then minRemoveId.
+	// because without the hole entry, their will never success
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		element := e
+		op := element.Value.(*AppendOp)
+		if op.entryId > minRemoveId {
+			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId))
+			elementsToRemove = append(elementsToRemove, element)
+		}
+	}
+	// send error callback to all elementsToRemove
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
@@ -220,13 +297,6 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		logger.Ctx(context.Background()).Debug("append fail after retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
-	}
-	// do not remove, just resubmit to retry again
-	for _, element := range elementsToRetry {
-		s.appendOpsQueue.Remove(element)
-		op := element.Value.(*AppendOp)
-		s.executor.Submit(op)
-		logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
 	}
 }
 
@@ -375,6 +445,22 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
+	// fence segment, prevent new append operations
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return false, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	}
+	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return false, err
+	}
+	return client.IsSegmentFenced(ctx, s.logId, s.segmentMetaCache.SegNo)
 }
 
 // RecoveryOrCompact used for the auditor of this Log
