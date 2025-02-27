@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"github.com/zilliztech/woodpecker/common/config"
 	"sync"
 	"time"
 
@@ -28,9 +29,11 @@ type LogWriter interface {
 	Close(context.Context) error
 }
 
-func NewLogWriter(ctx context.Context, logHandle *logHandleImpl) LogWriter {
+func NewLogWriter(ctx context.Context, logHandle *logHandleImpl, cfg *config.Configuration) LogWriter {
 	w := &logWriterImpl{
-		logHandle: logHandle,
+		logHandle:          logHandle,
+		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
+		cfg:                cfg,
 	}
 	go w.runAuditor()
 	return w
@@ -40,8 +43,10 @@ var _ LogWriter = (*logWriterImpl)(nil)
 
 type logWriterImpl struct {
 	sync.RWMutex
-	logHandle   *logHandleImpl
-	writerClose chan struct{}
+	logHandle          *logHandleImpl
+	auditorMaxInterval int
+	cfg                *config.Configuration
+	writerClose        chan struct{}
 }
 
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
@@ -105,8 +110,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 }
 
 func (l *logWriterImpl) runAuditor() {
-	// TODO should be config
-	ticker := time.NewTicker(time.Duration(5000 * int(time.Millisecond)))
+	ticker := time.NewTicker(time.Duration(l.auditorMaxInterval * int(time.Second)))
 	defer ticker.Stop()
 	for {
 		select {

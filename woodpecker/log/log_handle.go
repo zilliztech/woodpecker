@@ -91,7 +91,7 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		return nil, err
 	}
 	// return LogWriter instance if writableSegmentHandle is created
-	return NewLogWriter(ctx, l), nil
+	return NewLogWriter(ctx, l, l.cfg), nil
 }
 
 func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {

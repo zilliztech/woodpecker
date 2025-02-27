@@ -28,6 +28,11 @@ type SegmentAppendConfig struct {
 type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
+	Auditor              AuditorConfig              `yaml:"auditor"`
+}
+
+type AuditorConfig struct {
+	MaxInterval int `yaml:"maxInterval"`
 }
 
 // LogFileSyncPolicyConfig stores the log file sync policy configuration.
@@ -232,6 +237,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     100000000,
 				MaxInterval: 800,
+			},
+			Auditor: AuditorConfig{
+				MaxInterval: 5,
 			},
 		},
 		Logstore: LogstoreConfig{

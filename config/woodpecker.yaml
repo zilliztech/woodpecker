@@ -13,6 +13,8 @@ woodpecker:
     segmentRollingPolicy:
       maxSize: 2000000000 # Maximum entries count of a segment, default is 2GB
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
+    auditor:
+      maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
   # Configuration of Woodpecker logstore.
   logstore:
     logFileSyncPolicy:
