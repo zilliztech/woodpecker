@@ -18,11 +18,11 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 	assert.NoError(t, err)
 
 	// CreateLog if not exists
-	createErr := client.CreateLog(context.Background(), "test_log")
+	createErr := client.CreateLog(context.Background(), "test_log_single")
 	if createErr != nil {
 		assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
 	}
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+	logHandle, openErr := client.OpenLog(context.Background(), "test_log_single")
 	assert.NoError(t, openErr)
 
 	logWriter1, openWriterErr1 := logHandle.OpenLogWriter(context.Background())
@@ -41,14 +41,14 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 	client2, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err)
 
-	createErr := client1.CreateLog(context.Background(), "test_log")
+	createErr := client1.CreateLog(context.Background(), "test_log_multi")
 	if createErr != nil {
 		assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
 	}
 
-	logHandle1, openErr := client1.OpenLog(context.Background(), "test_log")
+	logHandle1, openErr := client1.OpenLog(context.Background(), "test_log_multi")
 	assert.NoError(t, openErr)
-	logHandle2, openErr := client2.OpenLog(context.Background(), "test_log")
+	logHandle2, openErr := client2.OpenLog(context.Background(), "test_log_multi")
 	assert.NoError(t, openErr)
 
 	// client1 get writer, client2 get fail
