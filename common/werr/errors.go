@@ -38,6 +38,8 @@ const (
 	MetadataUpdateSegmentError
 	// MetadataUpdateQuorumError failed in update quorum metadata
 	MetadataUpdateQuorumError
+	// LogAlreadyExists means log already exists
+	LogAlreadyExists
 	// MetadataSegmentNotFound means segment not found
 	MetadataSegmentNotFound
 	// PersistenceError failed to persist entry
@@ -123,6 +125,7 @@ var (
 	ErrInitClient       = newWoodpeckerError("failed to init client", ClientInitError, true)
 
 	// log&segment related
+	ErrLogAlreadyExists      = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
 	ErrSegmentNotFound       = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
 	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
 	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)

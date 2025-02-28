@@ -59,7 +59,7 @@ type WriterMessage struct {
 	Properties map[string]string
 }
 
-func marshalMessage(m *WriterMessage) ([]byte, error) {
+func MarshalMessage(m *WriterMessage) ([]byte, error) {
 	msgLayout := &pb.LogMessageLayout{
 		Payload:    m.Payload,
 		Properties: m.Properties,
@@ -71,7 +71,7 @@ func marshalMessage(m *WriterMessage) ([]byte, error) {
 	return data, nil
 }
 
-func unmarshalMessage(data []byte) (*LogMessage, error) {
+func UnmarshalMessage(data []byte) (*LogMessage, error) {
 	msgLayout := &pb.LogMessageLayout{}
 	err := proto.Unmarshal(data, msgLayout)
 	if err != nil {

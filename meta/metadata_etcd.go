@@ -146,7 +146,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if exists {
-		return werr.ErrCreateLogMetadata.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
+		return werr.ErrLogAlreadyExists.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 
 	// create a New Log with default Options
@@ -293,18 +293,22 @@ func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName
 	e.Lock()
 	defer e.Unlock()
 	if e.session == nil {
+		// keep a session for this metadata cli
 		newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(5))
 		if err != nil {
 			return err
 		}
 		e.session = newSession
 	}
+	// try lock if the lock already exists
 	if l, exists := e.logWriterLocks[logName]; exists {
 		return l.TryLock(ctx)
 	}
+	// create a new lock
 	lockKey := BuildLogLockKey(logName)
 	lock := concurrency.NewMutex(e.session, lockKey)
 	e.logWriterLocks[logName] = lock
+	//
 	return lock.TryLock(ctx)
 }
 
@@ -312,7 +316,7 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 	e.Lock()
 	defer e.Unlock()
 	if l, exists := e.logWriterLocks[logName]; exists {
-		e.logWriterLocks[logName] = nil
+		delete(e.logWriterLocks, logName)
 		return l.Unlock(ctx)
 	}
 	return nil

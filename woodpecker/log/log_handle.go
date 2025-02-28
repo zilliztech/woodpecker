@@ -30,6 +30,18 @@ type LogHandle interface {
 	GetLastRecordId(context.Context) (*LogMessageId, error)
 	// Truncate truncates the log to the specified offset.
 	Truncate(context.Context, int64) error
+	// GetNextSegmentId returns the next new segment ID for the log.
+	GetNextSegmentId() (int64, error)
+	// GetMetadataProvider returns the metadata provider instance.
+	GetMetadataProvider() meta.MetadataProvider
+	// GetOrCreateWritableSegmentHandle returns the writable segment handle for the log, means creating a new one
+	GetOrCreateWritableSegmentHandle(context.Context) (segment.SegmentHandle, error)
+	// GetExistsReadonlySegmentHandle returns the segment handle for the specified segment ID if it exists.
+	GetExistsReadonlySegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
+	// GetRecoverableSegmentHandle returns the segment handle for the specified segment ID if it exists and is in recovery state.
+	GetRecoverableSegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
+	// CloseAndCompleteCurrentWritableSegment closes and completes the current writable segment handle.
+	CloseAndCompleteCurrentWritableSegment(context.Context) error
 }
 
 var _ LogHandle = (*logHandleImpl)(nil)
@@ -80,13 +92,22 @@ func (l *logHandleImpl) GetName() string {
 	return l.Name
 }
 
+func (l *logHandleImpl) GetMetadataProvider() meta.MetadataProvider {
+	return l.Metadata
+}
+
 func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.SegmentMetadata, error) {
 	return l.SegmentsCache, nil
 }
 
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
+	acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
+	if acquireLockErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to acquire log writer lock for logName:%s", l.Name))
+		return nil, acquireLockErr
+	}
 	// getOrCreate writable segment handle
-	_, err := l.getOrCreateWritableSegmentHandle(ctx)
+	_, err := l.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +115,7 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	return NewLogWriter(ctx, l, l.cfg), nil
 }
 
-func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
 	l.Lock()
 	defer l.Unlock()
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
@@ -119,8 +140,8 @@ func (l *logHandleImpl) getOrCreateWritableSegmentHandle(ctx context.Context) (s
 }
 
 // getRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method
-func (l *logHandleImpl) getRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
-	s, err := l.getExistsReadonlySegmentHandle(ctx, segmentId)
+func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	s, err := l.GetExistsReadonlySegmentHandle(ctx, segmentId)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +161,7 @@ func (l *logHandleImpl) getRecoverableSegmentHandle(ctx context.Context, segment
 }
 
 // Deprecated
-func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	l.Lock()
 	defer l.Unlock()
 	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
@@ -180,7 +201,7 @@ func (l *logHandleImpl) getOrCreateReadonlySegmentHandle(ctx context.Context, se
 	return readableSegmentHandle, nil
 }
 
-func (l *logHandleImpl) getExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	l.Lock()
 	defer l.Unlock()
 	// get from cache directly
@@ -199,7 +220,7 @@ func (l *logHandleImpl) getExistsReadonlySegmentHandle(ctx context.Context, segm
 	// refresh meta and create handle
 	segMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
 	if err != nil && werr.ErrSegmentNotFound.Is(err) {
-		return nil, nil
+		return nil, err
 	}
 	if err != nil {
 		return nil, err
@@ -286,7 +307,7 @@ func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentM
 
 func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	// construct new segment metadata
-	segmentNo, err := l.getNextSegmentId()
+	segmentNo, err := l.GetNextSegmentId()
 	if err != nil {
 		return nil, err
 	}
@@ -311,8 +332,8 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	return newSegmentMeta, nil
 }
 
-// getNextSegmentId get the next id according to max seq No
-func (l *logHandleImpl) getNextSegmentId() (int64, error) {
+// GetNextSegmentId get the next id according to max seq No
+func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 	// refresh meta
 	maxSeqNo := int64(-1)
 	for _, seg := range l.SegmentsCache {

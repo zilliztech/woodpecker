@@ -2,13 +2,16 @@ package log
 
 import (
 	"context"
-	"github.com/zilliztech/woodpecker/common/config"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 type LogWriter interface {
@@ -29,11 +32,12 @@ type LogWriter interface {
 	Close(context.Context) error
 }
 
-func NewLogWriter(ctx context.Context, logHandle *logHandleImpl, cfg *config.Configuration) LogWriter {
+func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
 	w := &logWriterImpl{
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
 		cfg:                cfg,
+		writerClose:        make(chan struct{}, 1),
 	}
 	go w.runAuditor()
 	return w
@@ -43,7 +47,7 @@ var _ LogWriter = (*logWriterImpl)(nil)
 
 type logWriterImpl struct {
 	sync.RWMutex
-	logHandle          *logHandleImpl
+	logHandle          LogHandle
 	auditorMaxInterval int
 	cfg                *config.Configuration
 	writerClose        chan struct{}
@@ -61,12 +65,12 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 		}
 		close(ch)
 	}
-	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		callback(-1, -1, err)
 		return <-ch
 	}
-	bytes, err := marshalMessage(msg)
+	bytes, err := MarshalMessage(msg)
 	if err != nil {
 		return &WriteResult{
 			LogMessageId: nil,
@@ -93,15 +97,15 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 		// maybe let the caller decide when to close the channel, because the server view retry automatically?
 		close(ch)
 	}
-	writableSegmentHandle, err := l.logHandle.getOrCreateWritableSegmentHandle(ctx)
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.Name), zap.Error(err))
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
-	bytes, err := marshalMessage(msg)
+	bytes, err := MarshalMessage(msg)
 	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.Name), zap.Error(err))
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
@@ -117,12 +121,12 @@ func (l *logWriterImpl) runAuditor() {
 		case <-ticker.C:
 			segs, err := l.logHandle.GetSegments(context.TODO())
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Error(err))
+				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 				continue
 			}
-			nextSegId, err := l.logHandle.getNextSegmentId()
+			nextSegId, err := l.logHandle.GetNextSegmentId()
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Error(err))
+				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 				continue
 			}
 			for _, seg := range segs {
@@ -130,20 +134,20 @@ func (l *logWriterImpl) runAuditor() {
 					// last segment maybe in-progress, no need to recover it
 					continue
 				}
-				recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.getRecoverableSegmentHandle(context.TODO(), seg.SegNo)
+				recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
 				if getRecoverySegmentHandleErr != nil {
-					logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
+					logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
 					continue
 				}
 				maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
 				if err != nil {
-					logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
+					logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
 					continue
 				}
-				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.Name), zap.Int64("segId", seg.SegNo))
+				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo))
 			}
 		case <-l.writerClose:
-			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.Name))
+			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()))
 		}
 	}
 }
@@ -156,7 +160,18 @@ func (l *logWriterImpl) Truncate(ctx context.Context, id *LogMessageId) error {
 func (l *logWriterImpl) Close(ctx context.Context) error {
 	l.writerClose <- struct{}{}
 	close(l.writerClose)
-	return l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
+	closeErr := l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
+	if closeErr != nil {
+		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Error(closeErr))
+		if werr.ErrSegmentNotFound.Is(closeErr) {
+			closeErr = nil
+		}
+	}
+	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
+	if releaseLockErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()))
+	}
+	return errors.Join(closeErr, releaseLockErr)
 }
 
 type WriteResult struct {

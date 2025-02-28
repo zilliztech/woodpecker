@@ -22,7 +22,7 @@ type LogReader interface {
 	Close(context.Context) error
 }
 
-func NewLogReader(ctx context.Context, logHandle *logHandleImpl, segmentHandle segment.SegmentHandle, from *LogMessageId) LogReader {
+func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId) LogReader {
 	return &logReaderImpl{
 		logHandle:            logHandle,
 		from:                 from,
@@ -35,7 +35,7 @@ func NewLogReader(ctx context.Context, logHandle *logHandleImpl, segmentHandle s
 var _ LogReader = (*logReaderImpl)(nil)
 
 type logReaderImpl struct {
-	logHandle *logHandleImpl
+	logHandle LogHandle
 	from      *LogMessageId
 
 	pendingReadSegmentId int64
@@ -57,7 +57,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			l.pendingReadSegmentId = segId
 			l.pendingReadEntryId = entryId
 			logger.Ctx(ctx).Debug("no segment to read, sleep 200ms.",
-				zap.String("logName", l.logHandle.Name),
+				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId))
 			// TODO sleep backoff sleep(200ms)
@@ -74,7 +74,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// 2.1) if next segment exists, indicate that current segment is completed in fact
-			nextSegExists, checkErr := l.logHandle.Metadata.CheckSegmentExists(ctx, l.logHandle.Name, segId+1)
+			nextSegExists, checkErr := l.logHandle.GetMetadataProvider().CheckSegmentExists(ctx, l.logHandle.GetName(), segId+1)
 			if checkErr == nil && nextSegExists {
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
@@ -82,7 +82,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2.2) if no next segment exists, just wait and read again
 			logger.Ctx(ctx).Debug("no entry to read, sleep 200ms.",
-				zap.String("logName", l.logHandle.Name),
+				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId))
 			time.Sleep(1000 * time.Millisecond)
@@ -98,7 +98,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		l.pendingReadSegmentId = entries[0].SegmentId
 		l.pendingReadEntryId = entries[0].EntryId + 1
 		l.currentSegmentHandle = segHandle
-		logMsg, err := unmarshalMessage(entries[0].Data)
+		logMsg, err := UnmarshalMessage(entries[0].Data)
 		if err != nil {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
@@ -130,7 +130,7 @@ func (l *logReaderImpl) getNextSegHandleAndIDs() (segment.SegmentHandle, int64, 
 		}
 	}
 	// if pendingSegId is future segmentId, just return
-	latestSegmentId, err := l.logHandle.getNextSegmentId()
+	latestSegmentId, err := l.logHandle.GetNextSegmentId()
 	if err != nil {
 		return nil, -1, -1, err
 	}
@@ -141,8 +141,8 @@ func (l *logReaderImpl) getNextSegHandleAndIDs() (segment.SegmentHandle, int64, 
 	nextSegmentId := l.pendingReadSegmentId
 	nextEntryId := l.pendingReadEntryId
 	for {
-		segHandle, err := l.logHandle.getExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
-		if err != nil {
+		segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
+		if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 			return nil, -1, -1, err
 		}
 		if segHandle != nil {
@@ -168,7 +168,7 @@ func (l *logReaderImpl) getNextSegHandleAndIDs() (segment.SegmentHandle, int64, 
 	}
 
 	// move to next future segment, if no exists segment to read
-	nextSegmentId, err = l.logHandle.getNextSegmentId()
+	nextSegmentId, err = l.logHandle.GetNextSegmentId()
 	if err != nil {
 		return nil, -1, -1, err
 	}
