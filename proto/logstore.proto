@@ -1,0 +1,83 @@
+/**
+ * LogStore Client
+ */
+syntax = "proto3";
+
+
+package woodpecker.proto.logstore;
+
+option go_package = "github.com/zilliztech/woodpecker/proto";
+
+
+/**
+ * LogStore service.
+ */
+service LogStore {
+  /**
+   * Add a new entry to the log store
+   */
+  rpc AddEntry(AddEntryRequest) returns (AddEntryResponse);
+
+  /**
+   * Read an entry from the log store
+   */
+  rpc ReadEntry(ReadEntryRequest) returns (ReadEntryResponse);
+}
+
+message AddEntryRequest {
+  bytes value = 1;
+}
+
+message AddEntryResponse {
+  Status status = 1;
+  optional int64 segId = 2;
+  optional int64 entryId = 3;
+}
+
+message ReadEntryRequest {
+  int64 segId = 1;
+  int64 entryId = 2;
+}
+
+message ReadEntryResponse {
+  Status status = 1;
+  optional LogEntry entry = 2;
+}
+
+message LogEntry {
+  int64 segId = 1;
+  int64 entryId = 2;
+  bytes values = 3;
+}
+
+message LogMessageIdData{
+  int64 segId = 1;
+  int64 entryId = 2;
+}
+
+message LogMessageLayout{
+  bytes payload = 1;
+  map<string, string> properties = 2;
+}
+
+
+/**
+ * Represents all the possible status.
+ */
+enum Status {
+  // Operation was successful
+  OK = 0;
+  // The entry was not found
+  ENTRY_NOT_FOUND = 1;
+  // The existing version does not match the expected version
+  UNEXPECTED_VERSION_ID = 2;
+  // The session that the put request referred to is not alive
+  SESSION_DOES_NOT_EXIST = 3;
+}
+
+
+
+
+
+
+
