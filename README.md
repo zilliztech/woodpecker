@@ -8,9 +8,9 @@
 
 With its **high-throughput writes, ordered durability guarantees, and efficient reads**, Woodpecker provides a lightweight yet powerful solution for cloud-native logging.
 
-
 ### **Use Cases**
-Woodpecker is suitable for **high-throughput, ordered, and durable log storage** scenarios, including:
+Although Woodpecker is initially built for vectordatabase use case [Milvus](https://milvus.io/) and [Zilliz Cloud](https://zilliz.com/), we believe it has strong potential to serve multiple different workloads on cloud. Woodpecker is suitable for **high-throughput, ordered, and durable log storage** scenarios, including:
+
 - **Distributed WAL for databases** – Ensuring write-ahead logging with strict ordering and persistence.
 - **Streaming and event sourcing** – Providing a durable event log for stream processing frameworks.
 - **Consensus protocols** – Serving as a persistent log for distributed consensus algorithms (e.g., Raft, Paxos).
