@@ -156,7 +156,7 @@ logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
 		panic(openReaderErr)
 	}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
+	// iterate through all data logReader.ReadNext(context.Background())
 	for {
 		msg, err := logReader.ReadNext(context.Background())
 		if err == nil {
