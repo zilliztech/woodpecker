@@ -193,7 +193,7 @@ func (s *segmentProcessor) getInstanceBucket() string {
 }
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {
-	return fmt.Sprintf("woodpecker/%d/%d", s.logId, s.segId)
+	return fmt.Sprintf("%s/%d/%d", s.cfg.Woodpecker.Meta.Prefix, s.logId, s.segId)
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
