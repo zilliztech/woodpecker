@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,10 +112,11 @@ func TestMinioWritePerformance(t *testing.T) {
 	assert.NoError(t, err)
 	payloadStaticData, err := generateRandomBytes(TEST_OBJECT_SIZE) //
 	concurrentCh := make(chan int, 1)                               // 1 concurrency
-
+	wg := sync.WaitGroup{}
 	for i := 0; i < TEST_COUNT; i++ {
 		concurrentCh <- 1
 		objectId := i
+		wg.Add(1)
 		go func(ch chan int) {
 			start := time.Now()
 			_, putErr := minioCli.PutObject(
@@ -128,9 +130,11 @@ func TestMinioWritePerformance(t *testing.T) {
 			cost := time.Now().Sub(start)
 			//fmt.Printf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
 			<-ch
+			wg.Done()
 			MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
 			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}(concurrentCh)
 	}
+	wg.Wait()
 	fmt.Printf("Test Minio Finish \n")
 }

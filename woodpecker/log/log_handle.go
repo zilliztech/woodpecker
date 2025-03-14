@@ -3,9 +3,10 @@ package log
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -148,13 +149,6 @@ func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segment
 	if s == nil {
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment not found for logName:%s segmentId:%d,it may have been deleted", l.Name, segmentId))
 	}
-	// set recoverable
-	segMeta := s.GetMetadata(ctx)
-	segMeta.State = proto.SegmentState_InRecovery
-	err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMeta)
-	if err != nil {
-		return nil, err
-	}
 
 	//
 	return s, nil
@@ -266,17 +260,17 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("start to fence segment",
-		zap.String("logName", l.Name),
-		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
+	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	err = oldSegmentHandle.Fence(ctx)
 	if err != nil {
 		return nil, err
 	}
+	lac, err := oldSegmentHandle.GetLastAddConfirmed(ctx)
+	if err == nil {
+		logger.Ctx(ctx).Debug("fence segment finish", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)), zap.Int64("lastAddConfirmed", lac))
+	}
 
-	logger.Ctx(ctx).Debug("request segment compaction",
-		zap.String("logName", l.Name),
-		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
+	logger.Ctx(ctx).Debug("request segment compaction", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 2. select one logStore to async compact segment
 	err = oldSegmentHandle.RequestCompactionAsync(ctx)
 	if err != nil {

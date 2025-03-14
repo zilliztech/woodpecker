@@ -90,7 +90,7 @@ func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objec
 // Like OS file fsync dirty pageCache periodically, objectStoreFile will sync buffer to object storage periodically
 func (f *LogFile) run() {
 	// time ticker
-	ticker := time.NewTicker(time.Duration(f.maxIntervalMs / 4 * int(time.Millisecond)))
+	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	f.lastSync.Store(time.Now().UnixMilli())
 	for {
@@ -106,6 +106,7 @@ func (f *LogFile) run() {
 					zap.Int64("logFileId", f.id),
 					zap.Error(err))
 			}
+			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 		case <-f.fileClose:
 			err := f.Sync(context.Background())
 			if err != nil {
