@@ -4,14 +4,20 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 var (
 	_globalLevelLogger sync.Map
+	_globalLogger      atomic.Value
+	initLogOnce        sync.Once
 )
 
 func init() {
@@ -25,6 +31,17 @@ func init() {
 		}
 		_globalLevelLogger.Store(level, levelLogger)
 	}
+}
+
+func InitLogger(cfg *config.Configuration) {
+	initLogOnce.Do(func() {
+		logLevel := cfg.Log.Level
+		if len(logLevel) == 0 {
+			logLevel = "info"
+		}
+		v, _ := _globalLevelLogger.Load(logLevel)
+		_globalLogger.Store(v)
+	})
 }
 
 func debugLogger() *zap.Logger {
@@ -56,15 +73,16 @@ func Ctx(ctx context.Context) *zap.Logger {
 		return logger.(*zap.Logger)
 	}
 	level := ctx.Value("__LogLevel__")
-	if level == nil {
-		return warnLogger()
+	if level != nil {
+		if l, ok := _globalLevelLogger.Load(level); ok {
+			return l.(*zap.Logger)
+		}
 	}
-	logger, ok := _globalLevelLogger.Load(level)
-	if !ok {
-		return warnLogger()
+	l := _globalLogger.Load()
+	if l != nil {
+		return l.(*zap.Logger)
 	}
-	context.WithValue(ctx, "__Logger__", logger)
-	return logger.(*zap.Logger)
+	return warnLogger()
 }
 
 // NewLogger creates a new logger with the specified log level
@@ -86,11 +104,17 @@ func newLogger(level string) (*zap.Logger, error) {
 	default:
 		return nil, werr.ErrConfigError.WithCauseErrMsg(fmt.Sprintf("invalid log level: %s", level))
 	}
-
-	logger, err := config.Build(zap.AddCallerSkip(1))
+	// default text encoder
+	config.Encoding = "console"
+	config.EncoderConfig.EncodeTime = customTimeEncoder
+	logger, err := config.Build()
 	if err != nil {
 		return nil, err
 	}
 
 	return logger, nil
+}
+
+func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+	enc.AppendString(t.Format("2006-01-02 15:04:05.000")) // custom time format
 }

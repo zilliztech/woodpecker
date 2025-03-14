@@ -36,7 +36,6 @@ type LogStore interface {
 var _ LogStore = (*logStore)(nil)
 
 type logStore struct {
-	sync.RWMutex
 	cfg      *config.Configuration
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -44,6 +43,7 @@ type logStore struct {
 	minioCli minioHandler.MinioHandler
 	address  string
 
+	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]segment.SegmentProcessor
 }
 
@@ -94,7 +94,7 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 		return -1, nil, err
 	}
 	if segmentProcessor.IsFenced() {
-		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
+		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced, reject add entry:%d", logId, entry.SegmentId, entry.EntryId))
 	}
 	entryId, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
@@ -108,8 +108,8 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 }
 
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
-	l.Lock()
-	defer l.Unlock()
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
 	segProcessors := make(map[int64]segment.SegmentProcessor)
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		segProcessors = processors
@@ -124,6 +124,8 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 }
 
 func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segment.SegmentProcessor {
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		if processor, segExists := processors[segmentId]; segExists {
 			return processor

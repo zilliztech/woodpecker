@@ -4,11 +4,12 @@ import (
 	"container/list"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -203,12 +204,12 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed {
-			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks not compeleted by: %d \n", op.entryId))
+			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not completed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 		// Check if it is the next entry in the sequence.
 		if op.entryId != s.lastAddConfirmed.Load()+1 {
-			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks not the next lac by: %d \n", op.entryId))
+			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not the next lac", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 
@@ -217,14 +218,13 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
 		s.commitedSize.Add(int64(len(op.value)))
-		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("current Segment %d size %d commitedSize %d \n", s.segmentMetaCache.SegNo, s.GetSize(context.TODO()), s.commitedSize.Load()))
 		// callback
 		op.callback(op.segmentId, op.entryId, nil)
 	}
 	for _, element := range elementsToRemove {
-		logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks remove: %v \n", element))
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
+		logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks remove", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
@@ -234,7 +234,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
-	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId), zap.Error(err))
+	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
 
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
@@ -267,14 +267,14 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		op := element.Value.(*AppendOp)
 		if op.entryId == triggerEntryId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
+			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 			continue
 		}
 		if op.entryId < minRemoveId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
+			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 		} else {
-			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId))
+			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
 			elementsToRemove = append(elementsToRemove, element)
 		}
 	}
@@ -285,7 +285,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		element := e
 		op := element.Value.(*AppendOp)
 		if op.entryId > minRemoveId {
-			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId))
+			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
 			elementsToRemove = append(elementsToRemove, element)
 		}
 	}
@@ -294,7 +294,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		op.callback(s.segmentMetaCache.SegNo, op.entryId, err)
-		logger.Ctx(context.Background()).Debug("append fail after retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", triggerEntryId))
+		logger.Ctx(context.Background()).Debug("append fail after retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
@@ -504,6 +504,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	}
 	// only one recovery operation at the same time
 	if s.doingRecoveryOrCompact.Load() {
+		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo))
 		return nil
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
@@ -541,7 +542,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
 
-	logger.Ctx(ctx).Info("compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentMetaCache.SegNo))
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentMetaCache.SegNo))
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		return err
@@ -567,6 +568,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	s.segmentMetaCache.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
 	s.segmentMetaCache.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.segmentMetaCache)
+	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
 	return updateMetaErr
 }
 

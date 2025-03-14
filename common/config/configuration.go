@@ -215,7 +215,6 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 			return nil, err
 		}
 	}
-
 	return config, nil
 }
 

@@ -25,8 +25,8 @@ func (se *SequentialExecutor) Start() {
 // worker executes the logic for each order
 func (se *SequentialExecutor) worker() {
 	for appendOp := range se.appendOpsQueue {
-		se.wg.Done()
 		appendOp.Execute()
+		se.wg.Done()
 	}
 }
 
@@ -38,6 +38,6 @@ func (se *SequentialExecutor) Submit(op *AppendOp) {
 
 // Stop stops the sequential append executor
 func (se *SequentialExecutor) Stop() {
-	se.wg.Wait()
 	close(se.appendOpsQueue)
+	se.wg.Wait()
 }

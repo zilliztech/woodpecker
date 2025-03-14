@@ -58,10 +58,8 @@ func (op *AppendOp) Execute() {
 }
 
 func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex int) {
-	//fmt.Printf("send  %d request to server:%d \n", op.entryId, serverIndex)
 	// order request
 	entryId, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
-	// TODO to improve goroutines, maybe use chan or callback instead
 	// async received ack without order
 	go op.receivedAckCallback(entryId, syncedCh, err, serverIndex)
 }
@@ -70,7 +68,7 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
-		op.handle.SendAppendErrorCallbacks(entryId, err)
+		op.handle.SendAppendErrorCallbacks(op.entryId, err)
 		return
 	}
 	// async call error, wait until syncedCh closed
@@ -83,14 +81,14 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 			}
 			if syncedId == -1 {
 				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-				op.handle.SendAppendErrorCallbacks(entryId, werr.ErrSegmentWriteException)
+				op.handle.SendAppendErrorCallbacks(op.entryId, werr.ErrSegmentWriteException)
 				return
 			}
-			if syncedId != -1 && syncedId >= entryId {
+			if syncedId != -1 && syncedId >= op.entryId {
 				op.ackSet.Set(serverIndex)
 				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
 					op.completed = true
-					op.handle.SendAppendSuccessCallbacks(entryId)
+					op.handle.SendAppendSuccessCallbacks(op.entryId)
 				}
 				return
 			}
