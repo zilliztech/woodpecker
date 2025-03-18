@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -116,7 +118,7 @@ func (f *LogFile) run() {
 					zap.Error(err))
 			}
 			f.sealed.Store(true)
-			ReleaseFragments(context.Background(), f.fragments)
+			releaseFragments(context.Background(), f.fragments)
 			return
 		}
 	}
@@ -171,18 +173,7 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 
 // Deprecated: use AppendAsync instead
 func (f *LogFile) Append(ctx context.Context, data []byte) error {
-	//f.mu.Lock()
-	//defer f.mu.Unlock()
-	//
-	//offset := f.LastOffset() + 1
-	//key := f.getFragmentKey(offset)
-	//fragment := NewObjectStorageFragment(f.client, f.bucket, key, 0)
-	//err := fragment.Write(ctx, data)
-	//if err != nil {
-	//	return err
-	//}
-	//f.fragments = append(f.fragments, fragment)
-	return nil
+	panic("not support sync append, it's too slow")
 }
 
 func (f *LogFile) getFragmentKey(fragmentId uint64) string {
@@ -208,16 +199,24 @@ func (f *LogFile) getFragment(entryId int64) (*FragmentObject, error) {
 	// try next fragment which has been uploaded in objectStorage
 	nextFragmentId := f.LastFragmentId() + 1
 	nextFragmentKey := f.getFragmentKey(nextFragmentId)
+
+	// if the next fragment already cached
+	if cachedFrag, cached := cache.GetCachedFragment(context.TODO(), nextFragmentKey); cached {
+		return cachedFrag.(*FragmentObject), nil
+	}
+
+	// if the next fragment exists in objectStorage
 	exists, err := f.objectExists(context.Background(), nextFragmentKey)
 	if err != nil {
 		return nil, err
 	}
-
 	if exists {
-		fragment := NewFragmentObject(f.client, f.bucket, nextFragmentId, nextFragmentKey, nil, 0, false, true)
+		fragment := NewFragmentObject(f.client, f.bucket, nextFragmentId, nextFragmentKey, nil, 0, false, true, false)
 		f.fragments = append(f.fragments, fragment)
 		return fragment, nil
 	}
+
+	//
 	return nil, nil
 }
 
@@ -274,7 +273,7 @@ func (f *LogFile) GetLastEntryId() (int64, error) {
 	}
 
 	lastFrag := f.fragments[len(f.fragments)-1]
-	if !lastFrag.loaded {
+	if !lastFrag.dataLoaded {
 		err := lastFrag.Load(context.Background())
 		if err != nil {
 			logger.Ctx(context.TODO()).Warn("get last entryId failed",
@@ -334,7 +333,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			fragId := lastFragmentId + 1 + uint64(i) // fragment id
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 			key := f.getFragmentKey(fragId)
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, partition, partitionFirstEntryIds[i], true, false)
+			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, partition, partitionFirstEntryIds[i], true, false, true)
 			err = retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -344,6 +343,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			)
 			if err != nil {
 				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(err))
+			} else {
+				fragment.dataUploaded = true
 			}
 			flushResultCh <- &flushResult{
 				target: fragment,
@@ -375,6 +376,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		} else {
 			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
 			successFrags = append(successFrags, r.target)
+			cacheErr := cache.AddCacheFragment(ctx, r.target)
+			logger.Ctx(ctx).Warn("add fragment to cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Error(cacheErr))
 		}
 	}
 	f.fragments = append(f.fragments, successFrags...)
@@ -477,6 +480,14 @@ func (f *LogFile) prefetchFragmentInfos() {
 	}
 	for {
 		fragKey := f.getFragmentKey(fragId)
+		// check if the fragment is already cached
+		if frag, cached := cache.GetCachedFragment(context.TODO(), fragKey); cached {
+			f.fragments = append(f.fragments, frag.(*FragmentObject))
+			fragId++
+			continue
+		}
+
+		// check if the fragment exists in object storage
 		exists, err := f.objectExists(context.Background(), fragKey)
 		if err != nil {
 			// indicates that the prefetching of fragments has completed.
@@ -484,10 +495,11 @@ func (f *LogFile) prefetchFragmentInfos() {
 			return
 		}
 		if exists {
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true)
+			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true, false)
 			f.fragments = append(f.fragments, fragment)
 			fragId++
 		} else {
+			// no more fragment exists, cause the id sequence is broken
 			break
 		}
 	}
@@ -496,6 +508,7 @@ func (f *LogFile) prefetchFragmentInfos() {
 func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := time.Now()
 	// TODO should be config
 	// file max size, default 128MB
 	fileMaxSize := 128_000_000
@@ -504,6 +517,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 	entryOffset := make([]int32, 0)
 	fragmentIdOffset := make([]int32, 0)
 
+	totalMergeSize := 0
 	pendingMergeSize := 0
 	pendingMergeFrags := make([]*FragmentObject, 0)
 	// load all fragment in memory
@@ -516,7 +530,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 		pendingMergeSize += len(frag.entriesData) + len(frag.indexes)
 		if pendingMergeSize >= fileMaxSize {
 			// merge immediately
-			mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 			if mergeErr != nil {
 				return nil, nil, nil, mergeErr
 			}
@@ -525,12 +539,13 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 			entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 			pendingMergeFrags = make([]*FragmentObject, 0)
+			totalMergeSize += pendingMergeSize
 			pendingMergeSize = 0
 		}
 	}
 	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
 		// merge immediately
-		mergedFrag, mergeErr := MergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
 		if mergeErr != nil {
 			return nil, nil, nil, mergeErr
 		}
@@ -539,8 +554,12 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 		entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 		pendingMergeFrags = make([]*FragmentObject, 0)
+		totalMergeSize += pendingMergeSize
 		pendingMergeSize = 0
 	}
+	cost := time.Now().Sub(start)
+	metrics.WpCompactReqLatency.WithLabelValues(fmt.Sprintf("%d", f.id)).Observe(float64(cost.Milliseconds()))
+	metrics.WpCompactBytes.WithLabelValues(fmt.Sprintf("%d", f.id)).Observe(float64(totalMergeSize))
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
@@ -550,20 +569,30 @@ func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	if len(f.fragments) == 0 {
 		return 0, nil, nil
 	}
-	// TODO load fragment meta index only
 	totalSize := 0
-	for _, frag := range f.fragments {
+	cachedList := make(map[int]storage.Fragment)
+	for fid, frag := range f.fragments {
+		// if the fragment is already cached, use it later
+		if cachedFrag, cached := cache.GetCachedFragment(ctx, frag.GetFragmentKey()); cached {
+			cachedList[fid] = cachedFrag
+			cf := cachedFrag.(*FragmentObject)
+			totalSize += len(cf.entriesData) + len(cf.indexes)
+			continue
+		}
+		// otherwise, load from object storage
 		loadFragErr := frag.Load(ctx)
 		if loadFragErr != nil {
 			return 0, nil, loadFragErr
 		}
 		totalSize += len(frag.entriesData) + len(frag.indexes)
 	}
-	lastFragment := f.fragments[len(f.fragments)-1]
-	loadFragErr := lastFragment.Load(ctx)
-	if loadFragErr != nil {
-		return 0, nil, loadFragErr
+	// replace with cached fragment
+	for fid, frag := range cachedList {
+		f.fragments[fid] = frag.(*FragmentObject)
 	}
+
+	//
+	lastFragment := f.fragments[len(f.fragments)-1]
 	return int64(totalSize), lastFragment, nil
 }
 

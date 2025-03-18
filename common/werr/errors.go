@@ -99,6 +99,8 @@ const (
 	SegmentWriteException
 	// FragmentEmpty indicates that the fragment is empty.
 	FragmentEmpty
+	// FragmentNotFound indicates that the fragment is not found.
+	FragmentNotFound
 	// FragmentNotUploaded indicates that the fragment is not uploaded.
 	FragmentNotUploaded
 	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
@@ -135,6 +137,7 @@ var (
 
 	// LogFile related
 	ErrFragmentEmpty       = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
+	ErrFragmentNotFound    = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
 	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
 	//

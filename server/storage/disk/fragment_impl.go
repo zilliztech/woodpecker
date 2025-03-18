@@ -33,6 +33,21 @@ type FragmentFile struct {
 	fragmentSize    int    // total size of the fragment file
 }
 
+func (ff *FragmentFile) GetFragmentKey() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetFragmentId() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ff *FragmentFile) GetSize() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
 // NewFileFragment initializes a new FragmentFile.
 func NewFileFragment(basePath string, fileStartOffset uint64, fragmentSize int) (*FragmentFile, error) {
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
