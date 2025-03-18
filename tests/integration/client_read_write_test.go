@@ -156,7 +156,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 	fmt.Println("Test Read finished")
 }
 
-func TestReadTheWriteLoop(t *testing.T) {
+func TestReadWriteLoop(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)

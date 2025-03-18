@@ -19,52 +19,40 @@ func TestE2EWrite(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
-	}
+	assert.NoError(t, err)
 
 	// ###  CreateLog if not exists
 	client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
 
 	// ### OpenLog
 	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
+	assert.NoError(t, openErr)
 	logHandle.GetName()
 
 	//	### OpenWriter
 	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-	if openWriterErr != nil {
-		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
-		panic(openWriterErr)
-	}
+	assert.NoError(t, openWriterErr)
 	writeResultChan := logWriter.WriteAsync(context.Background(),
 		&log.WriterMessage{
 			Payload: []byte("hello world 1"),
 		},
 	)
 	writeResult := <-writeResultChan
-	if writeResult.Err != nil {
-		fmt.Println(writeResult.Err)
-		panic(writeResult.Err)
-	}
+	assert.NoError(t, writeResult.Err)
 	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-	//writeResult = logWriter.Write(context.Background(), []byte("hello world 2"))
-	//if writeResult.Err != nil {
-	//	fmt.Println(writeResult.Err)
-	//	panic(writeResult.Err)
-	//}
-	//fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
+
+	err = logWriter.Close(context.Background())
+	assert.NoError(t, err)
+	err = client.Close()
+	assert.NoError(t, err)
 }
 
 func TestAsyncWritePerformance(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
-	entrySize := 1 * 1024    // 1KB per row
-	batchCount := 16_000     // 64MB per batch to wait or retry if any failed exists
-	writeCount := 10_000_000 // total 10M rows to write
+	entrySize := 2_000_000 // 2MB per row
+	batchCount := 20       // 64MB per batch to wait or retry if any failed exists
+	writeCount := 5_000    // total 5k rows to write, 5k*2MB=10GB
 
 	// ### Create client
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -117,7 +105,7 @@ func TestAsyncWritePerformance(t *testing.T) {
 		if len(writingMessages)%batchCount == 0 { // wait 64000 entries or 64MB to completed
 			fmt.Printf("start wait for %d entries\n", len(writingMessages))
 			for idx, ch := range writingResultChan {
-				writeResult := <-ch // TODO， 这个chan不应该是segment暴露出来的，而是writer的chan，因为segment可能会fence 滚动
+				writeResult := <-ch
 				if writeResult.Err != nil {
 					fmt.Printf(writeResult.Err.Error())
 					failMessages = append(failMessages, writingMessages[idx])
@@ -213,22 +201,24 @@ func TestReadThroughput(t *testing.T) {
 		panic(openReaderErr)
 	}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
+	// read loop
 	for {
 		msg, err := logReader.ReadNext(context.Background())
 		if err != nil {
 			fmt.Printf("read failed, err:%v\n", err)
-			panic(err)
+			t.Error(err)
+			break
 		} else {
 			fmt.Printf("read success, msg:%v\n", msg)
 		}
 	}
-
-	fmt.Printf("Test Read finished\n")
+	fmt.Println("Test Read finished")
 }
 
 func TestReadFromEarliest(t *testing.T) {
 	startGopsAgent()
+	startMetrics()
+	startReporting()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
@@ -251,23 +241,26 @@ func TestReadFromEarliest(t *testing.T) {
 		panic(openReaderErr)
 	}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
+	// read loop
 	totalEntries := 0
 	for {
+		start := time.Now()
 		msg, err := logReader.ReadNext(context.Background())
 		if err != nil {
 			fmt.Printf("read failed, err:%v\n", err)
 			break
 		} else {
-			fmt.Printf("read success, msg:%v\n", msg)
+			//fmt.Printf("read success, msg:%v\n", msg)
+			cost := time.Now().Sub(start)
+			MinioIOBytes.WithLabelValues("0").Observe(float64(len(msg.Payload)))
+			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}
 		totalEntries += 1
-		if totalEntries%10000 == 0 {
-			fmt.Printf(" read %d success, the msg:%v \n", totalEntries, msg)
+		if totalEntries%10 == 0 {
+			fmt.Printf(" read %d success, the msg(seg:%d,entry:%d) \n", totalEntries, msg.Id.SegmentId, msg.Id.EntryId)
 		}
 	}
 	fmt.Printf("final read %d success \n", totalEntries)
-
 	fmt.Printf("Test Read finished\n")
 }
 
@@ -337,16 +330,17 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 		panic(openReaderErr)
 	}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
+	// read loop
 	for {
 		msg, err := logReader.ReadNext(context.Background())
 		if err != nil {
 			fmt.Printf("read failed, err:%v\n", err)
 			t.Error(err)
+			break
 		} else {
 			fmt.Printf("read success, msg:%v\n", msg)
 		}
 	}
 
-	fmt.Printf("Test Read finished\n")
+	fmt.Println("Test Read finished")
 }

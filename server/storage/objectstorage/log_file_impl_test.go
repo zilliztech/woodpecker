@@ -924,7 +924,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	err := logFile.Sync(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(logFile.fragments))
-	mockData, err := SerializeFragment(logFile.fragments[0])
+	mockData, err := serializeFragment(logFile.fragments[0])
 	assert.NoError(t, err)
 
 	// mock read 1.frag data
@@ -1028,7 +1028,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		frag1Data, err := SerializeFragment(logFile.fragments[0])
+		frag1Data, err := serializeFragment(logFile.fragments[0])
 		assert.NoError(t, err)
 		// fragment 1 data
 		client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything).Return(bytes.NewReader(frag1Data), int64(len(frag1Data)), nil)

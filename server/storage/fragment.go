@@ -6,6 +6,8 @@ import (
 
 // Fragment interface defines Read and Write operations.
 type Fragment interface {
+	GetFragmentId() int64
+	GetFragmentKey() string
 	Flush(ctx context.Context) error
 	Load(ctx context.Context) error
 	GetLastEntryId() (int64, error)
@@ -13,6 +15,7 @@ type Fragment interface {
 	GetLastEntryIdDirectly() int64
 	GetLastModified() int64
 	GetEntry(entryId int64) ([]byte, error)
+	GetSize() int64
 	Release() error
 }
 

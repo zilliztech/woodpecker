@@ -14,6 +14,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 type LogStore interface {
@@ -36,12 +37,13 @@ type LogStore interface {
 var _ LogStore = (*logStore)(nil)
 
 type logStore struct {
-	cfg      *config.Configuration
-	ctx      context.Context
-	cancel   context.CancelFunc
-	etcdCli  *clientv3.Client
-	minioCli minioHandler.MinioHandler
-	address  string
+	cfg             *config.Configuration
+	ctx             context.Context
+	cancel          context.CancelFunc
+	etcdCli         *clientv3.Client
+	minioCli        minioHandler.MinioHandler
+	address         string
+	fragmentManager cache.FragmentManager
 
 	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]segment.SegmentProcessor
@@ -49,24 +51,35 @@ type logStore struct {
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
+	fragmentMgr := cache.GetInstance(1_000_000_000, 1_000)
 	return &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
 		minioCli:          minioCli,
+		fragmentManager:   fragmentMgr,
 		segmentProcessors: make(map[int64]map[int64]segment.SegmentProcessor),
 	}
 }
 
 func (l *logStore) Start() error {
-	// TODO start service
-	// register to etcd and keep alive
-	registerErr := l.Register(context.Background())
-	return registerErr
+	err := l.Register(context.Background())
+	if err != nil {
+		return err
+	}
+	err = l.fragmentManager.StartEvictionLoop(1 * time.Second)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 func (l *logStore) Stop() error {
 	l.cancel()
+	err := l.fragmentManager.StopEvictionLoop()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -84,6 +97,7 @@ func (l *logStore) SetEtcdClient(etcdCli *clientv3.Client) {
 
 func (l *logStore) Register(ctx context.Context) error {
 	// register this node to etcd and keep alive
+	// TODO
 	return nil
 }
 
