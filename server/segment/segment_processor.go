@@ -123,6 +123,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 }
 
 func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {
+	// TODO should cache reader for each open reader
 	logFileReader, err := s.getOrCreateLogFileReader(ctx, entryId)
 	if err != nil {
 		return nil, err

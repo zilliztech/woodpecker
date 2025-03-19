@@ -243,6 +243,7 @@ func TestReadFromEarliest(t *testing.T) {
 
 	// read loop
 	totalEntries := 0
+	totalBytes := 0
 	for {
 		start := time.Now()
 		msg, err := logReader.ReadNext(context.Background())
@@ -255,9 +256,10 @@ func TestReadFromEarliest(t *testing.T) {
 			MinioIOBytes.WithLabelValues("0").Observe(float64(len(msg.Payload)))
 			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}
+		totalBytes += len(msg.Payload)
 		totalEntries += 1
-		if totalEntries%10 == 0 {
-			fmt.Printf(" read %d success, the msg(seg:%d,entry:%d) \n", totalEntries, msg.Id.SegmentId, msg.Id.EntryId)
+		if totalEntries%1 == 0 {
+			fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
 		}
 	}
 	fmt.Printf("final read %d success \n", totalEntries)
