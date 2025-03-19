@@ -26,6 +26,7 @@ import (
 
 var _ storage.LogFile = (*LogFile)(nil)
 
+// LogFile is used to write data to object storage as a logical file
 type LogFile struct {
 	mu               sync.Mutex
 	lastSync         atomic.Int64
