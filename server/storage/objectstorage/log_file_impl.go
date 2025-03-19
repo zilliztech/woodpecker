@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
