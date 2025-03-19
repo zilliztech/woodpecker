@@ -41,12 +41,14 @@ type FragmentFile struct {
 }
 
 // NewFragmentFile creates a new FragmentFile.
-func NewFragmentFile(filePath string, fileSize int64, fragmentId int64) (*FragmentFile, error) {
+func NewFragmentFile(filePath string, fileSize int64, fragmentId int64, firstEntryID int64) (*FragmentFile, error) {
 	ff := &FragmentFile{
-		filePath:   filePath,
-		fileSize:   fileSize,
-		dataOffset: headerSize,
-		fragmentId: fragmentId,
+		filePath:     filePath,
+		fileSize:     fileSize,
+		dataOffset:   headerSize,
+		fragmentId:   fragmentId,
+		firstEntryID: firstEntryID,
+		lastEntryID:  firstEntryID - 1, // 初始化为比firstEntryID小1，表示没有entries
 	}
 
 	// 创建或打开文件
@@ -154,9 +156,8 @@ func (ff *FragmentFile) Load(ctx context.Context) error {
 
 	// 如果有条目，则需要更新dataOffset
 	if ff.entryCount > 0 {
-		// 读取最后一个条目的索引位置（最大ID的条目）
-		lastEntryIndex := ff.lastEntryID - ff.firstEntryID
-		lastIdxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)-lastEntryIndex))
+		// 读取最后一个条目的索引位置
+		lastIdxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize))
 
 		// 读取最后一个条目的数据偏移量
 		lastDataOffset := binary.LittleEndian.Uint32(ff.mmap[lastIdxPos:])
@@ -180,11 +181,7 @@ func (ff *FragmentFile) validateHeader() bool {
 
 	// 检查版本号
 	version := binary.LittleEndian.Uint32(ff.mmap[8:12])
-	if version != 1 {
-		return false
-	}
-
-	return true
+	return version == 1
 }
 
 // readFooter reads the file footer.
@@ -247,9 +244,8 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("entry ID %d out of range", entryId)
 	}
 
-	// 计算索引位置
-	entryIndex := entryId - ff.firstEntryID
-	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)-entryIndex))
+	// 计算索引位置 - 根据条目ID在索引区中的相对位置
+	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-ff.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(ff.fileSize-footerSize) {
 		return nil, fmt.Errorf("invalid index position: %d", idxPos)
@@ -323,15 +319,23 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	ff.mu.Lock()
 	defer ff.mu.Unlock()
 
+	fmt.Printf("Fragment写入条目: fragment ID %d, first entry ID %d, 数据长度: %d\n",
+		ff.fragmentId, ff.firstEntryID, len(data))
+
 	if ff.closed {
+		fmt.Printf("Fragment已关闭，无法写入\n")
 		return errors.New("fragment file is closed")
 	}
 
 	// 检查空间是否足够
 	requiredSpace := uint32(len(data) + 8) // 数据长度(4) + CRC(4) + 数据
 
+	fmt.Printf("需要空间: %d, 当前偏移量: %d, 文件大小: %d\n",
+		requiredSpace, ff.dataOffset, ff.fileSize)
+
 	// 确保有足够的空间写入数据和索引
 	if ff.dataOffset+requiredSpace >= uint32(ff.fileSize-footerSize-int64(indexItemSize)*(int64(ff.entryCount)+1)) {
+		fmt.Printf("Fragment空间不足，无法写入\n")
 		return errors.New("no space left in fragment file")
 	}
 
@@ -350,16 +354,27 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	// 当前数据的偏移量
 	currentDataOffset := ff.dataOffset
 
-	// 更新条目ID - 使用常规的序列顺序
+	// 更新条目ID
 	if ff.entryCount == 0 {
-		ff.firstEntryID = 0
-		ff.lastEntryID = 0
+		// firstEntryID已在创建时设置，这里只需更新lastEntryID
+		ff.lastEntryID = ff.firstEntryID
 	} else {
 		ff.lastEntryID++
 	}
 
-	// 计算索引位置
-	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)+1))
+	// 计算索引位置 - 将最早的条目放在索引区的末尾，最新的条目放在索引区的开始
+	// 这样读取时就会按照写入顺序返回数据
+	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.lastEntryID-ff.firstEntryID+1)))
+
+	// 检查索引位置是否有效
+	if idxPos > uint32(ff.fileSize) || idxPos < ff.dataOffset {
+		return fmt.Errorf("计算的索引位置无效: %d (文件大小: %d, 数据偏移: %d)", idxPos, ff.fileSize, ff.dataOffset)
+	}
+
+	// 安全检查: 确保索引区域不会与数据区域重叠
+	if idxPos < ff.dataOffset {
+		return fmt.Errorf("索引位置 (%d) 与数据区域 (%d) 重叠", idxPos, ff.dataOffset)
+	}
 
 	// 写入索引（存储数据的偏移量）
 	binary.LittleEndian.PutUint32(ff.mmap[idxPos:], currentDataOffset)
