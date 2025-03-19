@@ -12,277 +12,363 @@ import (
 	"github.com/edsrzf/mmap-go"
 
 	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 var _ storage.Fragment = (*FragmentFile)(nil)
 
+const (
+	// 文件头大小
+	headerSize = 4 * 1024
+	// Footer大小
+	footerSize = 4 * 1024
+	// 每个索引项大小
+	indexItemSize = 4
+)
+
 // FragmentFile manages file-based fragments.
 type FragmentFile struct {
-	mu       sync.RWMutex
-	filePath string
-	basePath string
-	txnFile  *os.File
-	mmap     mmap.MMap // Memory-mapped file
-	entries  []storage.LogEntry
-	footer   storage.Footer
-
-	fileLastOffset  uint32 // Last offset written to the fragment file
-	fileStartOffset uint64 // Start offset of the file, used to calculate the offset of each entry in fragment
-	lastSequenceNum uint32 // Last entry sequence number, starts from 0 that corresponds to the first index item
-	fragmentSize    int    // total size of the fragment file
+	mu           sync.RWMutex
+	filePath     string
+	mmap         mmap.MMap
+	fileSize     int64
+	dataOffset   uint32 // 当前数据写入位置
+	indexOffset  uint32 // 当前索引写入位置（从后向前）
+	lastEntryID  int64  // 最后一个条目的ID
+	firstEntryID int64  // 第一个条目的ID
+	entryCount   int32  // 当前条目数量
+	closed       bool
+	fragmentId   int64 // fragment的唯一标识符
 }
 
-func (ff *FragmentFile) GetFragmentKey() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetFragmentId() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetSize() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-// NewFileFragment initializes a new FragmentFile.
-func NewFileFragment(basePath string, fileStartOffset uint64, fragmentSize int) (*FragmentFile, error) {
-	if _, err := os.Stat(basePath); os.IsNotExist(err) {
-		if err = os.MkdirAll(basePath, 0755); err != nil {
-			return nil, errors.Wrapf(err, "failed to create wal directory %s", basePath)
-		}
-	}
-
-	filePath := fmt.Sprintf("%s/fragment_%d", basePath, fileStartOffset)
+// NewFragmentFile creates a new FragmentFile.
+func NewFragmentFile(filePath string, fileSize int64, fragmentId int64) (*FragmentFile, error) {
 	ff := &FragmentFile{
-		filePath:        filePath,
-		basePath:        basePath,
-		fileStartOffset: fileStartOffset,
-		fragmentSize:    fragmentSize,
+		filePath:   filePath,
+		fileSize:   fileSize,
+		dataOffset: headerSize,
+		fragmentId: fragmentId,
 	}
 
-	// check if the fragment file exists
-	var err error
-	if _, err = os.Stat(ff.filePath); err == nil {
-		if err = ff.openAlreadyExistsFragment(); err != nil {
-			return nil, err
-		}
-	} else {
-		// create a new fragment file
-		if err = ff.openNewFragment(); err != nil {
-			return nil, err
-		}
+	// 创建或打开文件
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to open fragment file %s", filePath)
 	}
 
-	if ff.mmap, err = mmap.MapRegion(ff.txnFile, ff.fragmentSize, mmap.RDWR, 0, 0); err != nil {
-		return nil, errors.Wrapf(err, "failed to map fragment file %s", ff.txnFile)
+	// 设置文件大小
+	if err := file.Truncate(fileSize); err != nil {
+		file.Close()
+		return nil, errors.Wrapf(err, "failed to truncate file %s", filePath)
 	}
+
+	// 映射文件到内存
+	ff.mmap, err = mmap.MapRegion(file, int(fileSize), mmap.RDWR, 0, 0)
+	if err != nil {
+		file.Close()
+		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
+	}
+
+	// 写入文件头
+	if err := ff.writeHeader(); err != nil {
+		ff.Release()
+		return nil, err
+	}
+
 	return ff, nil
 }
 
-// openAlreadyExistsFragment opens an existing file and recovery the data.
-func (ff *FragmentFile) openAlreadyExistsFragment() error {
+// writeHeader writes the file header.
+func (ff *FragmentFile) writeHeader() error {
+	// 写入magic string
+	copy(ff.mmap[0:8], []byte("FRAGMENT"))
+
+	// 写入版本号
+	binary.LittleEndian.PutUint32(ff.mmap[8:12], 1)
+
 	return nil
 }
 
-// Create a new file if it doesn't exist
-func (ff *FragmentFile) openNewFragment() error {
-	var err error
-	if ff.txnFile, err = os.OpenFile(ff.filePath, os.O_CREATE|os.O_RDWR, 0644); err != nil {
-		return errors.Wrapf(err, "failed to open fragement file %s", ff.filePath)
-	}
-
-	if _, err := ff.txnFile.Seek(int64(ff.fragmentSize), 0); err != nil {
-		return err
-	}
-
-	// Write the Header (magic string and version)
-	if _, err := ff.txnFile.Write([]byte{0}); err != nil {
-		return err
-	}
-
-	_, err = ff.txnFile.WriteAt([]byte(codec.MagicString), 0)
-	if err != nil {
-		return err
-	}
-	err = binary.Write(ff.txnFile, binary.LittleEndian, codec.VERSION)
-	ff.fileLastOffset = uint32(codec.FileHeaderSize)
-	return ff.txnFile.Sync()
+// GetFragmentId returns the fragment ID.
+func (ff *FragmentFile) GetFragmentId() int64 {
+	return ff.fragmentId
 }
 
-// NewReader reads data from a file.
-func (ff *FragmentFile) Read(ctx context.Context, opt storage.ReaderOpt) ([]*storage.LogEntry, error) {
-	ff.mu.RLock()
-	defer ff.mu.RUnlock()
-
-	// Validate the sequence range
-	if opt.StartSequenceNum > opt.EndSequenceNum {
-		return nil, fmt.Errorf("invalid sequence range: start %d, end %d", opt.StartSequenceNum, opt.EndSequenceNum)
-	}
-
-	// Ensure the range is within the available sequences
-	// If the end sequence is greater than the last sequence, adjust the end sequence
-	if opt.EndSequenceNum >= int64(ff.lastSequenceNum)+int64(ff.fileStartOffset) {
-		opt.EndSequenceNum = int64(ff.lastSequenceNum) + int64(ff.fileStartOffset) - 1
-	}
-
-	// Ensure the start sequence is within the available sequences
-	if opt.StartSequenceNum >= int64(ff.lastSequenceNum)+int64(ff.fileStartOffset) {
-		return nil, fmt.Errorf("start sequence %d exceeds the available range", opt.StartSequenceNum)
-	}
-
-	// Determine the starting and ending index
-	startIndex := opt.StartSequenceNum - int64(ff.fileStartOffset)
-	endIndex := opt.EndSequenceNum - int64(ff.fileStartOffset) + 1
-
-	// Collect the entries within the range
-	entries := make([]*storage.LogEntry, 0, endIndex-startIndex)
-	for i := startIndex; i < endIndex; i++ {
-		if i >= int64(len(ff.footer.EntryOffset)) {
-			panic("index out of range, should not happen")
-		}
-
-		offset := ff.footer.EntryOffset[i]
-
-		// Read payload size
-		if offset+codec.PayloadSize > uint32(len(ff.mmap)) {
-			return nil, fmt.Errorf("corrupted data: offset %d exceeds file size", offset)
-		}
-		payloadSize := binary.LittleEndian.Uint32(ff.mmap[offset : offset+codec.PayloadSize])
-
-		if offset+payloadSize+codec.EntryHeaderSize > uint32(len(ff.mmap)) {
-			return nil, fmt.Errorf("corrupted data: offset %d exceeds file size", offset)
-		}
-
-		// Read CRC (stored 4 bytes after the payload size)
-		crc := binary.LittleEndian.Uint32(ff.mmap[offset+codec.PayloadSize : offset+codec.EntryHeaderSize])
-
-		// Read payload
-		payload := ff.mmap[offset+codec.EntryHeaderSize : offset+codec.EntryHeaderSize+payloadSize]
-
-		// Verify CRC
-		if crc != crc32.ChecksumIEEE(payload) {
-			return nil, fmt.Errorf("CRC mismatch at sequence %d", int64(ff.fileStartOffset)+i)
-		}
-
-		// Create the log entry
-		entry := &storage.LogEntry{
-			Payload:     payload,
-			SequenceNum: ff.fileStartOffset + uint64(i),
-			CRC:         crc,
-		}
-
-		entries = append(entries, entry)
-	}
-
-	return entries, nil
+// GetFragmentKey returns the fragment key (file path).
+func (ff *FragmentFile) GetFragmentKey() string {
+	return ff.filePath
 }
 
-// Write writes data to a file.
-func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
-	ff.mu.Lock()
-	defer ff.mu.Unlock()
-
-	// Calculate the entry size
-	payloadSize := uint32(len(data))
-	crc := crc32.ChecksumIEEE(data)
-	entrySize := 4 + 4 + len(data)
-
-	// Check if there is enough space
-	if len(ff.mmap)-int(ff.fileLastOffset) < entrySize {
-		return errors.New("not enough space in memory-mapped file")
-	}
-
-	// Write entry to mmap
-	// Construct the entry: [payloadSize (4 bytes)] + [CRC (4 bytes)] + [Payload (variable)]
-	binary.LittleEndian.PutUint32(ff.mmap[ff.fileLastOffset:], payloadSize)
-	ff.fileLastOffset += 4
-	binary.LittleEndian.PutUint32(ff.mmap[ff.fileLastOffset:], crc)
-	ff.fileLastOffset += 4
-	copy(ff.mmap[ff.fileLastOffset:], data)
-	ff.fileLastOffset += uint32(len(data))
-
-	// Update footer
-	ff.footer.EntryOffset = append(ff.footer.EntryOffset, ff.fileLastOffset)
-	ff.footer.IndexSize += codec.IndexItemSize
-	ff.lastSequenceNum++
-	return nil
-}
-
-// Flush writes the footer and ensures all data is persisted to the file.
+// Flush ensures all data is written to disk.
 func (ff *FragmentFile) Flush(ctx context.Context) error {
 	ff.mu.Lock()
 	defer ff.mu.Unlock()
 
-	// Sync changes to disk
-	if err := ff.mmap.Flush(); err != nil {
+	if ff.closed {
+		return errors.New("fragment file is closed")
+	}
+
+	// 写入footer
+	if err := ff.writeFooter(); err != nil {
 		return err
 	}
+
+	// 同步到磁盘
+	if err := ff.mmap.Flush(); err != nil {
+		return errors.Wrap(err, "failed to flush fragment file")
+	}
+
 	return nil
 }
 
-func (ff *FragmentFile) writeFooter() {
-	// Write the footer at the end of the file
-	for _, entryOffset := range ff.footer.EntryOffset {
-		binary.LittleEndian.PutUint32(ff.mmap[ff.fileLastOffset:], entryOffset)
-		ff.fileLastOffset += 4
-	}
-	binary.LittleEndian.PutUint32(ff.mmap[ff.fileLastOffset:], ff.footer.CRC)
-	ff.fileLastOffset += 4
-	binary.LittleEndian.PutUint32(ff.mmap[ff.fileLastOffset:], ff.footer.IndexSize)
-	ff.fileLastOffset += 4
+// writeFooter writes the file footer.
+func (ff *FragmentFile) writeFooter() error {
+	footerOffset := uint32(ff.fileSize - footerSize)
+	// 写入条目数量
+	binary.LittleEndian.PutUint32(ff.mmap[footerOffset:], uint32(ff.entryCount))
+
+	// 写入第一个和最后一个条目ID
+	binary.LittleEndian.PutUint64(ff.mmap[footerOffset+4:], uint64(ff.firstEntryID))
+	binary.LittleEndian.PutUint64(ff.mmap[footerOffset+12:], uint64(ff.lastEntryID))
+
+	return nil
 }
 
+// Load loads the fragment file.
 func (ff *FragmentFile) Load(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetLastEntryId() (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetFirstEntryIdDirectly() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetLastEntryIdDirectly() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetLastModified() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ff *FragmentFile) Release() error {
-	//TODO implement me
-	panic("implement me")
-}
-
-// Close writes the footer if it hasn't been flushed and closes the file.
-func (ff *FragmentFile) Close() error {
 	ff.mu.Lock()
 	defer ff.mu.Unlock()
 
-	// Write the footer to the end of the file
-	ff.writeFooter()
+	if ff.closed {
+		return errors.New("fragment file is closed")
+	}
 
-	err := ff.mmap.Unmap()
-	if err != nil {
+	// 读取文件头
+	if !ff.validateHeader() {
+		return errors.New("invalid fragment file header")
+	}
+
+	// 读取footer
+	if err := ff.readFooter(); err != nil {
 		return err
 	}
 
-	return ff.txnFile.Close()
+	// 如果有条目，则需要更新dataOffset
+	if ff.entryCount > 0 {
+		// 读取最后一个条目的索引位置（最大ID的条目）
+		lastEntryIndex := ff.lastEntryID - ff.firstEntryID
+		lastIdxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)-lastEntryIndex))
+
+		// 读取最后一个条目的数据偏移量
+		lastDataOffset := binary.LittleEndian.Uint32(ff.mmap[lastIdxPos:])
+
+		// 读取最后一个条目的数据长度
+		dataLength := binary.LittleEndian.Uint32(ff.mmap[lastDataOffset:])
+
+		// 计算下一个数据写入的偏移量 (lastDataOffset + 长度(4) + CRC(4) + 数据)
+		ff.dataOffset = lastDataOffset + 8 + dataLength
+	}
+
+	return nil
+}
+
+// validateHeader validates the file header.
+func (ff *FragmentFile) validateHeader() bool {
+	// 检查magic string
+	if string(ff.mmap[0:8]) != "FRAGMENT" {
+		return false
+	}
+
+	// 检查版本号
+	version := binary.LittleEndian.Uint32(ff.mmap[8:12])
+	if version != 1 {
+		return false
+	}
+
+	return true
+}
+
+// readFooter reads the file footer.
+func (ff *FragmentFile) readFooter() error {
+	footerOffset := uint32(ff.fileSize - footerSize)
+	// 读取条目数量
+	ff.entryCount = int32(binary.LittleEndian.Uint32(ff.mmap[footerOffset:]))
+
+	// 读取第一个和最后一个条目ID
+	ff.firstEntryID = int64(binary.LittleEndian.Uint64(ff.mmap[footerOffset+4:]))
+	ff.lastEntryID = int64(binary.LittleEndian.Uint64(ff.mmap[footerOffset+12:]))
+
+	return nil
+}
+
+// GetLastEntryId returns the last entry ID.
+func (ff *FragmentFile) GetLastEntryId() (int64, error) {
+	ff.mu.RLock()
+	defer ff.mu.RUnlock()
+
+	if ff.closed {
+		return 0, errors.New("fragment file is closed")
+	}
+
+	return ff.lastEntryID, nil
+}
+
+// GetFirstEntryId returns the first entry ID.
+func (ff *FragmentFile) GetFirstEntryId() (int64, error) {
+	ff.mu.RLock()
+	defer ff.mu.RUnlock()
+
+	if ff.closed {
+		return 0, errors.New("fragment file is closed")
+	}
+
+	return ff.firstEntryID, nil
+}
+
+// GetLastModified returns the last modification time.
+func (ff *FragmentFile) GetLastModified() int64 {
+	info, err := os.Stat(ff.filePath)
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano() / 1e6
+}
+
+// GetEntry returns the entry at the specified ID.
+func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
+	ff.mu.RLock()
+	defer ff.mu.RUnlock()
+
+	if ff.closed {
+		return nil, errors.New("fragment file is closed")
+	}
+
+	// 检查entryId是否在范围内
+	if entryId < ff.firstEntryID || entryId > ff.lastEntryID {
+		return nil, fmt.Errorf("entry ID %d out of range", entryId)
+	}
+
+	// 计算索引位置
+	entryIndex := entryId - ff.firstEntryID
+	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)-entryIndex))
+
+	if idxPos < headerSize || idxPos >= uint32(ff.fileSize-footerSize) {
+		return nil, fmt.Errorf("invalid index position: %d", idxPos)
+	}
+
+	// 读取数据偏移量
+	offset := binary.LittleEndian.Uint32(ff.mmap[idxPos:])
+	if offset < headerSize || offset >= uint32(ff.fileSize) {
+		return nil, fmt.Errorf("invalid data offset: %d", offset)
+	}
+
+	// 读取数据长度
+	length := binary.LittleEndian.Uint32(ff.mmap[offset:])
+	if length == 0 || length > uint32(ff.fileSize)-offset-8 {
+		return nil, fmt.Errorf("invalid data length: %d", length)
+	}
+
+	// 读取CRC (4字节)
+	storedCRC := binary.LittleEndian.Uint32(ff.mmap[offset+4:])
+
+	// 确定数据区域
+	dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
+	dataEnd := dataStart + length
+	if dataEnd > uint32(ff.fileSize) {
+		return nil, fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
+	}
+
+	// 读取数据
+	data := make([]byte, length)
+	copy(data, ff.mmap[dataStart:dataEnd])
+
+	// 验证CRC
+	if crc32.ChecksumIEEE(data) != storedCRC {
+		return nil, fmt.Errorf("CRC mismatch for entry ID %d", entryId)
+	}
+
+	return data, nil
+}
+
+// GetSize returns the current size of the fragment.
+func (ff *FragmentFile) GetSize() int64 {
+	ff.mu.RLock()
+	defer ff.mu.RUnlock()
+
+	return int64(ff.dataOffset)
+}
+
+// Release releases the fragment file.
+func (ff *FragmentFile) Release() error {
+	ff.mu.Lock()
+	defer ff.mu.Unlock()
+
+	if ff.closed {
+		return nil
+	}
+
+	// 解除内存映射
+	if ff.mmap != nil {
+		if err := ff.mmap.Unmap(); err != nil {
+			return errors.Wrap(err, "failed to unmap fragment file")
+		}
+		ff.mmap = nil
+	}
+
+	ff.closed = true
+	return nil
+}
+
+// Write writes data to the fragment file.
+func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
+	ff.mu.Lock()
+	defer ff.mu.Unlock()
+
+	if ff.closed {
+		return errors.New("fragment file is closed")
+	}
+
+	// 检查空间是否足够
+	requiredSpace := uint32(len(data) + 8) // 数据长度(4) + CRC(4) + 数据
+
+	// 确保有足够的空间写入数据和索引
+	if ff.dataOffset+requiredSpace >= uint32(ff.fileSize-footerSize-int64(indexItemSize)*(int64(ff.entryCount)+1)) {
+		return errors.New("no space left in fragment file")
+	}
+
+	// 写入数据长度 (4字节)
+	binary.LittleEndian.PutUint32(ff.mmap[ff.dataOffset:], uint32(len(data)))
+
+	// 计算CRC
+	crc := crc32.ChecksumIEEE(data)
+
+	// 写入CRC (4字节)
+	binary.LittleEndian.PutUint32(ff.mmap[ff.dataOffset+4:], crc)
+
+	// 写入数据
+	copy(ff.mmap[ff.dataOffset+8:], data)
+
+	// 当前数据的偏移量
+	currentDataOffset := ff.dataOffset
+
+	// 更新条目ID - 使用常规的序列顺序
+	if ff.entryCount == 0 {
+		ff.firstEntryID = 0
+		ff.lastEntryID = 0
+	} else {
+		ff.lastEntryID++
+	}
+
+	// 计算索引位置
+	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(ff.entryCount)+1))
+
+	// 写入索引（存储数据的偏移量）
+	binary.LittleEndian.PutUint32(ff.mmap[idxPos:], currentDataOffset)
+
+	// 增加条目计数
+	ff.entryCount++
+
+	// 更新下一个数据的偏移量
+	ff.dataOffset += 8 + uint32(len(data))
+
+	return nil
 }
