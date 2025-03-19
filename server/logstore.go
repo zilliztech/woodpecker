@@ -17,6 +17,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
+//go:generate mockery --dir=./server --name=LogStore --structname=LogStore --output=mocks/mocks_server --filename=mock_logstore.go --with-expecter=true  --outpkg=mocks_server
 type LogStore interface {
 	Start() error
 	Stop() error

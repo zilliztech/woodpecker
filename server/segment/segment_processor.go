@@ -20,6 +20,8 @@ import (
 )
 
 // SegmentProcessor for segment processing in server side
+//
+//go:generate mockery --dir=./server/segment --name=SegmentProcessor --structname=SegmentProcessor --output=mocks/mocks_server/mocks_segment --filename=mock_segment_processor.go --with-expecter=true  --outpkg=mocks_segment
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
@@ -209,12 +211,16 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		return nil, errors.New("no frags to merge")
 	}
 	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
-	totalSize := int64(0)
+	totalSize := lastMergedFrag.GetSize()
+	lastEntryIdOfAllMergedFrags, err := lastMergedFrag.GetLastEntryId()
+	if err != nil {
+		return nil, err
+	}
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Sealed,
 		CompletionTime: lastMergedFrag.GetLastModified(),
 		SealedTime:     time.Now().UnixMilli(),
-		LastEntryId:    lastMergedFrag.GetLastEntryIdDirectly(),
+		LastEntryId:    lastEntryIdOfAllMergedFrags,
 		Size:           totalSize,
 		EntryOffset:    entryOffset,
 		FragmentOffset: fragsOffset,
@@ -238,11 +244,14 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 			Size:           size,
 		}, nil
 	}
-
+	lastEntryId, err := lastFragment.GetLastEntryId()
+	if err != nil {
+		return nil, err
+	}
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Completed,
 		CompletionTime: lastFragment.GetLastModified(),
-		LastEntryId:    lastFragment.GetLastEntryIdDirectly(),
+		LastEntryId:    lastEntryId,
 		Size:           size,
 	}, nil
 }

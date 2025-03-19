@@ -80,6 +80,9 @@ func (f *FragmentObject) GetFragmentKey() string {
 }
 
 func (f *FragmentObject) GetSize() int64 {
+	if !f.dataLoaded {
+		return 0
+	}
 	return int64(len(f.entriesData) + len(f.indexes))
 }
 
@@ -141,6 +144,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.lastEntryId = tmpFrag.lastEntryId
 	f.dataLoaded = true
 	f.dataUploaded = true
+	f.infoFetched = true
 
 	// update metrics
 	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(f.entriesData) + len(f.indexes)))
@@ -168,14 +172,22 @@ func (f *FragmentObject) GetLastEntryId() (int64, error) {
 	return f.lastEntryId, nil
 }
 
-// only for merged fragment, TODO
-func (f *FragmentObject) GetLastEntryIdDirectly() int64 {
-	return f.lastEntryId
-}
-
-// only for merged fragment, TODO
-func (f *FragmentObject) GetFirstEntryIdDirectly() int64 {
-	return f.firstEntryId
+func (f *FragmentObject) GetFirstEntryId() (int64, error) {
+	// if info has been fetched, return directly
+	if f.infoFetched {
+		return f.firstEntryId, nil
+	}
+	// if data has not been loaded, try to load it
+	if !f.dataLoaded && f.dataUploaded {
+		err := f.Load(context.Background())
+		if err != nil {
+			return -1, err
+		}
+	}
+	if !f.infoFetched {
+		return -1, errors.New("fragment no data&info to load")
+	}
+	return f.firstEntryId, nil
 }
 
 func (f *FragmentObject) GetLastModified() int64 {
@@ -234,6 +246,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
 		dataUploaded: false,
 		dataLoaded:   false,
+		infoFetched:  true,
 	}
 	expectedEntryId := int64(-1)
 	for _, fragment := range fragments {
@@ -266,14 +279,15 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		// merge data
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
 	}
+	// mark dataLoaded
+	mergedFrag.dataLoaded = true
 
 	// upload the mergedFragment
-	mergedFrag.dataLoaded = true
 	flushErr := mergedFrag.Flush(ctx)
 	if flushErr != nil {
 		return nil, flushErr
 	}
-	// mark uploaded
+	// mark dataUploaded
 	mergedFrag.dataUploaded = true
 
 	//

@@ -35,24 +35,28 @@ type FragmentManager interface {
 }
 
 var (
-	once     sync.Once
-	instance FragmentManager
+	once      sync.Once
+	instance  FragmentManager
+	maxMemory int64 = 1_000_000
+	interval  int   = 1_000
 )
 
 func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 	once.Do(func() {
-		instance = newFragmentManager(maxMemoryBytes)
-		go instance.StartEvictionLoop(time.Duration(intervalMs) * time.Millisecond) // Run cleanup every 10 seconds
+		maxMemory = maxMemoryBytes
+		interval = intervalMs
+		instance = newFragmentManager(maxMemory)
+		go instance.StartEvictionLoop(time.Duration(interval) * time.Millisecond) // Run cleanup every 10 seconds
 	})
 	return instance
 }
 
 func GetCachedFragment(ctx context.Context, key string) (storage.Fragment, bool) {
-	return GetInstance(1_000_000, 1000).GetFragment(ctx, key)
+	return GetInstance(maxMemory, interval).GetFragment(ctx, key)
 }
 
 func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
-	return GetInstance(1_000_000, 1000).AddFragment(ctx, fragment)
+	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
 func newFragmentManager(maxMemory int64) FragmentManager {

@@ -15,6 +15,7 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+//go:generate mockery --dir=./woodpecker/log --name=LogWriter --structname=LogWriter --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_writer.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.

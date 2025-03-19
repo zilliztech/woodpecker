@@ -14,6 +14,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
+//go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogReader interface {
 	// ReadNext reads the next log message from the log, blocking until a message
 	// is available. It returns the log message and an error if any occurs.

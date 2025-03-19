@@ -18,6 +18,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
+//go:generate mockery --dir=./woodpecker/log --name=LogHandle --structname=LogHandle --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_handle.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogHandle interface {
 	// GetName returns the name of the log.
 	GetName() string
