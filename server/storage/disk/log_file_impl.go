@@ -58,7 +58,7 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		fragmentSize:    4 * 1024 * 1024, // Default 4MB
 		maxEntryPerFile: 100000,          // Default 100k entries per fragment
 		pendingRequests: make(map[int64]appendRequest),
-		nextExpectedID:  1, // 从1开始，因为0通常表示自动分配ID
+		nextExpectedID:  1, // 从1开始，因为0通常表示自动分配ID TODO-FIX 一个LogFile的entryID是从0开始的
 		appendCh:        make(chan appendRequest, 1000),
 		appendResultCh:  make(chan appendResult, 1000),
 		closeCh:         make(chan struct{}),
@@ -86,6 +86,7 @@ func (dlf *DiskLogFile) GetId() int64 {
 }
 
 // Append synchronously appends a log entry
+// Deprecated
 func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
 	resultCh := make(chan int64, 1)
 	entryID := dlf.lastEntryID.Add(1)
@@ -107,6 +108,7 @@ func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
 // AppendAsync asynchronously appends a log entry
 func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
 	if entryId <= 0 {
+		// TODO-FIX 不应该用lastEntryID叠加。不存在entryID <0的情况。不需要检查entryID
 		entryId = dlf.lastEntryID.Add(1)
 	} else {
 		// Update lastEntryID
@@ -115,6 +117,7 @@ func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, data []b
 			if entryId <= current {
 				break
 			}
+			// TODO-Fix 当entryID大于lastEntryId的时候，不应该直接更新lastEntryID，因为 append async的 entry数据可能是乱序的。比如先写 3再写2,1 为id的entries，这种情况是由可能的
 			if dlf.lastEntryID.CompareAndSwap(current, entryId) {
 				break
 			}
@@ -151,6 +154,7 @@ func (dlf *DiskLogFile) handleAppendRequest(req appendRequest) {
 
 	fmt.Printf("处理append请求ID: %d, nextExpectedID: %d\n", req.entryID, dlf.nextExpectedID)
 
+	// TODO-FIX 应该等于 nextExpected的时候才写入。而且总是顺序的递增写入。如果不是next expected的话，就应该分为大于或者小于的情况下，如果小于的话，说明重复提交了，直接忽略就行。如果大于的话，那么先放到缓存里，等下次顺序提交到这个位置的时候再从缓存中获取并写入提交
 	// 特殊处理：如果请求的ID小于nextExpectedID，直接处理
 	if req.entryID < dlf.nextExpectedID {
 		fmt.Printf("ID %d 小于 nextExpectedID %d，直接处理\n", req.entryID, dlf.nextExpectedID)
@@ -168,6 +172,7 @@ func (dlf *DiskLogFile) handleAppendRequest(req appendRequest) {
 		// 请求ID大于等于nextExpectedID的正常流程
 		// 将请求放入缓冲区
 		fmt.Printf("ID %d 放入缓冲区\n", req.entryID)
+		// TODO-FIX这里应该 entryID-firstEntryID的方式，不然这个数组会很大。这个write的pending requests 缓存只是一个窗口，并不会包含所有的请求数据。flush的部分就回收掉了。比如flush了01234，那么缓冲区就应该从5开始，即 0 位置的entry的id应该是5
 		dlf.pendingRequests[req.entryID] = req
 
 		// 尝试按顺序处理请求
