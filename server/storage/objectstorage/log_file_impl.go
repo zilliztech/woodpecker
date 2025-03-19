@@ -118,7 +118,6 @@ func (f *LogFile) run() {
 					zap.Error(err))
 			}
 			f.sealed.Store(true)
-			releaseFragments(context.Background(), f.fragments)
 			return
 		}
 	}
@@ -377,7 +376,9 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
 			successFrags = append(successFrags, r.target)
 			cacheErr := cache.AddCacheFragment(ctx, r.target)
-			logger.Ctx(ctx).Warn("add fragment to cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Error(cacheErr))
+			if cacheErr != nil {
+				logger.Ctx(ctx).Warn("add fragment to cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Error(cacheErr))
+			}
 		}
 	}
 	f.fragments = append(f.fragments, successFrags...)
@@ -536,7 +537,8 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
-			entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
+			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 			pendingMergeFrags = make([]*FragmentObject, 0)
 			totalMergeSize += pendingMergeSize
@@ -551,7 +553,8 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
-		entryOffset = append(entryOffset, int32(mergedFrag.GetFirstEntryIdDirectly()))
+		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 		pendingMergeFrags = make([]*FragmentObject, 0)
 		totalMergeSize += pendingMergeSize

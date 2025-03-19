@@ -26,6 +26,8 @@ type Reader interface {
 }
 
 // LogFile represents a log file interface with read and write operations.
+//
+//go:generate mockery --dir=./server/storage --name=LogFile --structname=LogFile --output=mocks/mocks_server/mocks_storage --filename=mock_logfile.go --with-expecter=true  --outpkg=mocks_storage
 type LogFile interface {
 	// GetId returns the unique log file id.
 	GetId() int64

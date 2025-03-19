@@ -7,6 +7,7 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+//go:generate  mockery --dir=./meta --name=MetadataProvider --structname=MetadataProvider --output=mocks/mocks_meta --filename=mock_metadata.go --with-expecter=true  --outpkg=mocks_meta
 type MetadataProvider interface {
 	io.Closer
 	// InitIfNecessary initializes the metadata provider if necessary.
