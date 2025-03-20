@@ -58,9 +58,9 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 	dlf := &DiskLogFile{
 		id:              id,
 		basePath:        filepath.Join(basePath, fmt.Sprintf("log_%d", id)),
-		fragmentSize:    4 * 1024 * 1024, // Default 4MB
-		maxEntryPerFile: 100000,          // Default 100k entries per fragment
-		maxBufferSize:   1 * 1024 * 1024, // Default 1MB buffer
+		fragmentSize:    128 * 1024 * 1024, // Default 128MB
+		maxEntryPerFile: 100000,            // Default 100k entries per fragment
+		maxBufferSize:   32 * 1024 * 1024,  // Default 32MB buffer
 		syncedChan:      make(map[int64]chan int64),
 		closeCh:         make(chan struct{}),
 		autoSync:        true, // Default is auto-sync enabled
