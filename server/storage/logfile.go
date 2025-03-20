@@ -33,6 +33,7 @@ type LogFile interface {
 	GetId() int64
 	// Append adds an entry to the log file synchronously.
 	// Returns a future that will receive the result of the append operation.
+	// Deprecated: Use AppendAsync instead, entryID is pass by client segmentHandle
 	Append(ctx context.Context, data []byte) error
 	// AppendAsync adds an entry to the log file asynchronously
 	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error)
