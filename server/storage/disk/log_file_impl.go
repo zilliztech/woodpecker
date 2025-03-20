@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,11 +14,13 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
+
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
-	"go.uber.org/zap"
 )
 
 var _ storage.LogFile = (*DiskLogFile)(nil)
@@ -947,7 +948,7 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	actualID := int64(binary.LittleEndian.Uint64(data[:8]))
 	actualData := data[8:]
 
-	// 创建LogEntry
+	// 创建 LogEntry
 	entry := &proto.LogEntry{
 		EntryId: actualID,
 		Values:  actualData,
@@ -991,15 +992,4 @@ func WithDisableAutoSync() Option {
 	return func(dlf *DiskLogFile) {
 		dlf.autoSync = false
 	}
-}
-
-type appendRequest struct {
-	entryID  int64
-	data     []byte
-	resultCh chan int64
-}
-
-type appendResult struct {
-	entryID int64
-	err     error
 }
