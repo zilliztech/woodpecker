@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,13 +166,22 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	defer s.Unlock()
 	if s.currentLogFileWriter == nil {
 		// get logfile id from meta/storage
-		s.currentLogFileId = 0 // Currently, simplified support for one LogFile per Segment
-		s.currentLogFileWriter = objectstorage.NewLogFile(
-			s.currentLogFileId,
-			s.getSegmentKeyPrefix(),
-			s.getInstanceBucket(),
-			s.minioClient,
-			s.cfg)
+		// Currently, simplified support for one logical LogFile per Segment
+		s.currentLogFileId = 0
+		if s.cfg.Woodpecker.Logstore.IsStorageLocal() || s.cfg.Woodpecker.Logstore.IsStorageService() {
+			// use local FileSystem or local FileSystem + minio-compatible
+			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix())
+			s.currentLogFileWriter = writerFile
+			return s.currentLogFileWriter, err
+		} else {
+			// use MinIO-compatible storage
+			s.currentLogFileWriter = objectstorage.NewLogFile(
+				s.currentLogFileId,
+				s.getSegmentKeyPrefix(),
+				s.getInstanceBucket(),
+				s.minioClient,
+				s.cfg)
+		}
 	}
 	return s.currentLogFileWriter, nil
 }
@@ -181,12 +191,20 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	defer s.Unlock()
 	if s.currentLogFileReader == nil {
 		// get logfile id from meta/storage
-		roLogFileId := int64(0) // Currently, simplified support for one LogFile per Segment
-		s.currentLogFileReader = objectstorage.NewROLogFile(
-			roLogFileId,
-			s.getSegmentKeyPrefix(),
-			s.getInstanceBucket(),
-			s.minioClient)
+		// Currently, simplified support for one LogFile per Segment
+		roLogFileId := int64(0)
+		if s.cfg.Woodpecker.Logstore.IsStorageLocal() || s.cfg.Woodpecker.Logstore.IsStorageService() {
+			// use local FileSystem or local FileSystem + minio-compatible
+			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix(), disk.WithDisableAutoSync())
+			s.currentLogFileWriter = writerFile
+			return s.currentLogFileWriter, err
+		} else {
+			s.currentLogFileReader = objectstorage.NewROLogFile(
+				roLogFileId,
+				s.getSegmentKeyPrefix(),
+				s.getInstanceBucket(),
+				s.minioClient)
+		}
 	}
 	return s.currentLogFileReader, nil
 }

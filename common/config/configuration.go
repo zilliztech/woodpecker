@@ -165,7 +165,20 @@ type MinioConfig struct {
 
 // LogstoreConfig stores the logstore configuration.
 type LogstoreConfig struct {
+	Storage           string                  `yaml:"storage"`
 	LogFileSyncPolicy LogFileSyncPolicyConfig `yaml:"logFileSyncPolicy"`
+}
+
+func (ls *LogstoreConfig) IsStorageLocal() bool {
+	return ls.Storage == "local"
+}
+
+func (ls *LogstoreConfig) IsStorageMinio() bool {
+	return ls.Storage == "minio" || ls.Storage == "default" || len(ls.Storage) == 0
+}
+
+func (ls *LogstoreConfig) IsStorageService() bool {
+	return ls.Storage == "service"
 }
 
 // WoodpeckerConfig stores the complete Woodpecker configuration.
@@ -238,6 +251,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 		},
 		Logstore: LogstoreConfig{
+			Storage: "minio",
 			LogFileSyncPolicy: LogFileSyncPolicyConfig{
 				MaxInterval:     1000,
 				MaxEntries:      10000,
