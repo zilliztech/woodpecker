@@ -180,7 +180,7 @@ func TestFragmentFile_CRCValidation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 修改文件中的数据（破坏CRC）
-	ff.mmap[ff.dataOffset-2] = 'X' // 修改数据的一部分
+	ff.mappedFile[ff.dataOffset-2] = 'X' // 修改数据的一部分
 
 	// 尝试读取数据
 	_, err = ff.GetEntry(startEntryID)

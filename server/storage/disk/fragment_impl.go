@@ -29,7 +29,7 @@ const (
 type FragmentFile struct {
 	mu           sync.RWMutex
 	filePath     string
-	mmap         mmap.MMap
+	mappedFile   mmap.MMap
 	fileSize     int64
 	dataOffset   uint32 // 当前数据写入位置
 	indexOffset  uint32 // 当前索引写入位置（从后向前）
@@ -64,7 +64,7 @@ func NewFragmentFile(filePath string, fileSize int64, fragmentId int64, firstEnt
 	}
 
 	// 映射文件到内存
-	ff.mmap, err = mmap.MapRegion(file, int(fileSize), mmap.RDWR, 0, 0)
+	ff.mappedFile, err = mmap.MapRegion(file, int(fileSize), mmap.RDWR, 0, 0)
 	if err != nil {
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
@@ -82,10 +82,10 @@ func NewFragmentFile(filePath string, fileSize int64, fragmentId int64, firstEnt
 // writeHeader writes the file header.
 func (ff *FragmentFile) writeHeader() error {
 	// 写入magic string
-	copy(ff.mmap[0:8], []byte("FRAGMENT"))
+	copy(ff.mappedFile[0:8], []byte("FRAGMENT"))
 
 	// 写入版本号
-	binary.LittleEndian.PutUint32(ff.mmap[8:12], 1)
+	binary.LittleEndian.PutUint32(ff.mappedFile[8:12], 1)
 
 	return nil
 }
@@ -115,7 +115,7 @@ func (ff *FragmentFile) Flush(ctx context.Context) error {
 	}
 
 	// 同步到磁盘
-	if err := ff.mmap.Flush(); err != nil {
+	if err := ff.mappedFile.Flush(); err != nil {
 		return errors.Wrap(err, "failed to flush fragment file")
 	}
 
@@ -126,11 +126,11 @@ func (ff *FragmentFile) Flush(ctx context.Context) error {
 func (ff *FragmentFile) writeFooter() error {
 	footerOffset := uint32(ff.fileSize - footerSize)
 	// 写入条目数量
-	binary.LittleEndian.PutUint32(ff.mmap[footerOffset:], uint32(ff.entryCount))
+	binary.LittleEndian.PutUint32(ff.mappedFile[footerOffset:], uint32(ff.entryCount))
 
 	// 写入第一个和最后一个条目ID
-	binary.LittleEndian.PutUint64(ff.mmap[footerOffset+4:], uint64(ff.firstEntryID))
-	binary.LittleEndian.PutUint64(ff.mmap[footerOffset+12:], uint64(ff.lastEntryID))
+	binary.LittleEndian.PutUint64(ff.mappedFile[footerOffset+4:], uint64(ff.firstEntryID))
+	binary.LittleEndian.PutUint64(ff.mappedFile[footerOffset+12:], uint64(ff.lastEntryID))
 
 	return nil
 }
@@ -160,10 +160,10 @@ func (ff *FragmentFile) Load(ctx context.Context) error {
 		lastIdxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize))
 
 		// 读取最后一个条目的数据偏移量
-		lastDataOffset := binary.LittleEndian.Uint32(ff.mmap[lastIdxPos:])
+		lastDataOffset := binary.LittleEndian.Uint32(ff.mappedFile[lastIdxPos:])
 
 		// 读取最后一个条目的数据长度
-		dataLength := binary.LittleEndian.Uint32(ff.mmap[lastDataOffset:])
+		dataLength := binary.LittleEndian.Uint32(ff.mappedFile[lastDataOffset:])
 
 		// 计算下一个数据写入的偏移量 (lastDataOffset + 长度(4) + CRC(4) + 数据)
 		ff.dataOffset = lastDataOffset + 8 + dataLength
@@ -175,12 +175,12 @@ func (ff *FragmentFile) Load(ctx context.Context) error {
 // validateHeader validates the file header.
 func (ff *FragmentFile) validateHeader() bool {
 	// 检查magic string
-	if string(ff.mmap[0:8]) != "FRAGMENT" {
+	if string(ff.mappedFile[0:8]) != "FRAGMENT" {
 		return false
 	}
 
 	// 检查版本号
-	version := binary.LittleEndian.Uint32(ff.mmap[8:12])
+	version := binary.LittleEndian.Uint32(ff.mappedFile[8:12])
 	return version == 1
 }
 
@@ -188,11 +188,11 @@ func (ff *FragmentFile) validateHeader() bool {
 func (ff *FragmentFile) readFooter() error {
 	footerOffset := uint32(ff.fileSize - footerSize)
 	// 读取条目数量
-	ff.entryCount = int32(binary.LittleEndian.Uint32(ff.mmap[footerOffset:]))
+	ff.entryCount = int32(binary.LittleEndian.Uint32(ff.mappedFile[footerOffset:]))
 
 	// 读取第一个和最后一个条目ID
-	ff.firstEntryID = int64(binary.LittleEndian.Uint64(ff.mmap[footerOffset+4:]))
-	ff.lastEntryID = int64(binary.LittleEndian.Uint64(ff.mmap[footerOffset+12:]))
+	ff.firstEntryID = int64(binary.LittleEndian.Uint64(ff.mappedFile[footerOffset+4:]))
+	ff.lastEntryID = int64(binary.LittleEndian.Uint64(ff.mappedFile[footerOffset+12:]))
 
 	return nil
 }
@@ -252,19 +252,19 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 	}
 
 	// 读取数据偏移量
-	offset := binary.LittleEndian.Uint32(ff.mmap[idxPos:])
+	offset := binary.LittleEndian.Uint32(ff.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(ff.fileSize) {
 		return nil, fmt.Errorf("invalid data offset: %d", offset)
 	}
 
 	// 读取数据长度
-	length := binary.LittleEndian.Uint32(ff.mmap[offset:])
+	length := binary.LittleEndian.Uint32(ff.mappedFile[offset:])
 	if length == 0 || length > uint32(ff.fileSize)-offset-8 {
 		return nil, fmt.Errorf("invalid data length: %d", length)
 	}
 
 	// 读取CRC (4字节)
-	storedCRC := binary.LittleEndian.Uint32(ff.mmap[offset+4:])
+	storedCRC := binary.LittleEndian.Uint32(ff.mappedFile[offset+4:])
 
 	// 确定数据区域
 	dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
@@ -275,7 +275,7 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 
 	// 读取数据
 	data := make([]byte, length)
-	copy(data, ff.mmap[dataStart:dataEnd])
+	copy(data, ff.mappedFile[dataStart:dataEnd])
 
 	// 验证CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
@@ -303,11 +303,11 @@ func (ff *FragmentFile) Release() error {
 	}
 
 	// 解除内存映射
-	if ff.mmap != nil {
-		if err := ff.mmap.Unmap(); err != nil {
+	if ff.mappedFile != nil {
+		if err := ff.mappedFile.Unmap(); err != nil {
 			return errors.Wrap(err, "failed to unmap fragment file")
 		}
-		ff.mmap = nil
+		ff.mappedFile = nil
 	}
 
 	ff.closed = true
@@ -340,16 +340,16 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	}
 
 	// 写入数据长度 (4字节)
-	binary.LittleEndian.PutUint32(ff.mmap[ff.dataOffset:], uint32(len(data)))
+	binary.LittleEndian.PutUint32(ff.mappedFile[ff.dataOffset:], uint32(len(data)))
 
 	// 计算CRC
 	crc := crc32.ChecksumIEEE(data)
 
 	// 写入CRC (4字节)
-	binary.LittleEndian.PutUint32(ff.mmap[ff.dataOffset+4:], crc)
+	binary.LittleEndian.PutUint32(ff.mappedFile[ff.dataOffset+4:], crc)
 
 	// 写入数据
-	copy(ff.mmap[ff.dataOffset+8:], data)
+	copy(ff.mappedFile[ff.dataOffset+8:], data)
 
 	// 当前数据的偏移量
 	currentDataOffset := ff.dataOffset
@@ -377,7 +377,7 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	}
 
 	// 写入索引（存储数据的偏移量）
-	binary.LittleEndian.PutUint32(ff.mmap[idxPos:], currentDataOffset)
+	binary.LittleEndian.PutUint32(ff.mappedFile[idxPos:], currentDataOffset)
 
 	// 增加条目计数
 	ff.entryCount++
@@ -386,4 +386,46 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	ff.dataOffset += 8 + uint32(len(data))
 
 	return nil
+}
+
+// OpenFragment opens an existing fragment file
+func OpenFragment(filePath string, fileSize int64, fragmentId int64) (*FragmentFile, error) {
+	// 打开文件
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to open fragment file %s", filePath)
+	}
+
+	// 获取文件信息
+	fileInfo, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, errors.Wrapf(err, "failed to get file info %s", filePath)
+	}
+
+	// 映射文件到内存
+	mappedFile, err := mmap.MapRegion(file, int(fileInfo.Size()), mmap.RDWR, 0, 0)
+	if err != nil {
+		file.Close()
+		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
+	}
+
+	// 读取footer以获取firstEntryID和lastEntryID
+	footerOffset := fileInfo.Size() - footerSize
+	firstEntryID := int64(binary.LittleEndian.Uint64(mappedFile[footerOffset+4 : footerOffset+12]))
+	lastEntryID := int64(binary.LittleEndian.Uint64(mappedFile[footerOffset+12 : footerOffset+20]))
+	entryCount := int32(binary.LittleEndian.Uint32(mappedFile[footerOffset : footerOffset+4]))
+
+	// 创建FragmentFile实例
+	ff := &FragmentFile{
+		filePath:     filePath,
+		mappedFile:   mappedFile,
+		fileSize:     fileInfo.Size(),
+		fragmentId:   fragmentId,
+		firstEntryID: firstEntryID,
+		lastEntryID:  lastEntryID,
+		entryCount:   entryCount,
+	}
+
+	return ff, nil
 }
