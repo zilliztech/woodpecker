@@ -42,7 +42,7 @@ func TestNewDiskLogFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
-	assert.Equal(t, 4*1024*1024, logFile.fragmentSize)
+	assert.Equal(t, 128*1024*1024, logFile.fragmentSize)
 	assert.Equal(t, 100000, logFile.maxEntryPerFile)
 
 	// Cleanup

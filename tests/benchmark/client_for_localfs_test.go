@@ -23,7 +23,8 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 	// ### Create client
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.Storage = "local"
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = "/tmp/TestAsyncWritePerformanceForLocalFs"
 
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
@@ -78,7 +79,7 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 					fmt.Printf(writeResult.Err.Error())
 					failMessages = append(failMessages, writingMessages[idx])
 				} else {
-					fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
+					//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
 					successCount++
 				}
 			}
@@ -145,7 +146,8 @@ func TestReadThroughputForLocalFs(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.Storage = "local"
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = "/tmp/TestAsyncWritePerformanceForLocalFs"
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
@@ -189,7 +191,8 @@ func TestReadFromEarliestForLocalFs(t *testing.T) {
 	startReporting()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.Storage = "local"
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = "/tmp/TestAsyncWritePerformanceForLocalFs"
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
@@ -239,7 +242,8 @@ func TestReadFromLatestForLocalFs(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.Storage = "local"
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = "/tmp/TestAsyncWritePerformanceForLocalFs"
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
@@ -279,7 +283,8 @@ func TestReadFromSpecifiedPositionForLocalFs(t *testing.T) {
 	startGopsAgent()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
-	cfg.Woodpecker.Logstore.Storage = "local"
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = "/tmp/TestAsyncWritePerformanceForLocalFs"
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)

@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"os"
 	"path/filepath"
 	"testing"
@@ -216,7 +217,7 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 	largeData := make([]byte, 5*1024) // 5KB
 	err = ff.Write(context.Background(), largeData)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no space left")
+	assert.True(t, werr.ErrDiskFragmentNoSpace.Is(err))
 }
 
 func TestFragmentFile_InvalidEntryId(t *testing.T) {
