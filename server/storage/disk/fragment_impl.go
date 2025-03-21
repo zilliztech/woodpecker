@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
@@ -72,6 +73,7 @@ func NewFragmentFile(filePath string, fileSize int64, fragmentId int64, firstEnt
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
 	}
+	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
 	// 写入文件头
 	if err := ff.writeHeader(); err != nil {
@@ -317,9 +319,6 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 
 // GetSize returns the current size of the fragment.
 func (ff *FragmentFile) GetSize() int64 {
-	ff.mu.RLock()
-	defer ff.mu.RUnlock()
-
 	return int64(ff.dataOffset)
 }
 
@@ -338,6 +337,8 @@ func (ff *FragmentFile) Release() error {
 			return errors.Wrap(err, "failed to unmap fragment file")
 		}
 		ff.mappedFile = nil
+		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(ff.GetSize()))
+		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
 	}
 
 	ff.closed = true
@@ -425,6 +426,9 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 
 	// 更新下一个数据的偏移量
 	ff.dataOffset += 8 + uint32(len(data))
+
+	// update metrics
+	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(requiredSpace))
 
 	return nil
 }

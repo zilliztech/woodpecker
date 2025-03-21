@@ -112,6 +112,7 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		go dlf.run()
 	}
 
+	logger.Ctx(context.Background()).Info("NewDiskLogFile", zap.String("basePath", dlf.basePath), zap.Int64("id", dlf.id))
 	return dlf, nil
 }
 
@@ -149,6 +150,7 @@ func (dlf *DiskLogFile) run() {
 					zap.Int64("logFileId", dlf.id),
 					zap.Error(err))
 			}
+			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
 		case <-dlf.closeCh:
 			logger.Ctx(context.Background()).Info("run: 收到关闭信号，退出goroutine")
 			// 尝试同步剩余数据
@@ -575,7 +577,8 @@ func (dlf *DiskLogFile) needNewFragment() bool {
 func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 	logger.Ctx(context.Background()).Info("rotating fragment",
 		zap.String("basePath", dlf.basePath),
-		zap.Int64("logFileId", dlf.id))
+		zap.Int64("logFileId", dlf.id),
+		zap.Int64("fragmentFirstEntryId", fragmentFirstEntryId))
 
 	// 如果当前片段存在，先关闭它
 	if dlf.currFragment != nil {
@@ -1025,6 +1028,12 @@ type Option func(*DiskLogFile)
 func WithFragmentSize(size int) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.fragmentSize = size
+	}
+}
+
+func WithMaxBufferSize(size int) Option {
+	return func(dlf *DiskLogFile) {
+		dlf.maxBufferSize = size
 	}
 }
 
