@@ -172,6 +172,7 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 			// use local FileSystem or local FileSystem + minio-compatible
 			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix())
 			s.currentLogFileWriter = writerFile
+			logger.Ctx(ctx).Info("create DiskLogFile for write", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()))
 			return s.currentLogFileWriter, err
 		} else {
 			// use MinIO-compatible storage
@@ -197,6 +198,7 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 			// use local FileSystem or local FileSystem + minio-compatible
 			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix(), disk.WithDisableAutoSync())
 			s.currentLogFileWriter = writerFile
+			logger.Ctx(ctx).Info("create DiskLogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()))
 			return s.currentLogFileWriter, err
 		} else {
 			s.currentLogFileReader = objectstorage.NewROLogFile(

@@ -10,7 +10,10 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/edsrzf/mmap-go"
+	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
@@ -236,11 +239,17 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 	defer ff.mu.RUnlock()
 
 	if ff.closed {
+		// Use context.Background() for logging since we don't have a context parameter
+		logger.Ctx(context.Background()).Debug("Fragment file is closed")
 		return nil, errors.New("fragment file is closed")
 	}
 
 	// 检查entryId是否在范围内
 	if entryId < ff.firstEntryID || entryId > ff.lastEntryID {
+		logger.Ctx(context.Background()).Debug("Entry ID out of range",
+			zap.Int64("requestedID", entryId),
+			zap.Int64("firstEntryID", ff.firstEntryID),
+			zap.Int64("lastEntryID", ff.lastEntryID))
 		return nil, fmt.Errorf("entry ID %d out of range", entryId)
 	}
 
@@ -248,18 +257,31 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 	idxPos := uint32(ff.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-ff.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(ff.fileSize-footerSize) {
+		logger.Ctx(context.Background()).Debug("Invalid index position",
+			zap.Uint32("idxPos", idxPos),
+			zap.Uint32("headerSize", headerSize),
+			zap.Int64("fileSize", ff.fileSize),
+			zap.Uint32("footerSize", footerSize))
 		return nil, fmt.Errorf("invalid index position: %d", idxPos)
 	}
 
 	// 读取数据偏移量
 	offset := binary.LittleEndian.Uint32(ff.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(ff.fileSize) {
+		logger.Ctx(context.Background()).Debug("Invalid data offset",
+			zap.Uint32("offset", offset),
+			zap.Uint32("headerSize", headerSize),
+			zap.Int64("fileSize", ff.fileSize))
 		return nil, fmt.Errorf("invalid data offset: %d", offset)
 	}
 
 	// 读取数据长度
 	length := binary.LittleEndian.Uint32(ff.mappedFile[offset:])
 	if length == 0 || length > uint32(ff.fileSize)-offset-8 {
+		logger.Ctx(context.Background()).Debug("Invalid data length",
+			zap.Uint32("length", length),
+			zap.Uint32("offset", offset),
+			zap.Int64("fileSize", ff.fileSize))
 		return nil, fmt.Errorf("invalid data length: %d", length)
 	}
 
@@ -270,6 +292,10 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 	dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
 	dataEnd := dataStart + length
 	if dataEnd > uint32(ff.fileSize) {
+		logger.Ctx(context.Background()).Debug("Data region out of bounds",
+			zap.Uint32("dataStart", dataStart),
+			zap.Uint32("dataEnd", dataEnd),
+			zap.Int64("fileSize", ff.fileSize))
 		return nil, fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
 	}
 
@@ -279,6 +305,10 @@ func (ff *FragmentFile) GetEntry(entryId int64) ([]byte, error) {
 
 	// 验证CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
+		logger.Ctx(context.Background()).Debug("CRC mismatch",
+			zap.Int64("entryId", entryId),
+			zap.Uint32("computedCRC", crc32.ChecksumIEEE(data)),
+			zap.Uint32("storedCRC", storedCRC))
 		return nil, fmt.Errorf("CRC mismatch for entry ID %d", entryId)
 	}
 
@@ -319,24 +349,28 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 	ff.mu.Lock()
 	defer ff.mu.Unlock()
 
-	fmt.Printf("Fragment写入条目: fragment ID %d, first entry ID %d, 数据长度: %d\n",
-		ff.fragmentId, ff.firstEntryID, len(data))
+	logger.Ctx(ctx).Debug("Fragment写入条目",
+		zap.Int64("fragmentId", ff.fragmentId),
+		zap.Int64("firstEntryID", ff.firstEntryID),
+		zap.Int("dataLength", len(data)))
 
 	if ff.closed {
-		fmt.Printf("Fragment已关闭，无法写入\n")
+		logger.Ctx(ctx).Debug("Fragment已关闭，无法写入")
 		return errors.New("fragment file is closed")
 	}
 
 	// 检查空间是否足够
 	requiredSpace := uint32(len(data) + 8) // 数据长度(4) + CRC(4) + 数据
 
-	fmt.Printf("需要空间: %d, 当前偏移量: %d, 文件大小: %d\n",
-		requiredSpace, ff.dataOffset, ff.fileSize)
+	logger.Ctx(ctx).Debug("需要空间",
+		zap.Uint32("requiredSpace", requiredSpace),
+		zap.Uint32("currentOffset", ff.dataOffset),
+		zap.Int64("fileSize", ff.fileSize))
 
 	// 确保有足够的空间写入数据和索引
 	if ff.dataOffset+requiredSpace >= uint32(ff.fileSize-footerSize-int64(indexItemSize)*(int64(ff.entryCount)+1)) {
-		fmt.Printf("Fragment空间不足，无法写入\n")
-		return errors.New("no space left in fragment file")
+		logger.Ctx(ctx).Debug("Fragment空间不足，无法写入")
+		return werr.ErrDiskFragmentNoSpace
 	}
 
 	// 写入数据长度 (4字节)
@@ -368,11 +402,18 @@ func (ff *FragmentFile) Write(ctx context.Context, data []byte) error {
 
 	// 检查索引位置是否有效
 	if idxPos > uint32(ff.fileSize) || idxPos < ff.dataOffset {
+		logger.Ctx(ctx).Debug("计算的索引位置无效",
+			zap.Uint32("idxPos", idxPos),
+			zap.Int64("fileSize", ff.fileSize),
+			zap.Uint32("dataOffset", ff.dataOffset))
 		return fmt.Errorf("计算的索引位置无效: %d (文件大小: %d, 数据偏移: %d)", idxPos, ff.fileSize, ff.dataOffset)
 	}
 
 	// 安全检查: 确保索引区域不会与数据区域重叠
 	if idxPos < ff.dataOffset {
+		logger.Ctx(ctx).Debug("索引位置与数据区域重叠",
+			zap.Uint32("idxPos", idxPos),
+			zap.Uint32("dataOffset", ff.dataOffset))
 		return fmt.Errorf("索引位置 (%d) 与数据区域 (%d) 重叠", idxPos, ff.dataOffset)
 	}
 
