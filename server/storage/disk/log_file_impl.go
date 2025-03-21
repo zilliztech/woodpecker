@@ -331,6 +331,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	// 将数据写入fragment
 	var writeError error
 	var lastWrittenEntryID int64 = dlf.lastEntryID.Load()
+	var pendingFlushBytes int = 0
 	var lastWrittenFlushedEntryID int64 = lastWrittenEntryID
 
 	logger.Ctx(ctx).Debug("Sync开始写入数据到fragment")
@@ -349,13 +350,18 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 		if dlf.needNewFragment() {
 			logger.Ctx(ctx).Debug("Sync检测到fragment已满，需要创建新的fragment")
 			// 先将当前fragment刷到磁盘
+			startFlush := time.Now()
 			if err := dlf.currFragment.Flush(ctx); err != nil {
 				logger.Ctx(ctx).Warn("Sync刷新当前fragment失败",
 					zap.Error(err))
 				writeError = err
 				break
 			}
+			flushDuration := time.Now().Sub(startFlush)
 			lastWrittenFlushedEntryID = lastWrittenEntryID
+			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
+			pendingFlushBytes = 0
 
 			// 创建新的fragment
 			if err := dlf.rotateFragment(lastWrittenFlushedEntryID + 1); err != nil {
@@ -385,13 +391,19 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 				writeError = rotateErr
 				break
 			}
+			startFlush := time.Now()
 			if flushErr := dlf.currFragment.Flush(ctx); flushErr != nil {
 				logger.Ctx(ctx).Warn("Sync刷新当前fragment失败",
 					zap.Error(flushErr))
 				writeError = flushErr
 				break
 			}
+			flushDuration := time.Now().Sub(startFlush)
 			lastWrittenFlushedEntryID = lastWrittenEntryID
+			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
+			pendingFlushBytes = 0
+
 			// 重试一次
 			writeErr = dlf.currFragment.Write(ctx, dataWithID)
 		}
@@ -405,17 +417,25 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 				zap.Error(writeErr))
 			break
 		}
+		// write success, update monitor bytesSize
+		pendingFlushBytes += len(dataWithID)
+		// write success, update lastWrittenEntryId
 		lastWrittenEntryID = entryID
 	}
 
 	// 说明还有写入数据还没flush到磁盘, 进行一次flush刷盘
 	if lastWrittenEntryID != lastWrittenFlushedEntryID {
+		startFlush := time.Now()
 		flushErr := dlf.currFragment.Flush(ctx)
 		if flushErr != nil {
 			logger.Ctx(ctx).Debug("Sync刷新当前fragment失败", zap.Error(flushErr))
 			writeError = flushErr
 		} else {
+			flushDuration := time.Now().Sub(startFlush)
 			lastWrittenFlushedEntryID = lastWrittenEntryID
+			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
+			pendingFlushBytes = 0
 		}
 	}
 
