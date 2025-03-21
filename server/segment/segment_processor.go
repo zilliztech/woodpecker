@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
+	"path"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -168,9 +169,9 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 		// get logfile id from meta/storage
 		// Currently, simplified support for one logical LogFile per Segment
 		s.currentLogFileId = 0
-		if s.cfg.Woodpecker.Logstore.IsStorageLocal() || s.cfg.Woodpecker.Logstore.IsStorageService() {
+		if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 			// use local FileSystem or local FileSystem + minio-compatible
-			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix())
+			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
 			s.currentLogFileWriter = writerFile
 			logger.Ctx(ctx).Info("create DiskLogFile for write", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()))
 			return s.currentLogFileWriter, err
@@ -194,9 +195,9 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 		// get logfile id from meta/storage
 		// Currently, simplified support for one LogFile per Segment
 		roLogFileId := int64(0)
-		if s.cfg.Woodpecker.Logstore.IsStorageLocal() || s.cfg.Woodpecker.Logstore.IsStorageService() {
+		if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 			// use local FileSystem or local FileSystem + minio-compatible
-			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, "/tmp/"+s.getSegmentKeyPrefix(), disk.WithDisableAutoSync())
+			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()), disk.WithDisableAutoSync())
 			s.currentLogFileWriter = writerFile
 			logger.Ctx(ctx).Info("create DiskLogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()))
 			return s.currentLogFileWriter, err
