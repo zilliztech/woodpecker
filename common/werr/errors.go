@@ -109,6 +109,8 @@ const (
 	MaxConcurrentOperationsReached
 	// ConfigError indicates that an error occurred while reading the configuration.
 	ConfigError
+	// DiskFragmentNoSpace indicates that the disk fragment is full.
+	DiskFragmentNoSpace
 )
 
 var (
@@ -147,6 +149,9 @@ var (
 	ErrNotSupport     = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
 	ErrInternalError  = newWoodpeckerError("internal error", InternalError, true)
 	ErrConfigError    = newWoodpeckerError("config error", ConfigError, false)
+
+	// Storage Related
+	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.

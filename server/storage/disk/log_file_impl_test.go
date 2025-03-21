@@ -3,12 +3,13 @@ package disk
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
