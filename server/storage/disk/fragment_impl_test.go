@@ -2,10 +2,11 @@ package disk
 
 import (
 	"context"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 
 	"github.com/stretchr/testify/assert"
 )
