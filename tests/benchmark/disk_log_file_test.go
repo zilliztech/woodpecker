@@ -3,6 +3,8 @@ package benchmark
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -24,6 +26,12 @@ func min(a, b int) int {
 // TestDiskLogFileWritePerformance 测试 DiskLogFile 写入性能
 // 关注点：buffer大小、flush频率、文件大小对写入性能的影响
 func TestDiskLogFileWritePerformance(t *testing.T) {
+	startGopsAgent()
+	startMetrics()
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "info"
+	logger.InitLogger(cfg)
+
 	// 测试参数
 	testCases := []struct {
 		name         string
@@ -50,6 +58,9 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 		{"大文件_小buffer_高频flush", 100 * 1024 * 1024, 4 * 1024 * 1024, 256 * 1024, 200, 100 * time.Millisecond},
 		{"大文件_大buffer_不自动flush", 100 * 1024 * 1024, 32 * 1024 * 1024, 256 * 1024, 200, 0},
 		{"大文件_大buffer_低频flush", 100 * 1024 * 1024, 32 * 1024 * 1024, 256 * 1024, 200, 500 * time.Millisecond},
+
+		// Little big dataset Test, 2MB*500 = 1GB
+		{"大文件_大buffer_低频flush", 128 * 1024 * 1024, 32 * 1024 * 1024, 2 * 1024 * 1024, 500, 10 * time.Millisecond},
 	}
 
 	// 创建临时目录
@@ -64,6 +75,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var options []disk.Option
 			options = append(options, disk.WithFragmentSize(tc.fragmentSize))
+			options = append(options, disk.WithMaxBufferSize(tc.bufferSize))
 
 			// 如果不自动flush，禁用自动同步
 			if tc.flushRate == 0 {
@@ -451,6 +463,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 			// 创建DiskLogFile实例
 			options := []disk.Option{
 				disk.WithFragmentSize(tc.fragmentSize),
+				disk.WithMaxBufferSize(tc.bufferSize),
 			}
 
 			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)

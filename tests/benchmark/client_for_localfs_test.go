@@ -17,7 +17,7 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
 	entrySize := 2_000_000 // 2MB per row
-	batchCount := 20       // 64MB per batch to wait or retry if any failed exists
+	batchCount := 1_000    // 64MB per batch to wait or retry if any failed exists
 	writeCount := 5_000    // total 5k rows to write, 5k*2MB=10GB
 
 	// ### Create client
@@ -76,7 +76,7 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 			for idx, ch := range writingResultChan {
 				writeResult := <-ch
 				if writeResult.Err != nil {
-					fmt.Printf(writeResult.Err.Error())
+					fmt.Println(writeResult.Err.Error())
 					failMessages = append(failMessages, writingMessages[idx])
 				} else {
 					//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
@@ -101,7 +101,7 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 		for idx, ch := range writingResultChan {
 			writeResult := <-ch
 			if writeResult.Err != nil {
-				fmt.Printf(writeResult.Err.Error())
+				fmt.Println(writeResult.Err.Error())
 				failMessages = append(failMessages, writingMessages[idx])
 			} else {
 				successCount++
@@ -123,7 +123,7 @@ func TestAsyncWritePerformanceForLocalFs(t *testing.T) {
 			for idx, ch := range writingResultChan {
 				writeResult := <-ch
 				if writeResult.Err != nil {
-					fmt.Printf(writeResult.Err.Error())
+					fmt.Println(writeResult.Err.Error())
 					failMessages = append(failMessages, writingMessages[idx])
 				} else {
 					successCount++
