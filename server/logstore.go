@@ -52,7 +52,7 @@ type logStore struct {
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
-	fragmentMgr := cache.GetInstance(1_000_000_000, 1_000)
+	fragmentMgr := cache.GetInstance(cfg.Woodpecker.Logstore.FragmentManager.MaxBytes, cfg.Woodpecker.Logstore.FragmentManager.MaxInterval)
 	return &logStore{
 		cfg:               cfg,
 		ctx:               ctx,

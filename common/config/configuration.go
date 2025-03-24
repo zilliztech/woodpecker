@@ -46,6 +46,12 @@ type LogFileSyncPolicyConfig struct {
 	MaxFlushThreads int `yaml:"maxFlushThreads"`
 }
 
+// FragmentManagerConfig stores the fragment manager configuration.
+type FragmentManagerConfig struct {
+	MaxBytes    int64 `yaml:"maxBytes"`
+	MaxInterval int   `yaml:"maxInterval"`
+}
+
 // LogFileConfig stores the log file configuration.
 type LogFileConfig struct {
 	RootPath   string `yaml:"rootPath"`
@@ -166,6 +172,7 @@ type MinioConfig struct {
 // LogstoreConfig stores the logstore configuration.
 type LogstoreConfig struct {
 	LogFileSyncPolicy LogFileSyncPolicyConfig `yaml:"logFileSyncPolicy"`
+	FragmentManager   FragmentManagerConfig   `yaml:"fragmentManager"`
 }
 
 type StorageConfig struct {
@@ -264,6 +271,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				RetryInterval:   2000,
 				MaxFlushSize:    16000000,
 				MaxFlushThreads: 8,
+			},
+			FragmentManager: FragmentManagerConfig{
+				MaxBytes:    256_000_000,
+				MaxInterval: 2000,
 			},
 		},
 		Storage: StorageConfig{

@@ -117,7 +117,7 @@ func startReporting() {
 					avgBytes := deltaBytesSum / deltaBytesCount
 					rateMB := deltaBytesSum / 1_000_000 / elapsedTimeMs * 1000                           // 转换为MB/s
 					avgRateMB := currentBytesSum / 1_000_000 / float64(currentTimeMs-firstTimeMs) * 1000 // 转换为MB/s
-					fmt.Printf("写入流量 - 平均每次大小: %.2f bytes ,当前流量: %.2f MB/s, 平均流量: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
+					fmt.Printf("流量监控 - 平均每次大小: %.2f bytes ,当前流量: %.2f MB/s, 平均流量: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
 				}
 
 				if deltaLatencyCount > 0 {

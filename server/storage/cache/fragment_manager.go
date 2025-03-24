@@ -37,7 +37,7 @@ type FragmentManager interface {
 var (
 	once      sync.Once
 	instance  FragmentManager
-	maxMemory int64 = 1_000_000
+	maxMemory int64 = 256_000_000
 	interval  int   = 1_000
 )
 

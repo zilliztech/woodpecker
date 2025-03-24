@@ -61,6 +61,8 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 
 		// Little big dataset Test, 2MB*500 = 1GB
 		{"大文件_大buffer_低频flush", 128 * 1024 * 1024, 32 * 1024 * 1024, 2 * 1024 * 1024, 500, 10 * time.Millisecond},
+		{"大文件_大buffer_超高频flush", 2 * 1024 * 1024 * 1024, 64 * 1024 * 1024, 2 * 1024 * 1024, 500, 0},
+		{"大文件_大buffer_超高频flush", 1 * 1024 * 1024 * 1024, 4 * 1024 * 1024, 4 * 1024, 5000, 0},
 	}
 
 	// 创建临时目录

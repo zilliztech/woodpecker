@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -549,6 +550,8 @@ func TestMmapMixedWritePattern(t *testing.T) {
 		{"大文件_小块_少量flush", 500 * 1024 * 1024, 5000, 4 * 1024, 500},
 		{"大文件_大块_频繁flush", 1024 * 1024 * 1024, 1000, 64 * 1024, 20},
 		{"大文件_大块_少量flush", 1024 * 1024 * 1024, 1000, 64 * 1024, 200},
+		{"大文件_很大块_频量flush", 1024 * 1024 * 1024, 500, 1024 * 1024, 10},
+		{"大文件_很大块_少量flush", 1024 * 1024 * 1024, 500, 1024 * 1024, 100},
 	}
 
 	// 创建临时目录
@@ -696,5 +699,336 @@ func TestMmapMixedWritePattern(t *testing.T) {
 			t.Logf("  尾部单次写入平均耗时: %.3f ms", tailAvgTime)
 			t.Logf("  单次刷新平均耗时: %.3f ms", flushAvgTime)
 		})
+	}
+}
+
+// TestMmapWritePerformanceDetailed 测试mmap写入性能的详细指标
+// 特别关注copy和flush操作的耗时分布
+func TestMmapWritePerformanceDetailed(t *testing.T) {
+	// 测试参数组合
+	testCases := []struct {
+		name          string
+		fileSize      int64
+		writeCount    int
+		dataBlockSize int
+		flushInterval int // 每写入多少次执行一次flush
+	}{
+		{"小数据块_4KB", 1024 * 1024 * 1024, 100000, 4 * 1024, 1000},
+		{"中数据块_64KB", 1024 * 1024 * 1024, 10000, 64 * 1024, 100},
+		{"大数据块_1MB", 1024 * 1024 * 1024, 1000, 1 * 1024 * 1024, 10},
+		{"超大数据块_4MB", 4 * 1024 * 1024 * 1024, 250, 4 * 1024 * 1024, 5},
+		{"超大数据块_16MB", 4 * 1024 * 1024 * 1024, 62, 16 * 1024 * 1024, 2},
+		{"极限数据块_64MB", 8 * 1024 * 1024 * 1024, 16, 64 * 1024 * 1024, 1},
+	}
+
+	// 创建临时目录
+	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("mmap_detailed_perf_%d", time.Now().UnixNano()))
+	err := os.MkdirAll(tempDir, 0755)
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			filePath := filepath.Join(tempDir, fmt.Sprintf("detailed_%s.data", tc.name))
+
+			// 测量文件创建时间
+			fileCreateStart := time.Now()
+			file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+			if err != nil {
+				t.Fatalf("无法创建文件: %v", err)
+			}
+
+			// 设置文件大小
+			truncateStart := time.Now()
+			fileCreateTime := truncateStart.Sub(fileCreateStart)
+
+			if err := file.Truncate(tc.fileSize); err != nil {
+				file.Close()
+				t.Fatalf("无法设置文件大小: %v", err)
+			}
+			truncateTime := time.Since(truncateStart)
+
+			// 测量映射时间
+			mmapStart := time.Now()
+			mappedFile, err := mmap.MapRegion(file, int(tc.fileSize), mmap.RDWR, 0, 0)
+			if err != nil {
+				file.Close()
+				t.Fatalf("无法映射文件: %v", err)
+			}
+			mmapTime := time.Since(mmapStart)
+
+			defer func() {
+				// 测量解除映射时间
+				unmapStart := time.Now()
+				if err := mappedFile.Unmap(); err != nil {
+					t.Errorf("无法解除文件映射: %v", err)
+				}
+				unmapTime := time.Since(unmapStart)
+				t.Logf("  解除映射耗时: %v", unmapTime)
+				file.Close()
+			}()
+
+			// 生成随机数据
+			dataGenStart := time.Now()
+			randomData := make([]byte, tc.dataBlockSize)
+			rand.Read(randomData)
+			dataGenTime := time.Since(dataGenStart)
+
+			// 数据写入统计
+			copyTimes := make([]time.Duration, 0, tc.writeCount)
+			flushTimes := make([]time.Duration, 0, tc.writeCount/tc.flushInterval+1)
+			totalBytesWritten := 0
+			flushCount := 0
+
+			// 数据结构存储写入子操作耗时
+			type WriteOpTimes struct {
+				lengthWriteTime time.Duration
+				dataCopyTime    time.Duration
+				totalWriteTime  time.Duration
+			}
+			writeOpTimes := make([]WriteOpTimes, 0, tc.writeCount)
+
+			// 写入数据的起始偏移
+			dataOffset := uint32(headerSize)
+
+			// 测量总体写入时间
+			totalWriteStart := time.Now()
+
+			for i := 0; i < tc.writeCount; i++ {
+				opStart := time.Now()
+
+				// 计算所需内存
+				requiredSpace := dataOffset + 4 + uint32(tc.dataBlockSize)
+
+				// 检查是否会超出文件大小
+				if requiredSpace >= uint32(tc.fileSize) {
+					t.Logf("警告：数据将超出文件大小，在%d/%d次写入后停止", i, tc.writeCount)
+					break
+				}
+
+				// 测量写入长度字段的时间
+				lengthWriteStart := time.Now()
+				binary.LittleEndian.PutUint32(mappedFile[dataOffset:], uint32(tc.dataBlockSize))
+				lengthWriteTime := time.Since(lengthWriteStart)
+
+				// 测量数据复制时间
+				copyStart := time.Now()
+				copy(mappedFile[dataOffset+4:], randomData)
+				copyTime := time.Since(copyStart)
+				copyTimes = append(copyTimes, copyTime)
+
+				// 更新统计
+				writeOpTimes = append(writeOpTimes, WriteOpTimes{
+					lengthWriteTime: lengthWriteTime,
+					dataCopyTime:    copyTime,
+					totalWriteTime:  time.Since(opStart),
+				})
+
+				// 更新offset和计数器
+				dataOffset += 4 + uint32(tc.dataBlockSize)
+				totalBytesWritten += tc.dataBlockSize + 4
+
+				// 根据刷新间隔执行flush
+				if (i+1)%tc.flushInterval == 0 || i == tc.writeCount-1 {
+					flushStart := time.Now()
+					if err := mappedFile.Flush(); err != nil {
+						t.Fatalf("刷新文件失败: %v", err)
+					}
+					flushTime := time.Since(flushStart)
+					flushTimes = append(flushTimes, flushTime)
+					flushCount++
+				}
+			}
+
+			totalWriteTime := time.Since(totalWriteStart)
+
+			// 计算性能指标
+			bytesPerSecond := float64(0)
+			mbPerSecond := float64(0)
+			if totalWriteTime > 0 {
+				bytesPerSecond = float64(totalBytesWritten) / totalWriteTime.Seconds()
+				mbPerSecond = bytesPerSecond / (1024 * 1024)
+			}
+
+			// 计算copy和flush时间统计
+			var totalCopyTime time.Duration
+			var totalFlushTime time.Duration
+			var minCopyTime, maxCopyTime time.Duration
+			var minFlushTime, maxFlushTime time.Duration
+
+			if len(copyTimes) > 0 {
+				minCopyTime = copyTimes[0]
+				maxCopyTime = copyTimes[0]
+				for _, t := range copyTimes {
+					totalCopyTime += t
+					if t < minCopyTime {
+						minCopyTime = t
+					}
+					if t > maxCopyTime {
+						maxCopyTime = t
+					}
+				}
+			}
+
+			if len(flushTimes) > 0 {
+				minFlushTime = flushTimes[0]
+				maxFlushTime = flushTimes[0]
+				for _, t := range flushTimes {
+					totalFlushTime += t
+					if t < minFlushTime {
+						minFlushTime = t
+					}
+					if t > maxFlushTime {
+						maxFlushTime = t
+					}
+				}
+			}
+
+			avgCopyTimeNs := int64(0)
+			if len(copyTimes) > 0 {
+				avgCopyTimeNs = totalCopyTime.Nanoseconds() / int64(len(copyTimes))
+			}
+
+			avgFlushTimeMs := float64(0)
+			if len(flushTimes) > 0 {
+				avgFlushTimeMs = float64(totalFlushTime.Milliseconds()) / float64(len(flushTimes))
+			}
+
+			copyThroughputMBs := float64(0)
+			if totalCopyTime > 0 {
+				copyThroughputMBs = float64(totalBytesWritten) / (1024 * 1024) / totalCopyTime.Seconds()
+			}
+
+			// 计算每秒写入操作数 (IOPS)
+			iops := float64(0)
+			if totalWriteTime > 0 {
+				iops = float64(len(copyTimes)) / totalWriteTime.Seconds()
+			}
+
+			// 计算copy操作分布
+			copyNanosP50 := calculatePercentile(copyTimes, 50)
+			copyNanosP95 := calculatePercentile(copyTimes, 95)
+			copyNanosP99 := calculatePercentile(copyTimes, 99)
+
+			// 计算flush操作分布
+			flushMsP50 := float64(calculatePercentile(flushTimes, 50)) / float64(time.Millisecond)
+			flushMsP95 := float64(calculatePercentile(flushTimes, 95)) / float64(time.Millisecond)
+			flushMsP99 := float64(calculatePercentile(flushTimes, 99)) / float64(time.Millisecond)
+
+			// 输出详细性能报告
+			t.Logf("======== mmap写入性能详细测试 - %s ========", tc.name)
+			t.Logf("初始化阶段:")
+			t.Logf("  文件创建耗时: %v", fileCreateTime)
+			t.Logf("  文件truncate耗时: %v", truncateTime)
+			t.Logf("  mmap映射耗时: %v", mmapTime)
+			t.Logf("  测试数据生成耗时: %v", dataGenTime)
+			t.Logf("\n文件和数据信息:")
+			t.Logf("  文件大小: %d MB", tc.fileSize/(1024*1024))
+			t.Logf("  数据块大小: %s", formatSize(int64(tc.dataBlockSize)))
+			t.Logf("  写入次数: %d", len(copyTimes))
+			t.Logf("  总写入数据: %s", formatSize(int64(totalBytesWritten)))
+			t.Logf("  刷新次数: %d", flushCount)
+			t.Logf("\n性能总结:")
+			t.Logf("  总写入耗时: %v", totalWriteTime)
+			t.Logf("  平均写入吞吐量: %.2f MB/s", mbPerSecond)
+			t.Logf("  每秒IO操作数(IOPS): %.2f", iops)
+			t.Logf("\ncopy操作性能分析:")
+			t.Logf("  copy操作总耗时: %v (占总时间的 %.1f%%)", totalCopyTime, float64(totalCopyTime)/float64(totalWriteTime)*100)
+			t.Logf("  平均单次copy耗时: %d ns", avgCopyTimeNs)
+			t.Logf("  copy操作延迟分布: P50=%d ns, P95=%d ns, P99=%d ns",
+				copyNanosP50, copyNanosP95, copyNanosP99)
+			t.Logf("  copy操作吞吐量: %.2f MB/s", copyThroughputMBs)
+			t.Logf("  最短copy耗时: %v", minCopyTime)
+			t.Logf("  最长copy耗时: %v", maxCopyTime)
+			t.Logf("\nflush操作性能分析:")
+			t.Logf("  flush操作总耗时: %v (占总时间的 %.1f%%)", totalFlushTime, float64(totalFlushTime)/float64(totalWriteTime)*100)
+			t.Logf("  平均单次flush耗时: %.2f ms", avgFlushTimeMs)
+			t.Logf("  flush操作延迟分布: P50=%.2f ms, P95=%.2f ms, P99=%.2f ms",
+				flushMsP50, flushMsP95, flushMsP99)
+			t.Logf("  最短flush耗时: %v", minFlushTime)
+			t.Logf("  最长flush耗时: %v", maxFlushTime)
+
+			// 修复除以零错误
+			avgFlushDataSize := "0 bytes"
+			if flushCount > 0 {
+				avgFlushDataSize = formatSize(int64(totalBytesWritten / flushCount))
+			}
+			t.Logf("  平均每次flush的数据量: %s", avgFlushDataSize)
+			t.Logf("\n结论:")
+
+			if copyThroughputMBs > 3000 {
+				t.Logf("  内存复制速度非常快(%.2f MB/s)，接近理论内存带宽限制", copyThroughputMBs)
+			} else if copyThroughputMBs > 1000 {
+				t.Logf("  内存复制速度良好(%.2f MB/s)", copyThroughputMBs)
+			} else {
+				t.Logf("  内存复制速度较慢(%.2f MB/s)，可能存在瓶颈", copyThroughputMBs)
+			}
+
+			// 分析总体性能瓶颈
+			copyPercentage := float64(0)
+			flushPercentage := float64(0)
+			otherPercentage := float64(0)
+
+			if totalWriteTime > 0 {
+				copyPercentage = float64(totalCopyTime) / float64(totalWriteTime) * 100
+				flushPercentage = float64(totalFlushTime) / float64(totalWriteTime) * 100
+				otherPercentage = 100 - copyPercentage - flushPercentage
+			}
+
+			t.Logf("  总体性能分布: copy操作占比%.1f%%, flush操作占比%.1f%%, 其他操作占比%.1f%%",
+				copyPercentage, flushPercentage, otherPercentage)
+
+			if flushPercentage > 50 {
+				t.Logf("  性能瓶颈: flush操作是主要瓶颈，减少flush频率可能会提高整体性能")
+			} else if copyPercentage > 50 {
+				t.Logf("  性能瓶颈: 内存复制是主要瓶颈，考虑使用更大的块大小或优化内存访问模式")
+			} else {
+				t.Logf("  性能分布均衡，没有明显瓶颈")
+			}
+		})
+	}
+}
+
+// calculatePercentile 计算持续时间切片的百分位数 (返回纳秒)
+func calculatePercentile(durations []time.Duration, percentile int) int64 {
+	if len(durations) == 0 {
+		return 0
+	}
+
+	// 复制切片以避免修改原始数据
+	durationsCopy := make([]time.Duration, len(durations))
+	copy(durationsCopy, durations)
+
+	// 转换为纳秒并排序
+	nanoseconds := make([]int64, len(durationsCopy))
+	for i, d := range durationsCopy {
+		nanoseconds[i] = d.Nanoseconds()
+	}
+	sort.Slice(nanoseconds, func(i, j int) bool { return nanoseconds[i] < nanoseconds[j] })
+
+	// 计算百分位数
+	index := int(float64(len(nanoseconds)-1) * float64(percentile) / 100.0)
+	return nanoseconds[index]
+}
+
+// formatSize 将字节数格式化为人类可读的大小
+func formatSize(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d bytes", bytes)
 	}
 }
