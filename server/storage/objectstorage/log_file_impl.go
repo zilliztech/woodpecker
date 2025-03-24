@@ -187,22 +187,24 @@ func (f *LogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
 
 // get the fragment for the entryId
 func (f *LogFile) getFragment(entryId int64) (*FragmentObject, error) {
+	logger.Ctx(context.TODO()).Debug("get fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId))
 	// fragmentId: 0~n
-	for _, fragment := range f.fragments {
-		lastEntryId, err := fragment.GetLastEntryId()
-		if err != nil {
-			return nil, err
-		}
-		if lastEntryId >= entryId {
-			return fragment, nil
-		}
+	foundFrag, err := f.findFragment(entryId)
+	if err != nil {
+		return nil, err
 	}
+	if foundFrag != nil {
+		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		return foundFrag, nil
+	}
+
 	// try next fragment which has been uploaded in objectStorage
 	nextFragmentId := f.LastFragmentId() + 1
 	nextFragmentKey := f.getFragmentKey(nextFragmentId)
 
 	// if the next fragment already cached
 	if cachedFrag, cached := cache.GetCachedFragment(context.TODO(), nextFragmentKey); cached {
+		logger.Ctx(context.TODO()).Debug("get cached fragment from FragmentManager for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", cachedFrag.GetFragmentId()))
 		return cachedFrag.(*FragmentObject), nil
 	}
 
@@ -214,11 +216,44 @@ func (f *LogFile) getFragment(entryId int64) (*FragmentObject, error) {
 	if exists {
 		fragment := NewFragmentObject(f.client, f.bucket, nextFragmentId, nextFragmentKey, nil, 0, false, true, false)
 		f.fragments = append(f.fragments, fragment)
+		logger.Ctx(context.TODO()).Info("get basic fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Uint64("fragmentId", nextFragmentId))
 		return fragment, nil
 	}
 
 	//
 	return nil, nil
+}
+
+// findFragment finds the fragment for the entryId
+func (f *LogFile) findFragment(entryId int64) (*FragmentObject, error) {
+	low, high := 0, len(f.fragments)-1
+	var candidate *FragmentObject
+
+	for low <= high {
+		mid := (low + high) / 2
+		frag := f.fragments[mid]
+
+		first, err := frag.GetFirstEntryId()
+		if err != nil {
+			return nil, err
+		}
+
+		if first > entryId {
+			high = mid - 1
+		} else {
+			last, err := frag.GetLastEntryId()
+			if err != nil {
+				return nil, err
+			}
+			if last >= entryId {
+				candidate = frag
+				return candidate, nil
+			} else {
+				low = mid + 1
+			}
+		}
+	}
+	return candidate, nil
 }
 
 // objectExists checks if an object exists in the MinIO bucket

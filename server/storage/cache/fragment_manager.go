@@ -121,7 +121,7 @@ func (m *fragmentManagerImpl) RemoveFragment(ctx context.Context, fragment stora
 		m.usedMemory -= fragmentSize
 		item.fragment.Release()
 		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
-		logger.Ctx(m.evictionCtx).Info("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+		logger.Ctx(m.evictionCtx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
 		return nil
 	}
 	return werr.ErrFragmentNotFound
@@ -160,7 +160,7 @@ func (m *fragmentManagerImpl) AddFragment(ctx context.Context, fragment storage.
 	fragmentSize := calculateSize(fragment)
 	m.usedMemory += fragmentSize
 	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Add(float64(fragmentSize))
-	logger.Ctx(m.evictionCtx).Info("add fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+	logger.Ctx(m.evictionCtx).Debug("add fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
 	return nil
 }
 
@@ -188,7 +188,7 @@ func (m *fragmentManagerImpl) EvictFragments() error {
 			metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 		}
 		m.order.Remove(evictElement)
-		logger.Ctx(m.evictionCtx).Info("evict fragment automatically", zap.String("key", key))
+		logger.Ctx(m.evictionCtx).Debug("evict fragment automatically", zap.String("key", key))
 
 		// break if the used memory is less than the max memory
 		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {

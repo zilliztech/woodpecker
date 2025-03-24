@@ -1065,3 +1065,85 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		assert.False(t, hasNext)
 	}
 }
+
+func TestFindFragment(t *testing.T) {
+	// 创建模拟的Fragment对象列表
+	mockFragments := []*FragmentObject{
+		{fragmentId: 1, firstEntryId: 0, lastEntryId: 99, infoFetched: true},    // [0,99]
+		{fragmentId: 2, firstEntryId: 100, lastEntryId: 199, infoFetched: true}, // [100,199]
+		{fragmentId: 3, firstEntryId: 200, lastEntryId: 299, infoFetched: true}, // [200,299]
+	}
+
+	// 创建LogFile实例并注入模拟数据
+	logFile := &LogFile{
+		fragments: mockFragments,
+	}
+
+	t.Run("找到存在于中间位置的Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(150)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+	})
+
+	t.Run("找到第一个Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(50)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
+
+	t.Run("找到最后一个Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(250)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+	})
+
+	t.Run("entryId在最后一个Fragment之后", func(t *testing.T) {
+		frag, err := logFile.findFragment(300)
+		assert.NoError(t, err)
+		assert.Nil(t, frag)
+	})
+
+	t.Run("第一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+
+		frag, err = logFile.findFragment(99)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
+	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(100)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+
+		frag, err = logFile.findFragment(199)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+	})
+
+	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(200)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+
+		frag, err = logFile.findFragment(299)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+	})
+
+	t.Run("多个候选Fragment时返回最左匹配", func(t *testing.T) {
+		// 模拟有重叠的Fragment
+		overlappingFrags := []*FragmentObject{
+			{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
+			{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
+		}
+		newLogFile := &LogFile{
+			fragments: overlappingFrags,
+		}
+
+		frag, err := newLogFile.findFragment(150)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
+}
