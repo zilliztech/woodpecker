@@ -290,17 +290,18 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	// mark dataUploaded
 	mergedFrag.dataUploaded = true
 
+	// update metrics
+	metrics.WpFragmentBufferBytes.WithLabelValues(mergedFrag.bucket).Add(float64(len(mergedFrag.entriesData) + len(mergedFrag.indexes)))
+	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
+
+	// update cache
+	err := cache.AddCacheFragment(ctx, mergedFrag)
+	if err != nil {
+		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
+	}
+
 	//
 	return mergedFrag, nil
-}
-
-func releaseFragments(ctx context.Context, fragments []*FragmentObject) {
-	for _, fragment := range fragments {
-		err := fragment.Release()
-		if err != nil {
-			logger.Ctx(ctx).Warn("release fragment failed when LogFile closing", zap.String("fragmentKey", fragment.fragmentKey), zap.Uint64("fragmentId", fragment.fragmentId), zap.Error(err))
-		}
-	}
 }
 
 // serializeFragment to object data bytes

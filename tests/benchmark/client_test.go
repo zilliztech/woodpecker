@@ -79,9 +79,9 @@ func TestE2EWrite(t *testing.T) {
 func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
-	entrySize := 2_000_000 // 2MB per row
-	batchCount := 5_000    // just write out all data and wait, the woodpecker should auto flush and sync
-	writeCount := 5_000    // total 5k rows to write, 5k*2MB=10GB
+	entrySize := 1_000_000 // 1MB per row
+	batchCount := 1_000    // wait for batch entries to finish
+	writeCount := 20_000   // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -166,7 +166,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							fmt.Printf(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
-							fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
+							//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
 							successCount++
 						}
 					}
