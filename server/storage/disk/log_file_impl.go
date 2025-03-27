@@ -509,7 +509,8 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	if lastWrittenFlushedEntryID > dlf.lastEntryID.Load() {
 		logger.Ctx(ctx).Debug("Sync更新lastEntryID",
 			zap.Int64("从", dlf.lastEntryID.Load()),
-			zap.Int64("到", lastWrittenFlushedEntryID))
+			zap.Int64("到", lastWrittenFlushedEntryID),
+			zap.String("filePath", dlf.currFragment.filePath))
 		dlf.lastEntryID.Store(lastWrittenFlushedEntryID)
 	}
 
@@ -618,19 +619,10 @@ func (dlf *DiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (s
 		return nil, errors.New("logfile is closed")
 	}
 
-	// 确保所有数据已同步到磁盘
-	if err := dlf.Sync(ctx); err != nil {
-		return nil, err
-	}
-
-	// 获取所有 fragments
+	// 获取所有已同步的 fragments
 	fragments, err := dlf.getFragments()
 	if err != nil {
 		return nil, err
-	}
-
-	if len(fragments) == 0 {
-		return nil, fmt.Errorf("no fragments found")
 	}
 
 	// 创建新的DiskReader
@@ -994,6 +986,11 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	if len(data) < 8 {
 		return nil, fmt.Errorf("invalid data format for entry %d: data too short", dr.currEntryID)
 	}
+
+	logger.Ctx(context.Background()).Debug("读取数据完成",
+		zap.Int64("entryId", dr.currEntryID),
+		zap.Int64("fragmentId", fragment.fragmentId),
+		zap.String("fragmentPath", fragment.filePath))
 
 	// 提取entryID和实际数据
 	actualID := int64(binary.LittleEndian.Uint64(data[:8]))

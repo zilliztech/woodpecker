@@ -31,9 +31,12 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 	if err != nil {
 		panic(err)
 	}
-	minioCli, err := minio.NewMinioHandler(ctx, configuration)
-	if err != nil {
-		panic(err)
+	var minioCli minio.MinioHandler
+	if configuration.Woodpecker.Storage.IsStorageMinio() {
+		minioCli, err = minio.NewMinioHandler(ctx, configuration)
+		if err != nil {
+			panic(err)
+		}
 	}
 	s := &Server{
 		ctx:         ctx,

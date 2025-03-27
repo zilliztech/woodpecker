@@ -80,8 +80,8 @@ func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
 	entrySize := 1_000_000 // 1MB per row
-	batchCount := 1_000    // wait for batch entries to finish
-	writeCount := 20_000   // total rows to write
+	batchCount := 1_00     // wait for batch entries to finish
+	writeCount := 2_000    // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -91,7 +91,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestAsyncWritePerformance",
+			rootPath:    "/tmp/TestWriteReadPerf",
 		},
 		{
 			name:        "ObjectStorage",
@@ -244,7 +244,7 @@ func TestReadThroughput(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadFromEarliest",
+			rootPath:    "/tmp/TestWriteReadPerf",
 		},
 		{
 			name:        "ObjectStorage",
@@ -269,6 +269,9 @@ func TestReadThroughput(t *testing.T) {
 			if err != nil {
 				fmt.Println(err)
 			}
+
+			// ###  CreateLog if not exists
+			client.CreateLog(context.Background(), "test_log")
 
 			// ### OpenLog
 			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
@@ -302,9 +305,9 @@ func TestReadThroughput(t *testing.T) {
 				}
 				totalBytes += len(msg.Payload)
 				totalEntries += 1
-				if totalEntries%10000 == 0 {
-					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
-				}
+				//if totalEntries%1 == 0 {
+				fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
+				//}
 			}
 			fmt.Printf("final read %d success \n", totalEntries)
 			fmt.Printf("Test Read finished\n")
@@ -323,7 +326,7 @@ func TestReadFromEarliest(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadThroughput",
+			rootPath:    "/tmp/TestWriteReadPerf",
 		},
 		{
 			name:        "ObjectStorage",
@@ -348,6 +351,9 @@ func TestReadFromEarliest(t *testing.T) {
 			if err != nil {
 				fmt.Println(err)
 			}
+
+			// ###  CreateLog if not exists
+			client.CreateLog(context.Background(), "test_log")
 
 			// ### OpenLog
 			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
@@ -391,7 +397,7 @@ func TestReadFromLatest(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadFromLatest",
+			rootPath:    "/tmp/TestWriteReadPerf",
 		},
 		{
 			name:        "ObjectStorage",
@@ -460,7 +466,7 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadFromSpecifiedPosition",
+			rootPath:    "/tmp/TestWriteReadPerf",
 		},
 		{
 			name:        "ObjectStorage",

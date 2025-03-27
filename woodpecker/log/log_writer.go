@@ -41,8 +41,8 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
 	}
-	// TODO should check some condition
-	// go w.runAuditor()
+	// TODO Test ONLY
+	//go w.runAuditor()
 	return w
 }
 

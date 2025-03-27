@@ -35,9 +35,12 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
-	minioCli, err := minio.NewMinioHandler(ctx, config)
-	if err != nil {
-		return nil, werr.ErrCreateConnection.WithCauseErr(err)
+	var minioCli minio.MinioHandler
+	if config.Woodpecker.Storage.IsStorageMinio() {
+		minioCli, err = minio.NewMinioHandler(ctx, config)
+		if err != nil {
+			return nil, werr.ErrCreateConnection.WithCauseErr(err)
+		}
 	}
 	return NewEmbedClient(ctx, config, etcdCli, minioCli, true)
 }
