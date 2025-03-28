@@ -80,8 +80,8 @@ func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
 	entrySize := 1_000_000 // 1MB per row
-	batchCount := 1_00     // wait for batch entries to finish
-	writeCount := 2_000    // total rows to write
+	batchCount := 1_000    // wait for batch entries to finish
+	writeCount := 20_000   // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -305,9 +305,9 @@ func TestReadThroughput(t *testing.T) {
 				}
 				totalBytes += len(msg.Payload)
 				totalEntries += 1
-				//if totalEntries%1 == 0 {
-				fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
-				//}
+				if totalEntries%100 == 0 {
+					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
+				}
 			}
 			fmt.Printf("final read %d success \n", totalEntries)
 			fmt.Printf("Test Read finished\n")

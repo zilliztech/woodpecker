@@ -315,8 +315,7 @@ func TestFragmentFile_Release(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 释放资源
-	err = ff.Release()
-	assert.NoError(t, err)
+	ff.Close()
 
 	// 尝试在释放后写入数据
 	err = ff.Write(context.Background(), testData, int64(1))

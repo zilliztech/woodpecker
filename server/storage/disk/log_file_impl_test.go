@@ -4,20 +4,22 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/logger"
-	"go.uber.org/zap"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/werr"
-
+	"github.com/google/gops/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
@@ -652,8 +654,30 @@ func TestSync(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Test Only
+func startGopsAgent() {
+	// start gops agent
+	if err := agent.Listen(agent.Options{}); err != nil {
+		panic(err)
+	}
+	http.HandleFunc("/pprof/cmdline", pprof.Cmdline)
+	http.HandleFunc("/pprof/profile", pprof.Profile)
+	http.HandleFunc("/pprof/symbol", pprof.Symbol)
+	http.HandleFunc("/pprof/trace", pprof.Trace)
+	go func() {
+		fmt.Println("Starting gops agent on :6060")
+		http.ListenAndServe(":6060", nil)
+	}()
+}
+
 // TestFragmentRotation tests the basic rotation of fragment files.
 func TestFragmentRotation(t *testing.T) {
+	startGopsAgent()
+
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
 	dir := getTempDir(t)
 	logFile, err := NewDiskLogFile(1, dir, WithMaxEntryPerFile(10))
 	assert.NoError(t, err)

@@ -101,27 +101,6 @@ func NewROFragmentFile(filePath string, fileSize int64, fragmentId int64) (*Frag
 		infoFetched:  false,
 	}
 
-	// 创建或打开文件
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to open fragment file %s", filePath)
-	}
-
-	// 映射文件到内存
-	ff.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
-	if err != nil {
-		file.Close()
-		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
-	}
-	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
-
-	// 加载meta
-	err = ff.Load(context.Background())
-	if err != nil {
-		ff.Release()
-		return nil, err
-	}
-
 	return ff, nil
 }
 
@@ -190,6 +169,20 @@ func (ff *FragmentFile) Load(ctx context.Context) error {
 		return errors.New("fragment file is closed")
 	}
 
+	// 创建或打开文件
+	file, err := os.OpenFile(ff.filePath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return errors.Wrapf(err, "failed to open fragment file %s", ff.filePath)
+	}
+
+	// 映射文件到内存
+	ff.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
+	if err != nil {
+		file.Close()
+		return errors.Wrapf(err, "failed to map fragment file %s", ff.filePath)
+	}
+	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
+
 	// 读取文件头
 	if !ff.validateHeader() {
 		return errors.New("invalid fragment file header")
@@ -249,9 +242,6 @@ func (ff *FragmentFile) readFooter() error {
 
 // GetLastEntryId returns the last entry ID.
 func (ff *FragmentFile) GetLastEntryId() (int64, error) {
-	ff.mu.RLock()
-	defer ff.mu.RUnlock()
-
 	if ff.closed {
 		return 0, errors.New("fragment file is closed")
 	}
@@ -268,9 +258,6 @@ func (ff *FragmentFile) GetLastEntryId() (int64, error) {
 
 // GetFirstEntryId returns the first entry ID.
 func (ff *FragmentFile) GetFirstEntryId() (int64, error) {
-	ff.mu.RLock()
-	defer ff.mu.RUnlock()
-
 	if ff.closed {
 		return 0, errors.New("fragment file is closed")
 	}
@@ -509,8 +496,16 @@ func (ff *FragmentFile) Release() error {
 		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
 	}
 
-	ff.closed = true
+	// mark data is not fetched in buff
+	ff.infoFetched = false
+
 	return nil
+}
+
+func (ff *FragmentFile) Close() {
+	ff.mu.Lock()
+	defer ff.mu.Unlock()
+	ff.closed = true
 }
 
 // Write writes data to the fragment file.

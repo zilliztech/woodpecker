@@ -585,6 +585,11 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 		if err := dlf.currFragment.Flush(context.Background()); err != nil {
 			return errors.Wrap(err, "flush current fragment")
 		}
+
+		// 将当前片段添加到缓存
+		cache.AddCacheFragment(context.Background(), dlf.currFragment)
+
+		// 仍然需要调用 Release 来标记为关闭，但不会立即释放资源
 		if err := dlf.currFragment.Release(); err != nil {
 			return errors.Wrap(err, "close current fragment")
 		}
@@ -654,12 +659,17 @@ func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, erro
 
 	// 计算总大小并返回最后一个fragment
 	totalSize := int64(0)
+	lastFragment := fragments[len(fragments)-1]
+
+	// 计算所有fragment的大小总和
 	for _, frag := range fragments {
 		size := frag.GetSize()
 		totalSize += size
 	}
 
-	return totalSize, fragments[len(fragments)-1], nil
+	// FragmentManager 负责管理 fragment 的生命周期，不需要手动释放
+
+	return totalSize, lastFragment, nil
 }
 
 // Merge merges log file fragments
@@ -694,6 +704,9 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	totalMergeSize := 0
 	pendingMergeSize := 0
 	pendingMergeFrags := make([]*FragmentFile, 0)
+
+	// 不需要再定义清理函数，因为 FragmentManager 负责管理 fragments 的生命周期
+
 	// load all fragment in memory
 	for _, frag := range fragments {
 		loadFragErr := frag.Load(ctx)
@@ -737,6 +750,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	cost := time.Now().Sub(start)
 	metrics.WpCompactReqLatency.WithLabelValues(fmt.Sprintf("%d", dlf.id)).Observe(float64(cost.Milliseconds()))
 	metrics.WpCompactBytes.WithLabelValues(fmt.Sprintf("%d", dlf.id)).Observe(float64(totalMergeSize))
+
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
@@ -761,6 +775,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 	for _, fragment := range fragments {
 		err := fragment.Load(ctx)
 		if err != nil {
+			// 合并失败，但不需要显式释放 fragments，FragmentManager 负责管理
+			mergedFragment.Release()
 			return nil, err
 		}
 		// check the order of entries
@@ -769,6 +785,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 			expectedEntryId = fragment.lastEntryID + 1
 		} else {
 			if expectedEntryId != fragment.firstEntryID {
+				// 合并失败，但不需要显式释放 fragments，FragmentManager 负责管理
+				mergedFragment.Release()
 				return nil, errors.New("fragments are not in order")
 			}
 			expectedEntryId = fragment.lastEntryID + 1
@@ -779,6 +797,9 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 		// 把fragment的data拷贝写入到mergedFragment的data区
 		// 把fragment的index拷贝写入到mergedFragment的index区,且所有index长度要调整下
 	}
+
+	// 添加合并后的片段到缓存
+	cache.AddCacheFragment(ctx, mergedFragment)
 
 	return mergedFragment, nil
 }
@@ -798,6 +819,12 @@ func (dlf *DiskLogFile) Close() error {
 
 	// 标记为已关闭，阻止新的操作
 	dlf.closed = true
+
+	// 如果当前片段存在，将其添加到缓存
+	if dlf.currFragment != nil {
+		cache.AddCacheFragment(context.Background(), dlf.currFragment)
+		dlf.currFragment = nil
+	}
 
 	// 发送关闭信号
 	close(dlf.closeCh)
@@ -834,19 +861,29 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFile, error) {
 				continue
 			}
 
+			// 先尝试从缓存中获取
+			fragment, ok := cache.GetCachedFragment(context.Background(), fragmentPath)
+			if ok {
+				// 从缓存中找到了
+				fragments = append(fragments, fragment.(*FragmentFile))
+				continue
+			}
+
 			// 创建FragmentFile实例并加载
-			fragment, err := NewROFragmentFile(fragmentPath, fileInfo.Size(), id) // firstEntryID会被忽略，从实际文件中加载
+			fragment, err = NewROFragmentFile(fragmentPath, fileInfo.Size(), id) // firstEntryID会被忽略，从实际文件中加载
 			if err != nil {
 				continue
 			}
 
 			// 加载fragment
-			if err := fragment.Load(context.Background()); err != nil {
-				fragment.Release()
+			if err := fragment.(*FragmentFile).Load(context.Background()); err != nil {
+				fragment.(*FragmentFile).Release()
 				continue
 			}
 
-			fragments = append(fragments, fragment)
+			// 添加到缓存
+			cache.AddCacheFragment(context.Background(), fragment)
+			fragments = append(fragments, fragment.(*FragmentFile))
 		}
 	}
 
@@ -899,6 +936,9 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 		// 获取最后一个fragment的最后一个条目ID
 		lastFragment := fragments[len(fragments)-1]
 		fragmentLastID, err := lastFragment.GetLastEntryId()
+
+		// FragmentManager 负责管理 fragment 的生命周期，不需要手动释放
+
 		if err == nil && fragmentLastID >= 0 {
 			// 更新原子变量
 			dlf.lastEntryID.Store(fragmentLastID)
@@ -1041,6 +1081,10 @@ func (dr *DiskReader) Close() error {
 	if dr.closed {
 		return nil
 	}
+
+	// 不再需要显式释放 fragments，它们由 FragmentManager 管理
+	// Fragments are now managed by the FragmentManager, no need to release here
+	dr.fragments = nil
 
 	dr.closed = true
 	return nil
