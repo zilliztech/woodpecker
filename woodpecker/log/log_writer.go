@@ -12,8 +12,10 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
+//go:generate mockery --dir=./woodpecker/log --name=LogWriter --structname=LogWriter --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_writer.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.
@@ -39,7 +41,10 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
 	}
-	go w.runAuditor()
+	// TODO: Add support for other storage auditors once they implement merge/compact functionality
+	if cfg.Woodpecker.Storage.IsStorageMinio() {
+		go w.runAuditor()
+	}
 	return w
 }
 
@@ -87,7 +92,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	defer l.Unlock()
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		//fmt.Println("callback segmentId: ", segmentId, " entryId: ", entryId, " err: ", err)
+		logger.Ctx(ctx).Debug("write log entry callback exec", zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -95,7 +100,6 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 			},
 			Err: err,
 		}
-		// maybe let the caller decide when to close the channel, because the server view retry automatically?
 		close(ch)
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
@@ -135,6 +139,10 @@ func (l *logWriterImpl) runAuditor() {
 					// last segment maybe in-progress, no need to recover it
 					continue
 				}
+				stateBefore := seg.State
+				if stateBefore == proto.SegmentState_Sealed || stateBefore == proto.SegmentState_Truncated {
+					continue
+				}
 				recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
 				if getRecoverySegmentHandleErr != nil {
 					logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
@@ -145,7 +153,7 @@ func (l *logWriterImpl) runAuditor() {
 					logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
 					continue
 				}
-				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo))
+				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.String("stateBefore", stateBefore.String()), zap.String("stateAfter", seg.State.String()))
 			}
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()))

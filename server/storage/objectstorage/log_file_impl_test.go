@@ -1,7 +1,6 @@
 package objectstorage
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -41,7 +40,7 @@ func TestNewLogFile(t *testing.T) {
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
-	assert.Equal(t, int64(1000), logFile.buffer.maxSize)
+	assert.Equal(t, int64(1000), logFile.buffer.MaxSize)
 	assert.Equal(t, 1024*1024, logFile.maxBufferSize)
 	assert.Equal(t, 1000, logFile.maxIntervalMs)
 }
@@ -55,7 +54,7 @@ func TestNewROLogFile(t *testing.T) {
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
-	assert.Equal(t, int64(100000), logFile.buffer.maxSize)
+	assert.Equal(t, int64(100000), logFile.buffer.MaxSize)
 	assert.Equal(t, 16*1024*1024, logFile.maxBufferSize)
 	assert.Equal(t, 1000, logFile.maxIntervalMs)
 }
@@ -81,7 +80,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncReachBufferSize", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
@@ -128,7 +127,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncSomeAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6}
@@ -175,7 +174,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncOnceAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0}
@@ -221,7 +220,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncNoneAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// wait for flush interval
 	<-time.After(2 * time.Second)
@@ -253,7 +252,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncWithHolesAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -302,7 +301,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncWithHolesButFillFinally", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -376,7 +375,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncDisorderWithinBounds", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 8, 9, 7, 2, 3, 4, 5}
@@ -423,7 +422,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestAppendAsyncDisorderAndPartialOutOfBounds", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 11, 12, 10, 7, 2, 3, 4, 5} // 0-7,10-12
@@ -491,7 +490,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 800 + 200 = buffer max data size, sync immediately
 	{
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize1", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -513,7 +512,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 200 + 300, wait for flush
 	{
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize2", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -534,7 +533,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 200 + 300, wait for flush
 	{
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize3", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -557,7 +556,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// the first append 1k should be immediately flush,
 	// the second append 200 should be wait for flush.
 	{
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize4", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data1k)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -587,7 +586,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test append 1(800),3(300), trigger flush 1(800). then append 2(200), wait for flush  2(200) + 3(300)
 	{
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize5", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -642,7 +641,7 @@ func TestSync(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestSync", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -696,7 +695,7 @@ func TestClose(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestClose", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -749,7 +748,7 @@ func TestGetId(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestGetId", "test-bucket", client, cfg).(*LogFile)
 	assert.Equal(t, int64(1), logFile.GetId())
 }
 
@@ -774,7 +773,7 @@ func TestMerge(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestMerge", "test-bucket", client, cfg).(*LogFile)
 
 	// write data and flush fragment 1
 	for i := 0; i < 100; i++ {
@@ -798,8 +797,12 @@ func TestMerge(t *testing.T) {
 	assert.Equal(t, 1, len(mergedFrags))
 	assert.Equal(t, []int32{0}, entryOffset)
 	assert.Equal(t, []int32{1}, fragmentIdOffset)
-	assert.Equal(t, int64(0), mergedFrags[0].GetFirstEntryIdDirectly())
-	assert.Equal(t, int64(199), mergedFrags[0].GetLastEntryIdDirectly())
+	firstEntryId, err := mergedFrags[0].GetFirstEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), firstEntryId)
+	lastEntryId, err := mergedFrags[0].GetLastEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(199), lastEntryId)
 }
 
 // TestLoad tests the Load function.
@@ -822,7 +825,7 @@ func TestLoad(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestLoad", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer and sync
 	for i := 0; i < 100; i++ {
@@ -838,8 +841,12 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, int64(100*len("test_data")) < totalSize)
 	assert.NotNil(t, lastFragment)
-	assert.Equal(t, int64(0), lastFragment.GetFirstEntryIdDirectly())
-	assert.Equal(t, int64(99), lastFragment.GetLastEntryIdDirectly())
+	firstEntryId, err := lastFragment.GetFirstEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), firstEntryId)
+	lastEntryId, err := lastFragment.GetLastEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(99), lastEntryId)
 }
 
 // TestNewReader tests the NewReader function.
@@ -847,7 +854,7 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	// when read frag 2, return it is not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInWriterLogFile/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -864,7 +871,7 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer and sync
 	for i := 0; i < 100; i++ {
@@ -916,7 +923,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client, cfg).(*LogFile)
 	for i := 0; i < 100; i++ {
 		_, _, err := logFile.AppendAsync(context.Background(), int64(i), []byte("test_data"))
 		assert.NoError(t, err)
@@ -924,17 +931,17 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	err := logFile.Sync(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(logFile.fragments))
-	mockData, err := SerializeFragment(logFile.fragments[0])
-	assert.NoError(t, err)
 
+	// Get 1.frag from cache, show no need to mock 1.frag
 	// mock read 1.frag data
-	client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything).Return(bytes.NewReader(mockData), int64(len(mockData)), nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
+	//client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/1.frag", mock.Anything).Return(bytes.NewReader(mockData), int64(len(mockData)), nil)
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
+
 	// mock 2.fra does not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*LogFile)
+	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client).(*LogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -961,15 +968,16 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	// buffer split to 3 partitions, concurrently flush 1,2,3 frags
 	// 1.frag put success
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	// 2.frag put failed
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "test-segment/1/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
 	// 3.frag put success
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "test-segment/1/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	// mock 1.frag exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
+	//mock 1.frag exists
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
 	// mock 2.frag not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -990,7 +998,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	data1000 := make([]byte, 1000)
 	// test write data with holes to minio, (fragment 1,x,3)
 	{ // write 3 frag
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data1000)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -1028,16 +1036,17 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		frag1Data, err := SerializeFragment(logFile.fragments[0])
-		assert.NoError(t, err)
+		// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
+		//frag1Data, err := serializeFragment(logFile.fragments[0])
+		//assert.NoError(t, err)
 		// fragment 1 data
-		client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-segment/1/1.frag", mock.Anything).Return(bytes.NewReader(frag1Data), int64(len(frag1Data)), nil)
+		//client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything).Return(bytes.NewReader(frag1Data), int64(len(frag1Data)), nil)
 	}
 
 	// test read data with holes (fragment 1,x,3) in minio
 	// we should only read data in fragment 1
 	{
-		roLogFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*LogFile)
+		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*LogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   3,
@@ -1055,4 +1064,86 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		hasNext = reader.HasNext()
 		assert.False(t, hasNext)
 	}
+}
+
+func TestFindFragment(t *testing.T) {
+	// 创建模拟的Fragment对象列表
+	mockFragments := []*FragmentObject{
+		{fragmentId: 1, firstEntryId: 0, lastEntryId: 99, infoFetched: true},    // [0,99]
+		{fragmentId: 2, firstEntryId: 100, lastEntryId: 199, infoFetched: true}, // [100,199]
+		{fragmentId: 3, firstEntryId: 200, lastEntryId: 299, infoFetched: true}, // [200,299]
+	}
+
+	// 创建LogFile实例并注入模拟数据
+	logFile := &LogFile{
+		fragments: mockFragments,
+	}
+
+	t.Run("找到存在于中间位置的Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(150)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+	})
+
+	t.Run("找到第一个Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(50)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
+
+	t.Run("找到最后一个Fragment", func(t *testing.T) {
+		frag, err := logFile.findFragment(250)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+	})
+
+	t.Run("entryId在最后一个Fragment之后", func(t *testing.T) {
+		frag, err := logFile.findFragment(300)
+		assert.NoError(t, err)
+		assert.Nil(t, frag)
+	})
+
+	t.Run("第一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+
+		frag, err = logFile.findFragment(99)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
+	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(100)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+
+		frag, err = logFile.findFragment(199)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), frag.fragmentId)
+	})
+
+	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+		frag, err := logFile.findFragment(200)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+
+		frag, err = logFile.findFragment(299)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3), frag.fragmentId)
+	})
+
+	t.Run("多个候选Fragment时返回最左匹配", func(t *testing.T) {
+		// 模拟有重叠的Fragment
+		overlappingFrags := []*FragmentObject{
+			{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
+			{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
+		}
+		newLogFile := &LogFile{
+			fragments: overlappingFrags,
+		}
+
+		frag, err := newLogFile.findFragment(150)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), frag.fragmentId)
+	})
 }

@@ -26,11 +26,14 @@ type Reader interface {
 }
 
 // LogFile represents a log file interface with read and write operations.
+//
+//go:generate mockery --dir=./server/storage --name=LogFile --structname=LogFile --output=mocks/mocks_server/mocks_storage --filename=mock_logfile.go --with-expecter=true  --outpkg=mocks_storage
 type LogFile interface {
 	// GetId returns the unique log file id.
 	GetId() int64
 	// Append adds an entry to the log file synchronously.
 	// Returns a future that will receive the result of the append operation.
+	// Deprecated: Use AppendAsync instead, entryID is pass by client segmentHandle
 	Append(ctx context.Context, data []byte) error
 	// AppendAsync adds an entry to the log file asynchronously
 	AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error)

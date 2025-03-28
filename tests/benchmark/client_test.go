@@ -16,401 +16,513 @@ import (
 func TestE2EWrite(t *testing.T) {
 	startGopsAgent()
 
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	// ###  CreateLog if not exists
-	client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
-
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
-	logHandle.GetName()
-
-	//	### OpenWriter
-	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-	if openWriterErr != nil {
-		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
-		panic(openWriterErr)
-	}
-	writeResultChan := logWriter.WriteAsync(context.Background(),
-		&log.WriterMessage{
-			Payload: []byte("hello world 1"),
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestE2EWrite",
 		},
-	)
-	writeResult := <-writeResultChan
-	if writeResult.Err != nil {
-		fmt.Println(writeResult.Err)
-		panic(writeResult.Err)
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
-	fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
-	//writeResult = logWriter.Write(context.Background(), []byte("hello world 2"))
-	//if writeResult.Err != nil {
-	//	fmt.Println(writeResult.Err)
-	//	panic(writeResult.Err)
-	//}
-	//fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// ###  CreateLog if not exists
+			client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			assert.NoError(t, openErr)
+			logHandle.GetName()
+
+			//	### OpenWriter
+			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, openWriterErr)
+			writeResultChan := logWriter.WriteAsync(context.Background(),
+				&log.WriterMessage{
+					Payload: []byte("hello world 1"),
+				},
+			)
+			writeResult := <-writeResultChan
+			assert.NoError(t, writeResult.Err)
+			fmt.Printf("write success, returned recordId:%v\n", writeResult.LogMessageId)
+
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+			err = client.Close()
+			assert.NoError(t, err)
+		})
+	}
 }
 
-func TestAsyncWritePerformance(t *testing.T) {
+func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
+	entrySize := 1_000_000 // 1MB per row
+	batchCount := 1_000    // wait for batch entries to finish
+	writeCount := 20_000   // total rows to write
 
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
 
-	// ###  CreateLog if not exists
-	client.CreateLog(context.Background(), "test_log")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// ### Create client
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
 
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
-	logHandle.GetName()
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
 
-	//	### OpenWriter
-	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-	if openWriterErr != nil {
-		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
-		panic(openWriterErr)
-	}
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
 
-	payloadStaticData, err := generateRandomBytes(4 * 1024)
-	assert.NoError(t, err)
+			// ###  CreateLog if not exists
+			client.CreateLog(context.Background(), "test_log")
 
-	resultChan := make([]<-chan *log.WriteResult, 1000000)
-	failedIdxs := make([]int, 0)
-	successCount := 0
-	for i := 0; i < 1000000; i++ {
-		writeResultChan := logWriter.WriteAsync(context.Background(),
-			&log.WriterMessage{
-				//Payload: []byte(fmt.Sprintf("hello world %d", i)),
-				Payload: payloadStaticData,
-				Properties: map[string]string{
-					"key": fmt.Sprintf("value%d", i),
-				},
-			},
-		)
-		resultChan[i] = writeResultChan
-	}
-	for i := 0; i < 1000000; i++ {
-		//fmt.Printf("wait %d\n", i)
-		writeResult := <-resultChan[i]
-		if writeResult.Err != nil {
-			failedIdxs = append(failedIdxs, i)
-			//fmt.Printf(writeResult.Err.Error())
-		} else {
-			successCount += 1
-			//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
-		}
-	}
-	fmt.Printf("round 0 success count: %d \n", successCount)
-	for i := 1; i <= 1000000; i++ {
-		tmpFailedIdxs := make([]int, 0)
-		successCount = 0
-		for _, idx := range failedIdxs {
-			writeResultChan := logWriter.WriteAsync(context.Background(),
-				&log.WriterMessage{
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+			logHandle.GetName()
+
+			//	### OpenWriter
+			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			if openWriterErr != nil {
+				fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
+				panic(openWriterErr)
+			}
+
+			// gen static data
+			payloadStaticData, err := generateRandomBytes(entrySize) // 1KB per row
+			assert.NoError(t, err)
+
+			// ### Write
+			successCount := 0
+			writingResultChan := make([]<-chan *log.WriteResult, 0) // 10M*1k=10GB
+			writingMessages := make([]*log.WriterMessage, 0)
+			failMessages := make([]*log.WriterMessage, 0)
+			for i := 0; i < writeCount; i++ {
+				// append async
+				msg := &log.WriterMessage{
 					Payload: payloadStaticData,
-				},
-			)
-			resultChan[idx] = writeResultChan
-		}
-		for _, idx := range failedIdxs {
-			writeResult := <-resultChan[idx]
-			if writeResult.Err != nil {
-				tmpFailedIdxs = append(tmpFailedIdxs, idx)
-				//fmt.Printf(writeResult.Err.Error() + "\n")
-			} else {
-				successCount += 1
-				//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+					Properties: map[string]string{
+						"key": fmt.Sprintf("value%d", i),
+					},
+				}
+				resultChan := logWriter.WriteAsync(context.Background(), msg)
+				writingResultChan = append(writingResultChan, resultChan)
+				writingMessages = append(writingMessages, msg)
+
+				// wait for batch finish
+				if len(writingMessages)%batchCount == 0 { // wait 64000 entries or 64MB to completed
+					fmt.Printf("start wait for %d entries\n", len(writingMessages))
+					for idx, ch := range writingResultChan {
+						writeResult := <-ch
+						if writeResult.Err != nil {
+							fmt.Printf(writeResult.Err.Error())
+							failMessages = append(failMessages, writingMessages[idx])
+						} else {
+							//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
+							successCount++
+						}
+					}
+					fmt.Printf("finish wait for %d entries. success:%d , failed: %d, i: %d \n", len(writingMessages), successCount, len(failMessages), i)
+					time.Sleep(1 * time.Second) // wait a moment to avoid too much retry
+					writingResultChan = make([]<-chan *log.WriteResult, 0)
+					writingMessages = make([]*log.WriterMessage, 0)
+					for _, m := range failMessages {
+						retryCh := logWriter.WriteAsync(context.Background(), m)
+						writingResultChan = append(writingResultChan, retryCh)
+						writingMessages = append(writingMessages, m)
+					}
+					failMessages = make([]*log.WriterMessage, 0)
+				}
 			}
-		}
-		fmt.Printf("round %d success count: %d \n", i, successCount)
-		failedIdxs = tmpFailedIdxs
-		if len(failedIdxs) == 0 {
-			break
-		}
-	}
 
-	fmt.Printf("start close log writer \n")
-	closeErr := logWriter.Close(context.Background())
-	if closeErr != nil {
-		fmt.Printf("close failed, err:%v\n", closeErr)
-		panic(closeErr)
-	}
-
-	fmt.Printf("Test Write finished\n")
-}
-
-// TestWrite example to show how to use woodpecker client to write msg to  unbounded log
-func TestWriteThroughput(t *testing.T) {
-	startGopsAgent()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	// ###  CreateLog if not exists
-	client.CreateLog(context.Background(), "test_log")
-
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
-	logHandle.GetName()
-
-	//	### OpenWriter
-	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-	if openWriterErr != nil {
-		fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
-		panic(openWriterErr)
-	}
-
-	resultChan := make([]<-chan *log.WriteResult, 1001)
-	failedIdxs := make([]int, 0)
-	successCount := 0
-	for i := 0; i < 1001; i++ {
-		writeResultChan := logWriter.WriteAsync(context.Background(),
-			&log.WriterMessage{
-				Payload: []byte(fmt.Sprintf("hello world %d", i)),
-				Properties: map[string]string{
-					"key": fmt.Sprintf("value%d", i),
-				},
-			},
-		)
-		resultChan[i] = writeResultChan
-	}
-	for i := 0; i < 1001; i++ {
-		//fmt.Printf("wait %d\n", i)
-		writeResult := <-resultChan[i]
-		if writeResult.Err != nil {
-			failedIdxs = append(failedIdxs, i)
-			//fmt.Printf(writeResult.Err.Error())
-		} else {
-			successCount += 1
-			//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
-		}
-	}
-	fmt.Printf("round 0 success count: %d \n", successCount)
-
-	for i := 1; i <= 100; i++ {
-		tmpFailedIdxs := make([]int, 0)
-		successCount = 0
-		for _, idx := range failedIdxs {
-			writeResultChan := logWriter.WriteAsync(context.Background(),
-				&log.WriterMessage{
-					Payload: []byte(fmt.Sprintf("hello world %d", idx)),
-				},
-			)
-			resultChan[idx] = writeResultChan
-		}
-		for _, idx := range failedIdxs {
-			writeResult := <-resultChan[idx]
-			if writeResult.Err != nil {
-				tmpFailedIdxs = append(tmpFailedIdxs, idx)
-				//fmt.Printf(writeResult.Err.Error() + "\n")
-			} else {
-				successCount += 1
-				//fmt.Printf("write %d success, returned recordId:%v\n", i, writeResult.LogMessageId)
+			// wait&retry the rest
+			{
+				for idx, ch := range writingResultChan {
+					writeResult := <-ch
+					if writeResult.Err != nil {
+						fmt.Printf(writeResult.Err.Error())
+						failMessages = append(failMessages, writingMessages[idx])
+					} else {
+						successCount++
+					}
+				}
+				time.Sleep(1 * time.Second) // wait a moment to avoid too much retry
+				for {
+					if len(failMessages) == 0 {
+						break
+					}
+					writingResultChan = make([]<-chan *log.WriteResult, 0)
+					writingMessages = make([]*log.WriterMessage, 0)
+					for _, m := range failMessages {
+						retryCh := logWriter.WriteAsync(context.Background(), m)
+						writingResultChan = append(writingResultChan, retryCh)
+						writingMessages = append(writingMessages, m)
+					}
+					failMessages = make([]*log.WriterMessage, 0)
+					for idx, ch := range writingResultChan {
+						writeResult := <-ch
+						if writeResult.Err != nil {
+							fmt.Printf(writeResult.Err.Error())
+							failMessages = append(failMessages, writingMessages[idx])
+						} else {
+							successCount++
+						}
+					}
+				}
 			}
-		}
-		fmt.Printf("round %d success count: %d \n", i, successCount)
-		failedIdxs = tmpFailedIdxs
-		if len(failedIdxs) == 0 {
-			break
-		}
-	}
 
-	fmt.Printf("start close log writer \n")
-	closeErr := logWriter.Close(context.Background())
-	if closeErr != nil {
-		fmt.Printf("close failed, err:%v\n", closeErr)
-		panic(closeErr)
+			// ### close and print result
+			fmt.Printf("start close log writer \n")
+			closeErr := logWriter.Close(context.Background())
+			if closeErr != nil {
+				fmt.Printf("close failed, err:%v\n", closeErr)
+				panic(closeErr)
+			}
+			fmt.Printf("Test Write finished  %d entries\n", successCount)
+		})
 	}
-
-	fmt.Printf("Test Write finished\n")
 }
 
 func TestReadThroughput(t *testing.T) {
 	startGopsAgent()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
+	startMetrics()
+	startReporting()
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
 
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
 
-	//	### OpenReader
-	start := &log.LogMessageId{
-		SegmentId: 21,
-		EntryId:   0,
-	}
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
-	if openReaderErr != nil {
-		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
-		panic(openReaderErr)
-	}
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
-	for {
-		msg, err := logReader.ReadNext(context.Background())
-		if err != nil {
-			fmt.Printf("read failed, err:%v\n", err)
-			panic(err)
-		} else {
-			fmt.Printf("read success, msg:%v\n", msg)
-		}
-	}
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
 
-	fmt.Printf("Test Read finished\n")
+			// ###  CreateLog if not exists
+			client.CreateLog(context.Background(), "test_log")
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenReader
+			earliest := log.EarliestLogMessageID()
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest)
+			if openReaderErr != nil {
+				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			// read loop
+			totalEntries := 0
+			totalBytes := 0
+			for {
+				start := time.Now()
+				msg, err := logReader.ReadNext(context.Background())
+				if err != nil {
+					fmt.Printf("read failed, err:%v\n", err)
+					break
+				} else {
+					//fmt.Printf("read success, msg:%v\n", msg)
+					cost := time.Now().Sub(start)
+					MinioIOBytes.WithLabelValues("0").Observe(float64(len(msg.Payload)))
+					MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
+				}
+				totalBytes += len(msg.Payload)
+				totalEntries += 1
+				if totalEntries%100 == 0 {
+					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
+				}
+			}
+			fmt.Printf("final read %d success \n", totalEntries)
+			fmt.Printf("Test Read finished\n")
+		})
+	}
 }
 
 func TestReadFromEarliest(t *testing.T) {
 	startGopsAgent()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
 
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
 
-	//	### OpenReader
-	earliest := log.EarliestLogMessageID()
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest)
-	if openReaderErr != nil {
-		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
-		panic(openReaderErr)
-	}
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
-	totalEntries := 0
-	for {
-		msg, err := logReader.ReadNext(context.Background())
-		if err != nil {
-			fmt.Printf("read failed, err:%v\n", err)
-			break
-		} else {
-			fmt.Printf("read success, msg:%v\n", msg)
-		}
-		totalEntries += 1
-		if totalEntries%10000 == 0 {
-			fmt.Printf(" read %d success, the msg:%v \n", totalEntries, msg)
-		}
-	}
-	fmt.Printf("final read %d success \n", totalEntries)
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
 
-	fmt.Printf("Test Read finished\n")
+			// ###  CreateLog if not exists
+			client.CreateLog(context.Background(), "test_log")
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenReader
+			start := log.EarliestLogMessageID()
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &start)
+			if openReaderErr != nil {
+				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			// read loop
+			for {
+				msg, err := logReader.ReadNext(context.Background())
+				if err != nil {
+					fmt.Printf("read failed, err:%v\n", err)
+					t.Error(err)
+					break
+				} else {
+					fmt.Printf("read success, msg:%v\n", msg)
+				}
+			}
+			fmt.Println("Test Read finished")
+		})
+	}
 }
 
 func TestReadFromLatest(t *testing.T) {
 	startGopsAgent()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
 
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
 
-	//	### OpenReader
-	latest := log.LatestLogMessageID()
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest)
-	if openReaderErr != nil {
-		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
-		panic(openReaderErr)
-	}
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
 
-	more := false
-	go func() {
-		msg, err := logReader.ReadNext(context.Background())
-		if err != nil {
-			fmt.Printf("read failed, err:%v\n", err)
-			t.Error(err)
-		} else {
-			more = true
-			fmt.Printf("read success, msg:%v\n", msg)
-		}
-	}()
-	time.Sleep(time.Second * 2)
-	assert.False(t, more, "should read nothing and timeout")
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenReader
+			latest := log.LatestLogMessageID()
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest)
+			if openReaderErr != nil {
+				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			more := false
+			go func() {
+				msg, err := logReader.ReadNext(context.Background())
+				if err != nil {
+					fmt.Printf("read failed, err:%v\n", err)
+					t.Error(err)
+				} else {
+					more = true
+					fmt.Printf("read success, msg:%v\n", msg)
+				}
+			}()
+			time.Sleep(time.Second * 2)
+			assert.False(t, more, "should read nothing and timeout")
+		})
+	}
 }
 
 func TestReadFromSpecifiedPosition(t *testing.T) {
 	startGopsAgent()
-	cfg, err := config.NewConfiguration()
-	assert.NoError(t, err)
-	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-	if err != nil {
-		fmt.Println(err)
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // 使用默认存储类型 minio-compatible
+			rootPath:    "", // 使用默认存储无需指定路径
+		},
 	}
 
-	// ### OpenLog
-	logHandle, openErr := client.OpenLog(context.Background(), "test_log")
-	if openErr != nil {
-		fmt.Printf("Open log failed, err:%v\n", openErr)
-		panic(openErr)
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
 
-	//	### OpenReader
-	start := &log.LogMessageId{
-		SegmentId: 5,
-		EntryId:   0,
-	}
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
-	if openReaderErr != nil {
-		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
-		panic(openReaderErr)
-	}
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
 
-	// 调用reader遍历所有的数据 logReader.ReadNext(context.Background())
-	for {
-		msg, err := logReader.ReadNext(context.Background())
-		if err != nil {
-			fmt.Printf("read failed, err:%v\n", err)
-			t.Error(err)
-		} else {
-			fmt.Printf("read success, msg:%v\n", msg)
-		}
-	}
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
 
-	fmt.Printf("Test Read finished\n")
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenReader
+			start := &log.LogMessageId{
+				SegmentId: 5,
+				EntryId:   0,
+			}
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
+			if openReaderErr != nil {
+				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			// read loop
+			for {
+				msg, err := logReader.ReadNext(context.Background())
+				if err != nil {
+					fmt.Printf("read failed, err:%v\n", err)
+					t.Error(err)
+					break
+				} else {
+					fmt.Printf("read success, msg:%v\n", msg)
+				}
+			}
+
+			fmt.Println("Test Read finished")
+		})
+	}
 }

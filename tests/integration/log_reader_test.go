@@ -19,7 +19,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-// NOTE: not integration test, file move here because cycle deps if in woodpecker/log pkg.TODO move out some day
+// NOTE: not integration test, file move here because cycle deps if in woodpecker/log pkg.TODO move to woodpecker/log/log_reader_test.go
 
 // One active segment#0 with entries 0,1
 func TestActiveSegmentRead(t *testing.T) {

@@ -46,6 +46,12 @@ type LogFileSyncPolicyConfig struct {
 	MaxFlushThreads int `yaml:"maxFlushThreads"`
 }
 
+// FragmentManagerConfig stores the fragment manager configuration.
+type FragmentManagerConfig struct {
+	MaxBytes    int64 `yaml:"maxBytes"`
+	MaxInterval int   `yaml:"maxInterval"`
+}
+
 // LogFileConfig stores the log file configuration.
 type LogFileConfig struct {
 	RootPath   string `yaml:"rootPath"`
@@ -166,6 +172,24 @@ type MinioConfig struct {
 // LogstoreConfig stores the logstore configuration.
 type LogstoreConfig struct {
 	LogFileSyncPolicy LogFileSyncPolicyConfig `yaml:"logFileSyncPolicy"`
+	FragmentManager   FragmentManagerConfig   `yaml:"fragmentManager"`
+}
+
+type StorageConfig struct {
+	Type     string `yaml:"type"`
+	RootPath string `yaml:"rootPath"`
+}
+
+func (s *StorageConfig) IsStorageLocal() bool {
+	return s.Type == "local"
+}
+
+func (s *StorageConfig) IsStorageMinio() bool {
+	return s.Type == "minio" || s.Type == "default" || len(s.Type) == 0
+}
+
+func (s *StorageConfig) IsStorageService() bool {
+	return s.Type == "service"
 }
 
 // WoodpeckerConfig stores the complete Woodpecker configuration.
@@ -173,6 +197,7 @@ type WoodpeckerConfig struct {
 	Meta     MetaConfig     `yaml:"meta"`
 	Client   ClientConfig   `yaml:"client"`
 	Logstore LogstoreConfig `yaml:"logstore"`
+	Storage  StorageConfig  `yaml:"storage"`
 }
 
 type Configuration struct {
@@ -215,7 +240,6 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 			return nil, err
 		}
 	}
-
 	return config, nil
 }
 
@@ -248,6 +272,14 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxFlushSize:    16000000,
 				MaxFlushThreads: 8,
 			},
+			FragmentManager: FragmentManagerConfig{
+				MaxBytes:    256_000_000,
+				MaxInterval: 2000,
+			},
+		},
+		Storage: StorageConfig{
+			Type:     "default",
+			RootPath: "/tmp/woodpecker",
 		},
 	}
 }

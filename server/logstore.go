@@ -14,8 +14,10 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
+//go:generate mockery --dir=./server --name=LogStore --structname=LogStore --output=mocks/mocks_server --filename=mock_logstore.go --with-expecter=true  --outpkg=mocks_server
 type LogStore interface {
 	Start() error
 	Stop() error
@@ -36,37 +38,49 @@ type LogStore interface {
 var _ LogStore = (*logStore)(nil)
 
 type logStore struct {
-	sync.RWMutex
-	cfg      *config.Configuration
-	ctx      context.Context
-	cancel   context.CancelFunc
-	etcdCli  *clientv3.Client
-	minioCli minioHandler.MinioHandler
-	address  string
+	cfg             *config.Configuration
+	ctx             context.Context
+	cancel          context.CancelFunc
+	etcdCli         *clientv3.Client
+	minioCli        minioHandler.MinioHandler
+	address         string
+	fragmentManager cache.FragmentManager
 
+	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]segment.SegmentProcessor
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
+	fragmentMgr := cache.GetInstance(cfg.Woodpecker.Logstore.FragmentManager.MaxBytes, cfg.Woodpecker.Logstore.FragmentManager.MaxInterval)
 	return &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
 		minioCli:          minioCli,
+		fragmentManager:   fragmentMgr,
 		segmentProcessors: make(map[int64]map[int64]segment.SegmentProcessor),
 	}
 }
 
 func (l *logStore) Start() error {
-	// TODO start service
-	// register to etcd and keep alive
-	registerErr := l.Register(context.Background())
-	return registerErr
+	err := l.Register(context.Background())
+	if err != nil {
+		return err
+	}
+	err = l.fragmentManager.StartEvictionLoop(1 * time.Second)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 func (l *logStore) Stop() error {
 	l.cancel()
+	err := l.fragmentManager.StopEvictionLoop()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -84,6 +98,7 @@ func (l *logStore) SetEtcdClient(etcdCli *clientv3.Client) {
 
 func (l *logStore) Register(ctx context.Context) error {
 	// register this node to etcd and keep alive
+	// TODO
 	return nil
 }
 
@@ -94,7 +109,7 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 		return -1, nil, err
 	}
 	if segmentProcessor.IsFenced() {
-		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", logId, entry.SegmentId))
+		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced, reject add entry:%d", logId, entry.SegmentId, entry.EntryId))
 	}
 	entryId, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
@@ -108,8 +123,8 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 }
 
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
-	l.Lock()
-	defer l.Unlock()
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
 	segProcessors := make(map[int64]segment.SegmentProcessor)
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		segProcessors = processors
@@ -124,6 +139,8 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 }
 
 func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segment.SegmentProcessor {
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		if processor, segExists := processors[segmentId]; segExists {
 			return processor

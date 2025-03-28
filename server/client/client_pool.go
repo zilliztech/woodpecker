@@ -12,6 +12,7 @@ import (
 	"github.com/zilliztech/woodpecker/server"
 )
 
+//go:generate mockery --dir=./server/client --name=LogStoreClientPool --structname=LogStoreClientPool --output=mocks/mocks_server/mocks_logstore_client --filename=mock_client_pool.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClientPool interface {
 	io.Closer
 	GetLogStoreClient(target string) (LogStoreClient, error)

@@ -87,6 +87,24 @@ var (
 		},
 		[]string{"log_name"},
 	)
+	WpCompactBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "compact_bytes",
+			Help:      "bytes of compact data",
+		},
+		[]string{"log_name"},
+	)
+	WpCompactReqLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "compact_req_latency",
+			Help:      "The latency of compact requests",
+		},
+		[]string{"log_name"},
+	)
 	WpFragmentBufferBytes = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
@@ -120,6 +138,15 @@ var (
 			Subsystem: server_namespace,
 			Name:      "fragment_flush_latency",
 			Help:      "The latency of fragment flush",
+		},
+		[]string{"log_name"},
+	)
+	WpFragmentCacheBytesGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_cache_bytes",
+			Help:      "bytes of fragment cache data",
 		},
 		[]string{"log_name"},
 	)
@@ -162,12 +189,15 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpFragmentLoadedGauge)
 		registerer.MustRegister(WpFragmentFlushBytes)
 		registerer.MustRegister(WpFragmentFlushLatency)
+		registerer.MustRegister(WpFragmentCacheBytesGauge)
 
 		// for write buffer
 		registerer.MustRegister(WpWriteBufferSlots)
 
 		// for segment
 		registerer.MustRegister(WpSegmentRollingLatency)
+		registerer.MustRegister(WpCompactBytes)
+		registerer.MustRegister(WpCompactReqLatency)
 	})
 }
 

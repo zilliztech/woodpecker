@@ -7,6 +7,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -29,18 +30,23 @@ type woodpeckerEmbedClient struct {
 }
 
 func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (client Client, err error) {
+	logger.InitLogger(config)
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)
 	}
-	minioCli, err := minio.NewMinioHandler(ctx, config)
-	if err != nil {
-		return nil, werr.ErrCreateConnection.WithCauseErr(err)
+	var minioCli minio.MinioHandler
+	if config.Woodpecker.Storage.IsStorageMinio() {
+		minioCli, err = minio.NewMinioHandler(ctx, config)
+		if err != nil {
+			return nil, werr.ErrCreateConnection.WithCauseErr(err)
+		}
 	}
 	return NewEmbedClient(ctx, config, etcdCli, minioCli, true)
 }
 
 func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler, managed bool) (client Client, err error) {
+	logger.InitLogger(cfg)
 	instance := server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
 	c := woodpeckerEmbedClient{
 		cfg:           cfg,

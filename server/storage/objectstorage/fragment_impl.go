@@ -18,6 +18,7 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 const (
@@ -28,40 +29,29 @@ var _ storage.Fragment = (*FragmentObject)(nil)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
-	client      minioHandler.MinioHandler
-	bucket      string
-	fragmentId  uint64
-	fragmentKey string
+	client minioHandler.MinioHandler
 
-	entriesData  []byte // Bytes of entries
-	indexes      []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
-	firstEntryId int64  // First entryId in the fragment
-	lastEntryId  int64  // Last entryId in the fragment, inclusive
-
+	// info
+	bucket       string
+	fragmentId   uint64
+	fragmentKey  string
+	firstEntryId int64 // First entryId in the fragment
+	lastEntryId  int64 // Last entryId in the fragment, inclusive
 	lastModified int64 // last modified time
 
+	// data
+	entriesData []byte // Bytes of entries
+	indexes     []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
+
 	// status
-	loaded   bool // If this fragment has been loaded to memory
-	uploaded bool // If this fragment has been uploaded to MinIO
+	dataLoaded   bool // If this fragment has been loaded to memory
+	dataUploaded bool // If this fragment has been uploaded to MinIO
+	infoFetched  bool // if info of this fragment has been fetched from MinIO
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, loaded, uploaded bool) *FragmentObject {
-	data := make([]byte, 0)
-	index := make([]byte, 0)
-	offset := 0
-	for i := 0; i < len(entries); i++ {
-		entryLength := uint32(len(entries[i]))
-		entryOffset := offset
-		entryIndex := make([]byte, 8)
-		binary.BigEndian.PutUint32(entryIndex[:4], uint32(entryOffset))
-		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
-
-		data = append(data, entries[i]...)
-		index = append(index, entryIndex...)
-
-		offset = offset + len(entries[i])
-	}
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+	index, data := genFragmentDataFromRaw(entries, firstEntryId)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
@@ -75,14 +65,30 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 		firstEntryId: firstEntryId,
 		lastEntryId:  lastEntryId,
 		lastModified: time.Now().UnixMilli(),
-		loaded:       loaded,
-		uploaded:     uploaded,
+		dataLoaded:   dataLoaded,
+		dataUploaded: dataUploaded,
+		infoFetched:  infoFetched,
 	}
+}
+
+func (f *FragmentObject) GetFragmentId() int64 {
+	return int64(f.fragmentId)
+}
+
+func (f *FragmentObject) GetFragmentKey() string {
+	return f.fragmentKey
+}
+
+func (f *FragmentObject) GetSize() int64 {
+	if !f.dataLoaded {
+		return 0
+	}
+	return int64(len(f.entriesData) + len(f.indexes))
 }
 
 // Flush uploads the data to MinIO.
 func (f *FragmentObject) Flush(ctx context.Context) error {
-	if !f.loaded {
+	if !f.dataLoaded {
 		return werr.ErrFragmentEmpty
 	}
 
@@ -91,7 +97,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	}
 
 	start := time.Now()
-	fullData, err := SerializeFragment(f)
+	fullData, err := serializeFragment(f)
 	if err != nil {
 		return err
 	}
@@ -102,17 +108,17 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	cost := time.Now().Sub(start)
 	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
 	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
-	f.uploaded = true
+	f.dataUploaded = true
 	return nil
 }
 
 // Load reads the data from MinIO.
 func (f *FragmentObject) Load(ctx context.Context) error {
-	if f.loaded {
+	if f.dataLoaded {
 		// already loaded, no need to load again
 		return nil
 	}
-	if !f.uploaded {
+	if !f.dataUploaded {
 		return werr.ErrFragmentNotUploaded
 	}
 
@@ -126,7 +132,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
-	tmpFrag, deserializeErr := DeserializeFragment(data)
+	tmpFrag, deserializeErr := deserializeFragment(data)
 	if deserializeErr != nil {
 		return deserializeErr
 	}
@@ -136,36 +142,52 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.indexes = tmpFrag.indexes
 	f.firstEntryId = tmpFrag.firstEntryId
 	f.lastEntryId = tmpFrag.lastEntryId
-	tmpFrag.Release() // release
+	f.dataLoaded = true
+	f.dataUploaded = true
+	f.infoFetched = true
 
-	//
-	f.loaded = true
+	// update metrics
 	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(f.entriesData) + len(f.indexes)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Inc()
-	return nil
+
+	// update cache
+	return cache.AddCacheFragment(ctx, f)
 }
 
 func (f *FragmentObject) GetLastEntryId() (int64, error) {
-	if !f.loaded && f.uploaded {
+	// if info has been fetched, return directly
+	if f.infoFetched {
+		return f.lastEntryId, nil
+	}
+	// if data has not been loaded, try to load it
+	if !f.dataLoaded && f.dataUploaded {
 		err := f.Load(context.Background())
 		if err != nil {
 			return -1, err
 		}
 	}
-	if !f.loaded {
-		return -1, errors.New("fragment no data to load")
+	if !f.infoFetched {
+		return -1, errors.New("fragment no data&info to load")
 	}
 	return f.lastEntryId, nil
 }
 
-// only for merged fragment, TODO
-func (f *FragmentObject) GetLastEntryIdDirectly() int64 {
-	return f.lastEntryId
-}
-
-// only for merged fragment, TODO
-func (f *FragmentObject) GetFirstEntryIdDirectly() int64 {
-	return f.firstEntryId
+func (f *FragmentObject) GetFirstEntryId() (int64, error) {
+	// if info has been fetched, return directly
+	if f.infoFetched {
+		return f.firstEntryId, nil
+	}
+	// if data has not been loaded, try to load it
+	if !f.dataLoaded && f.dataUploaded {
+		err := f.Load(context.Background())
+		if err != nil {
+			return -1, err
+		}
+	}
+	if !f.infoFetched {
+		return -1, errors.New("fragment no data&info to load")
+	}
+	return f.firstEntryId, nil
 }
 
 func (f *FragmentObject) GetLastModified() int64 {
@@ -173,13 +195,13 @@ func (f *FragmentObject) GetLastModified() int64 {
 }
 
 func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
-	if !f.loaded && f.uploaded {
+	if !f.dataLoaded && f.dataUploaded {
 		err := f.Load(context.Background())
 		if err != nil {
 			return nil, err
 		}
 	}
-	if !f.loaded {
+	if !f.dataLoaded {
 		return nil, errors.New("fragment no data to load")
 	}
 	relatedIdx := (entryId - f.firstEntryId) * 8
@@ -193,7 +215,7 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 
 // Release releases the memory used by the fragment.
 func (f *FragmentObject) Release() error {
-	if !f.loaded {
+	if !f.dataLoaded {
 		// empty, no need to release again
 		return nil
 	}
@@ -201,14 +223,12 @@ func (f *FragmentObject) Release() error {
 	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Dec()
 	f.indexes = nil
 	f.entriesData = nil
-	f.loaded = false
+	f.dataLoaded = false
 	return nil
 }
 
-// MergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
-func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject) (storage.Fragment, error) {
-	// release pending merge fragments before finish
-	defer ReleaseFragments(ctx, fragments)
+// mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
+func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject) (storage.Fragment, error) {
 	// check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -224,8 +244,9 @@ func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		indexes:      make([]byte, 0),
 		firstEntryId: fragments[0].firstEntryId,
 		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
-		uploaded:     false,
-		loaded:       false,
+		dataUploaded: false,
+		dataLoaded:   false,
+		infoFetched:  true,
 	}
 	expectedEntryId := int64(-1)
 	for _, fragment := range fragments {
@@ -258,31 +279,33 @@ func MergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		// merge data
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
 	}
+	// mark dataLoaded
+	mergedFrag.dataLoaded = true
 
 	// upload the mergedFragment
-	mergedFrag.loaded = true
 	flushErr := mergedFrag.Flush(ctx)
 	if flushErr != nil {
 		return nil, flushErr
 	}
-	// mark uploaded
-	mergedFrag.uploaded = true
+	// mark dataUploaded
+	mergedFrag.dataUploaded = true
+
+	// update metrics
+	metrics.WpFragmentBufferBytes.WithLabelValues(mergedFrag.bucket).Add(float64(len(mergedFrag.entriesData) + len(mergedFrag.indexes)))
+	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
+
+	// update cache
+	err := cache.AddCacheFragment(ctx, mergedFrag)
+	if err != nil {
+		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
+	}
 
 	//
 	return mergedFrag, nil
 }
 
-func ReleaseFragments(ctx context.Context, fragments []*FragmentObject) {
-	for _, fragment := range fragments {
-		err := fragment.Release()
-		if err != nil {
-			logger.Ctx(ctx).Warn("release fragment failed when LogFile closing", zap.String("fragmentKey", fragment.fragmentKey), zap.Uint64("fragmentId", fragment.fragmentId), zap.Error(err))
-		}
-	}
-}
-
-// SerializeFragment to object data bytes
-func SerializeFragment(f *FragmentObject) ([]byte, error) {
+// serializeFragment to object data bytes
+func serializeFragment(f *FragmentObject) ([]byte, error) {
 	fullData := make([]byte, 0)
 	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
@@ -292,8 +315,8 @@ func SerializeFragment(f *FragmentObject) ([]byte, error) {
 	return fullData, nil
 }
 
-// DeserializeFragment from object data bytes
-func DeserializeFragment(data []byte) (*FragmentObject, error) {
+// deserializeFragment from object data bytes
+func deserializeFragment(data []byte) (*FragmentObject, error) {
 	// Create a buffer to read from the data
 	buf := bytes.NewBuffer(data)
 
@@ -335,4 +358,23 @@ func DeserializeFragment(data []byte) (*FragmentObject, error) {
 		firstEntryId: int64(firstEntryID),
 		lastEntryId:  int64(lastEntryId),
 	}, nil
+}
+
+func genFragmentDataFromRaw(rawEntries [][]byte, firstEntryId int64) ([]byte, []byte) {
+	data := make([]byte, 0)
+	index := make([]byte, 0)
+	offset := 0
+	for i := 0; i < len(rawEntries); i++ {
+		entryLength := uint32(len(rawEntries[i]))
+		entryOffset := offset
+		entryIndex := make([]byte, 8)
+		binary.BigEndian.PutUint32(entryIndex[:4], uint32(entryOffset))
+		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
+
+		data = append(data, rawEntries[i]...)
+		index = append(index, entryIndex...)
+
+		offset = offset + len(rawEntries[i])
+	}
+	return index, data
 }

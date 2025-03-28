@@ -125,12 +125,67 @@ func (_c *Fragment_GetEntry_Call) RunAndReturn(run func(int64) ([]byte, error)) 
 	return _c
 }
 
-// GetFirstEntryIdDirectly provides a mock function with given fields:
-func (_m *Fragment) GetFirstEntryIdDirectly() int64 {
+// GetFirstEntryId provides a mock function with given fields:
+func (_m *Fragment) GetFirstEntryId() (int64, error) {
 	ret := _m.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetFirstEntryIdDirectly")
+		panic("no return value specified for GetFirstEntryId")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
+		return rf()
+	}
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func() error); ok {
+		r1 = rf()
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Fragment_GetFirstEntryId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFirstEntryId'
+type Fragment_GetFirstEntryId_Call struct {
+	*mock.Call
+}
+
+// GetFirstEntryId is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetFirstEntryId() *Fragment_GetFirstEntryId_Call {
+	return &Fragment_GetFirstEntryId_Call{Call: _e.mock.On("GetFirstEntryId")}
+}
+
+func (_c *Fragment_GetFirstEntryId_Call) Run(run func()) *Fragment_GetFirstEntryId_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Fragment_GetFirstEntryId_Call) Return(_a0 int64, _a1 error) *Fragment_GetFirstEntryId_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Fragment_GetFirstEntryId_Call) RunAndReturn(run func() (int64, error)) *Fragment_GetFirstEntryId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetFragmentId provides a mock function with given fields:
+func (_m *Fragment) GetFragmentId() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFragmentId")
 	}
 
 	var r0 int64
@@ -143,29 +198,74 @@ func (_m *Fragment) GetFirstEntryIdDirectly() int64 {
 	return r0
 }
 
-// Fragment_GetFirstEntryIdDirectly_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFirstEntryIdDirectly'
-type Fragment_GetFirstEntryIdDirectly_Call struct {
+// Fragment_GetFragmentId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFragmentId'
+type Fragment_GetFragmentId_Call struct {
 	*mock.Call
 }
 
-// GetFirstEntryIdDirectly is a helper method to define mock.On call
-func (_e *Fragment_Expecter) GetFirstEntryIdDirectly() *Fragment_GetFirstEntryIdDirectly_Call {
-	return &Fragment_GetFirstEntryIdDirectly_Call{Call: _e.mock.On("GetFirstEntryIdDirectly")}
+// GetFragmentId is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetFragmentId() *Fragment_GetFragmentId_Call {
+	return &Fragment_GetFragmentId_Call{Call: _e.mock.On("GetFragmentId")}
 }
 
-func (_c *Fragment_GetFirstEntryIdDirectly_Call) Run(run func()) *Fragment_GetFirstEntryIdDirectly_Call {
+func (_c *Fragment_GetFragmentId_Call) Run(run func()) *Fragment_GetFragmentId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *Fragment_GetFirstEntryIdDirectly_Call) Return(_a0 int64) *Fragment_GetFirstEntryIdDirectly_Call {
+func (_c *Fragment_GetFragmentId_Call) Return(_a0 int64) *Fragment_GetFragmentId_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *Fragment_GetFirstEntryIdDirectly_Call) RunAndReturn(run func() int64) *Fragment_GetFirstEntryIdDirectly_Call {
+func (_c *Fragment_GetFragmentId_Call) RunAndReturn(run func() int64) *Fragment_GetFragmentId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetFragmentKey provides a mock function with given fields:
+func (_m *Fragment) GetFragmentKey() string {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFragmentKey")
+	}
+
+	var r0 string
+	if rf, ok := ret.Get(0).(func() string); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+
+	return r0
+}
+
+// Fragment_GetFragmentKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFragmentKey'
+type Fragment_GetFragmentKey_Call struct {
+	*mock.Call
+}
+
+// GetFragmentKey is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetFragmentKey() *Fragment_GetFragmentKey_Call {
+	return &Fragment_GetFragmentKey_Call{Call: _e.mock.On("GetFragmentKey")}
+}
+
+func (_c *Fragment_GetFragmentKey_Call) Run(run func()) *Fragment_GetFragmentKey_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Fragment_GetFragmentKey_Call) Return(_a0 string) *Fragment_GetFragmentKey_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Fragment_GetFragmentKey_Call) RunAndReturn(run func() string) *Fragment_GetFragmentKey_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -225,51 +325,6 @@ func (_c *Fragment_GetLastEntryId_Call) RunAndReturn(run func() (int64, error)) 
 	return _c
 }
 
-// GetLastEntryIdDirectly provides a mock function with given fields:
-func (_m *Fragment) GetLastEntryIdDirectly() int64 {
-	ret := _m.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetLastEntryIdDirectly")
-	}
-
-	var r0 int64
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	return r0
-}
-
-// Fragment_GetLastEntryIdDirectly_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLastEntryIdDirectly'
-type Fragment_GetLastEntryIdDirectly_Call struct {
-	*mock.Call
-}
-
-// GetLastEntryIdDirectly is a helper method to define mock.On call
-func (_e *Fragment_Expecter) GetLastEntryIdDirectly() *Fragment_GetLastEntryIdDirectly_Call {
-	return &Fragment_GetLastEntryIdDirectly_Call{Call: _e.mock.On("GetLastEntryIdDirectly")}
-}
-
-func (_c *Fragment_GetLastEntryIdDirectly_Call) Run(run func()) *Fragment_GetLastEntryIdDirectly_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *Fragment_GetLastEntryIdDirectly_Call) Return(_a0 int64) *Fragment_GetLastEntryIdDirectly_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *Fragment_GetLastEntryIdDirectly_Call) RunAndReturn(run func() int64) *Fragment_GetLastEntryIdDirectly_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetLastModified provides a mock function with given fields:
 func (_m *Fragment) GetLastModified() int64 {
 	ret := _m.Called()
@@ -311,6 +366,51 @@ func (_c *Fragment_GetLastModified_Call) Return(_a0 int64) *Fragment_GetLastModi
 }
 
 func (_c *Fragment_GetLastModified_Call) RunAndReturn(run func() int64) *Fragment_GetLastModified_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetSize provides a mock function with given fields:
+func (_m *Fragment) GetSize() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetSize")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// Fragment_GetSize_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetSize'
+type Fragment_GetSize_Call struct {
+	*mock.Call
+}
+
+// GetSize is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetSize() *Fragment_GetSize_Call {
+	return &Fragment_GetSize_Call{Call: _e.mock.On("GetSize")}
+}
+
+func (_c *Fragment_GetSize_Call) Run(run func()) *Fragment_GetSize_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Fragment_GetSize_Call) Return(_a0 int64) *Fragment_GetSize_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Fragment_GetSize_Call) RunAndReturn(run func() int64) *Fragment_GetSize_Call {
 	_c.Call.Return(run)
 	return _c
 }

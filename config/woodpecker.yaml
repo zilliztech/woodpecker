@@ -25,6 +25,14 @@ woodpecker:
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 8000000 # Maximum size of a fragment in bytes to flush, default is 8M
       maxFlushThreads: 4 # Maximum number of threads to flush data
+    fragmentManager:
+      maxBytes: 1000000000 # Maximum size of a fragment cache in bytes, default is 1GB
+      maxInterval: 1000 # Maximum interval between two cache evict operations in milliseconds
+  storage:
+    # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.
+    # Valid values: [default, minio, local, service]
+    type: minio
+    rootPath: /var/lib/woodpecker # Root path to the log data files.
 
 # Configures the system log output.
 log:

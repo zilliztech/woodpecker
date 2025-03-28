@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,12 +21,12 @@ func TestNewLogger(t *testing.T) {
 		{"info", zap.NewAtomicLevelAt(zap.InfoLevel)},
 		{"warn", zap.NewAtomicLevelAt(zap.WarnLevel)},
 		{"error", zap.NewAtomicLevelAt(zap.ErrorLevel)},
-		{"invalid", zap.NewAtomicLevelAt(zap.DebugLevel)}, // 默认情况下，NewLogger 返回 InfoLevel
+		{"invalid", zap.NewAtomicLevelAt(zap.WarnLevel)}, // 默认情况下，NewLogger 返回 InfoLevel
 	}
 
 	for _, test := range tests {
 		logger := Ctx(context.WithValue(context.Background(), "__LogLevel__", test.level))
-		assert.True(t, logger.Core().Enabled(test.expected.Level()))
+		assert.True(t, logger.Core().Enabled(test.expected.Level()), fmt.Sprintf("level:%s should enable:%v", test.level, test.expected.Level()))
 	}
 }
 

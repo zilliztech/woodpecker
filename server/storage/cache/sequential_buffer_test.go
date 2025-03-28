@@ -1,4 +1,4 @@
-package objectstorage
+package cache
 
 import (
 	"testing"
@@ -10,9 +10,9 @@ import (
 func TestNewSequentialBuffer(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 5)
 	assert.NotNil(t, buffer)
-	assert.Equal(t, int64(1), buffer.firstEntryId)
-	assert.Equal(t, int64(1), buffer.expectedNextEntryId.Load())
-	assert.Len(t, buffer.values, 5)
+	assert.Equal(t, int64(1), buffer.FirstEntryId)
+	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
+	assert.Len(t, buffer.Values, 5)
 }
 
 // TestNewSequentialBufferWithData tests the creation of a new SequentialBuffer with initial data.
@@ -20,18 +20,18 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 	data := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3"), []byte("data4"), []byte("data5")}
 	buffer := NewSequentialBufferWithData(1, 5, data)
 	assert.NotNil(t, buffer)
-	assert.Equal(t, int64(1), buffer.firstEntryId)
-	assert.Equal(t, int64(1), buffer.expectedNextEntryId.Load())
-	assert.Len(t, buffer.values, 5)
-	assert.Equal(t, data, buffer.values)
+	assert.Equal(t, int64(1), buffer.FirstEntryId)
+	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
+	assert.Len(t, buffer.Values, 5)
+	assert.Equal(t, data, buffer.Values)
 
 	data2 := [][]byte{nil, []byte("data3"), nil, []byte("data5")}
 	buffer2 := NewSequentialBufferWithData(2, 5, data2)
 	assert.NotNil(t, buffer2)
-	assert.Equal(t, int64(2), buffer2.firstEntryId)
-	assert.Equal(t, int64(2), buffer2.expectedNextEntryId.Load())
-	assert.Len(t, buffer2.values, 5)
-	assert.Equal(t, [][]byte{nil, []byte("data3"), nil, []byte("data5"), nil}, buffer2.values)
+	assert.Equal(t, int64(2), buffer2.FirstEntryId)
+	assert.Equal(t, int64(2), buffer2.ExpectedNextEntryId.Load())
+	assert.Len(t, buffer2.Values, 5)
+	assert.Equal(t, [][]byte{nil, []byte("data3"), nil, []byte("data5"), nil}, buffer2.Values)
 }
 
 // TestWriteEntry tests the WriteEntry method.
@@ -42,31 +42,31 @@ func TestWriteEntry(t *testing.T) {
 	id, err := buffer.WriteEntry(1, []byte("data1"))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), id)
-	assert.Equal(t, int64(2), buffer.expectedNextEntryId.Load())
+	assert.Equal(t, int64(2), buffer.ExpectedNextEntryId.Load())
 
 	// Test writing another valid entry
 	id, err = buffer.WriteEntry(2, []byte("data2"))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), id)
-	assert.Equal(t, int64(3), buffer.expectedNextEntryId.Load())
+	assert.Equal(t, int64(3), buffer.ExpectedNextEntryId.Load())
 
 	// Test writing an entry with an valid ID, but not in sequence
 	id, err = buffer.WriteEntry(4, []byte("data4"))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(4), id)
-	assert.Equal(t, int64(3), buffer.expectedNextEntryId.Load())
+	assert.Equal(t, int64(3), buffer.ExpectedNextEntryId.Load())
 
 	// Test writing an entry that exceeds the buffer size
 	id, err = buffer.WriteEntry(7, []byte("data7"))
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), id)
-	assert.Equal(t, int64(3), buffer.expectedNextEntryId.Load())
+	assert.Equal(t, int64(3), buffer.ExpectedNextEntryId.Load())
 
 	// Test writing another valid entry
 	id, err = buffer.WriteEntry(3, []byte("data3"))
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3), id)
-	assert.Equal(t, int64(5), buffer.expectedNextEntryId.Load())
+	assert.Equal(t, int64(5), buffer.ExpectedNextEntryId.Load())
 
 }
 
@@ -190,8 +190,8 @@ func TestReset(t *testing.T) {
 	buffer.WriteEntry(2, []byte("data2"))
 	buffer.Reset()
 
-	assert.Len(t, buffer.values, 5)
-	assert.Equal(t, int64(0), buffer.dataSize.Load())
-	assert.Equal(t, int64(1), buffer.expectedNextEntryId.Load())
-	assert.Equal(t, [][]byte{nil, nil, nil, nil, nil}, buffer.values)
+	assert.Len(t, buffer.Values, 5)
+	assert.Equal(t, int64(0), buffer.DataSize.Load())
+	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
+	assert.Equal(t, [][]byte{nil, nil, nil, nil, nil}, buffer.Values)
 }

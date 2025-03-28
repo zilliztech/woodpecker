@@ -5,14 +5,18 @@ import (
 )
 
 // Fragment interface defines Read and Write operations.
+//
+//go:generate mockery --dir=./server/storage --name=Fragment --structname=Fragment --output=mocks/mocks_server/mocks_storage --filename=mock_fragment.go --with-expecter=true  --outpkg=mocks_storage
 type Fragment interface {
+	GetFragmentId() int64
+	GetFragmentKey() string
 	Flush(ctx context.Context) error
 	Load(ctx context.Context) error
 	GetLastEntryId() (int64, error)
-	GetFirstEntryIdDirectly() int64
-	GetLastEntryIdDirectly() int64
+	GetFirstEntryId() (int64, error)
 	GetLastModified() int64
 	GetEntry(entryId int64) ([]byte, error)
+	GetSize() int64
 	Release() error
 }
 

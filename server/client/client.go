@@ -8,6 +8,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/segment"
 )
 
+//go:generate mockery --dir=./server/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_server/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error)
