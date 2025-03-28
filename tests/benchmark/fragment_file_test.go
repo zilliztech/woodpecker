@@ -93,7 +93,7 @@ func TestFragmentWritePerformance(t *testing.T) {
 			for i := 0; i < tc.writeCount; i++ {
 				// 写入数据
 				writeStart := time.Now()
-				err := fragment.Write(ctx, dataSet[i])
+				err := fragment.Write(ctx, dataSet[i], int64(i))
 				writeTime += time.Since(writeStart)
 
 				if err != nil {
@@ -245,7 +245,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 				testData[i] = data
 
 				// 写入数据
-				if err := fragment.Write(ctx, data); err != nil {
+				if err := fragment.Write(ctx, data, int64(i)); err != nil {
 					fragment.Release()
 					t.Fatalf("写入数据失败: %v", err)
 				}
@@ -414,7 +414,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 				if op == 0 && writeCount < writeOps {
 					// 写入操作
 					writeStart := time.Now()
-					err := fragment.Write(ctx, dataSet[writeCount])
+					err := fragment.Write(ctx, dataSet[writeCount], int64(i))
 					writeTime += time.Since(writeStart)
 
 					if err != nil {

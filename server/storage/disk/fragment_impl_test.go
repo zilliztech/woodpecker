@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,7 +46,7 @@ func TestFragmentFile_WriteAndRead(t *testing.T) {
 
 	// 写入测试数据
 	testData := []byte("test data")
-	err = ff.Write(context.Background(), testData)
+	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
 	// 读取数据
@@ -71,11 +72,11 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	testData3 := []byte("test data 3")
 
 	// 写入数据
-	err = ff.Write(context.Background(), testData1)
+	err = ff.Write(context.Background(), testData1, startEntryID)
 	assert.NoError(t, err)
-	err = ff.Write(context.Background(), testData2)
+	err = ff.Write(context.Background(), testData2, startEntryID+1)
 	assert.NoError(t, err)
-	err = ff.Write(context.Background(), testData3)
+	err = ff.Write(context.Background(), testData3, startEntryID+2)
 	assert.NoError(t, err)
 
 	// 刷新数据
@@ -130,7 +131,7 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 
 	// 写入测试数据
 	testData := []byte("test data")
-	err = ff.Write(context.Background(), testData)
+	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
 	// 刷新数据到磁盘（这一步很重要）
@@ -142,7 +143,7 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 重新打开文件
-	ff2, err := NewFragmentFile(filePath, 1024*1024, 1, 0) // firstEntryID会被忽略，从文件加载
+	ff2, err := NewROFragmentFile(filePath, 1024*1024, 1) // firstEntryID会被忽略，从文件加载
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -165,6 +166,61 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 	assert.Equal(t, testData, data)
 }
 
+func TestFragmentFileLargeWriteAndRead(t *testing.T) {
+	// 创建临时目录
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.frag")
+
+	// 创建新的FragmentFile
+	startEntryID := int64(100)
+	ff, err := NewFragmentFile(filePath, 128*1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	assert.NoError(t, err)
+	assert.NotNil(t, ff)
+
+	// 写入测试数据
+	baseData := make([]byte, 1*1024*1024)
+	for i := 0; i < 120; i++ {
+		testData := []byte(fmt.Sprintf("test data_%d", i))
+		testData = append(testData, baseData...)
+		err = ff.Write(context.Background(), testData, startEntryID)
+		assert.NoError(t, err)
+	}
+
+	// 刷新数据到磁盘（这一步很重要）
+	err = ff.Flush(context.Background())
+	assert.NoError(t, err)
+
+	// 关闭文件
+	err = ff.Release()
+	assert.NoError(t, err)
+
+	// 重新打开文件
+	ff2, err := NewROFragmentFile(filePath, 128*1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	assert.NoError(t, err)
+	assert.NotNil(t, ff2)
+
+	// 加载数据
+	err = ff2.Load(context.Background())
+	assert.NoError(t, err)
+
+	// 检查加载的 firstEntryID
+	firstID, err := ff2.GetFirstEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID, firstID)
+
+	lastID, err := ff2.GetLastEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID+119, lastID)
+
+	// 读取数据
+	for i := 0; i < 120; i++ {
+		data, err := ff2.GetEntry(startEntryID + int64(i))
+		assert.NoError(t, err)
+		expected := append([]byte(fmt.Sprintf("test data_%d", i)), baseData...)
+		assert.Equal(t, expected, data)
+	}
+}
+
 func TestFragmentFile_CRCValidation(t *testing.T) {
 	// 创建临时目录
 	tmpDir := t.TempDir()
@@ -178,7 +234,7 @@ func TestFragmentFile_CRCValidation(t *testing.T) {
 
 	// 写入测试数据
 	testData := []byte("test data")
-	err = ff.Write(context.Background(), testData)
+	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
 	// 修改文件中的数据（破坏CRC）
@@ -211,12 +267,12 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 
 	// 写入一些小数据，确保能够成功
 	smallData := []byte("small test data")
-	err = ff.Write(context.Background(), smallData)
+	err = ff.Write(context.Background(), smallData, int64(startEntryID))
 	assert.NoError(t, err)
 
 	// 尝试写入大数据，应该导致空间不足错误
 	largeData := make([]byte, 5*1024) // 5KB
-	err = ff.Write(context.Background(), largeData)
+	err = ff.Write(context.Background(), largeData, int64(startEntryID+1))
 	assert.Error(t, err)
 	assert.True(t, werr.ErrDiskFragmentNoSpace.Is(err))
 }
@@ -255,7 +311,7 @@ func TestFragmentFile_Release(t *testing.T) {
 
 	// 写入测试数据
 	testData := []byte("test data")
-	err = ff.Write(context.Background(), testData)
+	err = ff.Write(context.Background(), testData, int64(0))
 	assert.NoError(t, err)
 
 	// 释放资源
@@ -263,7 +319,7 @@ func TestFragmentFile_Release(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 尝试在释放后写入数据
-	err = ff.Write(context.Background(), testData)
+	err = ff.Write(context.Background(), testData, int64(1))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "fragment file is closed")
 }

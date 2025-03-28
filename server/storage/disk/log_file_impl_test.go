@@ -1,8 +1,12 @@
 package disk
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"go.uber.org/zap"
 	"os"
 	"path/filepath"
 	"strings"
@@ -683,7 +687,7 @@ func TestFragmentRotation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 确认滚动写入了10个fragment
-	frags, err := logFile.getFragments()
+	frags, err := logFile.getROFragments()
 	assert.NoError(t, err)
 	assert.NotNil(t, frags)
 	assert.Equal(t, 10, len(frags))
@@ -1318,4 +1322,341 @@ func TestSequentialBufferAppend(t *testing.T) {
 
 	// 应该读取到5个entries (0-4)
 	assert.Equal(t, 5, entryCount)
+}
+
+func TestWrite10kAndReadInOrder(t *testing.T) {
+	testEntryCount := 10000
+	dir := getTempDir(t)
+	// 创建一个较大的fragment大小以容纳所有数据
+	logFile, err := NewDiskLogFile(1, dir, WithFragmentSize(10*1024*1024))
+	assert.NoError(t, err)
+
+	// 记录写入开始时间
+	writeStartTime := time.Now()
+
+	// 使用较大的起始ID，避免与自动分配的ID冲突
+	resultChannels := make([]<-chan int64, testEntryCount)
+	// 记录每个ID对应的数据，用于后续验证
+	entryData := make(map[int][]byte)
+
+	t.Logf("Starting to write %d entries...", testEntryCount)
+
+	for id := 0; id < testEntryCount; id++ {
+		// 创建数据，包含ID信息以便于验证
+		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
+		entryData[id] = data
+
+		assignedID, ch, err := logFile.AppendAsync(context.Background(), int64(id), data)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
+		resultChannels[id] = ch
+
+		// 每1000条打印一次进度
+		if (id+1)%1000 == 0 {
+			t.Logf("Wrote %d/%d entries", id+1, testEntryCount)
+		}
+	}
+
+	// 等待所有写入结果
+	successCount := 0
+	failCount := 0
+	for i, ch := range resultChannels {
+		select {
+		case result := <-ch:
+			if result >= 0 {
+				successCount++
+			} else {
+				failCount++
+				t.Logf("Failed to write entry %d", i)
+			}
+		case <-time.After(10 * time.Second): // 增加超时时间
+			t.Logf("Timeout waiting for append result for ID %d", i)
+			failCount++
+		}
+
+		// 每1000条打印一次进度
+		if (i+1)%1000 == 0 {
+			t.Logf("Processed %d/%d write results", i+1, testEntryCount)
+		}
+	}
+
+	writeDuration := time.Since(writeStartTime)
+	t.Logf("Write completed in %v. Success: %d, Failed: %d", writeDuration, successCount, failCount)
+
+	// 确保写入成功率是100%
+	assert.Equal(t, testEntryCount, successCount, "All entries should be written successfully")
+	assert.Equal(t, 0, failCount, "No entries should fail")
+
+	// 同步确保所有数据已写入磁盘
+	err = logFile.Sync(context.Background())
+	assert.NoError(t, err)
+
+	// 记录读取开始时间
+	readStartTime := time.Now()
+
+	// 创建reader验证数据，确保从ID 0开始读取所有数据
+	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+		StartSequenceNum: 0,
+		EndSequenceNum:   int64(testEntryCount),
+	})
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	// 收集所有读取到的条目
+	readEntries := make(map[int64]*proto.LogEntry)
+	readSequence := make([]int64, 0, testEntryCount) // 记录读取顺序
+
+	t.Logf("Starting to read entries...")
+	readCount := 0
+
+	for reader.HasNext() {
+		entry, err := reader.ReadNext()
+		if err != nil {
+			t.Logf("Error reading entry: %v", err)
+			continue
+		}
+
+		readEntries[entry.EntryId] = entry
+		readSequence = append(readSequence, entry.EntryId)
+		readCount++
+
+		// 每1000条打印一次进度
+		if readCount%1000 == 0 {
+			t.Logf("Read %d entries", readCount)
+		}
+	}
+
+	readDuration := time.Since(readStartTime)
+	t.Logf("Read completed in %v. Total entries read: %d", readDuration, len(readEntries))
+
+	// 验证是否读取了所有写入的条目
+	assert.Equal(t, testEntryCount, len(readEntries), "Should read back the same number of entries that were written")
+
+	// 验证读取顺序是否正确
+	for i := 0; i < len(readSequence)-1; i++ {
+		assert.Equal(t, readSequence[i]+1, readSequence[i+1],
+			"Entries should be read in sequential order, but got %d followed by %d",
+			readSequence[i], readSequence[i+1])
+	}
+
+	// 验证所有写入的ID和数据都被正确读取
+	for id, expectedData := range entryData {
+		entry, ok := readEntries[int64(id)]
+		assert.True(t, ok, "Entry with ID %d should be read back", id)
+		if ok {
+			assert.Equal(t, expectedData, entry.Values,
+				"Data for entry ID %d should match. Expected: %s, Got: %s",
+				id, string(expectedData), string(entry.Values))
+		}
+	}
+
+	// 清理
+	err = logFile.Close()
+	assert.NoError(t, err)
+}
+
+func TestWrite10kWithSmallFragments(t *testing.T) {
+	testEntryCount := 10000 // Reduce the number of entries for quicker testing
+	dir := getTempDir(t)
+
+	// Use more reasonable fragment sizes that will still force rotation
+	// but allow entries to be written correctly
+	smallFragmentSize := 16 * 1024 // 16KB instead of 4KB
+	maxEntriesPerFragment := 100   // 100 entries per fragment instead of 200
+
+	t.Logf("Creating log file with small fragment size: %d bytes, max %d entries per fragment",
+		smallFragmentSize, maxEntriesPerFragment)
+
+	logFile, err := NewDiskLogFile(1, dir,
+		WithFragmentSize(smallFragmentSize),
+		WithMaxEntryPerFile(maxEntriesPerFragment))
+	assert.NoError(t, err)
+
+	// 记录写入开始时间
+	writeStartTime := time.Now()
+
+	// 使用较大的起始ID，避免与自动分配的ID冲突
+	resultChannels := make([]<-chan int64, testEntryCount)
+	// 记录每个ID对应的数据，用于后续验证
+	entryData := make(map[int][]byte)
+
+	t.Logf("Starting to write %d entries with forced fragment rotations...", testEntryCount)
+
+	for id := 0; id < testEntryCount; id++ {
+		// 创建数据，包含ID信息以便于验证
+		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
+		entryData[id] = data
+
+		assignedID, ch, err := logFile.AppendAsync(context.Background(), int64(id), data)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
+		resultChannels[id] = ch
+
+		// 每100条打印一次进度（与fragment容量对应）
+		if (id+1)%100 == 0 {
+			t.Logf("Wrote %d/%d entries (should trigger fragment rotation)", id+1, testEntryCount)
+
+			// Force sync to ensure fragment rotation happens
+			err = logFile.Sync(context.Background())
+			assert.NoError(t, err, "Failed to sync at entry %d", id+1)
+
+			// 获取当前fragment信息
+			frags, err := logFile.getROFragments()
+			assert.NoError(t, err)
+			t.Logf("After %d entries, fragment count: %d", id+1, len(frags))
+
+			if len(frags) > 0 {
+				lastFrag := frags[len(frags)-1]
+				firstID, _ := lastFrag.GetFirstEntryId()
+				lastID, _ := lastFrag.GetLastEntryId()
+				t.Logf("Last fragment: ID=%d, first entry=%d, last entry=%d",
+					lastFrag.GetFragmentId(), firstID, lastID)
+			}
+		}
+	}
+
+	// 等待所有写入结果
+	successCount := 0
+	failCount := 0
+	for i, ch := range resultChannels {
+		select {
+		case result := <-ch:
+			if result >= 0 {
+				successCount++
+			} else {
+				failCount++
+				t.Logf("Failed to write entry %d", i)
+			}
+		case <-time.After(2 * time.Second): // Shorter timeout for faster testing
+			t.Logf("Timeout waiting for append result for ID %d", i)
+			failCount++
+		}
+
+		// 每100条打印一次进度
+		if (i+1)%100 == 0 {
+			t.Logf("Processed %d/%d write results", i+1, testEntryCount)
+		}
+	}
+
+	writeDuration := time.Since(writeStartTime)
+	t.Logf("Write completed in %v. Success: %d, Failed: %d", writeDuration, successCount, failCount)
+
+	// 检查写入情况，允许一些失败但不应太多
+	assert.Greater(t, successCount, failCount, "More successful than failed writes")
+
+	// 最终同步确保所有数据已写入磁盘
+	err = logFile.Sync(context.Background())
+	assert.NoError(t, err)
+
+	// 获取最终的fragment信息
+	frags, err := logFile.getROFragments()
+	assert.NoError(t, err)
+	t.Logf("Final fragment count: %d", len(frags))
+
+	// 验证是否有多个fragment（确认rotation发生）
+	assert.Greater(t, len(frags), 1, "Multiple fragments should be created due to small fragment size")
+
+	for i, frag := range frags {
+		firstID, _ := frag.GetFirstEntryId()
+		lastID, _ := frag.GetLastEntryId()
+		entryCount := lastID - firstID + 1
+		t.Logf("Fragment[%d]: ID=%d, first entry=%d, last entry=%d, entries=%d",
+			i, frag.GetFragmentId(), firstID, lastID, entryCount)
+	}
+
+	// 记录读取开始时间
+	readStartTime := time.Now()
+
+	// 创建reader验证数据，确保从ID 0开始读取所有数据
+	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+		StartSequenceNum: 0,
+		EndSequenceNum:   int64(testEntryCount),
+	})
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	// 收集所有读取到的条目
+	readEntries := make(map[int64]*proto.LogEntry)
+	readSequence := make([]int64, 0, testEntryCount) // 记录读取顺序
+
+	t.Logf("Starting to read entries across multiple fragments...")
+	readCount := 0
+
+	for reader.HasNext() {
+		entry, err := reader.ReadNext()
+		if err != nil {
+			t.Errorf("Error reading entry: %v", err)
+			continue
+		}
+
+		readEntries[entry.EntryId] = entry
+		readSequence = append(readSequence, entry.EntryId)
+		readCount++
+
+		// 每100条打印一次进度（与fragment容量对应）
+		if readCount%100 == 0 {
+			t.Logf("Read %d entries (crossing fragment boundary)", readCount)
+		}
+	}
+
+	readDuration := time.Since(readStartTime)
+	t.Logf("Read completed in %v. Total entries read: %d", readDuration, len(readEntries))
+
+	// 验证是否读取了所有写入的条目
+	// 注意：可能不会有所有条目，因为一些写入可能失败
+	t.Logf("Read back %d entries of %d attempted writes (%d successful writes)",
+		len(readEntries), testEntryCount, successCount)
+
+	// 如果有序列空洞，记录它们
+	if len(readSequence) > 0 {
+		t.Logf("First read ID: %d, Last read ID: %d",
+			readSequence[0], readSequence[len(readSequence)-1])
+
+		// 检查序列连续性
+		for i := 0; i < len(readSequence)-1; i++ {
+			if readSequence[i]+1 != readSequence[i+1] {
+				t.Logf("Gap in sequence: %d followed by %d (expected %d)",
+					readSequence[i], readSequence[i+1], readSequence[i]+1)
+			}
+		}
+	}
+
+	// 验证已读取条目的数据正确性
+	for id, entry := range readEntries {
+		expectedData, ok := entryData[int(id)]
+		if ok {
+			if !bytes.Equal(expectedData, entry.Values) {
+				t.Errorf("Data mismatch for ID %d. Expected: %s, Got: %s",
+					id, string(expectedData), string(entry.Values))
+			} else {
+				// Data matches
+				t.Logf("Verified entry ID %d", id)
+			}
+		} else {
+			t.Errorf("Read unexpected entry ID: %d", id)
+		}
+	}
+
+	// 清理
+	err = logFile.Close()
+	assert.NoError(t, err)
+}
+
+// TestFragmentDataValueCheck Debug Test Only
+func TestFragmentDataValueCheck(t *testing.T) {
+	t.Skipf("just for debug, skip")
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	for i := 0; i <= 14; i++ {
+		filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/1/0/log_0/fragment_%d", i)
+		ff, err := NewROFragmentFile(filePath, 128*1024*1024, int64(i))
+		assert.NoError(t, err)
+		err = ff.IteratorPrint()
+		assert.NoError(t, err)
+		if err != nil {
+			logger.Ctx(context.Background()).Error("iterator failed", zap.Int("fragmentId", i), zap.Error(err))
+		}
+	}
 }

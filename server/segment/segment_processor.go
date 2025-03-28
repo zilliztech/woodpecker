@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -18,6 +17,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
 
@@ -126,6 +126,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 
 func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {
 	// TODO should cache reader for each open reader
+	logger.Ctx(ctx).Debug("segment processor read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId))
 	logFileReader, err := s.getOrCreateLogFileReader(ctx, entryId)
 	if err != nil {
 		return nil, err
@@ -199,7 +200,7 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 			// use local FileSystem or local FileSystem + minio-compatible
 			writerFile, err := disk.NewDiskLogFile(s.currentLogFileId, path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()), disk.WithDisableAutoSync())
 			s.currentLogFileWriter = writerFile
-			logger.Ctx(ctx).Info("create DiskLogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()))
+			logger.Ctx(ctx).Info("create DiskLogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId))
 			return s.currentLogFileWriter, err
 		} else {
 			s.currentLogFileReader = objectstorage.NewROLogFile(

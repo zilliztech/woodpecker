@@ -52,6 +52,11 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 
 	for {
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs()
+		logger.Ctx(ctx).Debug("get next segment handle and ids",
+			zap.String("logName", l.logHandle.GetName()),
+			zap.Int64("pendingReadSegmentId", segId),
+			zap.Int64("pendingReadEntryId", entryId),
+			zap.Error(err))
 		if err != nil {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
