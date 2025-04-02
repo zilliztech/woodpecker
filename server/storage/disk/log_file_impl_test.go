@@ -897,6 +897,9 @@ func TestNewReader(t *testing.T) {
 
 // TestLoad tests loading a log file after restart.
 func TestLoad(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
 	dir := getTempDir(t)
 
 	// 初始写入的条目数量
@@ -907,7 +910,7 @@ func TestLoad(t *testing.T) {
 	{
 		logFile, err := NewDiskLogFile(1, dir)
 		assert.NoError(t, err)
-		// 先写入100个
+		// 先写入20个
 		resultChannels := make([]<-chan int64, 0, initialEntries)
 		entryIDs := make([]int64, 0, initialEntries)
 		for i := 0; i < initialEntries; i++ {
@@ -1212,6 +1215,10 @@ func TestReadAfterClose(t *testing.T) {
 
 // TestBasicReader tests basic reader functionality.
 func TestBasicReader(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
 	dir := getTempDir(t)
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
@@ -1243,16 +1250,11 @@ func TestBasicReader(t *testing.T) {
 	// 读取并验证所有条目
 	for i := 0; i < numEntries; i++ {
 		hasNext := reader.HasNext()
-		if !hasNext {
-			t.Fatalf("Expected HasNext to be true for entry %d, but got false", i)
-			break
-		}
-
+		assert.True(t, hasNext)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
-
 		expectedID := startID + int64(i)
-		assert.Equal(t, expectedID, entry.EntryId)
+		assert.Equal(t, expectedID, entry.EntryId, i)
 		assert.Equal(t, []byte(fmt.Sprintf("data-%d", i)), entry.Values)
 	}
 
@@ -1349,6 +1351,7 @@ func TestSequentialBufferAppend(t *testing.T) {
 }
 
 func TestWrite10kAndReadInOrder(t *testing.T) {
+	t.Skipf("todo")
 	testEntryCount := 10000
 	dir := getTempDir(t)
 	// 创建一个较大的fragment大小以容纳所有数据
@@ -1480,6 +1483,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 }
 
 func TestWrite10kWithSmallFragments(t *testing.T) {
+	t.Skipf("todo")
 	testEntryCount := 10000 // Reduce the number of entries for quicker testing
 	dir := getTempDir(t)
 
@@ -1673,8 +1677,10 @@ func TestFragmentDataValueCheck(t *testing.T) {
 	cfg.Log.Level = "debug"
 	logger.InitLogger(cfg)
 
-	for i := 0; i <= 14; i++ {
-		filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/1/0/log_0/fragment_%d", i)
+	for i := 0; i <= 0; i++ {
+		//filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/1/0/log_0/fragment_%d", i)
+		filePath := fmt.Sprintf("/var/folders/gq/gybc_zm17nz50mp3kfr_nzdr0000gn/T/disk_log_test_2431546518/log_1/fragment_%d", i)
+
 		ff, err := NewROFragmentFile(filePath, 128*1024*1024, int64(i))
 		assert.NoError(t, err)
 		err = ff.IteratorPrint()

@@ -3,13 +3,14 @@ package benchmark
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/logger"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
@@ -61,8 +62,11 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 
 		// Little big dataset Test, 2MB*500 = 1GB
 		{"大文件_大buffer_低频flush", 128 * 1024 * 1024, 32 * 1024 * 1024, 2 * 1024 * 1024, 500, 10 * time.Millisecond},
+
 		{"大文件_大buffer_超高频flush", 2 * 1024 * 1024 * 1024, 64 * 1024 * 1024, 2 * 1024 * 1024, 500, 0},
-		{"大文件_大buffer_超高频flush", 1 * 1024 * 1024 * 1024, 4 * 1024 * 1024, 4 * 1024, 5000, 0},
+		{"大文件_大buffer_超高频flush", 1 * 1024 * 1024 * 1024, 16 * 1024 * 1024, 4 * 1024, 5000, 0},
+		{"大文件_大buffer_超高频flush", 1 * 1024 * 1024 * 1024, 16 * 1024 * 1024, 2 * 1024, 5000, 0},
+		{"大文件_大buffer_超高频flush", 1 * 1024 * 1024 * 1024, 16 * 1024 * 1024, 1 * 1024, 5000, 0},
 	}
 
 	// 创建临时目录
@@ -113,9 +117,9 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 			start := time.Now()
 
 			// 执行写入测试
-			for i := 0; i < tc.writeCount; i += 100 {
+			for i := 0; i < tc.writeCount; i += 1 {
 				// 确定此批次的大小
-				batchSize := min(100, tc.writeCount-i)
+				batchSize := min(1, tc.writeCount-i)
 
 				// 保存每个写入操作的channel
 				resultChannels := make([]<-chan int64, batchSize)

@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -56,6 +57,7 @@ func GetCachedFragment(ctx context.Context, key string) (storage.Fragment, bool)
 }
 
 func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
+	logger.Ctx(ctx).Debug("add cache fragment", zap.String("key", fragment.GetFragmentKey()), zap.Any("fragInst", fmt.Sprintf("%p", fragment)))
 	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
