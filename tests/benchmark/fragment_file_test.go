@@ -62,7 +62,7 @@ func TestFragmentWritePerformance(t *testing.T) {
 			filePath := filepath.Join(tempDir, fmt.Sprintf("fragment_%s.data", tc.name))
 
 			// 创建FragmentFile实例
-			fragment, err := disk.NewFragmentFile(filePath, tc.fileSize, 1, 1)
+			fragment, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 1)
 			if err != nil {
 				t.Fatalf("创建FragmentFile失败: %v", err)
 			}
@@ -232,7 +232,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 			// 步骤1：先创建并填充 FragmentFile
 			t.Logf("准备测试文件，写入 %d 条目...", tc.entryCount)
-			fragment, err := disk.NewFragmentFile(filePath, tc.fileSize, 1, 1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 1)
 			if err != nil {
 				t.Fatalf("创建FragmentFile失败: %v", err)
 			}
@@ -245,34 +245,34 @@ func TestFragmentReadPerformance(t *testing.T) {
 				testData[i] = data
 
 				// 写入数据
-				if err := fragment.Write(ctx, data, int64(i)); err != nil {
-					fragment.Release()
+				if err := fragmentWriter.Write(ctx, data, int64(i)); err != nil {
+					fragmentWriter.Release()
 					t.Fatalf("写入数据失败: %v", err)
 				}
 			}
 
 			// 确保所有数据都写入磁盘
-			if err := fragment.Flush(ctx); err != nil {
-				fragment.Release()
+			if err := fragmentWriter.Flush(ctx); err != nil {
+				fragmentWriter.Release()
 				t.Fatalf("刷新数据失败: %v", err)
 			}
 
 			// 关闭并重新打开fragment以确保从磁盘读取
-			fragment.Release()
+			fragmentWriter.Release()
 
 			// 步骤2：重新打开 FragmentFile 并测试读取性能
-			fragment, err = disk.OpenFragment(filePath, tc.fileSize, 1)
+			fragmentReader, err := disk.NewFragmentFileReader(filePath, tc.fileSize, 1)
 			if err != nil {
 				t.Fatalf("打开FragmentFile失败: %v", err)
 			}
-			defer fragment.Release()
+			defer fragmentReader.Release()
 
 			// 获取条目范围
-			firstId, err := fragment.GetFirstEntryId()
+			firstId, err := fragmentReader.GetFirstEntryId()
 			if err != nil {
 				t.Fatalf("获取第一个条目ID失败: %v", err)
 			}
-			lastId, err := fragment.GetLastEntryId()
+			lastId, err := fragmentReader.GetLastEntryId()
 			if err != nil {
 				t.Fatalf("获取最后一个条目ID失败: %v", err)
 			}
@@ -288,7 +288,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 			// 顺序读取所有条目
 			for id := firstId; id <= lastId; id++ {
-				data, err := fragment.GetEntry(id)
+				data, err := fragmentReader.GetEntry(id)
 				if err != nil {
 					readErrors++
 					continue
@@ -364,11 +364,11 @@ func TestFragmentMixedPerformance(t *testing.T) {
 			ctx := context.Background()
 
 			// 创建FragmentFile实例
-			fragment, err := disk.NewFragmentFile(filePath, int64(tc.fileSize), 1, 1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 1)
 			if err != nil {
 				t.Fatalf("创建FragmentFile失败: %v", err)
 			}
-			defer fragment.Release()
+			defer fragmentWriter.Release()
 
 			// 准备测试数据
 			totalOps := tc.writeCount
@@ -414,7 +414,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 				if op == 0 && writeCount < writeOps {
 					// 写入操作
 					writeStart := time.Now()
-					err := fragment.Write(ctx, dataSet[writeCount], int64(i))
+					err := fragmentWriter.Write(ctx, dataSet[writeCount], int64(i))
 					writeTime += time.Since(writeStart)
 
 					if err != nil {
@@ -429,7 +429,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 					shouldFlush := tc.flushInterval > 0 && writeCount%tc.flushInterval == 0
 					if shouldFlush {
 						flushStart := time.Now()
-						err := fragment.Flush(ctx)
+						err := fragmentWriter.Flush(ctx)
 						flushTime += time.Since(flushStart)
 
 						if err != nil {
@@ -445,7 +445,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 					entryId := int64(1 + rand.Intn(writeCount))
 
 					readStart := time.Now()
-					data, err := fragment.GetEntry(entryId)
+					data, err := fragmentWriter.GetEntry(entryId)
 					readTime += time.Since(readStart)
 
 					if err != nil {
@@ -466,7 +466,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 			// 最后一次flush
 			if bytesSinceLastFlush > 0 {
 				flushStart := time.Now()
-				if err := fragment.Flush(ctx); err != nil {
+				if err := fragmentWriter.Flush(ctx); err != nil {
 					t.Fatalf("最后刷新文件失败: %v", err)
 				}
 				flushTime += time.Since(flushStart)

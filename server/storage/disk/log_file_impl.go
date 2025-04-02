@@ -31,7 +31,7 @@ type DiskLogFile struct {
 	mu           sync.RWMutex
 	id           int64
 	basePath     string
-	currFragment *FragmentFile
+	currFragment *FragmentFileWriter
 
 	// Configuration parameters
 	fragmentSize    int // Maximum size of each fragment
@@ -87,17 +87,12 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 	// Initialize state from existing fragments
 	if len(fragments) > 0 {
 		// Find max fragment ID
-		maxFragID := int64(0)
-		for _, f := range fragments {
-			if f.GetFragmentId() > maxFragID {
-				maxFragID = f.GetFragmentId()
-			}
-		}
+		maxFragID := fragments[len(fragments)-1].GetFragmentId()
 		dlf.lastFragmentID.Store(maxFragID)
 		// Find max entry ID
 		lastEntryID := int64(-1)
-		for i := 1; i < len(fragments); i++ {
-			id, err = fragments[len(fragments)-i].GetLastEntryId()
+		for i := 0; i < len(fragments); i++ {
+			id, err = fragments[len(fragments)-1-i].GetLastEntryId()
 			if err != nil {
 				return nil, err
 			}
@@ -120,6 +115,10 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 
 	logger.Ctx(context.Background()).Info("NewDiskLogFile", zap.String("basePath", dlf.basePath), zap.Int64("id", dlf.id))
 	return dlf, nil
+}
+
+func NewRODiskLogFile(id int64, basePath string) (*DiskLogFile, error) {
+	return NewDiskLogFile(id, basePath, WithDisableAutoSync())
 }
 
 // run 定期执行同步操作，类似于 objectstorage中的同步机制
@@ -613,10 +612,7 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 		logger.Ctx(context.Background()).Debug("Sync刷新当前fragment after rotate",
 			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 
-		// 将当前片段添加到缓存
-		cache.AddCacheFragment(context.Background(), dlf.currFragment)
-
-		// 仍然需要调用 Release 来标记为关闭，但不会立即释放资源
+		// Release 立即释放资源
 		if err := dlf.currFragment.Release(); err != nil {
 			return errors.Wrap(err, "close current fragment")
 		}
@@ -633,7 +629,7 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 
 	// 创建新的fragment
 	fragmentPath := filepath.Join(dlf.basePath, fmt.Sprintf("fragment_%d", fragmentID))
-	fragment, err := NewFragmentFile(fragmentPath, int64(dlf.fragmentSize), fragmentID, fragmentFirstEntryId)
+	fragment, err := NewFragmentFileWriter(fragmentPath, int64(dlf.fragmentSize), fragmentID, fragmentFirstEntryId)
 	if err != nil {
 		return errors.Wrapf(err, "create new fragment: %s", fragmentPath)
 	}
@@ -665,11 +661,7 @@ func (dlf *DiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (s
 		endEntryID:      opt.EndSequenceNum,
 		closed:          false,
 	}
-	fmt.Printf("####@@@@ new reader %p for [%d,%d)  frags:%d \n", reader, opt.StartSequenceNum, opt.EndSequenceNum, len(fragments))
-	//for _, frag := range fragments {
-	//	fmt.Printf("frag:%p  \n", frag)
-	//}
-
+	logger.Ctx(ctx).Debug("NewReader", zap.Any("reader", reader), zap.Any("opt", opt))
 	return reader, nil
 }
 
@@ -734,7 +726,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 
 	totalMergeSize := 0
 	pendingMergeSize := 0
-	pendingMergeFrags := make([]*FragmentFile, 0)
+	pendingMergeFrags := make([]*FragmentFileReader, 0)
 
 	// 不需要再定义清理函数，因为 FragmentManager 负责管理 fragments 的生命周期
 
@@ -758,7 +750,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
 			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
-			pendingMergeFrags = make([]*FragmentFile, 0)
+			pendingMergeFrags = make([]*FragmentFileReader, 0)
 			totalMergeSize += pendingMergeSize
 			pendingMergeSize = 0
 		}
@@ -774,7 +766,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
 		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
-		pendingMergeFrags = make([]*FragmentFile, 0)
+		pendingMergeFrags = make([]*FragmentFileReader, 0)
 		totalMergeSize += pendingMergeSize
 		pendingMergeSize = 0
 	}
@@ -789,7 +781,7 @@ func (dlf *DiskLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
 	return fmt.Sprintf("%s/%d/m_%d.frag", dlf.basePath, dlf.id, mergedFragmentId)
 }
 
-func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath string, mergeFragId uint64, mergeFragSize int, fragments []*FragmentFile) (storage.Fragment, error) {
+func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath string, mergeFragId uint64, mergeFragSize int, fragments []*FragmentFileReader) (storage.Fragment, error) {
 	// check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -797,7 +789,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 
 	// merge
 	fragmentFirstEntryId := fragments[0].lastEntryID
-	mergedFragment, err := NewFragmentFile(mergedFragPath, int64(mergeFragSize), int64(mergeFragId), fragmentFirstEntryId)
+	mergedFragmentWriter, err := NewFragmentFileWriter(mergedFragPath, int64(mergeFragSize), int64(mergeFragId), fragmentFirstEntryId)
 	if err != nil {
 		return nil, errors.Wrapf(err, "create new fragment: %s", mergedFragPath)
 	}
@@ -806,8 +798,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 	for _, fragment := range fragments {
 		err := fragment.Load(ctx)
 		if err != nil {
-			// 合并失败，但不需要显式释放 fragments，FragmentManager 负责管理
-			mergedFragment.Release()
+			// 合并失败，显式释放 fragment
+			mergedFragmentWriter.Release()
 			return nil, err
 		}
 		// check the order of entries
@@ -816,8 +808,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 			expectedEntryId = fragment.lastEntryID + 1
 		} else {
 			if expectedEntryId != fragment.firstEntryID {
-				// 合并失败，但不需要显式释放 fragments，FragmentManager 负责管理
-				mergedFragment.Release()
+				// 合并失败，显式释放 fragments
+				mergedFragmentWriter.Release()
 				return nil, errors.New("fragments are not in order")
 			}
 			expectedEntryId = fragment.lastEntryID + 1
@@ -830,9 +822,9 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 	}
 
 	// 添加合并后的片段到缓存
-	cache.AddCacheFragment(ctx, mergedFragment)
+	mergedFragmentWriter.Release()
 
-	return mergedFragment, nil
+	return mergedFragmentWriter, nil
 }
 
 // Close closes the log file and releases resources
@@ -858,7 +850,7 @@ func (dlf *DiskLogFile) Close() error {
 }
 
 // getFragments returns all exists fragments in the log file, which is readonly
-func (dlf *DiskLogFile) getROFragments() ([]*FragmentFile, error) {
+func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 	// 读取目录内容
 	entries, err := os.ReadDir(dlf.basePath)
 	if err != nil {
@@ -869,7 +861,7 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFile, error) {
 	}
 
 	// 筛选出fragment文件
-	fragments := make([]*FragmentFile, 0)
+	fragments := make([]*FragmentFileReader, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "fragment_") {
 			// 提取fragmentID
@@ -889,26 +881,28 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFile, error) {
 			// 先尝试从缓存中获取
 			fragment, ok := cache.GetCachedFragment(context.Background(), fragmentPath)
 			if ok {
-				// 从缓存中找到了
-				fragments = append(fragments, fragment.(*FragmentFile))
-				continue
+				if cachedFragReader, isReader := fragment.(*FragmentFileReader); isReader {
+					// 从缓存中找到了
+					fragments = append(fragments, cachedFragReader)
+					continue
+				}
 			}
 
 			// 创建FragmentFile实例并加载
-			fragment, err = NewROFragmentFile(fragmentPath, fileInfo.Size(), id) // firstEntryID会被忽略，从实际文件中加载
+			fragment, err = NewFragmentFileReader(fragmentPath, fileInfo.Size(), id) // firstEntryID会被忽略，从实际文件中加载
 			if err != nil {
 				continue
 			}
 
 			// 加载fragment
-			if err := fragment.(*FragmentFile).Load(context.Background()); err != nil {
-				fragment.(*FragmentFile).Release()
+			if err := fragment.Load(context.Background()); err != nil {
+				fragment.Release()
 				continue
 			}
 
 			// 添加到缓存
 			cache.AddCacheFragment(context.Background(), fragment)
-			fragments = append(fragments, fragment.(*FragmentFile))
+			fragments = append(fragments, fragment.(*FragmentFileReader))
 		}
 	}
 
@@ -978,7 +972,7 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 // DiskReader implements the Reader interface
 type DiskReader struct {
 	ctx             context.Context
-	fragments       []*FragmentFile
+	fragments       []*FragmentFileReader
 	currFragmentIdx int   // 当前fragment索引
 	currEntryID     int64 // 当前读取的entry ID
 	endEntryID      int64 // 终止ID（不包含）
@@ -987,18 +981,14 @@ type DiskReader struct {
 
 // HasNext returns true if there are more entries to read
 func (dr *DiskReader) HasNext() bool {
-	fmt.Printf("####@@@@ start HasNext for %p , frags: %d \n", dr, len(dr.fragments))
-	//for _, frag := range dr.fragments {
-	//	fmt.Printf("frag:%p  \n", frag)
-	//}
 	if dr.closed {
-		fmt.Printf("####@@@@ HasNext for %p , frags: %d , return false , because reader closed \n", dr, len(dr.fragments))
+		logger.Ctx(context.Background()).Debug("No more entries to read, current reader is closed", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
 		return false
 	}
 
 	// 如果已达到终止ID，返回false
 	if dr.endEntryID > 0 && dr.currEntryID >= dr.endEntryID {
-		fmt.Printf("####@@@@ HasNext for %p , frags: %d , return false , currentEntryId:%d > endEntryId:%d \n", dr, len(dr.fragments), dr.currEntryID, dr.endEntryID)
+		logger.Ctx(context.Background()).Debug("No more entries to read", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
 		return false
 	}
 
@@ -1018,7 +1008,7 @@ func (dr *DiskReader) HasNext() bool {
 		if dr.currEntryID < firstID {
 			// 如果结束ID小于fragment的第一个ID，说明没有更多数据
 			if dr.endEntryID > 0 && dr.endEntryID <= firstID {
-				fmt.Printf("####@@@@ HasNext for %p , return false ,  endEntryId:%d < firstId:%d \n", dr, dr.endEntryID, firstID)
+				logger.Ctx(context.Background()).Debug("No more entries to read", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Int64("firstId", firstID), zap.Int64("lastId", lastID))
 				return false
 			}
 			dr.currEntryID = firstID
@@ -1031,7 +1021,6 @@ func (dr *DiskReader) HasNext() bool {
 		}
 	}
 
-	fmt.Printf("####@@@@ HasNext for %p , return false , reach func end  \n", dr)
 	return false
 }
 

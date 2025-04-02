@@ -16,16 +16,16 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-func TestNewFragmentFile(t *testing.T) {
+func TestNewFragmentFileWriter(t *testing.T) {
 	// 创建临时目录
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
 	// 创建新的FragmentFile
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
+	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
-	assert.NotNil(t, ff)
-	assert.Equal(t, int64(1), ff.GetFragmentId())
+	assert.NotNil(t, fw)
+	assert.Equal(t, int64(1), fw.GetFragmentId())
 
 	// 验证文件是否存在
 	_, err = os.Stat(filePath)
@@ -35,6 +35,11 @@ func TestNewFragmentFile(t *testing.T) {
 	info, err := os.Stat(filePath)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1024*1024), info.Size())
+
+	// 创建一个已存在的fragmentFile 的writer是不可以的
+	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
+	assert.Error(t, err)
+	assert.Nil(t, fw2)
 }
 
 func TestFragmentFile_WriteAndRead(t *testing.T) {
@@ -44,7 +49,7 @@ func TestFragmentFile_WriteAndRead(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -70,7 +75,7 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -134,7 +139,7 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -150,27 +155,28 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 	// 关闭文件
 	err = ff.Release()
 	assert.NoError(t, err)
+	ff.Close()
 
 	// 重新打开文件
-	ff2, err := NewROFragmentFile(filePath, 1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1) // firstEntryID会被忽略，从文件加载
 	assert.NoError(t, err)
-	assert.NotNil(t, ff2)
+	assert.NotNil(t, fr)
 
 	// 加载数据
-	err = ff2.Load(context.Background())
+	err = fr.Load(context.Background())
 	assert.NoError(t, err)
 
 	// 检查加载的 firstEntryID
-	firstID, err := ff2.GetFirstEntryId()
+	firstID, err := fr.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
 
-	lastID, err := ff2.GetLastEntryId()
+	lastID, err := fr.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, lastID)
 
 	// 读取数据
-	data, err := ff2.GetEntry(startEntryID)
+	data, err := fr.GetEntry(startEntryID)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, data)
 }
@@ -182,7 +188,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 128*1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -204,7 +210,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 重新打开文件
-	ff2, err := NewROFragmentFile(filePath, 128*1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1) // firstEntryID会被忽略，从文件加载
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -237,7 +243,7 @@ func TestFragmentFile_CRCValidation(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -270,7 +276,7 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -293,7 +299,7 @@ func TestFragmentFile_InvalidEntryId(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -316,7 +322,7 @@ func TestFragmentFile_Release(t *testing.T) {
 
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -342,7 +348,7 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 	// 创建新的FragmentFile
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
-	ff, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -461,9 +467,6 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
 
-	err = ff.Load(ctx)
-	assert.NoError(t, err)
-
 	lastID, err := ff.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID+int64(entryCount-1), lastID)
@@ -477,12 +480,12 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 	// 创建用于写入的FragmentFile
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
-	writerFF, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	writerFF, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, writerFF)
 
 	// 创建用于读取的FragmentFile（同一文件的不同实例）
-	readerFF, err := NewROFragmentFile(filePath, fileSize, 1)
+	readerFF, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, readerFF)
 
@@ -605,7 +608,7 @@ func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
 	// Create new FragmentFile
 	startEntryID := int64(1000)
 	fileSize := int64(1 * 1024 * 1024) // 1MB
-	ff, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -666,7 +669,7 @@ func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
 	assert.NoError(t, err, "Failed to release resources")
 
 	// Reopen file
-	ff2, err := NewROFragmentFile(filePath, fileSize, 1)
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -703,12 +706,12 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	// Create new FragmentFile
 	startEntryID := int64(500)
 	fileSize := int64(1 * 1024 * 1024) // 1MB
-	ff, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
 	// open read file
-	ff2, err := NewROFragmentFile(filePath, fileSize, 1)
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -772,7 +775,7 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	assert.NoError(t, err, "Failed to release resources")
 
 	// Open file in read-only mode
-	roFF, err := NewROFragmentFile(filePath, fileSize, 1)
+	roFF, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err, "Failed to create read-only file")
 	assert.NotNil(t, roFF)
 
