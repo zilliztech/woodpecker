@@ -9,8 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zilliztech/woodpecker/server/storage/cache"
-
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
@@ -22,6 +20,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 var _ storage.LogFile = (*LogFile)(nil)

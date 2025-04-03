@@ -17,48 +17,48 @@ import (
 )
 
 func TestNewFragmentFileWriter(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
-	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
+	// Create new FragmentFile
+	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, fw)
 	assert.Equal(t, int64(1), fw.GetFragmentId())
 
-	// 验证文件是否存在
+	// Verify file exists
 	_, err = os.Stat(filePath)
 	assert.NoError(t, err)
 
-	// 验证文件大小
+	// Verify file size
 	info, err := os.Stat(filePath)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1024*1024), info.Size())
 
-	// 创建一个已存在的fragmentFile 的writer是不可以的
-	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
+	// Cannot create a writer for an existing fragmentFile
+	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.Error(t, err)
 	assert.Nil(t, fw2)
 }
 
 func TestFragmentFile_WriteAndRead(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 读取数据
+	// Read data
 	data, err := ff.GetEntry(startEntryID)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, data)
@@ -69,22 +69,22 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	cfg.Log.Level = "debug"
 	logger.InitLogger(cfg)
 
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入多个测试数据
+	// Write multiple test data
 	testData1 := []byte("test data 1")
 	testData2 := []byte("test data 2")
 	testData3 := []byte("test data 3")
 
-	// 写入数据
+	// Write data
 	err = ff.Write(context.Background(), testData1, startEntryID)
 	assert.NoError(t, err)
 	err = ff.Write(context.Background(), testData2, startEntryID+1)
@@ -92,11 +92,11 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	err = ff.Write(context.Background(), testData3, startEntryID+2)
 	assert.NoError(t, err)
 
-	// 刷新数据
+	// Flush data
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 检查条目ID范围
+	// Check entry ID range
 	firstID, err := ff.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -105,68 +105,68 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID+2, lastID)
 
-	t.Logf("条目ID范围: %d 到 %d", firstID, lastID)
+	t.Logf("Entry ID range: %d to %d", firstID, lastID)
 
-	// 获取并输出实际存储顺序 (调试信息)
+	// Get and output actual storage order (debug info)
 	for i := firstID; i <= lastID; i++ {
 		data, err := ff.GetEntry(i)
 		if err != nil {
-			t.Logf("读取条目 %d 失败: %v", i, err)
+			t.Logf("Failed to read entry %d: %v", i, err)
 		} else {
-			t.Logf("条目 %d: %s", i, string(data))
+			t.Logf("Entry %d: %s", i, string(data))
 		}
 		assert.NoError(t, err)
 	}
 
-	// 根据实际存储顺序验证数据
+	// Verify data based on actual storage order
 	data1, err := ff.GetEntry(startEntryID)
 	assert.NoError(t, err)
-	assert.Equal(t, testData1, data1, "第一个条目应该是testData1")
+	assert.Equal(t, testData1, data1, "First entry should be testData1")
 
 	data2, err := ff.GetEntry(startEntryID + 1)
 	assert.NoError(t, err)
-	assert.Equal(t, testData2, data2, "第二个条目应该是testData2")
+	assert.Equal(t, testData2, data2, "Second entry should be testData2")
 
 	data3, err := ff.GetEntry(startEntryID + 2)
 	assert.NoError(t, err)
-	assert.Equal(t, testData3, data3, "第三个条目应该是testData3")
+	assert.Equal(t, testData3, data3, "Third entry should be testData3")
 }
 
 func TestFragmentFile_LoadAndReload(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 刷新数据到磁盘（这一步很重要）
+	// Flush data to disk (this step is important)
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 关闭文件
+	// Close file
 	err = ff.Release()
 	assert.NoError(t, err)
 	ff.Close()
 
-	// 重新打开文件
-	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	// Reopen file
+	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
 	assert.NotNil(t, fr)
 
-	// 加载数据
+	// Load data
 	err = fr.Load(context.Background())
 	assert.NoError(t, err)
 
-	// 检查加载的 firstEntryID
+	// Check loaded firstEntryID
 	firstID, err := fr.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -175,24 +175,24 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, lastID)
 
-	// 读取数据
+	// Read data
 	data, err := fr.GetEntry(startEntryID)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, data)
 }
 
 func TestFragmentFileLargeWriteAndRead(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, startEntryID) // 128MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	baseData := make([]byte, 1*1024*1024)
 	for i := 0; i < 120; i++ {
 		testData := []byte(fmt.Sprintf("test data_%d", i))
@@ -201,24 +201,24 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// 刷新数据到磁盘（这一步很重要）
+	// Flush data to disk (this step is important)
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 关闭文件
+	// Close file
 	err = ff.Release()
 	assert.NoError(t, err)
 
-	// 重新打开文件
-	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	// Reopen file
+	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
-	// 加载数据
+	// Load data
 	err = ff2.Load(context.Background())
 	assert.NoError(t, err)
 
-	// 检查加载的 firstEntryID
+	// Check loaded firstEntryID
 	firstID, err := ff2.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -227,7 +227,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID+119, lastID)
 
-	// 读取数据
+	// Read data
 	for i := 0; i < 120; i++ {
 		data, err := ff2.GetEntry(startEntryID + int64(i))
 		assert.NoError(t, err)
@@ -237,55 +237,55 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 }
 
 func TestFragmentFile_CRCValidation(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 修改文件中的数据（破坏CRC）
-	ff.mappedFile[ff.dataOffset-2] = 'X' // 修改数据的一部分
+	// Modify data in file (corrupt CRC)
+	ff.mappedFile[ff.dataOffset-2] = 'X' // Modify part of the data
 
-	// 尝试读取数据
+	// Try to read data
 	_, err = ff.GetEntry(startEntryID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "CRC mismatch")
 }
 
 func TestFragmentFile_OutOfSpace(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建一个小文件，使得写入大数据时空间不足
-	// 文件结构:
-	// - headerSize(4KB): 文件头
-	// - dataArea: 实际数据存储区域
-	// - indexArea: 索引区域，每个条目占4字节(indexItemSize)
-	// - footerSize(4KB): 文件尾部
+	// Create a small file to cause out of space when writing large data
+	// File structure:
+	// - headerSize(4KB): File header
+	// - dataArea: Actual data storage area
+	// - indexArea: Index area, each entry takes 4 bytes(indexItemSize)
+	// - footerSize(4KB): File footer
 	fileSize := int64(12*1024 + 1024) // 13KB
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
 	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入一些小数据，确保能够成功
+	// Write small data to ensure success
 	smallData := []byte("small test data")
 	err = ff.Write(context.Background(), smallData, int64(startEntryID))
 	assert.NoError(t, err)
 
-	// 尝试写入大数据，应该导致空间不足错误
+	// Try to write large data, should cause out of space error
 	largeData := make([]byte, 5*1024) // 5KB
 	err = ff.Write(context.Background(), largeData, int64(startEntryID+1))
 	assert.Error(t, err)
@@ -293,73 +293,73 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 }
 
 func TestFragmentFile_InvalidEntryId(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 尝试读取不存在的条目
-	_, err = ff.GetEntry(startEntryID - 1) // 小于起始ID
+	// Try to read non-existent entries
+	_, err = ff.GetEntry(startEntryID - 1) // Less than start ID
 	assert.Error(t, err)
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
 	assert.Contains(t, err.Error(), "not in the range ")
 
-	_, err = ff.GetEntry(startEntryID + 1) // 大于已有条目ID
+	_, err = ff.GetEntry(startEntryID + 1) // Greater than existing entry ID
 	assert.Error(t, err)
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
 	assert.Contains(t, err.Error(), "not in the range ")
 }
 
 func TestFragmentFile_Release(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, int64(0))
 	assert.NoError(t, err)
 
-	// 释放资源
+	// Release resources
 	ff.Close()
 
-	// 尝试在释放后写入数据
+	// Try to write data after release
 	err = ff.Write(context.Background(), testData, int64(1))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "fragment file is closed")
 }
 
 func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "concurrent_test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
 	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入的条目数量
+	// Number of entries to write
 	entryCount := 100
-	// 同步通道，用于协调读写操作
+	// Synchronization channels for coordinating read/write operations
 	entryWritten := make(chan int64, entryCount)
 	done := make(chan struct{})
 	ctx := context.Background()
 
-	// 启动写入goroutine
+	// Start write goroutine
 	go func() {
 		defer close(entryWritten)
 
@@ -367,39 +367,39 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 			entryID := startEntryID + int64(i)
 			testData := []byte(fmt.Sprintf("concurrent test data %d", i))
 
-			// 写入数据
+			// Write data
 			err := ff.Write(ctx, testData, entryID)
 			if err != nil {
-				t.Logf("写入条目 %d 失败: %v", entryID, err)
+				t.Logf("Failed to write entry %d: %v", entryID, err)
 				return
 			}
 
-			// 每写入10个条目，刷新一次数据到磁盘
+			// Flush data to disk every 10 entries
 			if i > 0 && i%10 == 0 {
 				err = ff.Flush(ctx)
 				if err != nil {
-					t.Logf("刷新数据失败: %v", err)
+					t.Logf("Failed to flush data: %v", err)
 					return
 				}
-				t.Logf("已刷新数据到条目 %d", entryID)
+				t.Logf("Data flushed up to entry %d", entryID)
 			}
 
-			// 通知读取goroutine有新的条目写入
+			// Notify read goroutine of new entry
 			entryWritten <- entryID
-			// 短暂休眠，让读取goroutine有机会读取
+			// Brief sleep to allow read goroutine to read
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		// 最后一次刷新，确保所有数据都写入磁盘
+		// Final flush to ensure all data is written to disk
 		err = ff.Flush(ctx)
 		if err != nil {
-			t.Logf("最终刷新数据失败: %v", err)
+			t.Logf("Final flush failed: %v", err)
 		}
 
-		t.Logf("写入完成，共写入 %d 个条目", entryCount)
+		t.Logf("Write completed, total entries written: %d", entryCount)
 	}()
 
-	// 启动读取goroutine
+	// Start read goroutine
 	go func() {
 		defer close(done)
 
@@ -407,11 +407,11 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 		lastReadID := startEntryID - 1
 
 		for entryID := range entryWritten {
-			// 尝试读取新写入的条目及之前可能未读取的条目
+			// Try to read newly written entries and any previously unread entries
 			for readID := lastReadID + 1; readID <= entryID; readID++ {
 				expectedData := []byte(fmt.Sprintf("concurrent test data %d", int(readID-startEntryID)))
 
-				// 重试几次读取，因为写入可能需要一点时间才能被读取到
+				// Retry reading a few times as writes may take time to be visible
 				var readData []byte
 				var readErr error
 				success := false
@@ -419,12 +419,12 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 				for attempt := 0; attempt < 5; attempt++ {
 					readData, readErr = ff.GetEntry(readID)
 					if readErr == nil {
-						// 验证读取的数据是否正确
-						if !assert.Equal(t, expectedData, readData, "条目 %d 的数据不匹配", readID) {
-							t.Logf("条目 %d 读取成功但数据不匹配: 期望=%s, 实际=%s",
+						// Verify read data is correct
+						if !assert.Equal(t, expectedData, readData, "Data mismatch for entry %d", readID) {
+							t.Logf("Entry %d read successful but data mismatch: expected=%s, actual=%s",
 								readID, string(expectedData), string(readData))
 						} else {
-							t.Logf("条目 %d 读取成功: %s", readID, string(readData))
+							t.Logf("Entry %d read successful: %s", readID, string(readData))
 							readCount++
 							success = true
 						}
@@ -432,37 +432,37 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 					}
 
 					if strings.Contains(readErr.Error(), "out of range") {
-						// 条目可能尚未对读取可见，等待一会再试
+						// Entry may not be visible for reading yet, wait and retry
 						time.Sleep(20 * time.Millisecond)
 						continue
 					} else {
-						// 其他错误，直接报告
-						t.Logf("读取条目 %d 失败: %v", readID, readErr)
+						// Other errors, report directly
+						t.Logf("Failed to read entry %d: %v", readID, readErr)
 						break
 					}
 				}
 
 				if !success {
-					t.Logf("尝试5次后仍无法读取条目 %d: %v", readID, readErr)
+					t.Logf("Failed to read entry %d after 5 attempts: %v", readID, readErr)
 				}
 
 				lastReadID = readID
 			}
 		}
 
-		t.Logf("读取完成，成功读取 %d 个条目", readCount)
-		// 验证最终读取数量是否符合预期
-		assert.Equal(t, entryCount, readCount, "读取的条目数量不等于写入的条目数量")
+		t.Logf("Read completed, successfully read %d entries", readCount)
+		// Verify final read count matches expected
+		assert.Equal(t, entryCount, readCount, "Number of entries read does not match number written")
 	}()
 
-	// 等待读取完成
+	// Wait for read completion
 	<-done
 
-	// 释放资源
+	// Release resources
 	err = ff.Release()
 	assert.NoError(t, err)
 
-	// 验证最终写入的数据量
+	// Verify final written data
 	firstID, err := ff.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -473,34 +473,34 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 }
 
 func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "concurrent_diff_inst.frag")
 
-	// 创建用于写入的FragmentFile
+	// Create FragmentFile for writing
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
 	writerFF, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, writerFF)
 
-	// 创建用于读取的FragmentFile（同一文件的不同实例）
+	// Create FragmentFile for reading (different instance of the same file)
 	readerFF, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, readerFF)
 
-	// 先加载读取实例
-	err = readerFF.Load(context.Background()) // TODO test an other case: assert load error the first time, because invalid header
+	// Load the reader instance first
+	err = readerFF.Load(context.Background()) // TODO test another case: assert load error the first time, because invalid header
 	assert.NoError(t, err)
 
-	// 写入的条目数量
+	// Number of entries to write
 	entryCount := 100
-	// 同步通道，用于协调读写操作
+	// Synchronization channels for coordinating read/write operations
 	entryWritten := make(chan int64, entryCount)
 	done := make(chan struct{})
 	ctx := context.Background()
 
-	// 启动写入goroutine
+	// Start write goroutine
 	go func() {
 		defer close(entryWritten)
 
@@ -508,39 +508,39 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 			entryID := startEntryID + int64(i)
 			testData := []byte(fmt.Sprintf("concurrent different instances test data %d", i))
 
-			// 写入数据
+			// Write data
 			err := writerFF.Write(ctx, testData, entryID)
 			if err != nil {
-				t.Logf("写入条目 %d 失败: %v", entryID, err)
+				t.Logf("Failed to write entry %d: %v", entryID, err)
 				return
 			}
 
-			// 每写入5个条目，刷新一次数据到磁盘
+			// Flush data to disk every 5 entries
 			if i > 0 && i%5 == 0 {
 				err = writerFF.Flush(ctx)
 				if err != nil {
-					t.Logf("刷新数据失败: %v", err)
+					t.Logf("Failed to flush data: %v", err)
 					return
 				}
-				t.Logf("已刷新数据到条目 %d", entryID)
+				t.Logf("Data flushed up to entry %d", entryID)
 			}
 
-			// 通知读取goroutine有新的条目写入
+			// Notify read goroutine of new entry
 			entryWritten <- entryID
-			// 短暂休眠，让读取goroutine有机会读取
+			// Brief sleep to allow read goroutine to read
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		// 最后一次刷新，确保所有数据都写入磁盘
+		// Final flush to ensure all data is written to disk
 		err = writerFF.Flush(ctx)
 		if err != nil {
-			t.Logf("最终刷新数据失败: %v", err)
+			t.Logf("Final flush failed: %v", err)
 		}
 
-		t.Logf("写入完成，共写入 %d 个条目", entryCount)
+		t.Logf("Write completed, total entries written: %d", entryCount)
 	}()
 
-	// 启动读取goroutine
+	// Start read goroutine
 	go func() {
 		defer close(done)
 
@@ -548,11 +548,11 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 		lastReadID := startEntryID - 1
 
 		for entryID := range entryWritten {
-			// 尝试读取新写入的条目
+			// Try to read newly written entries
 			for readID := lastReadID + 1; readID <= entryID; readID++ {
 				expectedData := []byte(fmt.Sprintf("concurrent different instances test data %d", int(readID-startEntryID)))
 
-				// 重试几次读取，因为写入需要时间才能对另一个mmap实例可见
+				// Retry reading a few times as writes may take time to be visible to another mmap instance
 				var readData []byte
 				var readErr error
 				success := false
@@ -560,39 +560,39 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 				for attempt := 0; attempt < 10; attempt++ {
 					readData, readErr = readerFF.GetEntry(readID)
 					if readErr == nil {
-						// 验证读取的数据是否正确
-						if !assert.Equal(t, expectedData, readData, "条目 %d 的数据不匹配", readID) {
-							t.Logf("条目 %d 读取成功但数据不匹配: 期望=%s, 实际=%s",
+						// Verify read data is correct
+						if !assert.Equal(t, expectedData, readData, "Data mismatch for entry %d", readID) {
+							t.Logf("Entry %d read successful but data mismatch: expected=%s, actual=%s",
 								readID, string(expectedData), string(readData))
 						} else {
-							t.Logf("条目 %d 读取成功: %s", readID, string(readData))
+							t.Logf("Entry %d read successful: %s", readID, string(readData))
 							readCount++
 							success = true
 						}
 						break
 					}
-					// 错误处理和重试逻辑
-					t.Logf("尝试 %d: 读取条目 %d 失败: %v", attempt+1, readID, readErr)
+					// Error handling and retry logic
+					t.Logf("Attempt %d: Failed to read entry %d: %v", attempt+1, readID, readErr)
 					time.Sleep(50 * time.Millisecond)
 				}
 
 				if !success {
-					t.Logf("尝试10次后仍无法读取条目 %d", readID)
+					t.Logf("Failed to read entry %d after 10 attempts", readID)
 				}
 
 				lastReadID = readID
 			}
 		}
 
-		t.Logf("读取完成，成功读取 %d 个条目", readCount)
-		// 验证最终读取数量是否符合预期
-		assert.Equal(t, entryCount, readCount, "读取的条目数量不等于写入的条目数量")
+		t.Logf("Read completed, successfully read %d entries", readCount)
+		// Verify final read count matches expected
+		assert.Equal(t, entryCount, readCount, "Number of entries read does not match number written")
 	}()
 
-	// 等待读取完成
+	// Wait for read completion
 	<-done
 
-	// 释放资源
+	// Release resources
 	err = writerFF.Release()
 	assert.NoError(t, err)
 
@@ -601,7 +601,7 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 }
 
 func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
-	// Create temp directory
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test_multiple.frag")
 
@@ -710,7 +710,7 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// open read file
+	// Open read file
 	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)

@@ -21,32 +21,32 @@ import (
 var _ storage.Fragment = (*FragmentFileWriter)(nil)
 
 const (
-	// 文件头大小
+	// Header size
 	headerSize = 4 * 1024
-	// Footer大小
+	// Footer size
 	footerSize = 4 * 1024
-	// 每个索引项大小
+	// Size of each index item
 	indexItemSize = 4
 )
 
 // FragmentFileWriter manages fragment data write
 type FragmentFileWriter struct {
 	mu         sync.RWMutex
-	fragmentId int64 // fragment的唯一标识符
+	fragmentId int64 // Unique identifier for the fragment
 	filePath   string
 	fileSize   int64
 	mappedFile mmap.MMap
 
-	dataOffset  uint32 // 当前数据写入位置
-	indexOffset uint32 // 当前索引写入位置
+	dataOffset  uint32 // Current data write position
+	indexOffset uint32 // Current index write position
 
-	firstEntryID int64 // 第一个条目的ID
-	lastEntryID  int64 // 最后一个条目的ID
-	entryCount   int32 // 当前条目数量
-	isGrowing    bool  // 此fragment还会写入数据
+	firstEntryID int64 // ID of the first entry
+	lastEntryID  int64 // ID of the last entry
+	entryCount   int32 // Current number of entries
+	isGrowing    bool  // Whether this fragment will continue to receive writes
 
 	infoFetched bool
-	closed      bool // 是否已经关闭
+	closed      bool // Whether the file is closed
 }
 
 // NewFragmentFileWriter creates a new FragmentFile, which can write only
@@ -105,10 +105,10 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 
 // writeHeader writes the file header.
 func (fw *FragmentFileWriter) writeHeader() error {
-	// 写入magic string
+	// Write magic string
 	copy(fw.mappedFile[0:8], []byte("FRAGMENT"))
 
-	// 写入版本号
+	// Write version number
 	binary.LittleEndian.PutUint32(fw.mappedFile[8:12], 1)
 
 	return nil
@@ -149,14 +149,14 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 // writeFooter writes the file footer.
 func (fw *FragmentFileWriter) writeFooter() error {
 	footerOffset := uint32(fw.fileSize - footerSize)
-	// 写入条目数量
+	// Write entry count
 	binary.LittleEndian.PutUint32(fw.mappedFile[footerOffset:], uint32(fw.entryCount))
 
-	// 写入第一个和最后一个条目ID
+	// Write first and last entry IDs
 	binary.LittleEndian.PutUint64(fw.mappedFile[footerOffset+4:], uint64(fw.firstEntryID))
 	binary.LittleEndian.PutUint64(fw.mappedFile[footerOffset+12:], uint64(fw.lastEntryID))
 
-	// 写入growing状态
+	// Write growing state
 	isGrowingFlag := uint32(0)
 	if fw.isGrowing {
 		isGrowingFlag = uint32(1)
@@ -219,7 +219,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		zap.Int64("readingEntryId", entryId),
 		zap.String("fragInst", fmt.Sprintf("%p", fw)))
 
-	// 检查entryId是否在范围内
+	// Check if entryId is within range
 	if entryId < fw.firstEntryID || entryId > fw.lastEntryID {
 		logger.Ctx(context.Background()).Debug("entry ID out of range",
 			zap.Int64("requestedID", entryId),
@@ -228,7 +228,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("entry ID %d not in the range of this fragment", entryId))
 	}
 
-	// 计算索引位置 - 根据条目ID在索引区中的相对位置
+	// Calculate index position - relative position of entry ID in index area
 	idxPos := uint32(fw.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-fw.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(fw.fileSize-footerSize) {
@@ -240,7 +240,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid index position: %d", idxPos)
 	}
 
-	// 读取数据偏移量
+	// Read data offset
 	offset := binary.LittleEndian.Uint32(fw.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(fw.fileSize-footerSize) {
 		logger.Ctx(context.Background()).Debug("Invalid data offset",
@@ -250,7 +250,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid data offset: %d", offset)
 	}
 
-	// 读取数据长度
+	// Read data length
 	length := binary.LittleEndian.Uint32(fw.mappedFile[offset:])
 	if length == 0 || length > uint32(fw.fileSize-footerSize)-offset-8 {
 		logger.Ctx(context.Background()).Debug("Invalid data length",
@@ -260,11 +260,11 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid data length: %d", length)
 	}
 
-	// 读取CRC (4字节)
+	// Read CRC (4 bytes)
 	storedCRC := binary.LittleEndian.Uint32(fw.mappedFile[offset+4:])
 
-	// 确定数据区域
-	dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
+	// Determine data region
+	dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 	dataEnd := dataStart + length
 	if dataEnd > uint32(fw.fileSize-footerSize) {
 		logger.Ctx(context.Background()).Debug("Data region out of bounds",
@@ -274,21 +274,20 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
 	}
 
-	// 读取数据
+	// Read data
 	data := make([]byte, length)
 	copy(data, fw.mappedFile[dataStart:dataEnd])
 
-	logger.Ctx(context.Background()).Debug("fragment读取数据完成",
+	logger.Ctx(context.Background()).Debug("Fragment data read completed",
 		zap.String("fragmentFile", fw.filePath),
 		zap.Int64("readingEntryId", entryId),
 		zap.Uint32("start", dataStart),
 		zap.Uint32("end", dataEnd),
 		zap.Uint32("idxPos", idxPos),
 		zap.Int("dataSize", len(data)),
-		//zap.Any("data", data),
 		zap.String("fragInst", fmt.Sprintf("%p", fw)))
 
-	// 验证CRC
+	// Verify CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
 		logger.Ctx(context.Background()).Debug("CRC mismatch",
 			zap.Int64("entryId", entryId),
@@ -346,29 +345,28 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 		return errors.New("fragment file is closed")
 	}
 
-	// 检查空间是否足够
-	requiredSpace := uint32(len(data) + 8) // 数据长度(4) + CRC(4) + 数据
+	// Check if there's enough space
+	requiredSpace := uint32(len(data) + 8) // Data length(4) + CRC(4) + data
 	logger.Ctx(ctx).Debug("fragment writing entry",
 		zap.Int64("fragmentId", fw.fragmentId),
 		zap.Int64("firstEntryID", fw.firstEntryID),
 		zap.Int64("lastEntryID", fw.lastEntryID),
 		zap.Int32("entryCount", fw.entryCount),
 		zap.Int64("writingEntryId", writeEntryId),
-		//zap.Any("data", data),
 		zap.Uint32("requiredSpace", requiredSpace),
 		zap.Uint32("dataOffset", fw.dataOffset),
 		zap.Uint32("indexOffset", fw.indexOffset),
 		zap.String("fragInst", fmt.Sprintf("%p", fw)))
 
-	// 索引位置所需空间
+	// Space required for index position
 	indexSpace := int64(indexItemSize)
 	if fw.entryCount > 0 {
 		indexSpace = int64(indexItemSize) * (int64(fw.entryCount) + 1)
 	}
 
-	// 确保有足够的空间写入数据和索引
+	// Ensure there's enough space for data and index
 	if int64(fw.dataOffset)+int64(requiredSpace) >= fw.fileSize-footerSize-indexSpace {
-		logger.Ctx(ctx).Warn("Fragment空间不足，无法写入",
+		logger.Ctx(ctx).Warn("Insufficient fragment space, cannot write",
 			zap.Uint32("requiredSpace", requiredSpace),
 			zap.Uint32("dataOffset", fw.dataOffset),
 			zap.String("filePath", fw.filePath),
@@ -379,59 +377,58 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 		return werr.ErrDiskFragmentNoSpace
 	}
 
-	// 写入数据长度 (4字节)
+	// Write data length (4 bytes)
 	binary.LittleEndian.PutUint32(fw.mappedFile[fw.dataOffset:fw.dataOffset+4], uint32(len(data)))
-	// 计算CRC
+	// Calculate CRC
 	crc := crc32.ChecksumIEEE(data)
-	// 写入CRC (4字节)
+	// Write CRC (4 bytes)
 	binary.LittleEndian.PutUint32(fw.mappedFile[fw.dataOffset+4:fw.dataOffset+8], crc)
-	// 写入数据
+	// Write data
 	copy(fw.mappedFile[fw.dataOffset+8:fw.dataOffset+8+uint32(len(data))], data)
 
-	// 当前数据的偏移量
+	// Current data offset
 	currentDataOffset := fw.dataOffset
 
-	// 第一次写入
+	// First write
 	if fw.lastEntryID == -1 {
 		fw.lastEntryID = writeEntryId
 	} else if fw.lastEntryID+1 == writeEntryId {
 		fw.lastEntryID = writeEntryId
 	} else {
-		logger.Ctx(context.Background()).Warn("fragment写入数据后, lastEntryID自增",
+		logger.Ctx(context.Background()).Warn("fragment write data, lastEntryID auto-increment",
 			zap.String("fragmentFile", fw.filePath),
 			zap.Int64("writeEntryId", writeEntryId),
 			zap.Int64("lastEntryID", fw.lastEntryID),
 		)
-		return werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("writting the entry:%d is not the expected one: %d", writeEntryId, fw.lastEntryID+1))
+		return werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("writing the entry:%d is not the expected one: %d", writeEntryId, fw.lastEntryID+1))
 	}
 
-	// 计算索引位置 - 将最早的条目放在索引区的末尾，最新的条目放在索引区的开始
-	// 这样读取时就会按照写入顺序返回数据
+	// Calculate index position - place earliest entries at the end of index area, latest entries at the beginning
+	// This ensures data is returned in write order when reading
 	idxPos := fw.indexOffset
 
-	// 安全检查: 确保索引区域不会与数据区域重叠
+	// Safety check: ensure index area doesn't overlap with data area
 	if idxPos <= fw.dataOffset+requiredSpace {
-		logger.Ctx(ctx).Warn("索引位置与数据区域重叠",
+		logger.Ctx(ctx).Warn("Index position overlaps with data area",
 			zap.Uint32("idxPos", idxPos),
 			zap.Uint32("dataOffset", fw.dataOffset))
 		return werr.ErrDiskFragmentNoSpace
 	}
 
-	// 写入索引 - 存储数据的偏移量
+	// Write index - store data offset
 	binary.LittleEndian.PutUint32(fw.mappedFile[idxPos:idxPos+indexItemSize], currentDataOffset)
 
-	logger.Ctx(context.Background()).Debug("fragment已写入数据",
+	logger.Ctx(context.Background()).Debug("fragment data written",
 		zap.String("fragmentFile", fw.filePath),
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("start", fw.dataOffset+8),
 		zap.Uint32("end", fw.dataOffset+8+uint32(len(data))),
 		zap.Uint32("idxPos", idxPos),
 		zap.Int("dataSize", len(data)),
-		//zap.Any("data", data),
 		zap.String("fragInst", fmt.Sprintf("%p", fw)))
 
-	// 更新内部状态
-	logger.Ctx(context.Background()).Debug("fragment已写入数据,更新索引前",
+	// Update internal state
+	logger.Ctx(context.Background()).Debug("fragment data written, before index update",
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("dataOffset", fw.dataOffset),
 		zap.Uint32("indexOffset", fw.indexOffset),
@@ -440,13 +437,12 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 	fw.dataOffset += requiredSpace
 	fw.indexOffset -= indexItemSize
 	fw.entryCount++
-	logger.Ctx(context.Background()).Debug("fragment已写入数据,更新索引后",
+	logger.Ctx(context.Background()).Debug("fragment data written, after index update",
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("dataOffset", fw.dataOffset),
 		zap.Uint32("indexOffset", fw.indexOffset),
 		zap.Int32("entryCount", fw.entryCount))
 
-	//
 	return nil
 }
 
@@ -455,18 +451,18 @@ var _ storage.Fragment = (*FragmentFileReader)(nil)
 // FragmentFileReader manages fragment data read
 type FragmentFileReader struct {
 	mu         sync.RWMutex
-	fragmentId int64 // fragment的唯一标识符
+	fragmentId int64 // Unique identifier for the fragment
 	filePath   string
 	fileSize   int64
 	mappedFile mmap.MMap
 
-	firstEntryID int64 // 第一个条目的ID
-	lastEntryID  int64 // 最后一个条目的ID
-	entryCount   int32 // 当前条目数量
-	isGrowing    bool  // 此fragment还会写入数据
+	firstEntryID int64 // ID of the first entry
+	lastEntryID  int64 // ID of the last entry
+	entryCount   int32 // Current number of entries
+	isGrowing    bool  // Whether this fragment will continue to receive writes
 
 	infoFetched bool
-	closed      bool // 是否已经关闭
+	closed      bool // Whether the file is closed
 }
 
 // NewFragmentFileReader creates a new FragmentFile, which can read only
@@ -476,7 +472,7 @@ func NewFragmentFileReader(filePath string, fileSize int64, fragmentId int64) (*
 		fileSize:   fileSize,
 		fragmentId: fragmentId,
 
-		// variables bellow would be lazy loaded if need
+		// Variables below would be lazy loaded if needed
 		entryCount:   0,
 		firstEntryID: -1,
 		lastEntryID:  -1,
@@ -511,13 +507,13 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 		return errors.New("fragment file is closed")
 	}
 
-	// 创建或打开文件
+	// Create or open file
 	file, err := os.OpenFile(fr.filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open fragment file %s", fr.filePath)
 	}
 
-	// 映射文件到内存
+	// Map file to memory
 	fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
 	if err != nil {
 		file.Close()
@@ -525,31 +521,30 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	}
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
-	// 读取文件头
+	// Read file header
 	if !fr.validateHeader() {
 		return errors.New("invalid fragment file header")
 	}
 
-	// 读取footer
+	// Read footer
 	if err := fr.readFooter(); err != nil {
 		return err
 	}
 
-	// set infoFetched
+	// Set infoFetched flag
 	fr.infoFetched = true
 
-	//
 	return nil
 }
 
 // validateHeader validates the file header.
 func (fr *FragmentFileReader) validateHeader() bool {
-	// 检查magic string
+	// Check magic string
 	if string(fr.mappedFile[0:8]) != "FRAGMENT" {
 		return false
 	}
 
-	// 检查版本号
+	// Check version number
 	version := binary.LittleEndian.Uint32(fr.mappedFile[8:12])
 	return version == 1
 }
@@ -557,14 +552,14 @@ func (fr *FragmentFileReader) validateHeader() bool {
 // readFooter reads the file footer.
 func (fr *FragmentFileReader) readFooter() error {
 	footerOffset := uint32(fr.fileSize - footerSize)
-	// 读取条目数量
+	// Read entry count
 	fr.entryCount = int32(binary.LittleEndian.Uint32(fr.mappedFile[footerOffset:]))
 
-	// 读取第一个和最后一个条目ID
+	// Read first and last entry IDs
 	fr.firstEntryID = int64(binary.LittleEndian.Uint64(fr.mappedFile[footerOffset+4:]))
 	fr.lastEntryID = int64(binary.LittleEndian.Uint64(fr.mappedFile[footerOffset+12:]))
 
-	// 读取write state
+	// Read write state
 	fr.isGrowing = binary.LittleEndian.Uint32(fr.mappedFile[footerOffset+20:]) == 1
 	logger.Ctx(context.Background()).Debug("read footer",
 		zap.Int32("entryCount", fr.entryCount),
@@ -577,9 +572,9 @@ func (fr *FragmentFileReader) readFooter() error {
 }
 
 func (fr *FragmentFileReader) refreshFooter() error {
-	// 读取文件头
+	// Read file header
 	if !fr.validateHeader() {
-		// unchanged
+		// Unchanged
 		return nil
 	}
 	return fr.readFooter()
@@ -649,7 +644,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		zap.Int64("readingEntryId", entryId),
 		zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
-	// load data if not loaded
+	// Load data if not loaded
 	if !fr.infoFetched {
 		err := fr.Load(context.Background())
 		if err != nil {
@@ -657,7 +652,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		}
 	}
 
-	// refresh footer info only
+	// Refresh footer info only
 	if entryId > fr.lastEntryID && fr.isGrowing {
 		err := fr.refreshFooter()
 		if err != nil {
@@ -665,7 +660,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		}
 	}
 
-	// 检查entryId是否在范围内
+	// Check if entryId is within range
 	if entryId < fr.firstEntryID || entryId > fr.lastEntryID {
 		logger.Ctx(context.Background()).Debug("entry ID out of range",
 			zap.Int64("requestedID", entryId),
@@ -674,7 +669,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("entry ID %d not in the range of this fragment", entryId))
 	}
 
-	// 计算索引位置 - 根据条目ID在索引区中的相对位置
+	// Calculate index position - relative position of entry ID in index area
 	idxPos := uint32(fr.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-fr.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(fr.fileSize-footerSize) {
@@ -686,7 +681,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid index position: %d", idxPos)
 	}
 
-	// 读取数据偏移量
+	// Read data offset
 	offset := binary.LittleEndian.Uint32(fr.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(fr.fileSize-footerSize) {
 		logger.Ctx(context.Background()).Debug("Invalid data offset",
@@ -696,7 +691,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid data offset: %d", offset)
 	}
 
-	// 读取数据长度
+	// Read data length
 	length := binary.LittleEndian.Uint32(fr.mappedFile[offset:])
 	if length == 0 || length > uint32(fr.fileSize-footerSize)-offset-8 {
 		logger.Ctx(context.Background()).Debug("Invalid data length",
@@ -706,11 +701,11 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid data length: %d", length)
 	}
 
-	// 读取CRC (4字节)
+	// Read CRC (4 bytes)
 	storedCRC := binary.LittleEndian.Uint32(fr.mappedFile[offset+4:])
 
-	// 确定数据区域
-	dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
+	// Determine data region
+	dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 	dataEnd := dataStart + length
 	if dataEnd > uint32(fr.fileSize-footerSize) {
 		logger.Ctx(context.Background()).Debug("Data region out of bounds",
@@ -720,21 +715,20 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
 	}
 
-	// 读取数据
+	// Read data
 	data := make([]byte, length)
 	copy(data, fr.mappedFile[dataStart:dataEnd])
 
-	logger.Ctx(context.Background()).Debug("fragment读取数据完成",
+	logger.Ctx(context.Background()).Debug("Fragment data read completed",
 		zap.String("fragmentFile", fr.filePath),
 		zap.Int64("readingEntryId", entryId),
 		zap.Uint32("start", dataStart),
 		zap.Uint32("end", dataEnd),
 		zap.Uint32("idxPos", idxPos),
 		zap.Int("dataSize", len(data)),
-		//zap.Any("data", data),
 		zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
-	// 验证CRC
+	// Verify CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
 		logger.Ctx(context.Background()).Debug("CRC mismatch",
 			zap.Int64("entryId", entryId),
@@ -754,7 +748,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		return errors.New("fragment file is closed")
 	}
 
-	// fetch info
+	// Fetch info
 	if !fr.infoFetched {
 		err := fr.Load(context.Background())
 		if err != nil {
@@ -762,9 +756,8 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		}
 	}
 
-	// 计算索引位置 - 根据条目ID在索引区中的相对位置
+	// Calculate index position - relative position of entry ID in index area
 	for i := 0; i < int(fr.entryCount); i++ {
-
 		idxPos := uint32(fr.fileSize - footerSize - int64(indexItemSize)*(int64(i+1)))
 		if idxPos < headerSize || idxPos >= uint32(fr.fileSize-footerSize) {
 			logger.Ctx(context.Background()).Debug("Invalid index position",
@@ -775,7 +768,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 			return fmt.Errorf("invalid index position: %d", idxPos)
 		}
 
-		// 读取数据偏移量
+		// Read data offset
 		offset := binary.LittleEndian.Uint32(fr.mappedFile[idxPos:])
 		if offset < headerSize || offset >= uint32(fr.fileSize) {
 			logger.Ctx(context.Background()).Debug("Invalid data offset",
@@ -785,7 +778,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 			return fmt.Errorf("invalid data offset: %d", offset)
 		}
 
-		// 读取数据长度
+		// Read data length
 		length := binary.LittleEndian.Uint32(fr.mappedFile[offset:])
 		if length == 0 || length > uint32(fr.fileSize)-offset-8 {
 			logger.Ctx(context.Background()).Debug("Invalid data length",
@@ -795,11 +788,11 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 			return fmt.Errorf("invalid data length: %d", length)
 		}
 
-		// 读取CRC (4字节)
+		// Read CRC (4 bytes)
 		storedCRC := binary.LittleEndian.Uint32(fr.mappedFile[offset+4:])
 
-		// 确定数据区域
-		dataStart := offset + 8 // 跳过长度(4字节)和CRC(4字节)
+		// Determine data region
+		dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 		dataEnd := dataStart + length
 		if dataEnd > uint32(fr.fileSize) {
 			logger.Ctx(context.Background()).Debug("Data region out of bounds",
@@ -809,15 +802,15 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 			return fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
 		}
 
-		// 读取数据
+		// Read data
 		data := make([]byte, length)
 		copy(data, fr.mappedFile[dataStart:dataEnd])
 
-		// 提取里面的 id和data
+		// Extract id and data
 		actualID := int64(binary.LittleEndian.Uint64(data[:8]))
 		actualData := data[8:]
 
-		logger.Ctx(context.Background()).Debug("fragment读取数据",
+		logger.Ctx(context.Background()).Debug("Fragment data read",
 			zap.String("fragmentFile", fr.filePath),
 			zap.Int64("entryId", actualID),
 			zap.Int64("segmentEntryId", fr.firstEntryID+int64(i)),
@@ -828,7 +821,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 			zap.Int("i", i),
 			zap.Int64("firstId", fr.firstEntryID))
 
-		// 验证CRC
+		// Verify CRC
 		if crc32.ChecksumIEEE(data) != storedCRC {
 			logger.Ctx(context.Background()).Debug("CRC mismatch",
 				zap.Int64("entryId", actualID),
@@ -854,7 +847,7 @@ func (fr *FragmentFileReader) Release() error {
 		return nil
 	}
 
-	// 解除内存映射
+	// Unmap memory mapping
 	if fr.mappedFile != nil {
 		if err := fr.mappedFile.Unmap(); err != nil {
 			return errors.Wrap(err, "failed to unmap fragment file")
@@ -864,7 +857,7 @@ func (fr *FragmentFileReader) Release() error {
 		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
 	}
 
-	// mark data is not fetched in buff
+	// Mark data as not fetched in buffer
 	fr.infoFetched = false
 
 	return nil

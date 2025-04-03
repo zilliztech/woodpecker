@@ -42,11 +42,11 @@ type DiskLogFile struct {
 	lastFragmentID atomic.Int64
 	lastEntryID    atomic.Int64
 
-	// 使用SequentialBuffer存储窗口内的entries
+	// Use SequentialBuffer to store entries within the window
 	buffer        *cache.SequentialBuffer
-	maxBufferSize int                  // 最大buffer大小（字节）
-	lastSync      atomic.Int64         // 上次同步时间
-	syncedChan    map[int64]chan int64 // 同步完成的channel
+	maxBufferSize int                  // Maximum buffer size (bytes)
+	lastSync      atomic.Int64         // Last sync time
+	syncedChan    map[int64]chan int64 // Channels for sync completion
 
 	// For async writes and control
 	closed  bool
@@ -106,9 +106,9 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		dlf.lastEntryID.Store(-1)
 		dlf.lastFragmentID.Store(-1)
 	}
-	dlf.buffer = cache.NewSequentialBuffer(dlf.lastEntryID.Load()+1, 10000) // 默认缓存10000个entry
+	dlf.buffer = cache.NewSequentialBuffer(dlf.lastEntryID.Load()+1, 10000) // Default cache for 10000 entries
 
-	// 启动定期同步goroutine
+	// Start periodic sync goroutine
 	if dlf.autoSync {
 		go dlf.run()
 	}
@@ -121,21 +121,21 @@ func NewRODiskLogFile(id int64, basePath string) (*DiskLogFile, error) {
 	return NewDiskLogFile(id, basePath, WithDisableAutoSync())
 }
 
-// run 定期执行同步操作，类似于 objectstorage中的同步机制
+// run performs periodic sync operations, similar to the sync mechanism in objectstorage
 func (dlf *DiskLogFile) run() {
-	// 定时器
-	ticker := time.NewTicker(500 * time.Millisecond) // 500ms同步一次
+	// Timer
+	ticker := time.NewTicker(500 * time.Millisecond) // Sync every 500ms
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			// 检查是否已关闭
+			// Check if closed
 			if dlf.closed {
 				return
 			}
 
-			// 检查上次同步时间，避免过于频繁同步
+			// Check last sync time to avoid too frequent syncs
 			if time.Now().UnixMilli()-dlf.lastSync.Load() < 200 {
 				continue
 			}
@@ -149,18 +149,18 @@ func (dlf *DiskLogFile) run() {
 			}
 			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
 		case <-dlf.closeCh:
-			logger.Ctx(context.Background()).Info("run: 收到关闭信号，退出goroutine")
-			// 尝试同步剩余数据
+			logger.Ctx(context.Background()).Info("run: received close signal, exiting goroutine")
+			// Try to sync remaining data
 			if err := dlf.Sync(context.Background()); err != nil {
-				logger.Ctx(context.Background()).Warn("关闭时同步失败",
+				logger.Ctx(context.Background()).Warn("sync failed during close",
 					zap.String("basePath", dlf.basePath),
 					zap.Int64("logFileId", dlf.id),
 					zap.Error(err))
 			}
-			// 关闭当前fragment
+			// Close current fragment
 			if dlf.currFragment != nil {
 				if err := dlf.currFragment.Release(); err != nil {
-					logger.Ctx(context.Background()).Warn("关闭fragment失败",
+					logger.Ctx(context.Background()).Warn("failed to close fragment",
 						zap.String("basePath", dlf.basePath),
 						zap.Int64("logFileId", dlf.id),
 						zap.Error(err))
@@ -169,7 +169,7 @@ func (dlf *DiskLogFile) run() {
 				dlf.currFragment.Close()
 				dlf.currFragment = nil
 			}
-			logger.Ctx(context.Background()).Info("DiskLogFile已成功关闭",
+			logger.Ctx(context.Background()).Info("DiskLogFile successfully closed",
 				zap.String("basePath", dlf.basePath),
 				zap.Int64("logFileId", dlf.id))
 			return
@@ -185,74 +185,74 @@ func (dlf *DiskLogFile) GetId() int64 {
 // Append synchronously appends a log entry
 // Deprecated TODO
 func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
-	// 获取当前最大ID并加1
+	// Get current max ID and increment by 1
 	entryId := dlf.lastEntryID.Add(1) // TODO delete this
 
-	logger.Ctx(ctx).Debug("Append: 同步写入", zap.Int64("entryId", entryId))
+	logger.Ctx(ctx).Debug("Append: synchronous write", zap.Int64("entryId", entryId))
 
-	// 使用AppendAsync进行异步写入
+	// Use AppendAsync for asynchronous write
 	_, resultCh, err := dlf.AppendAsync(ctx, entryId, data)
 	if err != nil {
-		logger.Ctx(ctx).Debug("Append: 异步写入失败", zap.Error(err))
+		logger.Ctx(ctx).Debug("Append: async write failed", zap.Error(err))
 		return err
 	}
 
-	// 等待写入完成
+	// Wait for completion
 	select {
 	case result := <-resultCh:
 		if result < 0 {
-			logger.Ctx(ctx).Debug("Append: 写入失败",
+			logger.Ctx(ctx).Debug("Append: write failed",
 				zap.Int64("result", result))
 			return fmt.Errorf("failed to append entry, got result %d", result)
 		}
-		logger.Ctx(ctx).Debug("Append: 写入成功",
+		logger.Ctx(ctx).Debug("Append: write succeeded",
 			zap.Int64("result", result))
 		return nil
 	case <-ctx.Done():
-		logger.Ctx(ctx).Debug("Append: 写入超时或取消")
+		logger.Ctx(ctx).Debug("Append: write timeout or canceled")
 		return ctx.Err()
 	}
 }
 
 // AppendAsync appends data to the log file asynchronously.
 func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
-	logger.Ctx(ctx).Debug("AppendAsync: 尝试写入", zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)), zap.Any("data", value))
+	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)), zap.Any("data", value))
 
-	// 处理已关闭的文件
+	// Handle closed file
 	if dlf.closed {
-		logger.Ctx(ctx).Debug("AppendAsync: 失败 - 文件已关闭")
+		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed")
 		return -1, nil, errors.New("diskLogFile closed")
 	}
 
-	// 创建结果channel
+	// Create result channel
 	ch := make(chan int64, 1)
 
-	// 先检查是否ID已经存在于已同步的数据中
+	// First check if ID already exists in synced data
 	lastId := dlf.lastEntryID.Load()
 	if entryId <= lastId {
-		logger.Ctx(ctx).Debug("AppendAsync: ID已存在，返回成功", zap.Int64("entryId", entryId))
-		// 对于已经写入磁盘的数据，不再尝试重写，直接返回成功
+		logger.Ctx(ctx).Debug("AppendAsync: ID already exists, returning success", zap.Int64("entryId", entryId))
+		// For data already written to disk, don't try to rewrite, just return success
 		ch <- entryId
 		close(ch)
 		return entryId, ch, nil
 	}
 
 	dlf.mu.Lock()
-	// 写入缓冲区
+	// Write to buffer
 	id, err := dlf.buffer.WriteEntry(entryId, value)
 	if err != nil {
-		logger.Ctx(ctx).Debug("AppendAsync: 写入buffer失败", zap.Error(err))
+		logger.Ctx(ctx).Debug("AppendAsync: writing to buffer failed", zap.Error(err))
 		ch <- -1
 		close(ch)
 		dlf.mu.Unlock()
 		return -1, ch, err
 	}
-	// 保存到待同步通道
+	// Save to pending sync channels
 	dlf.syncedChan[id] = ch
-	logger.Ctx(ctx).Debug("AppendAsync: 成功写入buffer", zap.Int64("id", id), zap.Int64("expectedNextEntryId", dlf.buffer.ExpectedNextEntryId.Load()))
+	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.Int64("id", id), zap.Int64("expectedNextEntryId", dlf.buffer.ExpectedNextEntryId.Load()))
 	dlf.mu.Unlock()
 
-	// 检查是否需要触发同步
+	// Check if sync needs to be triggered
 	dataSize := dlf.buffer.DataSize.Load()
 	if dataSize >= int64(dlf.maxBufferSize) {
 		logger.Ctx(ctx).Debug("reach max buffer size, trigger flush",
@@ -293,13 +293,13 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 		return nil
 	}
 
-	// 将数据写入fragment
+	// Write data to fragment
 	var originWrittenEntryID int64 = dlf.lastEntryID.Load()
 	writeError := dlf.flushData(ctx, toFlushData, toFlushDataFirstEntryId)
 
-	// 处理结果通知
+	// Process result notifications
 	if originWrittenEntryID == dlf.lastEntryID.Load() {
-		// 没有一条写入成功，通知所有chan写入失败，让客户端重试。
+		// No entries were successfully written, notify all channels of write failure, let clients retry
 		// no flush success, callback all append sync error
 		for syncingId, ch := range dlf.syncedChan {
 			// append error
@@ -315,7 +315,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 		// reset buffer as empty
 		dlf.buffer.Reset()
 	} else if originWrittenEntryID < dlf.lastEntryID.Load() {
-		if writeError == nil { // 表示全部成功，
+		if writeError == nil { // Indicates all successful
 			restDataFirstEntryId := dlf.buffer.ExpectedNextEntryId.Load()
 			restData, err := dlf.buffer.ReadEntriesToLast(restDataFirstEntryId)
 			if err != nil {
@@ -334,15 +334,15 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 					close(ch)
 				}
 			}
-		} else { // 表示部分成功
+		} else { // Indicates partial success
 			restDataFirstEntryId := dlf.lastEntryID.Load() + 1
 			for syncingId, ch := range dlf.syncedChan {
-				if syncingId < restDataFirstEntryId { // flush落盘的通知写入成功
+				if syncingId < restDataFirstEntryId { // Notify success for entries flushed to disk
 					// append success
 					ch <- syncingId
 					delete(dlf.syncedChan, syncingId)
 					close(ch)
-				} else { // 没有flush落盘的都通知失败
+				} else { // Notify failure for entries not flushed to disk
 					// append error
 					ch <- -1
 					delete(dlf.syncedChan, syncingId)
@@ -354,21 +354,21 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 						zap.Error(writeError))
 				}
 			}
-			// 需要重新建立buffer，让客户端能够重试
+			// Need to recreate buffer to allow client retry
 			// new a empty buffer
 			dlf.buffer = cache.NewSequentialBuffer(restDataFirstEntryId, int64(10000)) // TODO config
 		}
 	}
 
-	// 更新lastEntryID
+	// Update lastEntryID
 	if originWrittenEntryID < dlf.lastEntryID.Load() {
-		logger.Ctx(ctx).Debug("Sync同步完成, 已经更新了lastEntryID",
-			zap.Int64("从", originWrittenEntryID),
-			zap.Int64("到", dlf.lastEntryID.Load()),
+		logger.Ctx(ctx).Debug("Sync completed, lastEntryID updated",
+			zap.Int64("from", originWrittenEntryID),
+			zap.Int64("to", dlf.lastEntryID.Load()),
 			zap.String("filePath", dlf.currFragment.filePath))
 	}
 
-	logger.Ctx(ctx).Debug("Sync完成")
+	logger.Ctx(ctx).Debug("Sync completed")
 	return nil
 }
 
@@ -381,7 +381,7 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context) ([][]byte, int64) {
 		return nil, -1
 	}
 
-	// 检查是否有数据需要刷新
+	// Check if there is data that needs to be flushed
 	if dlf.buffer.ExpectedNextEntryId.Load()-dlf.buffer.FirstEntryId == 0 {
 		logger.Ctx(ctx).Info("Call Sync, expected id not received yet, skip ... ",
 			zap.String("basePath", dlf.basePath),
@@ -391,8 +391,8 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context) ([][]byte, int64) {
 		return nil, -1
 	}
 
-	// 读取需要刷新的数据
-	logger.Ctx(ctx).Debug("Sync读取buffer起始顺序数据",
+	// Read data that needs to be flushed
+	logger.Ctx(ctx).Debug("Sync reading sequential data from buffer start",
 		zap.Int64("firstEntryId", dlf.buffer.FirstEntryId),
 		zap.Int64("expectedNextEntryId", dlf.buffer.ExpectedNextEntryId.Load()))
 	toFlushData, err := dlf.buffer.ReadEntriesRange(dlf.buffer.FirstEntryId, dlf.buffer.ExpectedNextEntryId.Load())
@@ -404,7 +404,7 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context) ([][]byte, int64) {
 		return nil, -1
 	}
 	toFlushDataFirstEntryId := dlf.buffer.FirstEntryId
-	logger.Ctx(ctx).Debug("Sync需要写入的数据", zap.Int("条数", len(toFlushData)), zap.Int64("起始ID", toFlushDataFirstEntryId))
+	logger.Ctx(ctx).Debug("Sync data to be written", zap.Int("count", len(toFlushData)), zap.Int64("startingID", toFlushDataFirstEntryId))
 	return toFlushData, toFlushDataFirstEntryId
 }
 
@@ -413,19 +413,19 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 	var lastWrittenToBuffEntryID int64 = dlf.lastEntryID.Load()
 	var pendingFlushBytes int = 0
 
-	// 确保fragment已创建
+	// Ensure fragment is created
 	if dlf.currFragment == nil {
-		logger.Ctx(ctx).Debug("Sync需要创建新的fragment")
+		logger.Ctx(ctx).Debug("Sync needs to create a new fragment")
 		if err := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); err != nil {
-			logger.Ctx(ctx).Debug("Sync创建新的fragment失败", zap.Error(err))
+			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(err))
 			return err
 		}
 	}
 
-	logger.Ctx(ctx).Debug("Sync开始写入数据到fragment")
+	logger.Ctx(ctx).Debug("Sync starting to write data to fragment")
 	for i, data := range toFlushData {
 		if data == nil {
-			// 数据为空，意味着没有数据或者存在空洞，结束本次flush
+			// Empty data means no data or a gap, end this flush
 			logger.Ctx(ctx).Warn("write entry to fragment failed, empty entry data found",
 				zap.String("basePath", dlf.basePath),
 				zap.Int64("logFileId", dlf.id),
@@ -434,16 +434,16 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			break
 		}
 
-		// 检查当前fragment是否已满，如果满了则创建新的fragment
+		// Check if current fragment is full, if so create a new one
 		if dlf.needNewFragment() {
-			logger.Ctx(ctx).Debug("Sync检测到需要创建新的fragment")
-			// 先将当前fragment刷到磁盘
+			logger.Ctx(ctx).Debug("Sync detected need for new fragment")
+			// First flush current fragment to disk
 			startFlush := time.Now()
-			logger.Ctx(ctx).Debug("Sync刷新当前fragment",
+			logger.Ctx(ctx).Debug("Sync flushing current fragment",
 				zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
 				zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 			if err := dlf.currFragment.Flush(ctx); err != nil {
-				logger.Ctx(ctx).Warn("Sync刷新当前fragment失败",
+				logger.Ctx(ctx).Warn("Sync failed to flush current fragment",
 					zap.Error(err))
 				writeError = err
 				break
@@ -454,34 +454,34 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			dlf.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
-			// 创建新的fragment
+			// Create new fragment
 			if err := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); err != nil {
-				logger.Ctx(ctx).Debug("Sync创建新的fragment失败",
+				logger.Ctx(ctx).Debug("Sync failed to create new fragment",
 					zap.Error(err))
 				writeError = err
 				break
 			}
 		}
 
-		// 创建包含EntryID的数据 - 将ID作为数据的前8个字节
+		// Create data with EntryID - ID as first 8 bytes of data
 		entryID := toFlushDataFirstEntryId + int64(i)
 		entryIDBytes := make([]byte, 8)
 		binary.LittleEndian.PutUint64(entryIDBytes, uint64(entryID))
 		dataWithID := append(entryIDBytes, data...)
 
-		// 写入数据
-		logger.Ctx(ctx).Debug("Sync写入数据",
+		// Write data
+		logger.Ctx(ctx).Debug("Sync writing data",
 			zap.Int64("entryID", entryID),
 			zap.Int("dataLen", len(data)))
 		writeErr := dlf.currFragment.Write(ctx, dataWithID, entryID)
-		// 如果是fragment满了的失败，那么就rotate fragment，并重新写入
+		// If fragment full error, rotate fragment and retry
 		if writeErr != nil && werr.ErrDiskFragmentNoSpace.Is(writeErr) {
 			startFlush := time.Now()
-			logger.Ctx(ctx).Debug("Sync刷新当前fragment",
+			logger.Ctx(ctx).Debug("Sync flushing current fragment",
 				zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
 				zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 			if flushErr := dlf.currFragment.Flush(ctx); flushErr != nil {
-				logger.Ctx(ctx).Warn("Sync刷新当前fragment失败",
+				logger.Ctx(ctx).Warn("Sync failed to flush current fragment",
 					zap.Error(flushErr))
 				writeError = flushErr
 				break
@@ -493,16 +493,16 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			pendingFlushBytes = 0
 
 			if rotateErr := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); rotateErr != nil {
-				logger.Ctx(ctx).Warn("Sync创建新的fragment失败",
+				logger.Ctx(ctx).Warn("Sync failed to create new fragment",
 					zap.Error(rotateErr))
 				writeError = rotateErr
 				break
 			}
-			// 重试一次
+			// Retry once
 			writeErr = dlf.currFragment.Write(ctx, dataWithID, entryID)
 		}
 
-		// 如果还写入失败，则中断本次sync
+		// If still failed, abort this sync
 		if writeErr != nil {
 			logger.Ctx(ctx).Warn("write entry to fragment failed",
 				zap.String("basePath", dlf.basePath),
@@ -517,15 +517,15 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 		lastWrittenToBuffEntryID = entryID
 	}
 
-	// 说明还有写入数据还没flush到磁盘, 进行一次flush刷盘
+	// If written data not yet flushed to disk, perform a flush
 	if lastWrittenToBuffEntryID > dlf.lastEntryID.Load() {
 		startFlush := time.Now()
-		logger.Ctx(ctx).Debug("Sync刷新当前fragment",
+		logger.Ctx(ctx).Debug("Sync flushing current fragment",
 			zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
 			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 		flushErr := dlf.currFragment.Flush(ctx)
 		if flushErr != nil {
-			logger.Ctx(ctx).Warn("Sync刷新当前fragment失败", zap.Error(flushErr))
+			logger.Ctx(ctx).Warn("Sync failed to flush current fragment", zap.Error(flushErr))
 			writeError = flushErr
 		} else {
 			flushDuration := time.Now().Sub(startFlush)
@@ -545,14 +545,14 @@ func (dlf *DiskLogFile) needNewFragment() bool {
 		return true
 	}
 
-	// 检查fragment是否已关闭
+	// Check if fragment is closed
 	if dlf.currFragment.closed {
 		return true
 	}
 
-	// 检查是否已经达到文件大小限制
+	// Check if already reached file size limit
 	currentLeftSize := dlf.currFragment.indexOffset - dlf.currFragment.dataOffset
-	if currentLeftSize <= 1024 { // 留出一些余量，防止溢出
+	if currentLeftSize <= 1024 { // Leave some margin to prevent overflow
 		logger.Ctx(context.Background()).Debug("Need new fragment due to size limit",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
@@ -561,10 +561,10 @@ func (dlf *DiskLogFile) needNewFragment() bool {
 		return true
 	}
 
-	// 检查是否达到条目数量限制
+	// Check if reached entry count limit
 	lastEntry, err := dlf.currFragment.GetLastEntryId()
 	if err != nil {
-		// 如果获取失败，可能是fragment有问题，创建新的
+		// If get failed, possibly the fragment is problematic, create a new one
 		logger.Ctx(context.Background()).Warn("Cannot get last entry ID, rotating fragment",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
@@ -574,7 +574,7 @@ func (dlf *DiskLogFile) needNewFragment() bool {
 
 	firstEntry, err := dlf.currFragment.GetFirstEntryId()
 	if err != nil {
-		// 如果获取失败，可能是fragment有问题，创建新的
+		// If get failed, possibly the fragment is problematic, create a new one
 		logger.Ctx(context.Background()).Warn("Cannot get first entry ID, rotating fragment",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
@@ -602,23 +602,23 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 		zap.Int64("logFileId", dlf.id),
 		zap.Int64("fragmentFirstEntryId", fragmentFirstEntryId))
 
-	// 如果当前片段存在，先关闭它
+	// If current fragment exists, close it first
 	if dlf.currFragment != nil {
-		logger.Ctx(context.Background()).Debug("Sync刷新当前fragment before rotate",
+		logger.Ctx(context.Background()).Debug("Sync flushing current fragment before rotate",
 			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 		if err := dlf.currFragment.Flush(context.Background()); err != nil {
 			return errors.Wrap(err, "flush current fragment")
 		}
-		logger.Ctx(context.Background()).Debug("Sync刷新当前fragment after rotate",
+		logger.Ctx(context.Background()).Debug("Sync flushing current fragment after rotate",
 			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 
-		// Release 立即释放资源
+		// Release immediately frees resources
 		if err := dlf.currFragment.Release(); err != nil {
 			return errors.Wrap(err, "close current fragment")
 		}
 	}
 
-	// 创建新的fragment ID
+	// Create new fragment ID
 	fragmentID := dlf.lastFragmentID.Add(1)
 
 	logger.Ctx(context.Background()).Info("creating new fragment",
@@ -627,32 +627,32 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 		zap.Int64("fragmentID", fragmentID),
 		zap.Int64("firstEntryID", fragmentFirstEntryId))
 
-	// 创建新的fragment
+	// Create new fragment
 	fragmentPath := filepath.Join(dlf.basePath, fmt.Sprintf("fragment_%d", fragmentID))
 	fragment, err := NewFragmentFileWriter(fragmentPath, int64(dlf.fragmentSize), fragmentID, fragmentFirstEntryId)
 	if err != nil {
 		return errors.Wrapf(err, "create new fragment: %s", fragmentPath)
 	}
 
-	// 更新当前fragment
+	// Update current fragment
 	dlf.currFragment = fragment
 	return nil
 }
 
 // NewReader creates a new Reader instance
 func (dlf *DiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	// 检查文件是否已关闭
+	// Check if file is closed
 	if dlf.closed {
 		return nil, errors.New("logfile is closed")
 	}
 
-	// 获取所有已同步的 fragments
+	// Get all synced fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
 		return nil, err
 	}
 
-	// 创建新的DiskReader
+	// Create new DiskReader
 	reader := &DiskReader{
 		ctx:             ctx,
 		fragments:       fragments,
@@ -670,7 +670,7 @@ func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, erro
 	dlf.mu.Lock()
 	defer dlf.mu.Unlock()
 
-	// 加载所有fragments
+	// Load all fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
 		return 0, nil, err
@@ -680,17 +680,17 @@ func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, erro
 		return 0, nil, nil
 	}
 
-	// 计算总大小并返回最后一个fragment
+	// Calculate total size and return the last fragment
 	totalSize := int64(0)
 	lastFragment := fragments[len(fragments)-1]
 
-	// 计算所有fragment的大小总和
+	// Calculate sum of all fragment sizes
 	for _, frag := range fragments {
 		size := frag.GetSize()
 		totalSize += size
 	}
 
-	// FragmentManager 负责管理 fragment 的生命周期，不需要手动释放
+	// FragmentManager is responsible for managing fragment lifecycle, no need to release manually
 
 	return totalSize, lastFragment, nil
 }
@@ -700,12 +700,12 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	dlf.mu.Lock()
 	defer dlf.mu.Unlock()
 
-	// 首先同步所有数据到磁盘
+	// First sync all data to disk
 	if err := dlf.Sync(ctx); err != nil {
 		return nil, nil, nil, err
 	}
 
-	// 获取所有fragments
+	// Get all fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
 		return nil, nil, nil, err
@@ -728,7 +728,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	pendingMergeSize := 0
 	pendingMergeFrags := make([]*FragmentFileReader, 0)
 
-	// 不需要再定义清理函数，因为 FragmentManager 负责管理 fragments 的生命周期
+	// No need to define cleanup function, because FragmentManager is responsible for managing fragments lifecycle
 
 	// load all fragment in memory
 	for _, frag := range fragments {
@@ -738,7 +738,7 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		}
 
 		pendingMergeFrags = append(pendingMergeFrags, frag)
-		pendingMergeSize += int(frag.fileSize) // TODO 应该获得fragment实际的准确数据大小，包括header/footer/index/data 几个部分的实际数据大小。
+		pendingMergeSize += int(frag.fileSize) // TODO should get fragment actual accurate data size, including header/footer/index/data actual data size.
 		if pendingMergeSize >= fileMaxSize {
 			// merge immediately
 			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, dlf.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeSize, pendingMergeFrags)
@@ -798,7 +798,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 	for _, fragment := range fragments {
 		err := fragment.Load(ctx)
 		if err != nil {
-			// 合并失败，显式释放 fragment
+			// Merge failed, explicitly release fragment
 			mergedFragmentWriter.Release()
 			return nil, err
 		}
@@ -808,7 +808,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 			expectedEntryId = fragment.lastEntryID + 1
 		} else {
 			if expectedEntryId != fragment.firstEntryID {
-				// 合并失败，显式释放 fragments
+				// Merge failed, explicitly release fragments
 				mergedFragmentWriter.Release()
 				return nil, errors.New("fragments are not in order")
 			}
@@ -817,11 +817,11 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 
 		// merge index
 		// TODO
-		// 把fragment的data拷贝写入到mergedFragment的data区
-		// 把fragment的index拷贝写入到mergedFragment的index区,且所有index长度要调整下
+		// Copy fragment data to merged fragment data area
+		// Copy fragment index to merged fragment index area, adjusting all index lengths
 	}
 
-	// 添加合并后的片段到缓存
+	// Add merged fragment to cache
 	mergedFragmentWriter.Release()
 
 	return mergedFragmentWriter, nil
@@ -836,14 +836,14 @@ func (dlf *DiskLogFile) Close() error {
 		return nil
 	}
 
-	logger.Ctx(context.Background()).Info("关闭DiskLogFile",
+	logger.Ctx(context.Background()).Info("Closing DiskLogFile",
 		zap.Int64("id", dlf.id),
 		zap.String("basePath", dlf.basePath))
 
-	// 标记为已关闭，阻止新的操作
+	// Mark as closed to prevent new operations
 	dlf.closed = true
 
-	// 发送关闭信号
+	// Send close signal
 	close(dlf.closeCh)
 
 	return nil
@@ -851,7 +851,7 @@ func (dlf *DiskLogFile) Close() error {
 
 // getFragments returns all exists fragments in the log file, which is readonly
 func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
-	// 读取目录内容
+	// Read directory contents
 	entries, err := os.ReadDir(dlf.basePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -860,53 +860,53 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 		return nil, err
 	}
 
-	// 筛选出fragment文件
+	// Filter out fragment files
 	fragments := make([]*FragmentFileReader, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "fragment_") {
-			// 提取fragmentID
+			// Extract fragmentID
 			idStr := strings.TrimPrefix(entry.Name(), "fragment_")
 			id, err := strconv.ParseInt(idStr, 10, 64)
 			if err != nil {
 				continue
 			}
 
-			// 打开fragment
+			// Open fragment
 			fragmentPath := filepath.Join(dlf.basePath, entry.Name())
 			fileInfo, err := os.Stat(fragmentPath)
 			if err != nil {
 				continue
 			}
 
-			// 先尝试从缓存中获取
+			// First try to get from cache
 			fragment, ok := cache.GetCachedFragment(context.Background(), fragmentPath)
 			if ok {
 				if cachedFragReader, isReader := fragment.(*FragmentFileReader); isReader {
-					// 从缓存中找到了
+					// Found in cache
 					fragments = append(fragments, cachedFragReader)
 					continue
 				}
 			}
 
-			// 创建FragmentFile实例并加载
-			fragment, err = NewFragmentFileReader(fragmentPath, fileInfo.Size(), id) // firstEntryID会被忽略，从实际文件中加载
+			// Create FragmentFile instance and load
+			fragment, err = NewFragmentFileReader(fragmentPath, fileInfo.Size(), id) // firstEntryID will be ignored, loaded from actual file
 			if err != nil {
 				continue
 			}
 
-			// 加载fragment
+			// Load fragment
 			if err := fragment.Load(context.Background()); err != nil {
 				fragment.Release()
 				continue
 			}
 
-			// 添加到缓存
+			// Add to cache
 			cache.AddCacheFragment(context.Background(), fragment)
 			fragments = append(fragments, fragment.(*FragmentFileReader))
 		}
 	}
 
-	// 按fragmentID排序
+	// Sort by fragmentID
 	sort.Slice(fragments, func(i, j int) bool {
 		return fragments[i].GetFragmentId() < fragments[j].GetFragmentId()
 	})
@@ -924,48 +924,48 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 	dlf.mu.RLock()
 	defer dlf.mu.RUnlock()
 
-	// 如果文件已关闭，返回错误
+	// If file is closed, return error
 	if dlf.closed {
 		return -1, errors.New("log file is closed")
 	}
 
-	// 使用原子变量中存储的lastEntryID
+	// Use lastEntryID stored in atomic variable
 	lastID := dlf.lastEntryID.Load()
 	if lastID >= 0 {
 		return lastID, nil
 	}
 
-	// 如果原子变量中没有值，尝试从当前fragment获取
+	// If no value in atomic variable, try to get from current fragment
 	if dlf.currFragment != nil {
-		fragmentLastID, err := dlf.currFragment.GetLastEntryId() // TODO 应该区分flushed lastEntryID,而非 lastEntryID
+		fragmentLastID, err := dlf.currFragment.GetLastEntryId() // TODO should distinguish between flushed lastEntryID and lastEntryID
 		if err == nil && fragmentLastID >= 0 {
-			// 更新原子变量
+			// Update atomic variable
 			dlf.lastEntryID.Store(fragmentLastID)
 			return fragmentLastID, nil
 		}
 	}
 
-	// 如果当前没有fragment或获取失败，尝试从所有fragment查找
+	// If no current fragment or get failed, try to find from all fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
 		return -1, err
 	}
 
 	if len(fragments) > 0 {
-		// 获取最后一个fragment的最后一个条目ID
+		// Get last entry ID from last fragment
 		lastFragment := fragments[len(fragments)-1]
 		fragmentLastID, err := lastFragment.GetLastEntryId()
 
-		// FragmentManager 负责管理 fragment 的生命周期，不需要手动释放
+		// FragmentManager is responsible for managing fragment lifecycle, no need to release manually
 
 		if err == nil && fragmentLastID >= 0 {
-			// 更新原子变量
+			// Update atomic variable
 			dlf.lastEntryID.Store(fragmentLastID)
 			return fragmentLastID, nil
 		}
 	}
 
-	// 如果没有任何fragment或无法获取ID，返回-1
+	// If no fragments or unable to get ID, return -1
 	return -1, nil
 }
 
@@ -973,10 +973,10 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 type DiskReader struct {
 	ctx             context.Context
 	fragments       []*FragmentFileReader
-	currFragmentIdx int   // 当前fragment索引
-	currEntryID     int64 // 当前读取的entry ID
-	endEntryID      int64 // 终止ID（不包含）
-	closed          bool  // 是否已关闭
+	currFragmentIdx int   // Current fragment index
+	currEntryID     int64 // Current entry ID being read
+	endEntryID      int64 // End ID (not included)
+	closed          bool  // Whether closed
 }
 
 // HasNext returns true if there are more entries to read
@@ -986,13 +986,13 @@ func (dr *DiskReader) HasNext() bool {
 		return false
 	}
 
-	// 如果已达到终止ID，返回false
+	// If reached endID, return false
 	if dr.endEntryID > 0 && dr.currEntryID >= dr.endEntryID {
 		logger.Ctx(context.Background()).Debug("No more entries to read", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
 		return false
 	}
 
-	// 在当前和后续fragment中查找currEntryID
+	// Find currEntryID in current and subsequent fragments
 	for i := dr.currFragmentIdx; i < len(dr.fragments); i++ {
 		fragment := dr.fragments[i]
 		firstID, err := fragment.GetFirstEntryId()
@@ -1004,9 +1004,9 @@ func (dr *DiskReader) HasNext() bool {
 			continue
 		}
 
-		// 如果当前ID小于fragment的第一个ID，更新当前ID
+		// If currentID less than fragment's firstID, update currentID
 		if dr.currEntryID < firstID {
-			// 如果结束ID小于fragment的第一个ID，说明没有更多数据
+			// If endID less than fragment's firstID, means no more data
 			if dr.endEntryID > 0 && dr.endEntryID <= firstID {
 				logger.Ctx(context.Background()).Debug("No more entries to read", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Int64("firstId", firstID), zap.Int64("lastId", lastID))
 				return false
@@ -1014,7 +1014,7 @@ func (dr *DiskReader) HasNext() bool {
 			dr.currEntryID = firstID
 		}
 
-		// 检查当前ID是否在fragment的范围内
+		// Check if currentID in fragment's range
 		if dr.currEntryID <= lastID {
 			dr.currFragmentIdx = i
 			return true
@@ -1034,30 +1034,30 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 		return nil, errors.New("no more entries to read")
 	}
 
-	// 获取当前fragment
+	// Get current fragment
 	fragment := dr.fragments[dr.currFragmentIdx]
 	firstID, _ := fragment.GetFirstEntryId()
 	lastID, _ := fragment.GetLastEntryId()
 
-	// 从当前fragment读取数据
+	// Read data from current fragment
 	data, err := fragment.GetEntry(dr.currEntryID)
 	if err != nil {
-		// 如果当前entryID不在fragment中，可能需要移动到下一个fragment
+		// If current entryID not in fragment, may need to move to next fragment
 		logger.Ctx(context.Background()).Debug("Failed to read entry, may need to try next fragment",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.Int64("fragmentFirstId", firstID),
 			zap.Int64("fragmentLastId", lastID),
 			zap.Error(err))
 
-		// 移动到下一个ID并检查是否需要切换fragment
+		// Move to next ID and check if need to switch fragment
 		dr.currEntryID++
 		if dr.currEntryID > lastID && dr.currFragmentIdx < len(dr.fragments)-1 {
 			dr.currFragmentIdx++
 		}
-		return dr.ReadNext() // 递归尝试读取下一个
+		return dr.ReadNext() // Recursively try to read next
 	}
 
-	// 确保数据长度合理
+	// Ensure data length is reasonable
 	if len(data) < 8 {
 		logger.Ctx(context.Background()).Warn("Invalid data format: data too short",
 			zap.Int64("entryId", dr.currEntryID),
@@ -1065,32 +1065,32 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 		return nil, fmt.Errorf("invalid data format for entry %d: data too short", dr.currEntryID)
 	}
 
-	logger.Ctx(context.Background()).Debug("读取数据完成",
+	logger.Ctx(context.Background()).Debug("Data read complete",
 		zap.Int64("entryId", dr.currEntryID),
 		zap.Int64("fragmentId", fragment.fragmentId),
 		zap.String("fragmentPath", fragment.filePath))
 
-	// 提取entryID和实际数据
+	// Extract entryID and actual data
 	actualID := int64(binary.LittleEndian.Uint64(data[:8]))
 	actualData := data[8:]
 
-	// 确保读取的ID匹配预期的ID
+	// Ensure read ID matches expected ID
 	if actualID != dr.currEntryID {
 		logger.Ctx(context.Background()).Warn("EntryID mismatch",
 			zap.Int64("expectedId", dr.currEntryID),
 			zap.Int64("actualId", actualID))
 	}
 
-	// 创建 LogEntry
+	// Create LogEntry
 	entry := &proto.LogEntry{
 		EntryId: actualID,
 		Values:  actualData,
 	}
 
-	// 移动到下一个ID
+	// Move to next ID
 	dr.currEntryID++
 
-	// 如果超过当前fragment的范围，准备移动到下一个fragment
+	// If beyond current fragment range, prepare to move to next fragment
 	if dr.currEntryID > lastID && dr.currFragmentIdx < len(dr.fragments)-1 {
 		dr.currFragmentIdx++
 	}
@@ -1104,7 +1104,7 @@ func (dr *DiskReader) Close() error {
 		return nil
 	}
 
-	// 不再需要显式释放 fragments，它们由 FragmentManager 管理
+	// No need to explicitly release fragments, they are managed by FragmentManager
 	// Fragments are now managed by the FragmentManager, no need to release here
 	dr.fragments = nil
 
@@ -1135,7 +1135,7 @@ func WithMaxEntryPerFile(count int) Option {
 	}
 }
 
-// WithDisableAutoSync 禁用自动同步
+// WithDisableAutoSync disables automatic sync
 func WithDisableAutoSync() Option {
 	return func(dlf *DiskLogFile) {
 		dlf.autoSync = false

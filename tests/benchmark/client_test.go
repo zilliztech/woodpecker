@@ -28,8 +28,8 @@ func TestE2EWrite(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 
@@ -95,8 +95,8 @@ func TestAsyncWriteThroughput(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 
@@ -248,8 +248,8 @@ func TestReadThroughput(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 
@@ -330,8 +330,8 @@ func TestReadFromEarliest(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 
@@ -401,8 +401,8 @@ func TestReadFromLatest(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 
@@ -470,8 +470,8 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
 		},
 	}
 

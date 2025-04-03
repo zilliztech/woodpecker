@@ -104,7 +104,7 @@ func startReporting() {
 				currentTimeMs := time.Now().UnixMilli()
 				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
 				if err != nil {
-					fmt.Printf("获取指标失败: %v\n", err)
+					fmt.Printf("Failed to get metrics: %v\n", err)
 					continue
 				}
 				elapsedTimeMs := float64(currentTimeMs - lastTimeMs)
@@ -112,21 +112,21 @@ func startReporting() {
 				deltaBytesCount := currentBytesCount - lastBytesCount
 				deltaLatencySum := currentLatencySum - lastLatencySum
 				deltaLatencyCount := currentLatencyCount - lastLatencyCount
-				// 打印计算结果
+				// Print calculation results
 				if deltaBytesCount > 0 {
 					avgBytes := deltaBytesSum / deltaBytesCount
-					rateMB := deltaBytesSum / 1_000_000 / elapsedTimeMs * 1000                           // 转换为MB/s
-					avgRateMB := currentBytesSum / 1_000_000 / float64(currentTimeMs-firstTimeMs) * 1000 // 转换为MB/s
-					fmt.Printf("流量监控 - 平均每次大小: %.2f bytes ,当前流量: %.2f MB/s, 平均流量: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
+					rateMB := deltaBytesSum / 1_000_000 / elapsedTimeMs * 1000                           // Convert to MB/s
+					avgRateMB := currentBytesSum / 1_000_000 / float64(currentTimeMs-firstTimeMs) * 1000 // Convert to MB/s
+					fmt.Printf("Traffic Monitor - Average size per operation: %.2f bytes, Current throughput: %.2f MB/s, Average throughput: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
 				}
 
 				if deltaLatencyCount > 0 {
 					avgLatency := deltaLatencySum / deltaLatencyCount
 					totalAvgLatency := currentLatencySum / currentLatencyCount
-					fmt.Printf("操作延迟 - 延时: %.3f 毫秒 平均延时: %.3f 毫秒\n", avgLatency, totalAvgLatency)
+					fmt.Printf("Operation Latency - Current: %.3f ms, Average: %.3f ms\n", avgLatency, totalAvgLatency)
 				}
 
-				// 更新状态 metrics
+				// Update metrics state
 				lastBytesSum = currentBytesSum
 				lastBytesCount = currentBytesCount
 				lastLatencySum = currentLatencySum
@@ -152,10 +152,10 @@ func printMetrics() {
 		return
 	}
 
-	// 直接打印
+	// Direct print
 	//fmt.Println(string(body))
 
-	// 过滤只打印某些指标
+	// Filter to print only certain metrics
 	metricsFilter := []string{
 		"minio_test_put_bytes_sum", "minio_test_put_bytes_count",
 		"minio_test_put_latency_sum", "minio_test_put_latency_count",
@@ -163,11 +163,11 @@ func printMetrics() {
 	lines := strings.Split(string(body), "\n")
 	var filtered []string
 	for _, line := range lines {
-		// 跳过注释和空行
+		// Skip comments and empty lines
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-		// 检查是否在过滤列表中
+		// Check if in filter list
 		for _, prefix := range metricsFilter {
 			if strings.HasPrefix(line, prefix) {
 				filtered = append(filtered, line)
@@ -192,7 +192,7 @@ func getCurrentMetrics() (bytesSum, bytesCount, latencySum, latencyCount float64
 
 	lines := strings.Split(string(body), "\n")
 
-	// 聚合所有线程的指标值
+	// Aggregate metrics from all threads
 	for _, line := range lines {
 		switch {
 		case strings.HasPrefix(line, "minio_test_io_bytes_sum"):

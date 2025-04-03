@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration Guide - Woodpecker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Afacad:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero h1 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+        
+        /* Content Sections */
+        .section {
+            padding: 60px 0;
+        }
+        
+        .section:nth-child(even) {
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            margin-bottom: 40px;
+        }
+        
+        .section-title h2 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-block pre {
+            margin: 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .code-block code {
+            color: #24292e;
+        }
+        
+        /* Configuration Tables */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .config-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .config-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="logo-wrapper">
+                <a href="index.html" class="logo">Woodpecker<span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+            </div>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="quickstart.html">Quick Start</a></li>
+                <li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-text">
+                    <h1>Configuration Guide</h1>
+                    <p>Comprehensive guide to configuring Woodpecker for optimal performance</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Server Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Server Configuration</h2>
+                <p>Configure the Woodpecker server for optimal performance and resource usage</p>
+            </div>
+            <div class="code-block">
+                <pre><code>server:
+  address: "0.0.0.0:8080"  # Server listening address
+  max_connections: 1000    # Maximum number of client connections
+  max_workers: 16         # Maximum number of worker threads
+  max_queue_size: 10000   # Maximum size of the request queue
+  timeout: 30s            # Request timeout duration</code></pre>
+            </div>
+            <table class="config-table">
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td>server.address</td>
+                    <td>Server listening address and port</td>
+                    <td>0.0.0.0:8080</td>
+                </tr>
+                <tr>
+                    <td>server.max_connections</td>
+                    <td>Maximum number of concurrent client connections</td>
+                    <td>1000</td>
+                </tr>
+                <tr>
+                    <td>server.max_workers</td>
+                    <td>Number of worker threads for request processing</td>
+                    <td>16</td>
+                </tr>
+                <tr>
+                    <td>server.max_queue_size</td>
+                    <td>Maximum size of the request processing queue</td>
+                    <td>10000</td>
+                </tr>
+                <tr>
+                    <td>server.timeout</td>
+                    <td>Request timeout duration</td>
+                    <td>30s</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Storage Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Storage Configuration</h2>
+                <p>Configure storage backends and optimize data persistence</p>
+            </div>
+            <div class="code-block">
+                <pre><code>storage:
+  type: "minio"           # Storage type (minio, local)
+  minio:
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "woodpecker"
+    use_ssl: false
+  local:
+    base_dir: "/data/woodpecker"
+    max_file_size: "1GB"
+    max_fragment_size: "128MB"</code></pre>
+            </div>
+            <table class="config-table">
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td>storage.type</td>
+                    <td>Storage backend type (minio, local)</td>
+                    <td>minio</td>
+                </tr>
+                <tr>
+                    <td>storage.minio.endpoint</td>
+                    <td>MinIO server endpoint</td>
+                    <td>localhost:9000</td>
+                </tr>
+                <tr>
+                    <td>storage.minio.bucket</td>
+                    <td>MinIO bucket name</td>
+                    <td>woodpecker</td>
+                </tr>
+                <tr>
+                    <td>storage.local.base_dir</td>
+                    <td>Base directory for local storage</td>
+                    <td>/data/woodpecker</td>
+                </tr>
+                <tr>
+                    <td>storage.local.max_file_size</td>
+                    <td>Maximum size of a single log file</td>
+                    <td>1GB</td>
+                </tr>
+                <tr>
+                    <td>storage.local.max_fragment_size</td>
+                    <td>Maximum size of a single fragment</td>
+                    <td>128MB</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Cache Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Cache Configuration</h2>
+                <p>Optimize memory usage and caching behavior</p>
+            </div>
+            <div class="code-block">
+                <pre><code>cache:
+  max_memory: "1GB"       # Maximum memory usage for cache
+  max_entries: 10000     # Maximum number of cache entries
+  max_bytes: "100MB"     # Maximum size of a single cache entry
+  max_interval: 1000     # Cache cleanup interval in milliseconds
+  eviction_policy: "LRU" # Cache eviction policy (LRU, FIFO)</code></pre>
+            </div>
+            <table class="config-table">
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td>cache.max_memory</td>
+                    <td>Maximum memory usage for cache</td>
+                    <td>1GB</td>
+                </tr>
+                <tr>
+                    <td>cache.max_entries</td>
+                    <td>Maximum number of cache entries</td>
+                    <td>10000</td>
+                </tr>
+                <tr>
+                    <td>cache.max_bytes</td>
+                    <td>Maximum size of a single cache entry</td>
+                    <td>100MB</td>
+                </tr>
+                <tr>
+                    <td>cache.max_interval</td>
+                    <td>Cache cleanup interval in milliseconds</td>
+                    <td>1000</td>
+                </tr>
+                <tr>
+                    <td>cache.eviction_policy</td>
+                    <td>Cache eviction policy (LRU, FIFO)</td>
+                    <td>LRU</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Log Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Log Configuration</h2>
+                <p>Configure log behavior and performance parameters</p>
+            </div>
+            <div class="code-block">
+                <pre><code>log:
+  max_segments: 100      # Maximum number of segments per log
+  max_segment_size: "1GB" # Maximum size of a single segment
+  max_entries: 1000000  # Maximum number of entries per segment
+  flush_interval: 1000  # Flush interval in milliseconds
+  sync_interval: 5000   # Sync interval in milliseconds</code></pre>
+            </div>
+            <table class="config-table">
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td>log.max_segments</td>
+                    <td>Maximum number of segments per log</td>
+                    <td>100</td>
+                </tr>
+                <tr>
+                    <td>log.max_segment_size</td>
+                    <td>Maximum size of a single segment</td>
+                    <td>1GB</td>
+                </tr>
+                <tr>
+                    <td>log.max_entries</td>
+                    <td>Maximum number of entries per segment</td>
+                    <td>1000000</td>
+                </tr>
+                <tr>
+                    <td>log.flush_interval</td>
+                    <td>Flush interval in milliseconds</td>
+                    <td>1000</td>
+                </tr>
+                <tr>
+                    <td>log.sync_interval</td>
+                    <td>Sync interval in milliseconds</td>
+                    <td>5000</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Monitoring Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Monitoring Configuration</h2>
+                <p>Configure monitoring and metrics collection</p>
+            </div>
+            <div class="code-block">
+                <pre><code>monitoring:
+  enabled: true          # Enable monitoring
+  prometheus:
+    enabled: true       # Enable Prometheus metrics
+    port: 9090         # Prometheus metrics port
+  logging:
+    level: "info"      # Log level (debug, info, warn, error)
+    format: "json"     # Log format (text, json)</code></pre>
+            </div>
+            <table class="config-table">
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td>monitoring.enabled</td>
+                    <td>Enable monitoring features</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td>monitoring.prometheus.enabled</td>
+                    <td>Enable Prometheus metrics</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td>monitoring.prometheus.port</td>
+                    <td>Prometheus metrics port</td>
+                    <td>9090</td>
+                </tr>
+                <tr>
+                    <td>monitoring.logging.level</td>
+                    <td>Log level (debug, info, warn, error)</td>
+                    <td>info</td>
+                </tr>
+                <tr>
+                    <td>monitoring.logging.format</td>
+                    <td>Log format (text, json)</td>
+                    <td>json</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>Woodpecker - High-Performance Distributed Log Storage System</p>
+            <p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+        </div>
+    </footer>
+</body>
+</html> 

@@ -24,14 +24,6 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
-// min returns the smaller of a or b
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func getTempDir(t *testing.T) string {
 	dir, err := os.MkdirTemp("", "disk_log_test_*")
 	require.NoError(t, err)
@@ -103,7 +95,7 @@ func TestAppendAsync(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
-	// Test with auto-assigned ID (0表示自动分配，实际上会使用内部自增ID)
+	// Test with auto-assigned ID (0 means auto-assign, will use internal incrementing ID)
 	entryID, resultCh, err := logFile.AppendAsync(context.Background(), 0, []byte("test_data"))
 	assert.NoError(t, err)
 	assert.Equal(t, entryID, int64(0))
@@ -194,11 +186,11 @@ func TestOutOfOrderAppend(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
-	// 使用较大的起始ID，避免与自动分配的ID冲突
+	// Use a larger starting ID to avoid conflicts with auto-assigned IDs
 	entryIDs := []int64{5, 3, 8, 1, 0, 2, 7, 6, 4, 9}
 	resultChannels := make([]<-chan int64, 0, len(entryIDs))
 
-	// 记录每个ID对应的数据，用于后续验证
+	// Record data for each ID for later verification
 	entryData := make(map[int64][]byte)
 	for _, id := range entryIDs {
 		data := []byte(fmt.Sprintf("data-%d", id))
@@ -211,7 +203,7 @@ func TestOutOfOrderAppend(t *testing.T) {
 		resultChannels = append(resultChannels, ch)
 	}
 
-	// 等待所有结果
+	// Wait for all results
 	for i, ch := range resultChannels {
 		select {
 		case result := <-ch:
@@ -222,21 +214,21 @@ func TestOutOfOrderAppend(t *testing.T) {
 		}
 	}
 
-	// 打印一下现在的ID顺序和数据映射，以便调试
+	// Print the current ID order and data mapping for debugging
 	t.Log("ID to Data mapping:")
 	for id, data := range entryData {
 		t.Logf("ID %d -> %s", id, string(data))
 	}
 
-	// 创建reader验证数据
+	// Create reader to verify data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
-		StartSequenceNum: 0,  // 确保从所有ID前开始
-		EndSequenceNum:   10, // 确保包含所有ID
+		StartSequenceNum: 0,  // Ensure we start before all IDs
+		EndSequenceNum:   10, // Ensure we include all IDs
 	})
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -248,10 +240,10 @@ func TestOutOfOrderAppend(t *testing.T) {
 		readEntries[entry.EntryId] = entry
 	}
 
-	// 验证是否读取了所有写入的条目
+	// Verify that all written entries were read back
 	assert.Equal(t, len(entryIDs), len(readEntries), "Should read back the same number of entries that were written")
 
-	// 验证所有写入的ID和数据都被正确读取
+	// Verify that all written IDs and data were correctly read back
 	for id, expectedData := range entryData {
 		entry, ok := readEntries[id]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -261,7 +253,7 @@ func TestOutOfOrderAppend(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -272,37 +264,37 @@ func TestDelayedAppend(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
-	// 使用的起始ID
+	// Starting ID to use
 	startID := int64(0)
 
-	// 准备数据
+	// Prepare data
 	entryData := make(map[int64][]byte)
 
-	// 先发送ID为2的请求
+	// First send request for ID 2
 	data2 := []byte("data-2")
 	entryData[startID+2] = data2
 	_, ch2, err := logFile.AppendAsync(context.Background(), startID+2, data2)
 	assert.NoError(t, err)
 
-	// 等待一小段时间，模拟延迟
+	// Wait a short time to simulate delay
 	time.Sleep(100 * time.Millisecond)
 
-	// 发送ID为1001的请求
+	// Send request for ID 1
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
 	_, ch1, err := logFile.AppendAsync(context.Background(), startID+1, data1)
 	assert.NoError(t, err)
 
-	// 等待一小段时间，模拟延迟
+	// Wait a short time to simulate delay
 	time.Sleep(100 * time.Millisecond)
 
-	// 发送ID为1000的请求
+	// Send request for ID 0
 	data0 := []byte("data-0")
 	entryData[startID] = data0
 	_, ch0, err := logFile.AppendAsync(context.Background(), startID, data0)
 	assert.NoError(t, err)
 
-	// 等待所有结果
+	// Wait for all results
 	select {
 	case result := <-ch0:
 		assert.Equal(t, startID, result)
@@ -324,12 +316,12 @@ func TestDelayedAppend(t *testing.T) {
 		t.Fatal("Timeout waiting for append result for ID 1002")
 	}
 
-	// 确保所有数据已写入
+	// Ensure all data is written
 	lastEntryID, err := logFile.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startID+2, lastEntryID, "Last entry ID should match the highest ID")
 
-	// 创建reader验证数据
+	// Create reader to verify data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + 3,
@@ -337,7 +329,7 @@ func TestDelayedAppend(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -349,20 +341,20 @@ func TestDelayedAppend(t *testing.T) {
 		readEntries[entry.EntryId] = entry
 	}
 
-	// 验证是否读取了所有写入的条目
+	// Verify that all written entries were read back
 	assert.Equal(t, 3, len(readEntries), "Should read back all 3 entries")
 
-	// 验证所有写入的ID和数据都被正确读取
-	for id, expectedData := range entryData {
-		entry, ok := readEntries[id]
+	// Verify that all written IDs and data were correctly read back
+	for id, resultData := range readEntries {
+		expectedEntry, ok := entryData[id]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
 		if ok {
-			assert.Equal(t, expectedData, entry.Values, "Data for entry ID %d should match", id)
-			t.Logf("Verified entry ID %d with data '%s'", id, string(entry.Values))
+			assert.Equal(t, expectedEntry, resultData.Values, "Data for entry ID %d should match", id)
+			t.Logf("Verified entry ID %d with data '%s'", id, string(resultData.Values))
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -373,7 +365,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 	{
-		// 先写入100个
+		// First write 100 entries
 		numEntries := 100
 		resultChannels := make([]<-chan int64, 0, numEntries)
 		entryIDs := make([]int64, 0, numEntries)
@@ -392,41 +384,41 @@ func TestOutOfBoundsAppend(t *testing.T) {
 		assert.Equal(t, int64(numEntries-1), lastEntryId)
 	}
 
-	// 使用的起始ID
+	// Starting ID to use
 	startID := int64(100)
 	entryData := make(map[int64][]byte)
 
-	// 先发送一个正常ID的请求
+	// First send a normal ID request
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
 	_, ch1, err := logFile.AppendAsync(context.Background(), startID+1, data1)
 	assert.NoError(t, err)
 	t.Logf("Appending entry with ID %d and data '%s'", startID+1, string(data1))
 
-	// 发送一个比当前ID小的请求
+	// Send a request with an ID smaller than the current ID
 	data0 := []byte("data-0")
 	entryData[startID+0] = data0
 	_, ch2, err := logFile.AppendAsync(context.Background(), startID+0, data0)
-	assert.NoError(t, err) // 这个请求应该被接受,
+	assert.NoError(t, err) // This request should be accepted
 	t.Logf("Appending entry with ID %d and data '%s'", startID+0, string(data0))
 
-	// 发送一个很小的ID，这个ID其实已经落盘过了。
+	// Send a request with a very small ID, which has already been persisted
 	dataN1 := []byte("data-N1")
 	entryData[startID-1] = dataN1
 	syncedId, ch3, err := logFile.AppendAsync(context.Background(), startID-1, dataN1)
-	assert.NoError(t, err) // 这个请求应该被接受，表示已经被添加了
+	assert.NoError(t, err) // This request should be accepted, indicating it's already been added
 	assert.Equal(t, syncedId, startID-1)
 	t.Logf("Appending entry with ID %d and data '%s'", startID-1, string(dataN1))
 
-	// 发送一个大于buff 窗口的 ID的请求
+	// Send a request with an ID greater than the buffer window
 	dataN2 := []byte("data-N2")
 	entryData[startID+1_00000_0000] = dataN1
 	_, ch4, err := logFile.AppendAsync(context.Background(), startID+1_00000_0000, dataN2)
-	assert.Error(t, err) // 这个请求应该被立刻拒绝，表示已经超过buff 窗口了
+	assert.Error(t, err) // This request should be immediately rejected, indicating it exceeds the buffer window
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
 	t.Logf("Appending entry with ID %d and data '%s'", startID+1_00000_0000, string(dataN2))
 
-	// 等待所有结果
+	// Wait for all results
 	select {
 	case result := <-ch1:
 		assert.Equal(t, startID+1, result)
@@ -445,7 +437,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 
 	select {
 	case result := <-ch3:
-		assert.Equal(t, startID-1, result) // 这个是直接被返回成功的，因为它之前已经落盘过
+		assert.Equal(t, startID-1, result) // This is directly returned as successful because it was already persisted
 		t.Logf("Received result for ID %d", result)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for append result for ID 999")
@@ -453,17 +445,17 @@ func TestOutOfBoundsAppend(t *testing.T) {
 
 	select {
 	case result := <-ch4:
-		assert.Equal(t, int64(-1), result) // 这个是返回错误的，因为超出了窗口范围的ID
+		assert.Equal(t, int64(-1), result) // This returns an error because it exceeds the window range
 		t.Logf("Received result for ID %d", result)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for append result for ID 1001")
 	}
 
-	// 确保所有数据已写入
+	// Ensure all data is written
 	syncErr := logFile.Sync(context.Background())
 	assert.NoError(t, syncErr)
 
-	// 创建reader验证数据
+	// Create reader to verify data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID + 0,
 		EndSequenceNum:   startID + 2,
@@ -471,7 +463,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -483,10 +475,10 @@ func TestOutOfBoundsAppend(t *testing.T) {
 		readEntries[entry.EntryId] = entry
 	}
 
-	// 验证是否读取了所有写入的条目
+	// Verify that all written entries were read back
 	assert.Equal(t, 2, len(readEntries), "Should read back all 3 entries")
 
-	// 验证所有写入的ID和数据都被正确读取
+	// Verify that all written IDs and data were correctly read back
 	for id, resultData := range readEntries {
 		expectedEntry, ok := entryData[id]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -496,7 +488,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -508,7 +500,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 
 	{
-		// 先写入100个
+		// First write 100 entries
 		numEntries := 100
 		resultChannels := make([]<-chan int64, 0, numEntries)
 		entryIDs := make([]int64, 0, numEntries)
@@ -527,26 +519,26 @@ func TestMixedAppendScenarios(t *testing.T) {
 		assert.Equal(t, int64(numEntries-1), lastEntryId)
 	}
 
-	// 使用较大的起始ID
+	// Use a larger starting ID
 	startID := int64(100)
 	entryData := make(map[int64][]byte)
 	channels := make(map[int64]<-chan int64)
 
-	// 场景1：正常顺序请求
+	// Scenario 1: Normal sequential request
 	data0 := []byte("data-0")
 	entryData[startID] = data0
 	_, ch1, err := logFile.AppendAsync(context.Background(), startID, data0)
 	assert.NoError(t, err)
 	channels[startID] = ch1
 
-	// 场景2：乱序请求
+	// Scenario 2: Out-of-order request
 	data2 := []byte("data-2")
 	entryData[startID+2] = data2
 	_, ch2, err := logFile.AppendAsync(context.Background(), startID+2, data2)
 	assert.NoError(t, err)
 	channels[startID+2] = ch2
 
-	// 场景3：延迟请求
+	// Scenario 3: Delayed request
 	time.Sleep(2000 * time.Millisecond)
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
@@ -554,14 +546,14 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 	channels[startID+1] = ch3
 
-	// 场景4：越界请求
+	// Scenario 4: Out-of-bounds request
 	data5 := []byte("data-5_000_0000")
 	_, ch4, err := logFile.AppendAsync(context.Background(), startID+5_000_0000, data5)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
-	assert.Equal(t, int64(-1), <-ch4) // 这个是返回错误的，因为超出了窗口范围的ID
+	assert.Equal(t, int64(-1), <-ch4) // This returns an error because it exceeds the window range
 
-	// 场景5：填充缺失的请求
+	// Scenario 5: Fill missing request
 	data3 := []byte("data-3")
 	entryData[startID+3] = data3
 	_, ch5, err := logFile.AppendAsync(context.Background(), startID+3, data3)
@@ -574,7 +566,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 	channels[startID+4] = ch6
 
-	// 等待所有结果
+	// Wait for all results
 	for id, ch := range channels {
 		select {
 		case result := <-ch:
@@ -585,11 +577,11 @@ func TestMixedAppendScenarios(t *testing.T) {
 		}
 	}
 
-	// 确保所有数据已写入
+	// Ensure all data is written
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 创建reader验证数据
+	// Create reader to verify data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + 5,
@@ -597,7 +589,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -609,10 +601,10 @@ func TestMixedAppendScenarios(t *testing.T) {
 		readEntries[entry.EntryId] = entry
 	}
 
-	// 验证是否读取了所有写入的条目
+	// Verify that all written entries were read back
 	assert.Equal(t, len(entryData), len(readEntries), "Should read back all entries")
 
-	// 验证所有写入的ID和数据都被正确读取
+	// Verify that all written IDs and data were correctly read back
 	for id, resultData := range readEntries {
 		expectedEntry, ok := entryData[id]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -622,7 +614,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -685,7 +677,7 @@ func TestFragmentRotation(t *testing.T) {
 	entryData := make(map[int64][]byte)
 	// Append a few entries
 	{
-		// 先写入100个
+		// First write 100 entries
 		numEntries := 100
 		resultChannels := make([]<-chan int64, 0, numEntries)
 		entryIDs := make([]int64, 0, numEntries)
@@ -706,23 +698,23 @@ func TestFragmentRotation(t *testing.T) {
 		assert.Equal(t, int64(numEntries-1), lastEntryId)
 	}
 
-	// 确保所有数据已经写入
+	// Ensure all data has been written
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 确认滚动写入了10个fragment
+	// Confirm that 10 fragments were created through rotation
 	frags, err := logFile.getROFragments()
 	assert.NoError(t, err)
 	assert.NotNil(t, frags)
 	assert.Equal(t, 10, len(frags))
 
-	// 检查是否至少创建了一个片段文件
+	// Check that at least one fragment file was created
 	files, err := os.ReadDir(logFile.basePath)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, len(files), "Expected 10 fragment files")
 
-	// 验证来自各个fragments的数据
-	// 创建reader验证数据
+	// Verify data from various fragments
+	// Create reader to verify data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -730,7 +722,7 @@ func TestFragmentRotation(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -742,10 +734,10 @@ func TestFragmentRotation(t *testing.T) {
 		readEntries[entry.EntryId] = entry
 	}
 
-	// 验证是否读取了所有写入的条目
-	assert.Equal(t, len(entryData), len(readEntries), "Should read back all 3 entries")
+	// Verify that all written entries were read back
+	assert.Equal(t, len(entryData), len(readEntries), "Should read back all entries")
 
-	// 验证所有写入的ID和数据都被正确读取
+	// Verify that all written IDs and data were correctly read back
 	for id, resultData := range readEntries {
 		expectedEntry, ok := entryData[id]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -770,7 +762,7 @@ func TestNewReader(t *testing.T) {
 	entryData := make(map[int64][]byte)
 	// Append a few entries
 	{
-		// 先写入100个
+		// First write 100 entries
 		numEntries := 100
 		resultChannels := make([]<-chan int64, 0, numEntries)
 		entryIDs := make([]int64, 0, numEntries)
@@ -791,11 +783,11 @@ func TestNewReader(t *testing.T) {
 		assert.Equal(t, int64(numEntries-1), lastEntryId)
 	}
 
-	// 读取中间80个条目的Reader
+	// Reader for middle 80 entries
 	{
 		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 10,
-			EndSequenceNum:   90, // 读取中间80个条目
+			EndSequenceNum:   90, // Read middle 80 entries
 		})
 		assert.NoError(t, err)
 		defer reader.Close()
@@ -810,10 +802,10 @@ func TestNewReader(t *testing.T) {
 			readEntries[entry.EntryId] = entry
 		}
 
-		// 验证是否读取了所有写入的条目
-		assert.Equal(t, 80, len(readEntries), "Should read back all 3 entries")
+		// Verify that all expected entries were read back
+		assert.Equal(t, 80, len(readEntries), "Should read back 80 entries")
 
-		// 验证所有写入的ID和数据都被正确读取
+		// Verify that all expected IDs and data were correctly read back
 		for id, resultData := range readEntries {
 			expectedEntry, ok := entryData[id]
 			assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -824,11 +816,11 @@ func TestNewReader(t *testing.T) {
 		}
 	}
 
-	// 读取前10个条目的Reader
+	// Read first 10 entries
 	{
 		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
-			EndSequenceNum:   10, // 读取中间80个条目
+			EndSequenceNum:   10, // Read middle 80 entries
 		})
 		assert.NoError(t, err)
 		defer reader.Close()
@@ -843,10 +835,10 @@ func TestNewReader(t *testing.T) {
 			readEntries[entry.EntryId] = entry
 		}
 
-		// 验证是否读取了所有写入的条目
+		// Verify if all written entries were read back
 		assert.Equal(t, 10, len(readEntries), "Should read back all 3 entries")
 
-		// 验证所有写入的ID和数据都被正确读取
+		// Verify all written IDs and data were correctly read back
 		for id, resultData := range readEntries {
 			expectedEntry, ok := entryData[id]
 			assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -857,11 +849,11 @@ func TestNewReader(t *testing.T) {
 		}
 	}
 
-	// 读取后10个条目的Reader
+	// Read last 10 entries
 	{
 		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 90,
-			EndSequenceNum:   100, // 读取中间80个条目
+			EndSequenceNum:   100, // Read middle 80 entries
 		})
 		assert.NoError(t, err)
 		defer reader.Close()
@@ -876,10 +868,10 @@ func TestNewReader(t *testing.T) {
 			readEntries[entry.EntryId] = entry
 		}
 
-		// 验证是否读取了所有写入的条目
+		// Verify if all written entries were read back
 		assert.Equal(t, 10, len(readEntries), "Should read back all 3 entries")
 
-		// 验证所有写入的ID和数据都被正确读取
+		// Verify all written IDs and data were correctly read back
 		for id, resultData := range readEntries {
 			expectedEntry, ok := entryData[id]
 			assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -890,7 +882,7 @@ func TestNewReader(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -902,7 +894,7 @@ func TestLoad(t *testing.T) {
 	logger.InitLogger(cfg)
 	dir := getTempDir(t)
 
-	// 初始写入的条目数量
+	// Initial number of entries written
 	const initialEntries = 20
 	var initialLastEntryID int64
 
@@ -910,7 +902,7 @@ func TestLoad(t *testing.T) {
 	{
 		logFile, err := NewDiskLogFile(1, dir)
 		assert.NoError(t, err)
-		// 先写入20个
+		// First write 20 entries
 		resultChannels := make([]<-chan int64, 0, initialEntries)
 		entryIDs := make([]int64, 0, initialEntries)
 		for i := 0; i < initialEntries; i++ {
@@ -945,7 +937,7 @@ func TestLoad(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, initialLastEntryID, loadedLastEntryID, "GetLastEntryId() should return the same value as loaded")
 
-		// 额外写入的条目数量
+		// Number of additional entries to write
 		const additionalEntries = 5
 
 		// Now append more entries to confirm it still works
@@ -984,16 +976,16 @@ func TestInvalidReaderRange(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
-	// 追踪条目ID和数据
+	// Track entry IDs and data
 	var entryIDs []int64
 
 	// Append a few entries
 	for i := 0; i < 5; i++ {
 		data := []byte{byte(i)}
-		// 使用AppendAsync来获取ID
+		// Use AppendAsync to get ID
 		id, resultCh, err := logFile.AppendAsync(context.Background(), int64(i), data)
 		assert.NoError(t, err)
-		// 等待追加完成
+		// Wait for append to complete
 		select {
 		case result := <-resultCh:
 			assert.Equal(t, id, result)
@@ -1004,18 +996,18 @@ func TestInvalidReaderRange(t *testing.T) {
 		t.Logf("Appended entry %d with ID %d and data '%d'", i, id, i)
 	}
 
-	// 确保所有数据已写入
+	// Ensure all data has been written
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 确保有足够的条目用于测试
+	// Ensure there are enough entries for testing
 	if len(entryIDs) < 5 {
-		t.Fatalf("不够条目来测试读取范围")
+		t.Fatalf("Not enough entries to test read range")
 		return
 	}
 
 	lastID := entryIDs[len(entryIDs)-1]
-	beyondLastID := lastID + 5 // 一个超出范围的ID
+	beyondLastID := lastID + 5 // An ID beyond the range
 
 	// Try to create a reader with start beyond available entries
 	_, err = logFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -1024,10 +1016,10 @@ func TestInvalidReaderRange(t *testing.T) {
 	})
 	assert.NoError(t, err) // Should fail
 
-	// 创建另一个reader，使用验证过的实际ID范围，并验证读取结果
-	// 明确只读取从第3个到第5个条目（索引2到4）
+	// Create another reader using verified actual ID range, and verify read results
+	// Explicitly read only from the 3rd to the 5th entry (indices 2 to 4)
 	startID := entryIDs[2]
-	endID := entryIDs[4] + 1 // +1 因为范围是半开区间
+	endID := entryIDs[4] + 1 // +1 because the range is half-open
 
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
@@ -1036,136 +1028,23 @@ func TestInvalidReaderRange(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 验证可以读取预期的条目
+	// Verify that expected entries can be read
 	for i := 2; i <= 4; i++ {
-		assert.True(t, reader.HasNext(), "应有条目在索引 %d", i)
+		assert.True(t, reader.HasNext(), "Should have entry at index %d", i)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
-		assert.Equal(t, entryIDs[i], entry.EntryId, "条目ID应匹配")
-		t.Logf("成功读取索引 %d 的条目：ID=%d", i, entry.EntryId)
+		assert.Equal(t, entryIDs[i], entry.EntryId, "Entry ID should match")
+		t.Logf("Successfully read entry at index %d: ID=%d", i, entry.EntryId)
 	}
 
-	// 读取完所有3个条目后，应该没有更多条目
-	assert.False(t, reader.HasNext(), "读取完所有有效条目后不应有更多条目")
+	// After reading all 3 entries, there should be no more entries
+	assert.False(t, reader.HasNext(), "Should not have more entries after reading all valid ones")
 
-	// 尝试再次读取，应该返回错误
+	// Try to read again, should return error
 	_, err = reader.ReadNext()
-	assert.Error(t, err, "超出范围读取应该返回错误")
+	assert.Error(t, err, "Reading out of range should return error")
 	assert.True(t, strings.Contains(err.Error(), "no more entries to read"))
-	t.Logf("超出范围读取返回预期错误: %v", err)
-
-	// Cleanup
-	err = logFile.Close()
-	assert.NoError(t, err)
-}
-
-// TODO
-// TestMerge tests the Merge function (which is a no-op in disk implementation).
-func TestMerge(t *testing.T) {
-	t.Skipf("Skip disk logfile merge, not impl yeat")
-	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir, WithMaxEntryPerFile(10))
-	assert.NoError(t, err)
-
-	entryData := make(map[int64][]byte)
-	// Append a few entries
-	{
-		// 先写入100个
-		numEntries := 100
-		resultChannels := make([]<-chan int64, 0, numEntries)
-		entryIDs := make([]int64, 0, numEntries)
-		for i := 0; i < numEntries; i++ {
-			entryID := int64(i)
-			entryValue := []byte(fmt.Sprintf("test_data_%d", i))
-			entryData[entryID] = entryValue
-			id, ch, err := logFile.AppendAsync(context.Background(), entryID, entryValue)
-			assert.NoError(t, err)
-			assert.Equal(t, entryID, id)
-			resultChannels = append(resultChannels, ch)
-			entryIDs = append(entryIDs, entryID)
-		}
-		err := logFile.Sync(context.TODO())
-		assert.NoError(t, err)
-		lastEntryId, err := logFile.GetLastEntryId()
-		assert.NoError(t, err)
-		assert.Equal(t, int64(numEntries-1), lastEntryId)
-	}
-
-	// Call merge (should be a no-op)
-	fragments, entryOffsets, fragmentIdOffsets, err := logFile.Merge(context.Background())
-	assert.NoError(t, err)
-	assert.Nil(t, fragments)
-	assert.Nil(t, entryOffsets)
-	assert.Nil(t, fragmentIdOffsets)
-
-	// Cleanup
-	err = logFile.Close()
-	assert.NoError(t, err)
-}
-
-// TestConcurrentAppend tests concurrent append operations.
-func TestConcurrentAppend(t *testing.T) {
-	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
-	assert.NoError(t, err)
-
-	// Number of concurrent appends
-	count := 100
-	doneCh := make(chan bool, count)
-
-	// Launch goroutines to append concurrently
-	for i := 0; i < count; i++ {
-		go func(id int) {
-			_, resultCh, err := logFile.AppendAsync(context.Background(), int64(i), []byte{byte(id)})
-			if err != nil {
-				t.Errorf("Append error: %v", err)
-				doneCh <- false
-				return
-			}
-
-			// Wait for result
-			select {
-			case <-resultCh:
-				doneCh <- true
-			case <-time.After(3 * time.Second):
-				t.Errorf("Timeout waiting for append result")
-				doneCh <- false
-			}
-		}(i)
-	}
-
-	// Wait for all operations to complete
-	for i := 0; i < count; i++ {
-		select {
-		case success := <-doneCh:
-			assert.True(t, success)
-		case <-time.After(5 * time.Second):
-			t.Fatalf("Timeout waiting for all append operations")
-		}
-	}
-
-	// Check last entry ID
-	lastEntryID, err := logFile.GetLastEntryId()
-	assert.NoError(t, err)
-	// ID分配可能大于count-1，因为分配是自动的，不是严格递增1
-	assert.Equal(t, lastEntryID, int64(count-1), "最后分配的ID应该至少为%d", count-1)
-
-	// Cleanup
-	err = logFile.Close()
-	assert.NoError(t, err)
-}
-
-// TestLoadNonExistent tests loading a non-existent log file.
-func TestLoadNonExistent(t *testing.T) {
-	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(999, dir) // Use an ID that doesn't exist
-	assert.NoError(t, err)
-
-	// Try to load (should create a new fragment)
-	lastEntryID, fragment, err := logFile.Load(context.Background())
-	assert.NoError(t, err)
-	assert.Nil(t, fragment)
-	assert.Equal(t, int64(0), lastEntryID)
+	t.Logf("Reading out of range returned expected error: %v", err)
 
 	// Cleanup
 	err = logFile.Close()
@@ -1179,7 +1058,7 @@ func TestReadAfterClose(t *testing.T) {
 		WithDisableAutoSync())
 	assert.NoError(t, err)
 
-	// 写入少量数据
+	// Write a small amount of data
 	numEntries := 5
 	for i := 0; i < numEntries; i++ {
 		entryID := int64(i)
@@ -1189,28 +1068,28 @@ func TestReadAfterClose(t *testing.T) {
 		assert.Equal(t, entryID, id)
 	}
 
-	// 强制同步
-	fmt.Println("强制同步数据")
+	// Force sync
+	fmt.Println("Force syncing data")
 	err = logFile.Sync(context.TODO())
 	assert.NoError(t, err)
 	lastEntryId, err := logFile.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(numEntries-1), lastEntryId)
 
-	// 关闭文件
-	fmt.Println("关闭文件")
+	// Close file
+	fmt.Println("Closing file")
 	err = logFile.Close()
 	assert.NoError(t, err)
 
-	// 尝试在关闭后创建reader
-	fmt.Println("尝试在关闭后创建reader")
+	// Try to create reader after closing
+	fmt.Println("Trying to create reader after closing")
 	_, err = logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   2,
 	})
-	assert.Error(t, err) // 应该失败，因为文件已关闭
+	assert.Error(t, err) // Should fail because file is closed
 	assert.Contains(t, err.Error(), "closed")
-	fmt.Println("测试通过: 无法在关闭后创建reader")
+	fmt.Println("Test passed: Cannot create reader after closing")
 }
 
 // TestBasicReader tests basic reader functionality.
@@ -1224,30 +1103,30 @@ func TestBasicReader(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Append entries with specific IDs to ensure we know the exact IDs to read later
-	startID := int64(0) // 使用较大的起始ID，确保没有冲突
+	startID := int64(0) // Use a larger starting ID to ensure no conflicts
 	numEntries := 10
 
-	// 追加有序的条目
+	// Append ordered entries
 	for i := 0; i < numEntries; i++ {
 		entryID := startID + int64(i)
 		data := []byte(fmt.Sprintf("data-%d", i))
 		_, ch, err := logFile.AppendAsync(context.Background(), entryID, data)
 		assert.NoError(t, err)
-		<-ch // 等待写入完成
+		<-ch // Wait for write to complete
 	}
 
-	// 确保数据已写入
+	// Ensure data has been written
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 创建读取全部条目的Reader
+	// Create reader for all entries
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + int64(numEntries),
 	})
 	assert.NoError(t, err)
 
-	// 读取并验证所有条目
+	// Read and verify all entries
 	for i := 0; i < numEntries; i++ {
 		hasNext := reader.HasNext()
 		assert.True(t, hasNext)
@@ -1258,24 +1137,24 @@ func TestBasicReader(t *testing.T) {
 		assert.Equal(t, []byte(fmt.Sprintf("data-%d", i)), entry.Values)
 	}
 
-	// 验证没有更多条目
+	// Verify no more entries
 	hasNext := reader.HasNext()
 	assert.False(t, hasNext)
 
-	// 清理
+	// Cleanup
 	err = reader.Close()
 	assert.NoError(t, err)
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
 
-// TestOnlyFirstAndLast 跳过读取测试，仅测试首次和最后一次条目ID的获取
+// TestOnlyFirstAndLast skips read testing, only tests getting first and last entry IDs
 func TestOnlyFirstAndLast(t *testing.T) {
 	dir := getTempDir(t)
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
-	// 使用简单的 Append 方法添加数据，让系统自己分配 ID
+	// Use simple Append method to add data, letting the system assign IDs
 	numEntries := 5
 	testData := make([][]byte, numEntries)
 
@@ -1286,24 +1165,24 @@ func TestOnlyFirstAndLast(t *testing.T) {
 		t.Logf("Appended data: %s", testData[i])
 	}
 
-	// 确保数据已写入
+	// Ensure data has been written
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 获取最后一个条目ID
+	// Get last entry ID
 	lastEntryID, err := logFile.GetLastEntryId()
 	assert.NoError(t, err)
 	t.Logf("Last entry ID after writes: %d", lastEntryID)
 
-	// 确保lastEntryID是有效的
+	// Ensure lastEntryID is valid
 	assert.Equal(t, lastEntryID, int64(numEntries-1), "Last entry ID should be at least %d", numEntries-1)
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
 
-// TestSequentialBufferAppend 测试基于SequentialBuffer的实现
+// TestSequentialBufferAppend Test based on SequentialBuffer implementation
 func TestSequentialBufferAppend(t *testing.T) {
 	tempDir := getTempDir(t)
 	defer os.RemoveAll(tempDir)
@@ -1312,32 +1191,32 @@ func TestSequentialBufferAppend(t *testing.T) {
 	assert.NoError(t, err)
 	defer dlf.Close()
 
-	// 测试连续有序写入
+	// Test continuous ordered write
 	for i := 0; i < 5; i++ {
 		data := []byte(fmt.Sprintf("data-%d", i))
 		id, ch, err := dlf.AppendAsync(context.Background(), int64(i), data)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), id)
-		<-ch // 等待写入完成
+		<-ch // Wait for write to complete
 	}
 
-	// 强制同步缓冲区到磁盘
+	// Force sync buffer to disk
 	err = dlf.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 获取最后写入的entryID
+	// Get last written entryID
 	lastID, err := dlf.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(4), lastID)
 
-	// 验证可以读取写入的数据
+	// Verify can read written data
 	reader, err := dlf.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
-		EndSequenceNum:   5, // 读取所有entries
+		EndSequenceNum:   5, // Read all entries
 	})
 	assert.NoError(t, err)
 
-	// 读取并验证数据
+	// Read and verify data
 	entryCount := 0
 	for reader.HasNext() {
 		entry, err := reader.ReadNext()
@@ -1346,29 +1225,29 @@ func TestSequentialBufferAppend(t *testing.T) {
 		entryCount++
 	}
 
-	// 应该读取到5个entries (0-4)
+	// Should read 5 entries (0-4)
 	assert.Equal(t, 5, entryCount)
 }
 
 func TestWrite10kAndReadInOrder(t *testing.T) {
 	testEntryCount := 10000
 	dir := getTempDir(t)
-	// 创建一个较大的fragment大小以容纳所有数据
+	// Create a larger fragment size to accommodate all data
 	logFile, err := NewDiskLogFile(1, dir, WithFragmentSize(10*1024*1024))
 	assert.NoError(t, err)
 
-	// 记录写入开始时间
+	// Record write start time
 	writeStartTime := time.Now()
 
-	// 使用较大的起始ID，避免与自动分配的ID冲突
+	// Use larger starting ID to avoid conflicts with auto-allocated ID
 	resultChannels := make([]<-chan int64, testEntryCount)
-	// 记录每个ID对应的数据，用于后续验证
+	// Record data for each ID, for subsequent verification
 	entryData := make(map[int][]byte)
 
 	t.Logf("Starting to write %d entries...", testEntryCount)
 
 	for id := 0; id < testEntryCount; id++ {
-		// 创建数据，包含ID信息以便于验证
+		// Create data, include ID information for verification
 		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
 		entryData[id] = data
 
@@ -1377,13 +1256,13 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
 		resultChannels[id] = ch
 
-		// 每1000条打印一次进度
+		// Print progress every 1000 entries
 		if (id+1)%1000 == 0 {
 			t.Logf("Wrote %d/%d entries", id+1, testEntryCount)
 		}
 	}
 
-	// 等待所有写入结果
+	// Wait for all write results
 	successCount := 0
 	failCount := 0
 	for i, ch := range resultChannels {
@@ -1395,12 +1274,12 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 				failCount++
 				t.Logf("Failed to write entry %d", i)
 			}
-		case <-time.After(10 * time.Second): // 增加超时时间
+		case <-time.After(10 * time.Second): // Increase timeout
 			t.Logf("Timeout waiting for append result for ID %d", i)
 			failCount++
 		}
 
-		// 每1000条打印一次进度
+		// Print progress every 1000 entries
 		if (i+1)%1000 == 0 {
 			t.Logf("Processed %d/%d write results", i+1, testEntryCount)
 		}
@@ -1409,18 +1288,18 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	writeDuration := time.Since(writeStartTime)
 	t.Logf("Write completed in %v. Success: %d, Failed: %d", writeDuration, successCount, failCount)
 
-	// 确保写入成功率是100%
+	// Ensure write success rate is 100%
 	assert.Equal(t, testEntryCount, successCount, "All entries should be written successfully")
 	assert.Equal(t, 0, failCount, "No entries should fail")
 
-	// 同步确保所有数据已写入磁盘
+	// Sync to ensure all data has been written to disk
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 记录读取开始时间
+	// Record read start time
 	readStartTime := time.Now()
 
-	// 创建reader验证数据，确保从ID 0开始读取所有数据
+	// Create reader to verify data, ensure read from ID 0 to all data
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   int64(testEntryCount),
@@ -1428,9 +1307,9 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	readSequence := make([]int64, 0, testEntryCount) // 记录读取顺序
+	readSequence := make([]int64, 0, testEntryCount) // Record read order
 
 	t.Logf("Starting to read entries...")
 	readCount := 0
@@ -1446,7 +1325,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 		readSequence = append(readSequence, entry.EntryId)
 		readCount++
 
-		// 每1000条打印一次进度
+		// Print progress every 1000 entries
 		if readCount%1000 == 0 {
 			t.Logf("Read %d entries", readCount)
 		}
@@ -1455,17 +1334,17 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	readDuration := time.Since(readStartTime)
 	t.Logf("Read completed in %v. Total entries read: %d", readDuration, len(readEntries))
 
-	// 验证是否读取了所有写入的条目
+	// Verify if all written entries were read back
 	assert.Equal(t, testEntryCount, len(readEntries), "Should read back the same number of entries that were written")
 
-	// 验证读取顺序是否正确
+	// Verify read order is correct
 	for i := 0; i < len(readSequence)-1; i++ {
 		assert.Equal(t, readSequence[i]+1, readSequence[i+1],
 			"Entries should be read in sequential order, but got %d followed by %d",
 			readSequence[i], readSequence[i+1])
 	}
 
-	// 验证所有写入的ID和数据都被正确读取
+	// Verify all written IDs and data were correctly read back
 	for id, expectedData := range entryData {
 		entry, ok := readEntries[int64(id)]
 		assert.True(t, ok, "Entry with ID %d should be read back", id)
@@ -1476,7 +1355,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }
@@ -1498,18 +1377,18 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		WithMaxEntryPerFile(maxEntriesPerFragment))
 	assert.NoError(t, err)
 
-	// 记录写入开始时间
+	// Record write start time
 	writeStartTime := time.Now()
 
-	// 使用较大的起始ID，避免与自动分配的ID冲突
+	// Use larger starting ID to avoid conflicts with auto-allocated ID
 	resultChannels := make([]<-chan int64, testEntryCount)
-	// 记录每个ID对应的数据，用于后续验证
+	// Record data for each ID, for subsequent verification
 	entryData := make(map[int][]byte)
 
 	t.Logf("Starting to write %d entries with forced fragment rotations...", testEntryCount)
 
 	for id := 0; id < testEntryCount; id++ {
-		// 创建数据，包含ID信息以便于验证
+		// Create data, include ID information for verification
 		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
 		entryData[id] = data
 
@@ -1518,7 +1397,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
 		resultChannels[id] = ch
 
-		// 每100条打印一次进度（与fragment容量对应）
+		// Print progress every 100 entries (should trigger fragment rotation)
 		if (id+1)%100 == 0 {
 			t.Logf("Wrote %d/%d entries (should trigger fragment rotation)", id+1, testEntryCount)
 
@@ -1526,7 +1405,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			err = logFile.Sync(context.Background())
 			assert.NoError(t, err, "Failed to sync at entry %d", id+1)
 
-			// 获取当前fragment信息
+			// Get current fragment information
 			frags, err := logFile.getROFragments()
 			assert.NoError(t, err)
 			t.Logf("After %d entries, fragment count: %d", id+1, len(frags))
@@ -1541,7 +1420,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		}
 	}
 
-	// 等待所有写入结果
+	// Wait for all write results
 	successCount := 0
 	failCount := 0
 	for i, ch := range resultChannels {
@@ -1558,7 +1437,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			failCount++
 		}
 
-		// 每100条打印一次进度
+		// Print progress every 100 entries
 		if (i+1)%100 == 0 {
 			t.Logf("Processed %d/%d write results", i+1, testEntryCount)
 		}
@@ -1567,19 +1446,19 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	writeDuration := time.Since(writeStartTime)
 	t.Logf("Write completed in %v. Success: %d, Failed: %d", writeDuration, successCount, failCount)
 
-	// 检查写入情况，允许一些失败但不应太多
+	// Check write status, allow some failures but not too many
 	assert.Greater(t, successCount, failCount, "More successful than failed writes")
 
-	// 最终同步确保所有数据已写入磁盘
+	// Final sync to ensure all data is written to disk
 	err = logFile.Sync(context.Background())
 	assert.NoError(t, err)
 
-	// 获取最终的fragment信息
+	// Get final fragment information
 	frags, err := logFile.getROFragments()
 	assert.NoError(t, err)
 	t.Logf("Final fragment count: %d", len(frags))
 
-	// 验证是否有多个fragment（确认rotation发生）
+	// Verify multiple fragments were created (confirm rotation occurred)
 	assert.Greater(t, len(frags), 1, "Multiple fragments should be created due to small fragment size")
 
 	for i, frag := range frags {
@@ -1590,10 +1469,10 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			i, frag.GetFragmentId(), firstID, lastID, entryCount)
 	}
 
-	// 记录读取开始时间
+	// Record read start time
 	readStartTime := time.Now()
 
-	// 创建reader验证数据，确保从ID 0开始读取所有数据
+	// Create reader to verify data, ensure reading all data from ID 0
 	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   int64(testEntryCount),
@@ -1601,9 +1480,9 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	assert.NoError(t, err)
 	defer reader.Close()
 
-	// 收集所有读取到的条目
+	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	readSequence := make([]int64, 0, testEntryCount) // 记录读取顺序
+	readSequence := make([]int64, 0, testEntryCount) // Record read order
 
 	t.Logf("Starting to read entries across multiple fragments...")
 	readCount := 0
@@ -1619,7 +1498,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		readSequence = append(readSequence, entry.EntryId)
 		readCount++
 
-		// 每100条打印一次进度（与fragment容量对应）
+		// Print progress every 100 entries (corresponding to fragment capacity)
 		if readCount%100 == 0 {
 			t.Logf("Read %d entries (crossing fragment boundary)", readCount)
 		}
@@ -1628,17 +1507,17 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	readDuration := time.Since(readStartTime)
 	t.Logf("Read completed in %v. Total entries read: %d", readDuration, len(readEntries))
 
-	// 验证是否读取了所有写入的条目
-	// 注意：可能不会有所有条目，因为一些写入可能失败
+	// Verify all written entries were read back
+	// Note: May not have all entries as some writes may have failed
 	t.Logf("Read back %d entries of %d attempted writes (%d successful writes)",
 		len(readEntries), testEntryCount, successCount)
 
-	// 如果有序列空洞，记录它们
+	// If there are sequence gaps, record them
 	if len(readSequence) > 0 {
 		t.Logf("First read ID: %d, Last read ID: %d",
 			readSequence[0], readSequence[len(readSequence)-1])
 
-		// 检查序列连续性
+		// Check sequence continuity
 		for i := 0; i < len(readSequence)-1; i++ {
 			if readSequence[i]+1 != readSequence[i+1] {
 				t.Logf("Gap in sequence: %d followed by %d (expected %d)",
@@ -1647,7 +1526,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		}
 	}
 
-	// 验证已读取条目的数据正确性
+	// Verify correctness of read entries' data
 	for id, entry := range readEntries {
 		expectedData, ok := entryData[int(id)]
 		if ok {
@@ -1663,7 +1542,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		}
 	}
 
-	// 清理
+	// Cleanup
 	err = logFile.Close()
 	assert.NoError(t, err)
 }

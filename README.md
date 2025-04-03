@@ -64,13 +64,17 @@ In the service mode, the WAL read/write operations and caching logic are decoupl
 ## 🏎 Benchmarks
 
 
-| Test Scenario                      | Description                                          | Throughput |
-|------------------------------------|------------------------------------------------------|------------|
-| **embedded mode one client write** | Concurrent async append log entries to cloud storage | 729.4 MB/s |
-| **embedded mode one client read**  | Reading batches of log entries from cloud storage    |            |
+| Test Scenario                      | Description                                             | Throughput | Latency |
+|------------------------------------|---------------------------------------------------------|------------|---------|
+| **embedded mode one client write** | Concurrent async append log entries to S3               | 729.4 MB/s | T+100ms |
+| **embedded mode one client read**  | Reading batches of log entries from S3                  | 768.0 MB/s | 245ms   |
+| **embedded mode one client write** | Concurrent async append log entries to standalone minio | 103.04MB/s | T+19ms  |
+| **embedded mode one client read**  | Reading batches of log entries from standalone minio    | 141.9MB/s  | 14.1ms  |
+| **embedded mode one client write** | Concurrent async append log entries to local SSD        | 562.9MB/s  | T+27.ms |
+| **embedded mode one client read**  | Reading batches of log entries from local SSD           |            |         |
 
 > **Note**: The performance benchmarks are based on a single ECS instance writing to S3. While there are traffic limitations on a single ECS instance, the upper throughput limits can be higher with proper configuration or scaling. Additionally, **Woodpecker** is still under active development, and performance improvements are continually being made to enhance throughput and reduce latency.
-
+> **Note**: Test 2MB-16MB per entry, record the max throughput and latency. ”T“ represents the time interval for flush buffer, which is configurable.
 ---
 
 ## 🎯 **Usage Examples**
@@ -108,14 +112,19 @@ woodpecker:
 ```
 
 ### **3. Use Woodpecker for write**
-```go
+**3.1 open client writer**
+```
 // open client writer
 cfg, _ := config.NewConfiguration()
 client, _ := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 _ = client.CreateLog(context.Background(), "test_log_single")
 logHandle, _ := client.OpenLog(context.Background(), "test_log_single")
 logWriter, _ := logHandle.OpenLogWriter(context.Background())
+```
+**3.2 sync/async write**
 
+sync write 
+```
 // Sync Write
 writeResult := logWriter.WriteAsync(context.Background(),
     &log.WriterMessage{
@@ -125,31 +134,32 @@ writeResult := logWriter.WriteAsync(context.Background(),
         },
     }, 
 )
-
-//// Async Write multi messages as a batch
-//resultChan := make([]<-chan *log.WriteResult, count)
-//for i := 0; i < count; i++ {
-//	writeResultChan := logWriter.WriteAsync(context.Background(),
-//		&log.WriterMessage{
-//			Payload: []byte(fmt.Sprintf("hello world %d", i)),
-//			Properties: map[string]string{
-//				"key": fmt.Sprintf("value%d", i),
-//			},
-//		},
-//	)
-//	resultChan[i] = writeResultChan
-//}
-//// wait for async result for this batch
-//for _, resultChan := range resultChan {
-//	r := <-resultChan
-//	// biz ...
-//}
-
+```
+or async write
+```
+// Async Write multi messages as a batch
+resultChan := make([]<-chan *log.WriteResult, count)
+for i := 0; i < count; i++ {
+	writeResultChan := logWriter.WriteAsync(context.Background(),
+		&log.WriterMessage{
+			Payload: []byte(fmt.Sprintf("hello world %d", i)),
+			Properties: map[string]string{
+				"key": fmt.Sprintf("value%d", i),
+			},
+		},
+	)
+	resultChan[i] = writeResultChan
+}
+// wait for async result for this batch
+for _, resultChan := range resultChan {
+	r := <-resultChan
+	// biz ...
+}
 // Other biz logic ...
 ```
 
 ### **4. Use Woodpecker for read**
-```go
+```
 logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
 	if openReaderErr != nil {
 		fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
