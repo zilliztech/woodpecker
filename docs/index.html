@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Woodpecker - High-Performance Distributed Log Storage System</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Afacad:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero-diagram {
+            width: 600px;
+            height: 100%;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .hero-diagram svg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.45);
+            width: 200%;
+            height: 200%;
+        }
+        
+        .hero h1 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+        }
+
+        @media (max-width: 1080px) {
+            .hero-content {
+                width: 100%;
+                padding: 0 20px;
+            }
+            
+            .hero-diagram svg {
+                transform: translate(-50%, -50%) scale(0.35);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .hero {
+                height: auto;
+            }
+            
+            .hero-content {
+                flex-direction: column;
+                height: auto;
+                padding: 40px 20px;
+                align-items: center;
+            }
+            
+            .hero-text {
+                width: 100%;
+                height: auto;
+                align-items: center;
+                text-align: center;
+                padding: 0 0 30px 0;
+            }
+            
+            .hero p {
+                max-width: 100%;
+            }
+            
+            .hero-diagram {
+                width: 100%;
+                height: 300px;
+            }
+            
+            .hero-diagram svg {
+                transform: translate(-50%, -50%) scale(0.2);
+            }
+
+            .hero h1 {
+                font-size: 36px;
+                margin-bottom: 12px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+                margin-bottom: 20px;
+            }
+
+            .hero-buttons {
+                justify-content: center;
+            }
+        }
+        
+        .btn {
+            display: inline-block;
+            background-color: white;
+            color: var(--primary-color);
+            padding: 12px 30px;
+            border-radius: 30px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 15px;
+        }
+        
+        .btn-outline {
+            background-color: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn-outline:hover {
+            background-color: white;
+            color: var(--primary-color);
+        }
+        
+        /* Features Section */
+        .features {
+            padding: 80px 0;
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+        
+        .section-title h2 {
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .feature-card {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .feature-icon {
+            font-size: 40px;
+            color: var(--primary-color);
+            margin-bottom: 20px;
+        }
+        
+        .feature-card h3 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: var(--dark-color);
+        }
+        
+        /* Architecture Section */
+        .architecture {
+            padding: 80px 0;
+        }
+        
+        .architecture-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 50px;
+            align-items: center;
+        }
+        
+        .architecture-text h2 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            color: var(--dark-color);
+        }
+        
+        .architecture-text p {
+            margin-bottom: 20px;
+        }
+        
+        .architecture-image {
+            text-align: center;
+        }
+        
+        .architecture-image img {
+            max-width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Components Section */
+        .components {
+            padding: 80px 0;
+            background-color: var(--light-color);
+        }
+        
+        .component-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .component-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .component-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .component-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Concepts Section */
+        .concepts {
+            padding: 80px 0;
+        }
+        
+        .concept-list {
+            list-style: none;
+        }
+        
+        .concept-list li {
+            margin-bottom: 15px;
+            padding-left: 30px;
+            position: relative;
+        }
+        
+        .concept-list li:before {
+            content: "•";
+            color: var(--primary-color);
+            font-size: 20px;
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        
+        /* Workflow Section */
+        .workflow {
+            padding: 80px 0;
+            background-color: var(--light-color);
+        }
+        
+        .workflow-steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .workflow-step {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .workflow-step h3 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: var(--dark-color);
+        }
+        
+        .workflow-step ol {
+            padding-left: 20px;
+        }
+        
+        .workflow-step li {
+            margin-bottom: 10px;
+        }
+        
+        /* Configuration Section */
+        .configuration {
+            padding: 80px 0;
+        }
+        
+        .config-list {
+            list-style: none;
+        }
+        
+        .config-list li {
+            margin-bottom: 15px;
+            padding-left: 30px;
+            position: relative;
+        }
+        
+        .config-list li:before {
+            content: "•";
+            color: var(--primary-color);
+            font-size: 20px;
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        
+        /* Roadmap Section */
+        .roadmap {
+            padding: 80px 0;
+            background-color: var(--light-color);
+        }
+        
+        .roadmap-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .roadmap-card {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .roadmap-card h3 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: var(--dark-color);
+        }
+        
+        .roadmap-card ul {
+            list-style: none;
+        }
+        
+        .roadmap-card li {
+            margin-bottom: 10px;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .roadmap-card li:before {
+            content: "→";
+            color: var(--primary-color);
+            position: absolute;
+            left: 0;
+        }
+        
+        /* References Section */
+        .references {
+            padding: 80px 0;
+        }
+        
+        .reference-links {
+            list-style: none;
+        }
+        
+        .reference-links li {
+            margin-bottom: 15px;
+        }
+        
+        .reference-links a {
+            color: var(--primary-color);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        .reference-links a:hover {
+            color: #3a5bd9;
+            text-decoration: underline;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .hero h1 {
+                font-size: 36px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+            }
+            
+            .architecture-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .architecture-image {
+                order: -1;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+            
+            .feature-card h3,
+            .workflow-step h3,
+            .roadmap-card h3 {
+                font-size: 20px;
+            }
+            
+            .architecture-text h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="logo-wrapper">
+                <a href="index.html" class="logo">Woodpecker<span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+            </div>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="quickstart.html">Quick Start</a></li>
+                <li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-text">
+                <h1>Woodpecker</h1>
+                <p>High-Performance Distributed Log Storage System</p>
+                <div class="hero-buttons">
+                    <a href="quickstart.html" class="btn">Get Started</a>
+                    <a href="https://github.com/zilliztech/woodpecker" class="btn btn-outline">View on GitHub</a>
+                </div>
+            </div>
+            <div class="hero-diagram">
+                <svg viewBox="0 0 3600 2000" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Background Grid -->
+                    <defs>
+                        <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+                            <path d="M 50 0 L 0 0 0 50" fill="none" stroke="white" stroke-width="0.5" opacity="0.3"/>
+                        </pattern>
+                        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="3" dy="3" stdDeviation="3" flood-opacity="0.3"/>
+                        </filter>
+                        <marker id="arrow" viewBox="0 0 20 20" refX="10" refY="10"
+                            markerWidth="16" markerHeight="16" orient="auto-start-reverse">
+                            <path d="M 0 0 L 20 10 L 0 20 L 5 10 z" fill="white" opacity="0.3"/>
+                        </marker>
+                        <linearGradient id="arrow-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" style="stop-color:white;stop-opacity:0.2" />
+                            <stop offset="100%" style="stop-color:white;stop-opacity:0.3" />
+                        </linearGradient>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid)" />
+                    
+                    <!-- Architecture Diagram -->
+                    <!-- Client Layer -->
+                    <g transform="translate(150, 150)" filter="url(#shadow)">
+                        <rect x="0" y="0" width="1000" height="400" rx="40" fill="white" opacity="0.2" />
+                        <text x="500" y="140" font-family="Arial" font-size="72" fill="white" text-anchor="middle">Client Layer</text>
+                        <!-- Client components with stacking effect -->
+                        <g transform="translate(100, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Client</text>
+                        </g>
+                        <g transform="translate(440, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Writer</text>
+                        </g>
+                        <g transform="translate(780, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Reader</text>
+                        </g>
+                    </g>
+                    
+                    <!-- Server Layer -->
+                    <g transform="translate(1300, 150)" filter="url(#shadow)">
+                        <rect x="0" y="0" width="1000" height="400" rx="40" fill="white" opacity="0.2" />
+                        <text x="500" y="140" font-family="Arial" font-size="72" fill="white" text-anchor="middle">Server Layer</text>
+                        <!-- Server components with stacking effect -->
+                        <g transform="translate(100, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Log Store</text>
+                        </g>
+                        <g transform="translate(440, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Processor</text>
+                        </g>
+                        <g transform="translate(780, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Manager</text>
+                        </g>
+                    </g>
+                    
+                    <!-- Storage Layer -->
+                    <g transform="translate(2450, 150)" filter="url(#shadow)">
+                        <rect x="0" y="0" width="1000" height="400" rx="40" fill="white" opacity="0.2" />
+                        <text x="500" y="140" font-family="Arial" font-size="72" fill="white" text-anchor="middle">Storage Layer</text>
+                        <!-- Storage components with stacking effect -->
+                        <g transform="translate(100, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Object</text>
+                        </g>
+                        <g transform="translate(440, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">File</text>
+                        </g>
+                        <g transform="translate(780, 240)">
+                            <rect x="0" y="0" width="280" height="100" rx="20" fill="white" opacity="0.3" />
+                            <text x="140" y="68" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Cache</text>
+                        </g>
+                    </g>
+                    
+                    <!-- Connection Lines with Arrows -->
+                    <path d="M 1150,350 L 1300,350" 
+                          stroke="url(#arrow-gradient)" 
+                          stroke-width="6" 
+                          marker-end="url(#arrow)" 
+                          stroke-linecap="round" />
+                    <path d="M 2300,350 L 2450,350" 
+                          stroke="url(#arrow-gradient)" 
+                          stroke-width="6" 
+                          marker-end="url(#arrow)" 
+                          stroke-linecap="round" />
+                    
+                    <!-- Log Flow Visualization with stacking effect -->
+                    <g transform="translate(150, 700)" filter="url(#shadow)">
+                        <rect x="0" y="0" width="3300" height="1000" rx="40" fill="white" opacity="0.1" />
+                        <text x="1650" y="160" font-family="Arial" font-size="80" fill="white" text-anchor="middle">Log Flow</text>
+                        
+                        <!-- Log Segments with stacking effect -->
+                        <g transform="translate(200, 280)">
+                            <rect x="0" y="0" width="800" height="200" rx="20" fill="white" opacity="0.2" />
+                            <text x="400" y="120" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Segment 1</text>
+                        </g>
+                        
+                        <g transform="translate(1200, 280)">
+                            <rect x="0" y="0" width="800" height="200" rx="20" fill="white" opacity="0.2" />
+                            <text x="400" y="120" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Segment 2</text>
+                        </g>
+                        
+                        <g transform="translate(2200, 280)">
+                            <rect x="0" y="0" width="800" height="200" rx="20" fill="white" opacity="0.2" />
+                            <text x="400" y="120" font-family="Arial" font-size="56" fill="white" text-anchor="middle">Segment 3</text>
+                        </g>
+                        
+                        <!-- Log Files with stacking effect -->
+                        <g transform="translate(280, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 1</text>
+                        </g>
+                        
+                        <g transform="translate(600, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 2</text>
+                        </g>
+                        
+                        <g transform="translate(1280, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 3</text>
+                        </g>
+                        
+                        <g transform="translate(1600, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 4</text>
+                        </g>
+                        
+                        <g transform="translate(2280, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 5</text>
+                        </g>
+                        
+                        <g transform="translate(2600, 560)">
+                            <rect x="0" y="0" width="280" height="140" rx="12" fill="white" opacity="0.3" />
+                            <text x="140" y="92" font-family="Arial" font-size="48" fill="white" text-anchor="middle">LogFile 6</text>
+                        </g>
+                        
+                        <!-- Fragments with stacking effect -->
+                        <g transform="translate(320, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(460, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(600, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(1320, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(1460, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(2320, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(2460, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                        
+                        <g transform="translate(2600, 760)">
+                            <rect x="0" y="0" width="100" height="80" rx="8" fill="white" opacity="0.4" />
+                        </g>
+                    </g>
+                    
+                    <!-- 3D Effect - Bottom Panels -->
+                    <g transform="translate(150, 1700)">
+                        <rect x="200" y="0" width="800" height="80" rx="0" fill="white" opacity="0.15" />
+                        <rect x="1200" y="0" width="800" height="80" rx="0" fill="white" opacity="0.15" />
+                        <rect x="2200" y="0" width="800" height="80" rx="0" fill="white" opacity="0.15" />
+                    </g>
+                </svg>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features">
+        <div class="container">
+            <div class="section-title">
+                <h2>Key Features</h2>
+                <p>Woodpecker provides a powerful solution for cloud-native logging with high performance and reliability</p>
+            </div>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-cloud"></i></div>
+                    <h3>Cloud-Native WAL</h3>
+                    <p>Uses cloud object storage as the durable storage layer, ensuring scalability and cost-effectiveness.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-bolt"></i></div>
+                    <h3>High-Throughput Writes</h3>
+                    <p>Optimized for cloud storage with specialized write strategies to maximize sequential write throughput.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-book-reader"></i></div>
+                    <h3>Efficient Log Reads</h3>
+                    <p>Utilizes memory management and prefetching strategies to optimize sequential log access.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-shield-alt"></i></div>
+                    <h3>Ordered Durability</h3>
+                    <p>Guarantees strict sequential ordering for log persistence.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-cubes"></i></div>
+                    <h3>Flexible Deployment</h3>
+                    <p>Can be deployed as a standalone service or integrated as an embedded library in your application.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fas fa-sync"></i></div>
+                    <h3>Resilient & Fault-Tolerant</h3>
+                    <p>Leverages cloud reliability features for strong durability guarantees.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture Section -->
+    <section class="architecture">
+        <div class="container">
+            <div class="architecture-content">
+                <div class="architecture-text">
+                    <h2>System Architecture</h2>
+                    <p>Woodpecker is designed with a modular architecture that separates concerns into distinct layers, enabling efficient data flow and management.</p>
+                    <p>The system consists of three main layers: Client Layer, Server Layer, and Storage Layer, each with specific responsibilities and components.</p>
+                </div>
+                <div class="architecture-image">
+                    <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#666666" stroke-width="0.5" opacity="0.3"/>
+                            </pattern>
+                            <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                                <feDropShadow dx="3" dy="3" stdDeviation="3" flood-opacity="0.3"/>
+                            </filter>
+                            <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5"
+                                markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                                <path d="M 0 0 L 10 5 L 0 10 L 2.5 5 z" fill="#666666"/>
+                            </marker>
+                            <linearGradient id="arrow-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#666666;stop-opacity:0.4" />
+                                <stop offset="100%" style="stop-color:#666666;stop-opacity:0.8" />
+                            </linearGradient>
+                            <linearGradient id="layer-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#4a6cf7;stop-opacity:0.1" />
+                                <stop offset="100%" style="stop-color:#6a11cb;stop-opacity:0.1" />
+                            </linearGradient>
+                            <linearGradient id="component-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#4a6cf7;stop-opacity:0.2" />
+                                <stop offset="100%" style="stop-color:#6a11cb;stop-opacity:0.2" />
+                            </linearGradient>
+                        </defs>
+                        <rect width="100%" height="100%" fill="url(#grid)" />
+                        
+                        <!-- Client Layer -->
+                        <g transform="translate(100, 50)" filter="url(#shadow)">
+                            <rect x="0" y="0" width="600" height="150" rx="30" fill="url(#layer-gradient)" />
+                            <text x="300" y="50" font-family="Arial" font-size="36" fill="#666666" text-anchor="middle">Client Layer</text>
+                            <g transform="translate(80, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Client</text>
+                            </g>
+                            <g transform="translate(240, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Writer</text>
+                            </g>
+                            <g transform="translate(400, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Reader</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Server Layer -->
+                        <g transform="translate(100, 225)" filter="url(#shadow)">
+                            <rect x="0" y="0" width="600" height="150" rx="30" fill="url(#layer-gradient)" />
+                            <text x="300" y="50" font-family="Arial" font-size="36" fill="#666666" text-anchor="middle">Server Layer</text>
+                            <g transform="translate(80, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Log Store</text>
+                            </g>
+                            <g transform="translate(240, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Processor</text>
+                            </g>
+                            <g transform="translate(400, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Manager</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Storage Layer -->
+                        <g transform="translate(100, 400)" filter="url(#shadow)">
+                            <rect x="0" y="0" width="600" height="150" rx="30" fill="url(#layer-gradient)" />
+                            <text x="300" y="50" font-family="Arial" font-size="36" fill="#666666" text-anchor="middle">Storage Layer</text>
+                            <g transform="translate(80, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Object</text>
+                            </g>
+                            <g transform="translate(240, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">File</text>
+                            </g>
+                            <g transform="translate(400, 80)">
+                                <rect x="0" y="0" width="140" height="50" rx="15" fill="url(#component-gradient)" />
+                                <text x="70" y="35" font-family="Arial" font-size="24" fill="#666666" text-anchor="middle">Cache</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Connection Lines with Arrows -->
+                        <path d="M 400,200 L 400,225" 
+                              stroke="url(#arrow-gradient)" 
+                              stroke-width="2" 
+                              marker-end="url(#arrow)" 
+                              stroke-linecap="round" />
+                        <path d="M 400,375 L 400,400" 
+                              stroke="url(#arrow-gradient)" 
+                              stroke-width="2" 
+                              marker-end="url(#arrow)" 
+                              stroke-linecap="round" />
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Components Section -->
+    <section class="components">
+        <div class="container">
+            <div class="section-title">
+                <h2>Core Components</h2>
+                <p>The building blocks of the Woodpecker system</p>
+            </div>
+            <table class="component-table">
+                <tr>
+                    <th>Client Layer</th>
+                    <th>Server Layer</th>
+                    <th>Storage Layer</th>
+                </tr>
+                <tr>
+                    <td>Client<br>Log Writer/Reader<br>Segment Handler</td>
+                    <td>Log Store<br>Segment Processor<br>LogFile Writer/Reader</td>
+                    <td>Object Storage<br>Local File System<br>Cache System</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- Concepts Section -->
+    <section class="concepts">
+        <div class="container">
+            <div class="section-title">
+                <h2>Core Concepts</h2>
+                <p>Understanding the fundamental data model of Woodpecker</p>
+            </div>
+            <ul class="concept-list">
+                <li><strong>Log</strong>: Represents a continuous data stream</li>
+                <li><strong>Segment</strong>: Logical partition of a log</li>
+                <li><strong>LogFile</strong>: Physical storage unit within a segment</li>
+                <li><strong>Fragment</strong>: Shard of a log file, the basic storage unit</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Workflow Section -->
+    <section class="workflow">
+        <div class="container">
+            <div class="section-title">
+                <h2>Key Workflows</h2>
+                <p>How data flows through the Woodpecker system</p>
+            </div>
+            <div class="workflow-steps">
+                <div class="workflow-step">
+                    <h3>Write Flow</h3>
+                    <ol>
+                        <li>Client calls AppendAsync to add data to the log</li>
+                        <li>Data is first written to memory buffer</li>
+                        <li>When specific conditions are met, Sync operation is triggered</li>
+                        <li>Sync persists data to storage system as log file fragments</li>
+                        <li>Client receives acknowledgment of successful write</li>
+                    </ol>
+                </div>
+                <div class="workflow-step">
+                    <h3>Read Flow</h3>
+                    <ol>
+                        <li>Client creates a Reader for a specific range</li>
+                        <li>Reader locates the appropriate segment through segment manager</li>
+                        <li>LogFile is retrieved from the segment, and data is read from fragments</li>
+                        <li>Data may be retrieved from cache or object storage</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Configuration Section -->
+    <section class="configuration">
+        <div class="container">
+            <div class="section-title">
+                <h2>Configuration & Tuning</h2>
+                <p>Key parameters for optimizing Woodpecker performance</p>
+            </div>
+            <ul class="config-list">
+                <li><strong>MaxEntries</strong>: Maximum number of entries in the buffer</li>
+                <li><strong>MaxBytes</strong>: Maximum buffer size in bytes</li>
+                <li><strong>MaxInterval</strong>: Maximum sync interval (milliseconds)</li>
+                <li><strong>MaxFlushThreads</strong>: Maximum number of flush threads</li>
+                <li><strong>MaxFlushSize</strong>: Maximum size of a single fragment</li>
+                <li><strong>MaxMemory</strong>: Maximum memory usage for cache</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Roadmap Section -->
+    <section class="roadmap">
+        <div class="container">
+            <div class="section-title">
+                <h2>Future Development</h2>
+                <p>Planned improvements and enhancements</p>
+            </div>
+            <div class="roadmap-grid">
+                <div class="roadmap-card">
+                    <h3>Short-term Goals</h3>
+                    <ul>
+                        <li>Improve test coverage and system stability</li>
+                        <li>Optimize memory usage and reduce resource consumption</li>
+                        <li>Enhance monitoring and diagnostic capabilities</li>
+                    </ul>
+                </div>
+                <div class="roadmap-card">
+                    <h3>Mid-term Goals</h3>
+                    <ul>
+                        <li>Support more storage backends (beyond MinIO)</li>
+                        <li>Implement more advanced caching strategies</li>
+                        <li>Provide richer client interfaces and tools</li>
+                    </ul>
+                </div>
+                <div class="roadmap-card">
+                    <h3>Long-term Vision</h3>
+                    <ul>
+                        <li>Distributed deployment support</li>
+                        <li>Advanced data analysis and query capabilities</li>
+                        <li>Integration with more ecosystems</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- References Section -->
+    <section class="references">
+        <div class="container">
+            <div class="section-title">
+                <h2>Reference Documentation</h2>
+                <p>Detailed technical documentation for developers</p>
+            </div>
+            <ul class="reference-links">
+                <li><a href="local_fs_storage.html">Local File System Storage Guide</a></li>
+                <li><a href="configuration.html">Configuration Guide</a></li>
+                <li><a href="object_storage.html">Object Storage Guide</a></li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>Woodpecker - High-Performance Distributed Log Storage System</p>
+            <p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+        </div>
+    </footer>
+</body>
+</html>

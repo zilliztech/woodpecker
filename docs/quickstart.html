@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick Start - Woodpecker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Afacad:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero-diagram {
+            width: 600px;
+            height: 100%;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .hero-diagram svg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.45);
+            width: 200%;
+            height: 200%;
+        }
+        
+        .hero h1 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+        
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+        }
+        
+        @media (max-width: 1080px) {
+            .hero-content {
+                width: 100%;
+                padding: 0 20px;
+            }
+            
+            .hero-diagram svg {
+                transform: translate(-50%, -50%) scale(0.35);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .hero {
+                height: auto;
+            }
+            
+            .hero-content {
+                flex-direction: column;
+                height: auto;
+                padding: 40px 20px;
+                align-items: center;
+            }
+            
+            .hero-text {
+                width: 100%;
+                height: auto;
+                align-items: center;
+                text-align: center;
+                padding: 0 0 30px 0;
+            }
+            
+            .hero p {
+                max-width: 100%;
+            }
+            
+            .hero-diagram {
+                width: 100%;
+                height: 300px;
+            }
+            
+            .hero-diagram svg {
+                transform: translate(-50%, -50%) scale(0.2);
+            }
+
+            .hero h1 {
+                font-size: 36px;
+                margin-bottom: 12px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+                margin-bottom: 20px;
+            }
+
+            .hero-buttons {
+                justify-content: center;
+            }
+        }
+        
+        .btn {
+            display: inline-block;
+            background-color: white;
+            color: var(--primary-color);
+            padding: 12px 30px;
+            border-radius: 30px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin-right: 15px;
+        }
+        
+        .btn-outline {
+            background-color: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn-outline:hover {
+            background-color: white;
+            color: var(--primary-color);
+        }
+        
+        /* Content Sections */
+        .section {
+            padding: 60px 0;
+        }
+        
+        .section:nth-child(even) {
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .section-title h2 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-block pre {
+            margin: 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .code-block code {
+            color: #24292e;
+        }
+        
+        /* Installation Steps */
+        .install-steps {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .install-step {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .install-step h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .install-step h3 i {
+            margin-right: 10px;
+            color: var(--primary-color);
+        }
+        
+        /* Usage Examples */
+        .example-card {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .example-card h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .example-card p {
+            margin-bottom: 15px;
+        }
+        
+        /* Configuration Table */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .config-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .config-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="logo-wrapper">
+                <a href="index.html" class="logo">Woodpecker<span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+            </div>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="quickstart.html">Quick Start</a></li>
+                <li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-text">
+                <h1>Quick Start</h1>
+                <p>Get started with Woodpecker in minutes</p>
+                <div class="hero-buttons">
+                    <a href="#installation" class="btn">Installation</a>
+                    <a href="#configuration" class="btn btn-outline">Configuration</a>
+                </div>
+            </div>
+            <div class="hero-diagram">
+                <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" stroke-width="0.5" opacity="0.3"/>
+                        </pattern>
+                        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="3" dy="3" stdDeviation="3" flood-opacity="0.3"/>
+                        </filter>
+                        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5"
+                            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                            <path d="M 0 0 L 10 5 L 0 10 L 2.5 5 z" fill="white"/>
+                        </marker>
+                        <linearGradient id="arrow-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" style="stop-color:white;stop-opacity:0.2" />
+                            <stop offset="100%" style="stop-color:white;stop-opacity:0.3" />
+                        </linearGradient>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid)" />
+                    
+                    <!-- Quick Start Flow -->
+                    <g transform="translate(100, 100)" filter="url(#shadow)">
+                        <rect x="0" y="0" width="600" height="400" rx="30" fill="white" opacity="0.1" />
+                        <text x="300" y="60" font-family="Arial" font-size="36" fill="white" text-anchor="middle">Quick Start Flow</text>
+                        
+                        <!-- Steps -->
+                        <g transform="translate(50, 120)">
+                            <rect x="0" y="0" width="500" height="60" rx="15" fill="white" opacity="0.2" />
+                            <text x="250" y="40" font-family="Arial" font-size="24" fill="white" text-anchor="middle">1. Installation</text>
+                        </g>
+                        
+                        <g transform="translate(50, 200)">
+                            <rect x="0" y="0" width="500" height="60" rx="15" fill="white" opacity="0.2" />
+                            <text x="250" y="40" font-family="Arial" font-size="24" fill="white" text-anchor="middle">2. Configuration</text>
+                        </g>
+                        
+                        <g transform="translate(50, 280)">
+                            <rect x="0" y="0" width="500" height="60" rx="15" fill="white" opacity="0.2" />
+                            <text x="250" y="40" font-family="Arial" font-size="24" fill="white" text-anchor="middle">3. Run & Test</text>
+                        </g>
+                        
+                        <!-- Arrows -->
+                        <path d="M 300,180 L 300,200" 
+                              stroke="url(#arrow-gradient)" 
+                              stroke-width="2" 
+                              marker-end="url(#arrow)" 
+                              stroke-linecap="round" />
+                        <path d="M 300,260 L 300,280" 
+                              stroke="url(#arrow-gradient)" 
+                              stroke-width="2" 
+                              marker-end="url(#arrow)" 
+                              stroke-linecap="round" />
+                    </g>
+                </svg>
+            </div>
+        </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Installation</h2>
+                <p>Choose the installation method that best suits your needs</p>
+            </div>
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3><i class="fas fa-download"></i> Using Go Install</h3>
+                    <div class="code-block">
+                        <pre><code>go install github.com/zilliztech/woodpecker/cmd/woodpecker@latest</code></pre>
+                    </div>
+                </div>
+                <div class="install-step">
+                    <h3><i class="fas fa-code-branch"></i> From Source</h3>
+                    <div class="code-block">
+                        <pre><code>git clone https://github.com/zilliztech/woodpecker.git
+cd woodpecker
+make build</code></pre>
+                    </div>
+                </div>
+                <div class="install-step">
+                    <h3><i class="fas fa-docker"></i> Using Docker</h3>
+                    <div class="code-block">
+                        <pre><code>docker pull zilliztech/woodpecker:latest
+docker run -d -p 8080:8080 zilliztech/woodpecker:latest</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Basic Usage Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Basic Usage</h2>
+                <p>Learn how to use Woodpecker in your application</p>
+            </div>
+            <div class="example-card">
+                <h3>Writing Logs</h3>
+                <p>Here's a simple example of writing logs to Woodpecker:</p>
+                <div class="code-block">
+                    <pre><code>package main
+
+import (
+    "context"
+    "github.com/zilliztech/woodpecker/client"
+)
+
+func main() {
+    // Create a new client
+    c, err := client.New("localhost:8080")
+    if err != nil {
+        panic(err)
+    }
+    defer c.Close()
+
+    // Create a new log
+    log, err := c.CreateLog(context.Background(), "my-log")
+    if err != nil {
+        panic(err)
+    }
+
+    // Write some data
+    data := []byte("Hello, Woodpecker!")
+    _, err = log.AppendAsync(context.Background(), data)
+    if err != nil {
+        panic(err)
+    }
+
+    // Sync to ensure data is persisted
+    err = log.Sync(context.Background())
+    if err != nil {
+        panic(err)
+    }
+}</code></pre>
+                </div>
+            </div>
+            <div class="example-card">
+                <h3>Reading Logs</h3>
+                <p>Here's how to read logs from Woodpecker:</p>
+                <div class="code-block">
+                    <pre><code>package main
+
+import (
+    "context"
+    "fmt"
+    "github.com/zilliztech/woodpecker/client"
+)
+
+func main() {
+    // Create a new client
+    c, err := client.New("localhost:8080")
+    if err != nil {
+        panic(err)
+    }
+    defer c.Close()
+
+    // Open an existing log
+    log, err := c.OpenLog(context.Background(), "my-log")
+    if err != nil {
+        panic(err)
+    }
+
+    // Create a reader
+    reader, err := log.NewReader(context.Background(), 0, -1)
+    if err != nil {
+        panic(err)
+    }
+    defer reader.Close()
+
+    // Read data
+    for {
+        data, err := reader.ReadNext(context.Background())
+        if err != nil {
+            if err == io.EOF {
+                break
+            }
+            panic(err)
+        }
+        fmt.Printf("Read: %s\n", string(data))
+    }
+}</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Configuration Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Configuration</h2>
+                <p>Configure Woodpecker to suit your needs</p>
+            </div>
+            <div class="example-card">
+                <h3>Basic Configuration</h3>
+                <p>Create a configuration file (e.g., `config.yaml`):</p>
+                <div class="code-block">
+                    <pre><code>server:
+  address: "0.0.0.0:8080"
+  max_connections: 1000
+
+storage:
+  type: "minio"
+  minio:
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "woodpecker"
+    use_ssl: false
+
+cache:
+  max_memory: "1GB"
+  max_entries: 10000
+  max_bytes: "100MB"
+  max_interval: 1000  # milliseconds</code></pre>
+                </div>
+            </div>
+            <div class="example-card">
+                <h3>Configuration Parameters</h3>
+                <table class="config-table">
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Description</th>
+                        <th>Default</th>
+                    </tr>
+                    <tr>
+                        <td>server.address</td>
+                        <td>Server listening address</td>
+                        <td>0.0.0.0:8080</td>
+                    </tr>
+                    <tr>
+                        <td>server.max_connections</td>
+                        <td>Maximum number of client connections</td>
+                        <td>1000</td>
+                    </tr>
+                    <tr>
+                        <td>storage.type</td>
+                        <td>Storage backend type (minio, local)</td>
+                        <td>minio</td>
+                    </tr>
+                    <tr>
+                        <td>cache.max_memory</td>
+                        <td>Maximum memory usage for cache</td>
+                        <td>1GB</td>
+                    </tr>
+                    <tr>
+                        <td>cache.max_entries</td>
+                        <td>Maximum number of cache entries</td>
+                        <td>10000</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Next Steps Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Next Steps</h2>
+                <p>Learn more about Woodpecker's advanced features</p>
+            </div>
+            <div class="example-card">
+                <h3>Advanced Topics</h3>
+                <ul style="list-style: none; padding-left: 0;">
+                    <li style="margin-bottom: 15px;">
+                        <i class="fas fa-book" style="color: var(--primary-color); margin-right: 10px;"></i>
+                        <a href="index.html#architecture">System Architecture</a> - Understand how Woodpecker works internally
+                    </li>
+                    <li style="margin-bottom: 15px;">
+                        <i class="fas fa-cogs" style="color: var(--primary-color); margin-right: 10px;"></i>
+                        <a href="index.html#configuration">Configuration Guide</a> - Fine-tune Woodpecker for your use case
+                    </li>
+                    <li style="margin-bottom: 15px;">
+                        <i class="fas fa-code" style="color: var(--primary-color); margin-right: 10px;"></i>
+                        <a href="https://github.com/zilliztech/woodpecker/tree/main/examples">Example Applications</a> - See more code examples
+                    </li>
+                    <li style="margin-bottom: 15px;">
+                        <i class="fas fa-chart-line" style="color: var(--primary-color); margin-right: 10px;"></i>
+                        <a href="index.html#benchmarks">Performance Benchmarks</a> - Learn about Woodpecker's performance characteristics
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>Woodpecker - High-Performance Distributed Log Storage System</p>
+            <p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+        </div>
+    </footer>
+</body>
+</html> 

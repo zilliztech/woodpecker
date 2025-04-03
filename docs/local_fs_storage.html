@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local File System Storage - Woodpecker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Afacad:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4a6cf7;
+            --secondary-color: #6c757d;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --border-color: #e1e4e8;
+            --success-color: #28a745;
+            --code-bg: #f6f8fa;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #fff;
+        }
+        
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Navigation */
+        .navbar {
+            background-color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 24px;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-dot {
+            margin: 0 4px;
+            font-size: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+        
+        .logo-beta {
+            font-size: 14px;
+            opacity: 0.6;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+        }
+        
+        .nav-links li {
+            margin-left: 30px;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--dark-color);
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+        
+        /* Content Sections */
+        .section {
+            padding: 60px 0;
+        }
+        
+        .section:nth-child(even) {
+            background-color: var(--light-color);
+        }
+        
+        .section-title {
+            margin-bottom: 40px;
+        }
+        
+        .section-title h2 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 36px;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+            letter-spacing: -0.02em;
+        }
+        
+        .section-title p {
+            color: var(--secondary-color);
+            max-width: 700px;
+        }
+        
+        /* Code Blocks */
+        .code-block {
+            background-color: var(--code-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-block pre {
+            margin: 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .code-block code {
+            color: #24292e;
+        }
+        
+        /* Lists */
+        .feature-list {
+            list-style: none;
+            margin: 20px 0;
+        }
+        
+        .feature-list li {
+            margin-bottom: 15px;
+            padding-left: 30px;
+            position: relative;
+        }
+        
+        .feature-list li:before {
+            content: "•";
+            color: var(--primary-color);
+            font-size: 20px;
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        
+        /* Tables */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        .config-table th {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 15px;
+            text-align: left;
+        }
+        
+        .config-table td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .config-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 40px 0;
+            text-align: center;
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+            }
+            
+            .nav-links {
+                margin-top: 20px;
+            }
+            
+            .nav-links li {
+                margin: 0 15px;
+            }
+            
+            .section-title h2 {
+                font-size: 30px;
+            }
+        }
+
+        h1, h2, h3 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, rgba(74, 108, 247, 0.9) 0%, rgba(106, 17, 203, 0.9) 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            height: 420px;
+            width: 100%;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            width: 1080px;
+            height: 418px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .hero-text {
+            width: 400px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px 0;
+        }
+        
+        .hero h1 {
+            font-family: 'Afacad', sans-serif;
+            font-weight: 400;
+            font-size: 48px;
+            margin-bottom: 16px;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            margin-bottom: 24px;
+            opacity: 0.9;
+            line-height: 1.4;
+            max-width: 440px;
+        }
+        
+        @media (max-width: 1080px) {
+            .hero-content {
+                width: 100%;
+                padding: 0 20px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .hero {
+                height: auto;
+            }
+            
+            .hero-content {
+                flex-direction: column;
+                height: auto;
+                padding: 40px 20px;
+                align-items: center;
+            }
+            
+            .hero-text {
+                width: 100%;
+                height: auto;
+                align-items: center;
+                text-align: center;
+                padding: 0 0 30px 0;
+            }
+            
+            .hero p {
+                max-width: 100%;
+            }
+            
+            .hero h1 {
+                font-size: 36px;
+                margin-bottom: 12px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+                margin-bottom: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="logo-wrapper">
+                <a href="index.html" class="logo">Woodpecker<span class="logo-dot">·</span><span class="logo-beta">beta</span></a>
+            </div>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="quickstart.html">Quick Start</a></li>
+                <li><a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-text">
+                    <h1>Local File System Storage</h1>
+                    <p>High-performance disk-based log storage implementation using memory mapping</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Overview Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Overview</h2>
+                <p>The local file system storage implements a disk-based log storage system using memory mapping (mmap) to provide efficient read and write performance. Although the local file system supports append operations, we maintain the Fragment concept to ensure consistency with the object storage implementation.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Core Components Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Core Components</h2>
+            </div>
+            
+            <div class="section-title">
+                <h3>FragmentFile</h3>
+                <p>FragmentFile is the basic storage unit responsible for read and write operations of individual log fragment files.</p>
+            </div>
+            
+            <div class="code-block">
+                <pre><code>File Layout:
+[Header (4K)] + [Data Area (grows forward)] + [...Free Space...] + [Index Area (grows backward)] + [Footer (fixed size)]
+
+- Header (4K): Stores magic string and version information
+- Data Area: Stores actual log entries, growing forward from 4K position
+- Free Space: Unused space between data area and index area
+- Index Area: Stores offset of each entry, growing backward from file end
+- Footer: Stores metadata information
+
+Data Entry Format:
+[Payload Size (4 bytes)] + [CRC (4 bytes)] + [Actual Data (variable length)]</code></pre>
+            </div>
+
+            <div class="section-title">
+                <h3>DiskLogFile</h3>
+                <p>DiskLogFile manages multiple Fragment files, providing a unified read/write interface.</p>
+            </div>
+            
+            <div class="code-block">
+                <pre><code>Directory Structure:
+/basePath/
+  └── log_[logID]/
+      ├── fragment_[startOffset1]
+      ├── fragment_[startOffset2]
+      └── ...</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Key Design Decisions Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Key Design Decisions</h2>
+            </div>
+
+            <div class="section-title">
+                <h3>Use of mmap</h3>
+                <ul class="feature-list">
+                    <li>Provides zero-copy read/write operations</li>
+                    <li>Supports random access</li>
+                    <li>OS automatically handles page caching</li>
+                    <li>Delivers memory-level read/write performance</li>
+                </ul>
+            </div>
+
+            <div class="section-title">
+                <h3>Fragment Necessity</h3>
+                <p>Although local file system supports append, maintaining the Fragment concept provides several benefits:</p>
+                <ul class="feature-list">
+                    <li>Maintains same architecture as object storage implementation</li>
+                    <li>Facilitates file size limitations</li>
+                    <li>Supports segmented management and cleanup</li>
+                    <li>Simplifies concurrency control</li>
+                    <li>Improves system recovery capability</li>
+                </ul>
+            </div>
+
+            <div class="section-title">
+                <h3>Space Management</h3>
+                <ul class="feature-list">
+                    <li>Pre-allocates fixed-size file space</li>
+                    <li>Data area and index area grow from opposite ends</li>
+                    <li>Creates new Fragment when areas meet</li>
+                    <li>Avoids overflow through precise space calculation</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance Considerations Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Performance Considerations</h2>
+            </div>
+
+            <div class="section-title">
+                <h3>Write Performance Optimization</h3>
+                <ul class="feature-list">
+                    <li>Zero-copy writes using mmap</li>
+                    <li>Batch writes to reduce system calls</li>
+                    <li>Asynchronous write support</li>
+                    <li>Pre-allocated space reduces expansion overhead</li>
+                </ul>
+            </div>
+
+            <div class="section-title">
+                <h3>Read Performance Optimization</h3>
+                <ul class="feature-list">
+                    <li>Quick positioning through index</li>
+                    <li>Supports random reads</li>
+                    <li>Utilizes OS page cache</li>
+                    <li>Supports range reads</li>
+                </ul>
+            </div>
+
+            <div class="section-title">
+                <h3>Memory Usage</h3>
+                <ul class="feature-list">
+                    <li>On-demand loading through mmap</li>
+                    <li>Controls individual Fragment size</li>
+                    <li>Implements memory usage limits</li>
+                    <li>Supports memory mapping release</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Reliability Guarantees Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Reliability Guarantees</h2>
+            </div>
+
+            <div class="section-title">
+                <h3>Data Integrity</h3>
+                <ul class="feature-list">
+                    <li>CRC32 checksum for data validation</li>
+                    <li>Magic string verification in file header</li>
+                    <li>Separate index and data areas</li>
+                    <li>Data recovery support</li>
+                </ul>
+            </div>
+
+            <div class="section-title">
+                <h3>Concurrency Control</h3>
+                <ul class="feature-list">
+                    <li>Read-write locks for shared resource protection</li>
+                    <li>Supports multiple-reader single-writer mode</li>
+                    <li>Atomic operations for counter guarantees</li>
+                    <li>File locks prevent concurrent writes</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Configuration Parameters Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Configuration Parameters</h2>
+            </div>
+
+            <div class="section-title">
+                <h3>Fragment Configuration</h3>
+                <table class="config-table">
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>File Size Limit</td>
+                        <td>Maximum size of a fragment file</td>
+                    </tr>
+                    <tr>
+                        <td>Maximum Entries</td>
+                        <td>Maximum number of entries per fragment</td>
+                    </tr>
+                    <tr>
+                        <td>Pre-allocated Space</td>
+                        <td>Amount of space to pre-allocate</td>
+                    </tr>
+                    <tr>
+                        <td>Memory Mapping Options</td>
+                        <td>Configuration for memory mapping behavior</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="section-title">
+                <h3>LogFile Configuration</h3>
+                <table class="config-table">
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>Base Path</td>
+                        <td>Root directory for log files</td>
+                    </tr>
+                    <tr>
+                        <td>Fragment Size</td>
+                        <td>Size of individual fragments</td>
+                    </tr>
+                    <tr>
+                        <td>Async Write Buffer Size</td>
+                        <td>Size of asynchronous write buffer</td>
+                    </tr>
+                    <tr>
+                        <td>Cleanup Policy</td>
+                        <td>Strategy for cleaning up old fragments</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Usage Examples Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Usage Examples</h2>
+            </div>
+            
+            <div class="code-block">
+                <pre><code>// Create LogFile
+logFile, err := NewDiskLogFile(1, "/path/to/logs", WithFragmentSize(4*1024*1024))
+
+// Write data
+err = logFile.Append(ctx, []byte("log entry"))
+
+// Async write
+entryID, resultCh, err := logFile.AppendAsync(ctx, 0, []byte("async log entry"))
+
+// Read data
+reader, err := logFile.NewReader(ctx, storage.ReaderOpt{
+    StartSequenceNum: 0,
+    EndSequenceNum:   100,
+})</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Important Notes Section -->
+    <section class="section">
+        <div class="container">
+            <div class="section-title">
+                <h2>Important Notes</h2>
+                <ul class="feature-list">
+                    <li>Ensure sufficient disk space</li>
+                    <li>Regularly clean up old Fragment files</li>
+                    <li>Monitor memory usage</li>
+                    <li>Handle file system errors</li>
+                    <li>Implement graceful shutdown</li>
+                    <li>Consider system crash recovery</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>Woodpecker - High-Performance Distributed Log Storage System</p>
+            <p>Licensed under the <a href="https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt">Server Side Public License (SSPL) v1</a></p>
+        </div>
+    </footer>
+</body>
+</html> 

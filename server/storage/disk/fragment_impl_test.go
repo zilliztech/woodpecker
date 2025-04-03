@@ -5,73 +5,86 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-
-	"github.com/zilliztech/woodpecker/common/werr"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-func TestNewFragmentFile(t *testing.T) {
-	// 创建临时目录
+func TestNewFragmentFileWriter(t *testing.T) {
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, 100) // 1MB文件，fragmentId=1, firstEntryID=100
+	// Create new FragmentFile
+	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
-	assert.NotNil(t, ff)
-	assert.Equal(t, int64(1), ff.GetFragmentId())
+	assert.NotNil(t, fw)
+	assert.Equal(t, int64(1), fw.GetFragmentId())
 
-	// 验证文件是否存在
+	// Verify file exists
 	_, err = os.Stat(filePath)
 	assert.NoError(t, err)
 
-	// 验证文件大小
+	// Verify file size
 	info, err := os.Stat(filePath)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1024*1024), info.Size())
+
+	// Cannot create a writer for an existing fragmentFile
+	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
+	assert.Error(t, err)
+	assert.Nil(t, fw2)
 }
 
 func TestFragmentFile_WriteAndRead(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 读取数据
+	// Read data
 	data, err := ff.GetEntry(startEntryID)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, data)
 }
 
 func TestFragmentFile_MultipleEntries(t *testing.T) {
-	// 创建临时目录
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入多个测试数据
+	// Write multiple test data
 	testData1 := []byte("test data 1")
 	testData2 := []byte("test data 2")
 	testData3 := []byte("test data 3")
 
-	// 写入数据
+	// Write data
 	err = ff.Write(context.Background(), testData1, startEntryID)
 	assert.NoError(t, err)
 	err = ff.Write(context.Background(), testData2, startEntryID+1)
@@ -79,11 +92,11 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	err = ff.Write(context.Background(), testData3, startEntryID+2)
 	assert.NoError(t, err)
 
-	// 刷新数据
+	// Flush data
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 检查条目ID范围
+	// Check entry ID range
 	firstID, err := ff.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -92,118 +105,120 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID+2, lastID)
 
-	t.Logf("条目ID范围: %d 到 %d", firstID, lastID)
+	t.Logf("Entry ID range: %d to %d", firstID, lastID)
 
-	// 获取并输出实际存储顺序 (调试信息)
+	// Get and output actual storage order (debug info)
 	for i := firstID; i <= lastID; i++ {
 		data, err := ff.GetEntry(i)
 		if err != nil {
-			t.Logf("读取条目 %d 失败: %v", i, err)
+			t.Logf("Failed to read entry %d: %v", i, err)
 		} else {
-			t.Logf("条目 %d: %s", i, string(data))
+			t.Logf("Entry %d: %s", i, string(data))
 		}
+		assert.NoError(t, err)
 	}
 
-	// 根据实际存储顺序验证数据
+	// Verify data based on actual storage order
 	data1, err := ff.GetEntry(startEntryID)
 	assert.NoError(t, err)
-	assert.Equal(t, testData1, data1, "第一个条目应该是testData1")
+	assert.Equal(t, testData1, data1, "First entry should be testData1")
 
 	data2, err := ff.GetEntry(startEntryID + 1)
 	assert.NoError(t, err)
-	assert.Equal(t, testData2, data2, "第二个条目应该是testData2")
+	assert.Equal(t, testData2, data2, "Second entry should be testData2")
 
 	data3, err := ff.GetEntry(startEntryID + 2)
 	assert.NoError(t, err)
-	assert.Equal(t, testData3, data3, "第三个条目应该是testData3")
+	assert.Equal(t, testData3, data3, "Third entry should be testData3")
 }
 
 func TestFragmentFile_LoadAndReload(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 刷新数据到磁盘（这一步很重要）
+	// Flush data to disk (this step is important)
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 关闭文件
+	// Close file
 	err = ff.Release()
 	assert.NoError(t, err)
+	ff.Close()
 
-	// 重新打开文件
-	ff2, err := NewROFragmentFile(filePath, 1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	// Reopen file
+	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
-	assert.NotNil(t, ff2)
+	assert.NotNil(t, fr)
 
-	// 加载数据
-	err = ff2.Load(context.Background())
+	// Load data
+	err = fr.Load(context.Background())
 	assert.NoError(t, err)
 
-	// 检查加载的 firstEntryID
-	firstID, err := ff2.GetFirstEntryId()
+	// Check loaded firstEntryID
+	firstID, err := fr.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
 
-	lastID, err := ff2.GetLastEntryId()
+	lastID, err := fr.GetLastEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, lastID)
 
-	// 读取数据
-	data, err := ff2.GetEntry(startEntryID)
+	// Read data
+	data, err := fr.GetEntry(startEntryID)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, data)
 }
 
 func TestFragmentFileLargeWriteAndRead(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 128*1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, startEntryID) // 128MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	baseData := make([]byte, 1*1024*1024)
 	for i := 0; i < 120; i++ {
 		testData := []byte(fmt.Sprintf("test data_%d", i))
 		testData = append(testData, baseData...)
-		err = ff.Write(context.Background(), testData, startEntryID)
+		err = ff.Write(context.Background(), testData, startEntryID+int64(i))
 		assert.NoError(t, err)
 	}
 
-	// 刷新数据到磁盘（这一步很重要）
+	// Flush data to disk (this step is important)
 	err = ff.Flush(context.Background())
 	assert.NoError(t, err)
 
-	// 关闭文件
+	// Close file
 	err = ff.Release()
 	assert.NoError(t, err)
 
-	// 重新打开文件
-	ff2, err := NewROFragmentFile(filePath, 128*1024*1024, 1) // firstEntryID会被忽略，从文件加载
+	// Reopen file
+	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
-	// 加载数据
+	// Load data
 	err = ff2.Load(context.Background())
 	assert.NoError(t, err)
 
-	// 检查加载的 firstEntryID
+	// Check loaded firstEntryID
 	firstID, err := ff2.GetFirstEntryId()
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID, firstID)
@@ -212,7 +227,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, startEntryID+119, lastID)
 
-	// 读取数据
+	// Read data
 	for i := 0; i < 120; i++ {
 		data, err := ff2.GetEntry(startEntryID + int64(i))
 		assert.NoError(t, err)
@@ -222,55 +237,55 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 }
 
 func TestFragmentFile_CRCValidation(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, startEntryID)
 	assert.NoError(t, err)
 
-	// 修改文件中的数据（破坏CRC）
-	ff.mappedFile[ff.dataOffset-2] = 'X' // 修改数据的一部分
+	// Modify data in file (corrupt CRC)
+	ff.mappedFile[ff.dataOffset-2] = 'X' // Modify part of the data
 
-	// 尝试读取数据
+	// Try to read data
 	_, err = ff.GetEntry(startEntryID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "CRC mismatch")
 }
 
 func TestFragmentFile_OutOfSpace(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建一个小文件，使得写入大数据时空间不足
-	// 文件结构:
-	// - headerSize(4KB): 文件头
-	// - dataArea: 实际数据存储区域
-	// - indexArea: 索引区域，每个条目占4字节(indexItemSize)
-	// - footerSize(4KB): 文件尾部
+	// Create a small file to cause out of space when writing large data
+	// File structure:
+	// - headerSize(4KB): File header
+	// - dataArea: Actual data storage area
+	// - indexArea: Index area, each entry takes 4 bytes(indexItemSize)
+	// - footerSize(4KB): File footer
 	fileSize := int64(12*1024 + 1024) // 13KB
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入一些小数据，确保能够成功
+	// Write small data to ensure success
 	smallData := []byte("small test data")
 	err = ff.Write(context.Background(), smallData, int64(startEntryID))
 	assert.NoError(t, err)
 
-	// 尝试写入大数据，应该导致空间不足错误
+	// Try to write large data, should cause out of space error
 	largeData := make([]byte, 5*1024) // 5KB
 	err = ff.Write(context.Background(), largeData, int64(startEntryID+1))
 	assert.Error(t, err)
@@ -278,47 +293,517 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 }
 
 func TestFragmentFile_InvalidEntryId(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 尝试读取不存在的条目
-	_, err = ff.GetEntry(startEntryID - 1) // 小于起始ID
+	// Try to read non-existent entries
+	_, err = ff.GetEntry(startEntryID - 1) // Less than start ID
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "out of range")
+	assert.True(t, werr.ErrInvalidEntryId.Is(err))
+	assert.Contains(t, err.Error(), "not in the range ")
 
-	_, err = ff.GetEntry(startEntryID + 1) // 大于已有条目ID
+	_, err = ff.GetEntry(startEntryID + 1) // Greater than existing entry ID
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "out of range")
+	assert.True(t, werr.ErrInvalidEntryId.Is(err))
+	assert.Contains(t, err.Error(), "not in the range ")
 }
 
 func TestFragmentFile_Release(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "test.frag")
 
-	// 创建新的FragmentFile
+	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFile(filePath, 1024*1024, 1, startEntryID) // 1MB文件，fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
-	// 写入测试数据
+	// Write test data
 	testData := []byte("test data")
 	err = ff.Write(context.Background(), testData, int64(0))
 	assert.NoError(t, err)
 
-	// 释放资源
+	// Release resources
 	ff.Close()
 
-	// 尝试在释放后写入数据
+	// Try to write data after release
 	err = ff.Write(context.Background(), testData, int64(1))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "fragment file is closed")
+}
+
+func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "concurrent_test.frag")
+
+	// Create new FragmentFile
+	startEntryID := int64(100)
+	fileSize := int64(10 * 1024 * 1024) // 10MB
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	assert.NoError(t, err)
+	assert.NotNil(t, ff)
+
+	// Number of entries to write
+	entryCount := 100
+	// Synchronization channels for coordinating read/write operations
+	entryWritten := make(chan int64, entryCount)
+	done := make(chan struct{})
+	ctx := context.Background()
+
+	// Start write goroutine
+	go func() {
+		defer close(entryWritten)
+
+		for i := 0; i < entryCount; i++ {
+			entryID := startEntryID + int64(i)
+			testData := []byte(fmt.Sprintf("concurrent test data %d", i))
+
+			// Write data
+			err := ff.Write(ctx, testData, entryID)
+			if err != nil {
+				t.Logf("Failed to write entry %d: %v", entryID, err)
+				return
+			}
+
+			// Flush data to disk every 10 entries
+			if i > 0 && i%10 == 0 {
+				err = ff.Flush(ctx)
+				if err != nil {
+					t.Logf("Failed to flush data: %v", err)
+					return
+				}
+				t.Logf("Data flushed up to entry %d", entryID)
+			}
+
+			// Notify read goroutine of new entry
+			entryWritten <- entryID
+			// Brief sleep to allow read goroutine to read
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		// Final flush to ensure all data is written to disk
+		err = ff.Flush(ctx)
+		if err != nil {
+			t.Logf("Final flush failed: %v", err)
+		}
+
+		t.Logf("Write completed, total entries written: %d", entryCount)
+	}()
+
+	// Start read goroutine
+	go func() {
+		defer close(done)
+
+		readCount := 0
+		lastReadID := startEntryID - 1
+
+		for entryID := range entryWritten {
+			// Try to read newly written entries and any previously unread entries
+			for readID := lastReadID + 1; readID <= entryID; readID++ {
+				expectedData := []byte(fmt.Sprintf("concurrent test data %d", int(readID-startEntryID)))
+
+				// Retry reading a few times as writes may take time to be visible
+				var readData []byte
+				var readErr error
+				success := false
+
+				for attempt := 0; attempt < 5; attempt++ {
+					readData, readErr = ff.GetEntry(readID)
+					if readErr == nil {
+						// Verify read data is correct
+						if !assert.Equal(t, expectedData, readData, "Data mismatch for entry %d", readID) {
+							t.Logf("Entry %d read successful but data mismatch: expected=%s, actual=%s",
+								readID, string(expectedData), string(readData))
+						} else {
+							t.Logf("Entry %d read successful: %s", readID, string(readData))
+							readCount++
+							success = true
+						}
+						break
+					}
+
+					if strings.Contains(readErr.Error(), "out of range") {
+						// Entry may not be visible for reading yet, wait and retry
+						time.Sleep(20 * time.Millisecond)
+						continue
+					} else {
+						// Other errors, report directly
+						t.Logf("Failed to read entry %d: %v", readID, readErr)
+						break
+					}
+				}
+
+				if !success {
+					t.Logf("Failed to read entry %d after 5 attempts: %v", readID, readErr)
+				}
+
+				lastReadID = readID
+			}
+		}
+
+		t.Logf("Read completed, successfully read %d entries", readCount)
+		// Verify final read count matches expected
+		assert.Equal(t, entryCount, readCount, "Number of entries read does not match number written")
+	}()
+
+	// Wait for read completion
+	<-done
+
+	// Release resources
+	err = ff.Release()
+	assert.NoError(t, err)
+
+	// Verify final written data
+	firstID, err := ff.GetFirstEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID, firstID)
+
+	lastID, err := ff.GetLastEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID+int64(entryCount-1), lastID)
+}
+
+func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "concurrent_diff_inst.frag")
+
+	// Create FragmentFile for writing
+	startEntryID := int64(100)
+	fileSize := int64(10 * 1024 * 1024) // 10MB
+	writerFF, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	assert.NoError(t, err)
+	assert.NotNil(t, writerFF)
+
+	// Create FragmentFile for reading (different instance of the same file)
+	readerFF, err := NewFragmentFileReader(filePath, fileSize, 1)
+	assert.NoError(t, err)
+	assert.NotNil(t, readerFF)
+
+	// Load the reader instance first
+	err = readerFF.Load(context.Background()) // TODO test another case: assert load error the first time, because invalid header
+	assert.NoError(t, err)
+
+	// Number of entries to write
+	entryCount := 100
+	// Synchronization channels for coordinating read/write operations
+	entryWritten := make(chan int64, entryCount)
+	done := make(chan struct{})
+	ctx := context.Background()
+
+	// Start write goroutine
+	go func() {
+		defer close(entryWritten)
+
+		for i := 0; i < entryCount; i++ {
+			entryID := startEntryID + int64(i)
+			testData := []byte(fmt.Sprintf("concurrent different instances test data %d", i))
+
+			// Write data
+			err := writerFF.Write(ctx, testData, entryID)
+			if err != nil {
+				t.Logf("Failed to write entry %d: %v", entryID, err)
+				return
+			}
+
+			// Flush data to disk every 5 entries
+			if i > 0 && i%5 == 0 {
+				err = writerFF.Flush(ctx)
+				if err != nil {
+					t.Logf("Failed to flush data: %v", err)
+					return
+				}
+				t.Logf("Data flushed up to entry %d", entryID)
+			}
+
+			// Notify read goroutine of new entry
+			entryWritten <- entryID
+			// Brief sleep to allow read goroutine to read
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		// Final flush to ensure all data is written to disk
+		err = writerFF.Flush(ctx)
+		if err != nil {
+			t.Logf("Final flush failed: %v", err)
+		}
+
+		t.Logf("Write completed, total entries written: %d", entryCount)
+	}()
+
+	// Start read goroutine
+	go func() {
+		defer close(done)
+
+		readCount := 0
+		lastReadID := startEntryID - 1
+
+		for entryID := range entryWritten {
+			// Try to read newly written entries
+			for readID := lastReadID + 1; readID <= entryID; readID++ {
+				expectedData := []byte(fmt.Sprintf("concurrent different instances test data %d", int(readID-startEntryID)))
+
+				// Retry reading a few times as writes may take time to be visible to another mmap instance
+				var readData []byte
+				var readErr error
+				success := false
+
+				for attempt := 0; attempt < 10; attempt++ {
+					readData, readErr = readerFF.GetEntry(readID)
+					if readErr == nil {
+						// Verify read data is correct
+						if !assert.Equal(t, expectedData, readData, "Data mismatch for entry %d", readID) {
+							t.Logf("Entry %d read successful but data mismatch: expected=%s, actual=%s",
+								readID, string(expectedData), string(readData))
+						} else {
+							t.Logf("Entry %d read successful: %s", readID, string(readData))
+							readCount++
+							success = true
+						}
+						break
+					}
+					// Error handling and retry logic
+					t.Logf("Attempt %d: Failed to read entry %d: %v", attempt+1, readID, readErr)
+					time.Sleep(50 * time.Millisecond)
+				}
+
+				if !success {
+					t.Logf("Failed to read entry %d after 10 attempts", readID)
+				}
+
+				lastReadID = readID
+			}
+		}
+
+		t.Logf("Read completed, successfully read %d entries", readCount)
+		// Verify final read count matches expected
+		assert.Equal(t, entryCount, readCount, "Number of entries read does not match number written")
+	}()
+
+	// Wait for read completion
+	<-done
+
+	// Release resources
+	err = writerFF.Release()
+	assert.NoError(t, err)
+
+	err = readerFF.Release()
+	assert.NoError(t, err)
+}
+
+func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test_multiple.frag")
+
+	// Create new FragmentFile
+	startEntryID := int64(1000)
+	fileSize := int64(1 * 1024 * 1024) // 1MB
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	assert.NoError(t, err)
+	assert.NotNil(t, ff)
+
+	// Write 10 entries
+	entryCount := 10
+	writtenData := make([][]byte, entryCount)
+	ctx := context.Background()
+
+	t.Log("Writing 10 entries...")
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+		// Each entry has different content and size
+		data := []byte(fmt.Sprintf("Test data #%d - Random content: %d", i, time.Now().UnixNano()))
+		writtenData[i] = data
+
+		err := ff.Write(ctx, data, entryID)
+		assert.NoError(t, err, "Failed to write entry %d", entryID)
+		t.Logf("Wrote entry %d: %s", entryID, string(data))
+	}
+
+	// Flush data to disk
+	err = ff.Flush(ctx)
+	assert.NoError(t, err, "Failed to flush data")
+	t.Log("Data flushed to disk")
+
+	// Verify first and last entry IDs
+	firstID, err := ff.GetFirstEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID, firstID, "First entry ID mismatch")
+
+	lastID, err := ff.GetLastEntryId()
+	assert.NoError(t, err)
+	assert.Equal(t, startEntryID+int64(entryCount-1), lastID, "Last entry ID mismatch")
+
+	// Read and verify each entry
+	t.Log("Reading and verifying 10 entries...")
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+		data, err := ff.GetEntry(entryID)
+		assert.NoError(t, err, "Failed to read entry %d", entryID)
+
+		// Verify data content matches
+		assert.Equal(t, writtenData[i], data, "Data mismatch for entry %d", entryID)
+		t.Logf("Read entry %d: %s", entryID, string(data))
+	}
+	t.Log("All entries verified")
+
+	// Try to read non-existent entries
+	_, err = ff.GetEntry(startEntryID - 1)
+	assert.Error(t, err, "Should not be able to read entry outside range")
+
+	_, err = ff.GetEntry(startEntryID + int64(entryCount))
+	assert.Error(t, err, "Should not be able to read entry outside range")
+
+	// Release and reload test
+	t.Log("Releasing and reloading file...")
+	err = ff.Release()
+	assert.NoError(t, err, "Failed to release resources")
+
+	// Reopen file
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
+	assert.NoError(t, err)
+	assert.NotNil(t, ff2)
+
+	// Load data
+	err = ff2.Load(ctx)
+	assert.NoError(t, err, "Failed to load data")
+
+	// Verify data again
+	t.Log("Verifying data after reload...")
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+		data, err := ff2.GetEntry(entryID)
+		assert.NoError(t, err, "Failed to read entry %d after reload", entryID)
+
+		// Verify data content matches
+		assert.Equal(t, writtenData[i], data, "Data mismatch for entry %d after reload", entryID)
+	}
+	t.Log("All entries verified after reload")
+
+	// Final cleanup
+	err = ff2.Release()
+	assert.NoError(t, err, "Failed to release resources")
+}
+
+func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "alternating_test.frag")
+
+	// Create new FragmentFile
+	startEntryID := int64(500)
+	fileSize := int64(1 * 1024 * 1024) // 1MB
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	assert.NoError(t, err)
+	assert.NotNil(t, ff)
+
+	// Open read file
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
+	assert.NoError(t, err)
+	assert.NotNil(t, ff2)
+
+	// Number of test entries
+	entryCount := 15
+	ctx := context.Background()
+
+	t.Log("Starting alternating write/read test...")
+
+	// Store all written data for final verification
+	allWrittenData := make([][]byte, entryCount)
+
+	// Alternating write and read
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+
+		// 1. Write a piece of data
+		testData := []byte(fmt.Sprintf("data#%d", entryID))
+		allWrittenData[i] = testData
+
+		t.Logf("Step %d.1: Writing entry %d", i+1, entryID)
+		err = ff.Write(ctx, testData, entryID)
+		assert.NoError(t, err, "Failed to write entry %d", entryID)
+
+		// 2. Flush data immediately
+		t.Logf("Step %d.2: Flushing entry %d", i+1, entryID)
+		err = ff.Flush(ctx)
+		assert.NoError(t, err, "Failed to flush entry %d", entryID)
+
+		// 3. Read and verify the data just written
+		t.Logf("Step %d.3: Reading entry %d", i+1, entryID)
+		readData, err := ff2.GetEntry(entryID)
+		assert.NoError(t, err, "Failed to read entry %d", entryID)
+		assert.Equal(t, testData, readData, "Data mismatch for entry %d", entryID)
+		t.Logf("Entry %d verified successfully: %s", entryID, string(readData))
+
+		// 4. Ensure lastEntryID is updated correctly
+		t.Logf("Step %d.4: Ensure lastEntryID is updated correctly", i+1)
+		lastID, err := ff2.GetLastEntryId()
+		assert.NoError(t, err, "Failed to get last entry ID")
+		assert.Equal(t, entryID, lastID, "Last entry ID mismatch")
+
+		// Add a small delay for test clarity
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Log("Alternating write/read test completed")
+
+	// Final verification of all entries
+	t.Log("Performing final verification of all entries...")
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+		data, err := ff2.GetEntry(entryID)
+		assert.NoError(t, err, "Final verification: Failed to read entry %d", entryID)
+		assert.Equal(t, allWrittenData[i], data, "Final verification: Data mismatch for entry %d", entryID)
+	}
+
+	// Reload test
+	t.Log("Releasing and reloading file for verification...")
+	err = ff2.Release()
+	assert.NoError(t, err, "Failed to release resources")
+
+	// Open file in read-only mode
+	roFF, err := NewFragmentFileReader(filePath, fileSize, 1)
+	assert.NoError(t, err, "Failed to create read-only file")
+	assert.NotNil(t, roFF)
+
+	// Load data
+	err = roFF.Load(ctx)
+	assert.NoError(t, err, "Failed to load data")
+
+	// Verify first and last IDs
+	firstID, err := roFF.GetFirstEntryId()
+	assert.NoError(t, err, "Failed to get first entry ID")
+	assert.Equal(t, startEntryID, firstID, "First entry ID mismatch")
+
+	lastID, err := roFF.GetLastEntryId()
+	assert.NoError(t, err, "Failed to get last entry ID")
+	assert.Equal(t, startEntryID+int64(entryCount-1), lastID, "Last entry ID mismatch")
+
+	// Re-verify all entries
+	t.Log("Verifying all entries after reload...")
+	for i := 0; i < entryCount; i++ {
+		entryID := startEntryID + int64(i)
+		data, err := roFF.GetEntry(entryID)
+		assert.NoError(t, err, "After reload: Failed to read entry %d", entryID)
+		assert.Equal(t, allWrittenData[i], data, "After reload: Data mismatch for entry %d", entryID)
+		t.Logf("After reload: Entry %d verified successfully", entryID)
+	}
+
+	// Clean up resources
+	err = roFF.Release()
+	assert.NoError(t, err, "Failed to release read-only file resources")
+	t.Log("All alternating write/flush/read tests passed!")
 }

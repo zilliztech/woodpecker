@@ -11,7 +11,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-// TestNewLogger 测试 NewLogger 函数
+// TestNewLogger tests the NewLogger function
 func TestNewLogger(t *testing.T) {
 	tests := []struct {
 		level    string
@@ -21,7 +21,7 @@ func TestNewLogger(t *testing.T) {
 		{"info", zap.NewAtomicLevelAt(zap.InfoLevel)},
 		{"warn", zap.NewAtomicLevelAt(zap.WarnLevel)},
 		{"error", zap.NewAtomicLevelAt(zap.ErrorLevel)},
-		{"invalid", zap.NewAtomicLevelAt(zap.WarnLevel)}, // 默认情况下，NewLogger 返回 InfoLevel
+		{"invalid", zap.NewAtomicLevelAt(zap.WarnLevel)}, // By default, NewLogger returns WarnLevel
 	}
 
 	for _, test := range tests {
@@ -30,11 +30,11 @@ func TestNewLogger(t *testing.T) {
 	}
 }
 
-// TestLoggerMethods 测试 Logger 的方法
+// TestLoggerMethods tests the Logger methods
 func TestLoggerMethods(t *testing.T) {
 	logger := Ctx(context.WithValue(context.Background(), "__LogLevel__", "debug"))
 
-	// 使用 testify 的 assert 来验证日志记录
+	// Verify log recording using testify's assert
 	assert.NotPanics(t, func() {
 		logger.Debug("debug message", zap.String("key", "value"))
 		logger.Info("info message", zap.String("key", "value"))

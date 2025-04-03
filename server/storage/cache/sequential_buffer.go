@@ -121,7 +121,7 @@ func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([][]byte, error
 	return b.ReadEntriesRange(fromEntryId, b.FirstEntryId+b.MaxSize)
 }
 
-// ReadBytesFromSeqRange reads bytes from the buffer starting from the startEntryId to the endEntryId (Exclusive).
+// ReadEntriesRange reads bytes from the buffer starting from the startEntryId to the endEntryId (Exclusive).
 func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64) ([][]byte, error) {
 	b.Mu.Lock()
 	defer b.Mu.Unlock()

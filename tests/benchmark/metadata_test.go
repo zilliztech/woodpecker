@@ -17,7 +17,7 @@ import (
 // TestShowEtcd Test only for debug etcd
 func TestShowEtcd(t *testing.T) {
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
+		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -29,7 +29,7 @@ func TestShowEtcd(t *testing.T) {
 	defer cancel()
 
 	// 1. show simple dirs
-	directoryPrefix := "woodpecker" // 要打印的目录前缀
+	directoryPrefix := "woodpecker" // Directory prefix to print
 	printDirContents(ctx, cli, directoryPrefix, "")
 
 	// 2. show meta detail
@@ -39,7 +39,7 @@ func TestShowEtcd(t *testing.T) {
 func TestCheckLogExists(t *testing.T) {
 	logName := "by-dev-rootcoord-dml_1"
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
+		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -62,7 +62,7 @@ func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, 
 	for _, kv := range resp.Kvs {
 		fmt.Printf("%s%s: %s\n", indent, string(kv.Key), string(kv.Value))
 
-		// 递归地打印子目录的内容
+		// Recursively print contents of subdirectories
 		if strings.HasSuffix(string(kv.Key), "/") {
 			newPrefix := string(kv.Key)
 			printDirContents(ctx, cli, newPrefix, indent+"  ")
@@ -86,7 +86,7 @@ func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) 
 		if err != nil {
 			t.Error(err)
 		}
-		// 对 segs 的 key 进行排序
+		// Sort the keys in segs
 		var keys []int64
 		for k := range segs {
 			keys = append(keys, k)
@@ -94,7 +94,7 @@ func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) 
 		sort.Slice(keys, func(i, j int) bool {
 			return keys[i] < keys[j]
 		})
-		// 按照排序后的 key 顺序打印 segMeta
+		// Print segMeta in sorted key order
 		for _, key := range keys {
 			t.Logf("segMeta: %v", segs[key])
 		}
@@ -104,7 +104,7 @@ func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) 
 // Test only
 func TestClear(t *testing.T) {
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{"localhost:2379"}, // etcd 服务器的地址
+		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {

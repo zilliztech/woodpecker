@@ -10,53 +10,53 @@ import (
 	"time"
 )
 
-// TestFileAppendPerformance 测试标准文件追加写入性能
-// 关注点：追加数据块大小、flush频率、预分配大小对性能的影响
+// TestFileAppendPerformance tests standard file append write performance
+// Focus: impact of append block size, flush frequency, and preallocation size on performance
 func TestFileAppendPerformance(t *testing.T) {
-	// 测试参数
+	// Test parameters
 	testCases := []struct {
 		name           string
-		preallocSize   int64  // 预分配文件大小，0表示不预分配
-		totalWriteSize int64  // 总计写入数据大小
-		blockSize      int    // 每次写入的数据块大小
-		flushInterval  int    // 每写入多少次执行一次flush
+		preallocSize   int64  // Preallocation size, 0 means no preallocation
+		totalWriteSize int64  // Total data size to write
+		blockSize      int    // Size of each data block to write
+		flushInterval  int    // How many writes before executing a flush
 		syncMode       string // none, flush, sync, datasync
 	}{
-		// 小数据块测试
-		{"小块_不预分配_不flush", 0, 50 * 1024 * 1024, 4 * 1024, 0, "none"},
-		{"小块_不预分配_少量flush", 0, 50 * 1024 * 1024, 4 * 1024, 100, "flush"},
-		{"小块_不预分配_频繁flush", 0, 50 * 1024 * 1024, 4 * 1024, 10, "flush"},
-		{"小块_预分配_不flush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 0, "none"},
-		{"小块_预分配_少量flush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 100, "flush"},
-		{"小块_预分配_频繁flush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 10, "flush"},
+		// Small block tests
+		{"SmallBlock_NoPrealloc_NoFlush", 0, 50 * 1024 * 1024, 4 * 1024, 0, "none"},
+		{"SmallBlock_NoPrealloc_FewFlush", 0, 50 * 1024 * 1024, 4 * 1024, 100, "flush"},
+		{"SmallBlock_NoPrealloc_FrequentFlush", 0, 50 * 1024 * 1024, 4 * 1024, 10, "flush"},
+		{"SmallBlock_Prealloc_NoFlush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 0, "none"},
+		{"SmallBlock_Prealloc_FewFlush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 100, "flush"},
+		{"SmallBlock_Prealloc_FrequentFlush", 100 * 1024 * 1024, 50 * 1024 * 1024, 4 * 1024, 10, "flush"},
 
-		// 中等数据块测试
-		{"中块_不预分配_不flush", 0, 100 * 1024 * 1024, 32 * 1024, 0, "none"},
-		{"中块_不预分配_少量flush", 0, 100 * 1024 * 1024, 32 * 1024, 50, "flush"},
-		{"中块_不预分配_频繁flush", 0, 100 * 1024 * 1024, 32 * 1024, 10, "flush"},
-		{"中块_预分配_不flush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 0, "none"},
-		{"中块_预分配_少量flush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 50, "flush"},
-		{"中块_预分配_频繁flush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 10, "flush"},
+		// Medium block tests
+		{"MediumBlock_NoPrealloc_NoFlush", 0, 100 * 1024 * 1024, 32 * 1024, 0, "none"},
+		{"MediumBlock_NoPrealloc_FewFlush", 0, 100 * 1024 * 1024, 32 * 1024, 50, "flush"},
+		{"MediumBlock_NoPrealloc_FrequentFlush", 0, 100 * 1024 * 1024, 32 * 1024, 10, "flush"},
+		{"MediumBlock_Prealloc_NoFlush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 0, "none"},
+		{"MediumBlock_Prealloc_FewFlush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 50, "flush"},
+		{"MediumBlock_Prealloc_FrequentFlush", 200 * 1024 * 1024, 100 * 1024 * 1024, 32 * 1024, 10, "flush"},
 
-		// 大数据块测试
-		{"大块_不预分配_不flush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 0, "none"},
-		{"大块_不预分配_少量flush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 20, "flush"},
-		{"大块_不预分配_频繁flush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 5, "flush"},
-		{"大块_预分配_不flush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 0, "none"},
-		{"大块_预分配_少量flush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 20, "flush"},
-		{"大块_预分配_频繁flush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 5, "flush"},
+		// Large block tests
+		{"LargeBlock_NoPrealloc_NoFlush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 0, "none"},
+		{"LargeBlock_NoPrealloc_FewFlush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 20, "flush"},
+		{"LargeBlock_NoPrealloc_FrequentFlush", 0, 200 * 1024 * 1024, 1 * 1024 * 1024, 5, "flush"},
+		{"LargeBlock_Prealloc_NoFlush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 0, "none"},
+		{"LargeBlock_Prealloc_FewFlush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 20, "flush"},
+		{"LargeBlock_Prealloc_FrequentFlush", 500 * 1024 * 1024, 200 * 1024 * 1024, 1 * 1024 * 1024, 5, "flush"},
 
-		// Sync测试（保证数据持久化）
-		{"小块_Sync", 0, 10 * 1024 * 1024, 4 * 1024, 50, "sync"},
-		{"中块_Sync", 0, 20 * 1024 * 1024, 32 * 1024, 10, "sync"},
-		{"大块_Sync", 0, 50 * 1024 * 1024, 1 * 1024 * 1024, 5, "sync"},
+		// Sync tests (ensure data persistence)
+		{"SmallBlock_Sync", 0, 10 * 1024 * 1024, 4 * 1024, 50, "sync"},
+		{"MediumBlock_Sync", 0, 20 * 1024 * 1024, 32 * 1024, 10, "sync"},
+		{"LargeBlock_Sync", 0, 50 * 1024 * 1024, 1 * 1024 * 1024, 5, "sync"},
 	}
 
-	// 创建临时目录
+	// Create temporary directory
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("file_append_test_%d", time.Now().UnixNano()))
 	err := os.MkdirAll(tempDir, 0755)
 	if err != nil {
-		t.Fatalf("创建临时目录失败: %v", err)
+		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -64,76 +64,76 @@ func TestFileAppendPerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			filePath := filepath.Join(tempDir, fmt.Sprintf("append_%s.data", tc.name))
 
-			// 创建文件
+			// Create file
 			var file *os.File
 			var err error
 
 			flags := os.O_CREATE | os.O_WRONLY
 			if tc.preallocSize > 0 {
-				// 如果需要预分配空间，先创建文件并设置大小
+				// If preallocation is needed, create the file and set its size first
 				file, err = os.OpenFile(filePath, flags, 0644)
 				if err != nil {
-					t.Fatalf("无法创建文件: %v", err)
+					t.Fatalf("Cannot create file: %v", err)
 				}
 
-				// 使用truncate预分配空间
+				// Use truncate to preallocate space
 				if err := file.Truncate(tc.preallocSize); err != nil {
 					file.Close()
-					t.Fatalf("无法预分配文件空间: %v", err)
+					t.Fatalf("Cannot preallocate file space: %v", err)
 				}
 
-				// 关闭文件后以追加方式重新打开
+				// Close file and reopen in append mode
 				file.Close()
 				flags |= os.O_APPEND
 				file, err = os.OpenFile(filePath, flags, 0644)
 			} else {
-				// 不预分配，直接以追加模式打开
+				// No preallocation, open directly in append mode
 				flags |= os.O_APPEND
 				file, err = os.OpenFile(filePath, flags, 0644)
 			}
 
 			if err != nil {
-				t.Fatalf("无法打开文件: %v", err)
+				t.Fatalf("Cannot open file: %v", err)
 			}
 
 			defer func() {
-				// 清理资源
+				// Clean up resources
 				if err := file.Close(); err != nil {
-					t.Errorf("无法关闭文件: %v", err)
+					t.Errorf("Cannot close file: %v", err)
 				}
 			}()
 
-			// 准备测试参数
+			// Prepare test parameters
 			writeCount := int(tc.totalWriteSize) / tc.blockSize
 			flushCount := 0
 			totalBytesWritten := 0
 			bytesSinceLastFlush := 0
-			flushSizes := make([]int, 0) // 记录每次flush的数据量
+			flushSizes := make([]int, 0) // Record data amount for each flush
 
-			// 生成随机测试数据
+			// Generate random test data
 			randomData := make([]byte, tc.blockSize)
 			rand.Read(randomData)
 
-			// 记录写入和刷新时间
+			// Record write and flush times
 			writeTime := time.Duration(0)
 			flushTime := time.Duration(0)
 
 			start := time.Now()
 
 			for i := 0; i < writeCount; i++ {
-				// 写入数据
+				// Write data
 				writeStart := time.Now()
 				n, err := file.Write(randomData)
 				writeTime += time.Since(writeStart)
 
 				if err != nil {
-					t.Fatalf("写入失败: %v", err)
+					t.Fatalf("Write failed: %v", err)
 				}
 
 				totalBytesWritten += n
 				bytesSinceLastFlush += n
 
-				// 根据刷新策略执行刷新
+				// Execute flush according to flush strategy
 				shouldFlush := tc.flushInterval > 0 && (i+1)%tc.flushInterval == 0
 
 				if shouldFlush {
@@ -141,33 +141,33 @@ func TestFileAppendPerformance(t *testing.T) {
 
 					switch tc.syncMode {
 					case "flush":
-						// 仅刷新文件缓冲区
+						// Only flush file buffer
 						err = file.Sync()
 					case "sync":
-						// 完全同步到磁盘，包括元数据
+						// Complete sync to disk, including metadata
 						err = file.Sync()
 					case "datasync":
-						// 仅同步数据到磁盘，不包括元数据
-						// 在Linux下可以使用系统调用fdatasync，这里简化为Sync
+						// Only sync data to disk, not including metadata
+						// On Linux, fdatasync system call could be used, simplified to Sync here
 						err = file.Sync()
 					}
 
 					if err != nil {
-						t.Fatalf("刷新文件失败: %v", err)
+						t.Fatalf("Failed to flush file: %v", err)
 					}
 
 					flushTime += time.Since(flushStart)
-					flushSizes = append(flushSizes, bytesSinceLastFlush) // 记录本次flush的数据量
+					flushSizes = append(flushSizes, bytesSinceLastFlush) // Record amount of data for this flush
 					flushCount++
 					bytesSinceLastFlush = 0
 				}
 			}
 
-			// 最后一次flush确保所有数据写入磁盘
+			// Final flush to ensure all data is written to disk
 			if tc.syncMode != "none" && bytesSinceLastFlush > 0 {
 				flushStart := time.Now()
 				if err := file.Sync(); err != nil {
-					t.Fatalf("最后刷新文件失败: %v", err)
+					t.Fatalf("Final file flush failed: %v", err)
 				}
 				flushTime += time.Since(flushStart)
 				flushSizes = append(flushSizes, bytesSinceLastFlush)
@@ -176,7 +176,7 @@ func TestFileAppendPerformance(t *testing.T) {
 
 			duration := time.Since(start)
 
-			// 统计flush数据量
+			// Statistics for flush data amounts
 			var minFlushSize, maxFlushSize int
 			totalFlushSize := 0
 			if len(flushSizes) > 0 {
@@ -197,73 +197,73 @@ func TestFileAppendPerformance(t *testing.T) {
 				avgFlushSize = totalFlushSize / flushCount
 			}
 
-			// 计算性能指标
+			// Calculate performance metrics
 			throughput := float64(totalBytesWritten) / (1024 * 1024) / duration.Seconds()
 			opsPerSecond := float64(writeCount) / duration.Seconds()
-			writeAvgTime := writeTime.Seconds() * 1000 / float64(writeCount) // 毫秒
+			writeAvgTime := writeTime.Seconds() * 1000 / float64(writeCount) // milliseconds
 			flushAvgTime := 0.0
 			if flushCount > 0 {
-				flushAvgTime = flushTime.Seconds() * 1000 / float64(flushCount) // 毫秒
+				flushAvgTime = flushTime.Seconds() * 1000 / float64(flushCount) // milliseconds
 			}
 
-			// 输出结果
-			t.Logf("标准文件追加测试结果 - %s:", tc.name)
-			t.Logf("  预分配大小: %d MB", tc.preallocSize/(1024*1024))
-			t.Logf("  总写入数据: %.2f MB", float64(totalBytesWritten)/(1024*1024))
-			t.Logf("  写入次数: %d", writeCount)
-			t.Logf("  数据块大小: %d KB", tc.blockSize/1024)
-			t.Logf("  刷新模式: %s", tc.syncMode)
-			t.Logf("  刷新次数: %d", flushCount)
-			t.Logf("  刷新间隔: 每%d次写入", tc.flushInterval)
+			// Output results
+			t.Logf("Standard File Append Test Results - %s:", tc.name)
+			t.Logf("  Preallocation size: %d MB", tc.preallocSize/(1024*1024))
+			t.Logf("  Total data written: %.2f MB", float64(totalBytesWritten)/(1024*1024))
+			t.Logf("  Write count: %d", writeCount)
+			t.Logf("  Data block size: %d KB", tc.blockSize/1024)
+			t.Logf("  Flush mode: %s", tc.syncMode)
+			t.Logf("  Flush count: %d", flushCount)
+			t.Logf("  Flush interval: every %d writes", tc.flushInterval)
 			if flushCount > 0 {
-				t.Logf("  平均每次刷新数据量: %.2f KB", float64(avgFlushSize)/1024)
-				t.Logf("  最小刷新数据量: %.2f KB", float64(minFlushSize)/1024)
-				t.Logf("  最大刷新数据量: %.2f KB", float64(maxFlushSize)/1024)
+				t.Logf("  Average data per flush: %.2f KB", float64(avgFlushSize)/1024)
+				t.Logf("  Minimum flush data: %.2f KB", float64(minFlushSize)/1024)
+				t.Logf("  Maximum flush data: %.2f KB", float64(maxFlushSize)/1024)
 			}
-			t.Logf("  总耗时: %v", duration)
-			t.Logf("  写入总耗时: %v (%.1f%%)", writeTime, float64(writeTime)/float64(duration)*100)
+			t.Logf("  Total duration: %v", duration)
+			t.Logf("  Total write time: %v (%.1f%%)", writeTime, float64(writeTime)/float64(duration)*100)
 			if flushCount > 0 {
-				t.Logf("  刷新总耗时: %v (%.1f%%)", flushTime, float64(flushTime)/float64(duration)*100)
+				t.Logf("  Total flush time: %v (%.1f%%)", flushTime, float64(flushTime)/float64(duration)*100)
 			}
-			t.Logf("  吞吐量: %.2f MB/s", throughput)
-			t.Logf("  操作速率: %.2f ops/s", opsPerSecond)
-			t.Logf("  单次写入平均耗时: %.3f ms", writeAvgTime)
+			t.Logf("  Throughput: %.2f MB/s", throughput)
+			t.Logf("  Operations rate: %.2f ops/s", opsPerSecond)
+			t.Logf("  Average write time: %.3f ms", writeAvgTime)
 			if flushCount > 0 {
-				t.Logf("  单次刷新平均耗时: %.3f ms", flushAvgTime)
+				t.Logf("  Average flush time: %.3f ms", flushAvgTime)
 			}
 
-			// 获取最终文件大小
+			// Get final file size
 			fileInfo, err := os.Stat(filePath)
 			if err == nil {
-				t.Logf("  最终文件大小: %.2f MB", float64(fileInfo.Size())/(1024*1024))
+				t.Logf("  Final file size: %.2f MB", float64(fileInfo.Size())/(1024*1024))
 			}
 		})
 	}
 }
 
-// TestFileReadPerformance 测试标准文件顺序读取性能
-// 关注点：读取块大小、文件大小对读取性能的影响
+// TestFileReadPerformance tests standard file sequential read performance
+// Focus: impact of read block size and file size on read performance
 func TestFileReadPerformance(t *testing.T) {
-	// 测试参数
+	// Test parameters
 	testCases := []struct {
 		name          string
-		fileSize      int64 // 用于测试的文件大小
-		readBlockSize int   // 每次读取的数据块大小
+		fileSize      int64 // File size for testing
+		readBlockSize int   // Size of each data block to read
 	}{
-		{"小文件_小块读取", 10 * 1024 * 1024, 4 * 1024},
-		{"小文件_大块读取", 10 * 1024 * 1024, 64 * 1024},
-		{"中文件_小块读取", 50 * 1024 * 1024, 4 * 1024},
-		{"中文件_大块读取", 50 * 1024 * 1024, 64 * 1024},
-		{"大文件_小块读取", 200 * 1024 * 1024, 4 * 1024},
-		{"大文件_中块读取", 200 * 1024 * 1024, 64 * 1024},
-		{"大文件_大块读取", 200 * 1024 * 1024, 1 * 1024 * 1024},
+		{"SmallFile_SmallBlockRead", 10 * 1024 * 1024, 4 * 1024},
+		{"SmallFile_LargeBlockRead", 10 * 1024 * 1024, 64 * 1024},
+		{"MediumFile_SmallBlockRead", 50 * 1024 * 1024, 4 * 1024},
+		{"MediumFile_LargeBlockRead", 50 * 1024 * 1024, 64 * 1024},
+		{"LargeFile_SmallBlockRead", 200 * 1024 * 1024, 4 * 1024},
+		{"LargeFile_MediumBlockRead", 200 * 1024 * 1024, 64 * 1024},
+		{"LargeFile_LargeBlockRead", 200 * 1024 * 1024, 1 * 1024 * 1024},
 	}
 
-	// 创建临时目录
+	// Create temporary directory
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("file_read_test_%d", time.Now().UnixNano()))
 	err := os.MkdirAll(tempDir, 0755)
 	if err != nil {
-		t.Fatalf("创建临时目录失败: %v", err)
+		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -271,25 +271,25 @@ func TestFileReadPerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			filePath := filepath.Join(tempDir, fmt.Sprintf("read_%s.data", tc.name))
 
-			// 先创建并填充测试文件
-			t.Logf("准备测试文件，大小: %d MB...", tc.fileSize/(1024*1024))
+			// First create and fill the test file
+			t.Logf("Preparing test file, size: %d MB...", tc.fileSize/(1024*1024))
 
-			// 创建文件并预分配空间
+			// Create file and preallocate space
 			file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
-				t.Fatalf("无法创建文件: %v", err)
+				t.Fatalf("Cannot create file: %v", err)
 			}
 
-			// 使用truncate预分配空间
+			// Use truncate to preallocate space
 			if err := file.Truncate(tc.fileSize); err != nil {
 				file.Close()
-				t.Fatalf("无法预分配文件空间: %v", err)
+				t.Fatalf("Cannot preallocate file space: %v", err)
 			}
 
-			// 生成随机数据并填充文件
-			writeBlockSize := 1 * 1024 * 1024 // 使用1MB块来快速填充文件
+			// Generate random data and fill the file
+			writeBlockSize := 1 * 1024 * 1024 // Use 1MB blocks to quickly fill the file
 			writeBuffer := make([]byte, writeBlockSize)
-			rand.Read(writeBuffer) // 生成随机内容
+			rand.Read(writeBuffer) // Generate random content
 
 			bytesWritten := int64(0)
 			for bytesWritten < tc.fileSize {
@@ -301,7 +301,7 @@ func TestFileReadPerformance(t *testing.T) {
 				n, err := file.Write(writeBuffer[:writeSize])
 				if err != nil {
 					file.Close()
-					t.Fatalf("写入文件失败: %v", err)
+					t.Fatalf("Failed to write to file: %v", err)
 				}
 
 				bytesWritten += int64(n)
@@ -309,10 +309,10 @@ func TestFileReadPerformance(t *testing.T) {
 
 			file.Close()
 
-			// 开始读取测试
+			// Start read test
 			readFile, err := os.Open(filePath)
 			if err != nil {
-				t.Fatalf("无法打开文件进行读取: %v", err)
+				t.Fatalf("Cannot open file for reading: %v", err)
 			}
 
 			defer readFile.Close()
@@ -323,14 +323,14 @@ func TestFileReadPerformance(t *testing.T) {
 
 			start := time.Now()
 
-			// 顺序读取整个文件
+			// Sequential read of the entire file
 			for {
 				n, err := readFile.Read(readBuffer)
 				if err != nil {
 					if err == io.EOF {
 						break
 					}
-					t.Fatalf("读取文件失败: %v", err)
+					t.Fatalf("Failed to read file: %v", err)
 				}
 
 				totalBytesRead += n
@@ -339,22 +339,22 @@ func TestFileReadPerformance(t *testing.T) {
 
 			duration := time.Since(start)
 
-			// 计算性能指标
+			// Calculate performance metrics
 			throughput := float64(totalBytesRead) / (1024 * 1024) / duration.Seconds()
 			opsPerSecond := float64(readCount) / duration.Seconds()
 			avgReadSize := float64(totalBytesRead) / float64(readCount) / 1024 // KB
 
-			// 输出结果
-			t.Logf("标准文件读取测试结果 - %s:", tc.name)
-			t.Logf("  文件大小: %.2f MB", float64(tc.fileSize)/(1024*1024))
-			t.Logf("  总读取数据: %.2f MB", float64(totalBytesRead)/(1024*1024))
-			t.Logf("  读取次数: %d", readCount)
-			t.Logf("  读取块大小: %d KB", tc.readBlockSize/1024)
-			t.Logf("  平均实际读取: %.2f KB/次", avgReadSize)
-			t.Logf("  总耗时: %v", duration)
-			t.Logf("  吞吐量: %.2f MB/s", throughput)
-			t.Logf("  操作速率: %.2f ops/s", opsPerSecond)
-			t.Logf("  单次读取平均耗时: %.3f µs", duration.Seconds()*1000000/float64(readCount))
+			// Output results
+			t.Logf("Standard File Read Test Results - %s:", tc.name)
+			t.Logf("  File size: %.2f MB", float64(tc.fileSize)/(1024*1024))
+			t.Logf("  Total data read: %.2f MB", float64(totalBytesRead)/(1024*1024))
+			t.Logf("  Read count: %d", readCount)
+			t.Logf("  Read block size: %d KB", tc.readBlockSize/1024)
+			t.Logf("  Average actual read: %.2f KB/op", avgReadSize)
+			t.Logf("  Total duration: %v", duration)
+			t.Logf("  Throughput: %.2f MB/s", throughput)
+			t.Logf("  Operations rate: %.2f ops/s", opsPerSecond)
+			t.Logf("  Average read time: %.3f µs", duration.Seconds()*1000000/float64(readCount))
 		})
 	}
 }

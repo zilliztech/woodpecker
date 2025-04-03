@@ -28,8 +28,8 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
 		},
 	}
 
@@ -200,8 +200,8 @@ func TestReadWriteLoop(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
 		},
 	}
 
@@ -335,8 +335,8 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 		},
 		{
 			name:        "ObjectStorage",
-			storageType: "", // 使用默认存储类型 minio-compatible
-			rootPath:    "", // 使用默认存储无需指定路径
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
 		},
 	}
 
@@ -458,4 +458,240 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 	closeErr := logWriter.Close(context.Background())
 	assert.NoError(t, closeErr)
 	return successIds
+}
+
+func TestTailReadBlockingBehavior(t *testing.T) {
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// CreateLog if not exists
+			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open the log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// First open a reader starting from the "latest" position
+			latest := log.LatestLogMessageID()
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			assert.NoError(t, err)
+
+			totalMessages := 20
+			readMessages := make([]*log.LogMessage, 0, totalMessages)
+			readCh := make(chan *log.LogMessage, totalMessages)
+			readErrorCh := make(chan error, 1)
+			readCompleteCh := make(chan struct{})
+
+			// Start a goroutine to continuously read messages
+			go func() {
+				for {
+					msg, err := logReader.ReadNext(context.Background())
+					if err != nil {
+						readErrorCh <- err
+						return
+					}
+
+					readCh <- msg
+					readMessages = append(readMessages, msg)
+					fmt.Printf("Read message seg:%d entry:%d payload:%v props:%v\n", msg.Id.SegmentId, msg.Id.EntryId, msg.Payload, msg.Properties)
+
+					// If we've read enough messages, signal completion
+					if len(readMessages) == totalMessages {
+						close(readCompleteCh)
+						break
+					}
+				}
+			}()
+
+			// Now open a writer and write messages at intervals
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			// Write messages in batches with delays
+			writeMessages := make([]*log.LogMessageId, 0, totalMessages)
+			batchSize := 5
+			numBatches := totalMessages / batchSize
+
+			for batch := 0; batch < numBatches; batch++ {
+				// Write a batch of messages
+				for i := 0; i < batchSize; i++ {
+					idx := batch*batchSize + i
+					result := logWriter.Write(context.Background(), &log.WriterMessage{
+						Payload: []byte(fmt.Sprintf("message %d", idx)),
+						Properties: map[string]string{
+							"k1": fmt.Sprintf("%d", batch),
+							"k2": fmt.Sprintf("%d", i),
+						},
+					})
+
+					assert.NoError(t, result.Err)
+					writeMessages = append(writeMessages, result.LogMessageId)
+					fmt.Printf("Written message %d: %v\n", idx, result.LogMessageId)
+				}
+
+				// Sleep between batches to simulate time-delayed writes
+				time.Sleep(1 * time.Second)
+			}
+
+			// Wait for all reads to complete
+			select {
+			case <-readCompleteCh:
+				fmt.Println("All messages read successfully")
+			case err := <-readErrorCh:
+				t.Fatalf("Error reading messages: %v", err)
+			case <-time.After(20 * time.Second):
+				t.Fatalf("Timeout waiting for messages to be read")
+			}
+
+			// Verify that the timeout goroutine completes, confirming blocking behavior
+			more := false
+			go func() {
+				m, e := logReader.ReadNext(context.Background())
+				t.Logf("Reader did not exhibit expected blocking behavior, but got m: %v e:%v", m, e)
+				more = true
+			}()
+			time.Sleep(3 * time.Second)
+			assert.False(t, more, "Reader did not exhibit expected blocking behavior")
+
+			// Verify the messages we read match what we wrote
+			assert.Equal(t, totalMessages, len(readMessages))
+			for i, msg := range readMessages {
+				assert.Equal(t, writeMessages[i].SegmentId, msg.Id.SegmentId)
+				assert.Equal(t, writeMessages[i].EntryId, msg.Id.EntryId)
+				assert.Equal(t, fmt.Sprintf("message %d", i), string(msg.Payload))
+			}
+
+			// Clean up
+			err = logReader.Close(context.Background())
+			assert.NoError(t, err)
+
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+
+			fmt.Println("Test completed successfully")
+		})
+	}
+}
+
+func TestTailReadBlockingAfterWriting(t *testing.T) {
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// CreateLog if not exists
+			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open the log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			totalMessages := 20
+			// Now open a writer and write messages at intervals
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			// Write messages in batches with delays
+			writeMessages := make([]*log.LogMessageId, 0, totalMessages)
+			batchSize := 5
+			numBatches := totalMessages / batchSize
+			for batch := 0; batch < numBatches; batch++ {
+				// Write a batch of messages
+				for i := 0; i < batchSize; i++ {
+					idx := batch*batchSize + i
+					result := logWriter.Write(context.Background(), &log.WriterMessage{
+						Payload: []byte(fmt.Sprintf("message %d", idx)),
+						Properties: map[string]string{
+							"k1": fmt.Sprintf("%d", batch),
+							"k2": fmt.Sprintf("%d", i),
+						},
+					})
+
+					assert.NoError(t, result.Err)
+					writeMessages = append(writeMessages, result.LogMessageId)
+					fmt.Printf("Written message %d: %v\n", idx, result.LogMessageId)
+				}
+			}
+
+			// Verify that tail read timeout
+			latest := log.LatestLogMessageID()
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			assert.NoError(t, err)
+			more := false
+			go func() {
+				m, e := logReader.ReadNext(context.Background())
+				t.Logf("Reader did not exhibit expected blocking behavior, but got m: %v e:%v", m, e)
+				more = true
+			}()
+			time.Sleep(3 * time.Second)
+			assert.False(t, more, "Reader did not exhibit expected blocking behavior")
+
+			// Clean up
+			err = logReader.Close(context.Background())
+			assert.NoError(t, err)
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+			fmt.Println("Test completed successfully")
+		})
+	}
 }

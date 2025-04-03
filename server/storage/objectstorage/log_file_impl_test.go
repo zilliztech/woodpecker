@@ -1067,43 +1067,43 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 }
 
 func TestFindFragment(t *testing.T) {
-	// 创建模拟的Fragment对象列表
+	// Create mock Fragment object list
 	mockFragments := []*FragmentObject{
 		{fragmentId: 1, firstEntryId: 0, lastEntryId: 99, infoFetched: true},    // [0,99]
 		{fragmentId: 2, firstEntryId: 100, lastEntryId: 199, infoFetched: true}, // [100,199]
 		{fragmentId: 3, firstEntryId: 200, lastEntryId: 299, infoFetched: true}, // [200,299]
 	}
 
-	// 创建LogFile实例并注入模拟数据
+	// Create LogFile instance and inject mock data
 	logFile := &LogFile{
 		fragments: mockFragments,
 	}
 
-	t.Run("找到存在于中间位置的Fragment", func(t *testing.T) {
+	t.Run("Find Fragment in middle position", func(t *testing.T) {
 		frag, err := logFile.findFragment(150)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), frag.fragmentId)
 	})
 
-	t.Run("找到第一个Fragment", func(t *testing.T) {
+	t.Run("Find first Fragment", func(t *testing.T) {
 		frag, err := logFile.findFragment(50)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), frag.fragmentId)
 	})
 
-	t.Run("找到最后一个Fragment", func(t *testing.T) {
+	t.Run("Find last Fragment", func(t *testing.T) {
 		frag, err := logFile.findFragment(250)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(3), frag.fragmentId)
 	})
 
-	t.Run("entryId在最后一个Fragment之后", func(t *testing.T) {
+	t.Run("entryId after the last Fragment", func(t *testing.T) {
 		frag, err := logFile.findFragment(300)
 		assert.NoError(t, err)
 		assert.Nil(t, frag)
 	})
 
-	t.Run("第一个Fragment边界值", func(t *testing.T) {
+	t.Run("First Fragment boundary values", func(t *testing.T) {
 		frag, err := logFile.findFragment(0)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), frag.fragmentId)
@@ -1112,7 +1112,7 @@ func TestFindFragment(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), frag.fragmentId)
 	})
-	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+	t.Run("Second Fragment boundary values", func(t *testing.T) {
 		frag, err := logFile.findFragment(100)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), frag.fragmentId)
@@ -1122,7 +1122,7 @@ func TestFindFragment(t *testing.T) {
 		assert.Equal(t, uint64(2), frag.fragmentId)
 	})
 
-	t.Run("最后一个Fragment边界值", func(t *testing.T) {
+	t.Run("Last Fragment boundary values", func(t *testing.T) {
 		frag, err := logFile.findFragment(200)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(3), frag.fragmentId)
@@ -1132,8 +1132,8 @@ func TestFindFragment(t *testing.T) {
 		assert.Equal(t, uint64(3), frag.fragmentId)
 	})
 
-	t.Run("多个候选Fragment时返回最左匹配", func(t *testing.T) {
-		// 模拟有重叠的Fragment
+	t.Run("Return leftmost match when multiple candidate Fragments", func(t *testing.T) {
+		// Mock overlapping Fragments
 		overlappingFrags := []*FragmentObject{
 			{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
 			{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
