@@ -367,6 +367,8 @@ func (s *segmentHandleImpl) GetLastAddPushed(ctx context.Context) (int64, error)
 }
 
 func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetadata {
+	s.RLock()
+	defer s.RUnlock()
 	return s.segmentMetaCache
 }
 

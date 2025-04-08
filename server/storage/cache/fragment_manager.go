@@ -104,9 +104,12 @@ func (m *fragmentManagerImpl) GetUsedMemory() int64 {
 }
 
 func (m *fragmentManagerImpl) GetFragment(ctx context.Context, fragmentKey string) (storage.Fragment, bool) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	if item, ok := m.cache[fragmentKey]; ok {
+		// update LRU
+		m.order.Remove(item.element)
+		m.order.PushFront(fragmentKey)
 		return item.fragment, true
 	}
 	return nil, false
@@ -188,10 +191,9 @@ func (m *fragmentManagerImpl) EvictFragments() error {
 			m.usedMemory -= fragmentSize
 			item.fragment.Release()
 			metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+			m.order.Remove(evictElement)
+			logger.Ctx(m.evictionCtx).Debug("evict fragment automatically", zap.String("key", key), zap.String("fragInst", fmt.Sprintf("%p", item.fragment)))
 		}
-		m.order.Remove(evictElement)
-		logger.Ctx(m.evictionCtx).Debug("evict fragment automatically", zap.String("key", key))
-
 		// break if the used memory is less than the max memory
 		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
 			break

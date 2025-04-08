@@ -216,7 +216,7 @@ func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
 
 // AppendAsync appends data to the log file asynchronously.
 func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
-	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)), zap.Any("data", value))
+	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)))
 
 	// Handle closed file
 	if dlf.closed {
@@ -894,14 +894,15 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 				continue
 			}
 
+			// TODO do lazy load
 			// Load fragment
-			if err := fragment.Load(context.Background()); err != nil {
-				fragment.Release()
-				continue
-			}
-
-			// Add to cache
-			cache.AddCacheFragment(context.Background(), fragment)
+			//if err := fragment.Load(context.Background()); err != nil {
+			//	fragment.Release()
+			//	continue
+			//}
+			//
+			//// Add to cache
+			//cache.AddCacheFragment(context.Background(), fragment)
 			fragments = append(fragments, fragment.(*FragmentFileReader))
 		}
 	}

@@ -534,6 +534,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	// Set infoFetched flag
 	fr.infoFetched = true
 
+	logger.Ctx(ctx).Debug("fragment file loaded", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 	return nil
 }
 

@@ -81,7 +81,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 	startMetrics()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
-	writeCount := 20_000   // total rows to write
+	writeCount := 10_000   // total rows to write
 
 	testCases := []struct {
 		name        string

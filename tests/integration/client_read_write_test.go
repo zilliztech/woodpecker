@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ import (
 )
 
 func TestReadTheWrittenDataSequentially(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadTheWrittenDataSequentially")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -24,7 +27,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadTheWrittenDataSequentially",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -188,6 +191,8 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 }
 
 func TestReadWriteLoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadWriteLoop")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -196,7 +201,7 @@ func TestReadWriteLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadWriteLoop",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -323,6 +328,8 @@ func testRead(t *testing.T, client woodpecker.Client, logName string, writtenIds
 }
 
 func TestMultiAppendSyncLoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMultiAppendSyncLoop")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -331,7 +338,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestMultiAppendSyncLoop",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -461,6 +468,8 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 }
 
 func TestTailReadBlockingBehavior(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestTailReadBlockingBehavior")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -469,7 +478,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -605,6 +614,8 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 }
 
 func TestTailReadBlockingAfterWriting(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestTailReadBlockingBehavior")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -613,7 +624,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
