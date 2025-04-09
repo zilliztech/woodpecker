@@ -235,7 +235,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
-	logger.Ctx(context.Background()).Warn("SendAppendErrorCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
+	logger.Ctx(context.Background()).Warn("SendAppendFailedCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentMetaCache.SegNo), zap.Int64("triggerEntryId", triggerEntryId), zap.String("msg", err.Error()))
 
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
