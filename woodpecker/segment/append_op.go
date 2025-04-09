@@ -3,6 +3,7 @@ package segment
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -29,10 +30,30 @@ type AppendOp struct {
 	ackSet     *bitset.BitSet
 	quorumInfo *proto.QuorumInfo
 
-	completed bool
+	completed atomic.Bool
 	err       error
 
-	attempt int
+	attempt int // attemptId
+}
+
+func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo, attempt int) *AppendOp {
+	op := &AppendOp{
+		logId:     logId,
+		segmentId: segmentId,
+		entryId:   entryId,
+		value:     value,
+		callback:  callback,
+
+		clientPool: clientPool,
+		handle:     handle,
+		ackSet:     &bitset.BitSet{},
+		quorumInfo: quorumInfo,
+
+		attempt: attempt,
+	}
+	op.completed.Store(false)
+	return op
 }
 
 func (op *AppendOp) Execute() {
@@ -87,7 +108,7 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 			if syncedId != -1 && syncedId >= op.entryId {
 				op.ackSet.Set(serverIndex)
 				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
-					op.completed = true
+					op.completed.Store(true)
 					op.handle.SendAppendSuccessCallbacks(op.entryId)
 				}
 				return

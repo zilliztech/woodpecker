@@ -69,18 +69,10 @@ func (l *logStore) Start() error {
 	if err != nil {
 		return err
 	}
-	err = l.fragmentManager.StartEvictionLoop(1 * time.Second)
-	if err != nil {
-		return err
-	}
 	return nil
 }
 func (l *logStore) Stop() error {
 	l.cancel()
-	err := l.fragmentManager.StopEvictionLoop()
-	if err != nil {
-		return err
-	}
 	return nil
 }
 

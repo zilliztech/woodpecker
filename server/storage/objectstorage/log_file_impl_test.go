@@ -40,7 +40,7 @@ func TestNewLogFile(t *testing.T) {
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
-	assert.Equal(t, int64(1000), logFile.buffer.MaxSize)
+	assert.Equal(t, int64(1000), logFile.buffer.Load().MaxSize)
 	assert.Equal(t, 1024*1024, logFile.maxBufferSize)
 	assert.Equal(t, 1000, logFile.maxIntervalMs)
 }
@@ -54,7 +54,7 @@ func TestNewROLogFile(t *testing.T) {
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
-	assert.Equal(t, int64(100000), logFile.buffer.MaxSize)
+	assert.Nil(t, logFile.buffer.Load())
 	assert.Equal(t, 16*1024*1024, logFile.maxBufferSize)
 	assert.Equal(t, 1000, logFile.maxIntervalMs)
 }
