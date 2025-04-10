@@ -295,7 +295,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
 
 	// update cache
-	err := cache.AddCacheFragment(ctx, mergedFrag)
+	err := cache.AddCacheFragment(ctx, mergedFrag) // TODO use lock free cache
 	if err != nil {
 		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
 	}

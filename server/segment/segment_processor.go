@@ -184,6 +184,7 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 				s.getInstanceBucket(),
 				s.minioClient,
 				s.cfg)
+			logger.Ctx(ctx).Info("create LogFile for write", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentLogFileWriter)))
 		}
 	}
 	return s.currentLogFileWriter, nil
@@ -208,6 +209,7 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 				s.getSegmentKeyPrefix(),
 				s.getInstanceBucket(),
 				s.minioClient)
+			logger.Ctx(ctx).Info("create LogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentLogFileReader)))
 		}
 	}
 	return s.currentLogFileReader, nil

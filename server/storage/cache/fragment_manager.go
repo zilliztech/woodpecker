@@ -108,8 +108,7 @@ func (m *fragmentManagerImpl) GetFragment(ctx context.Context, fragmentKey strin
 	defer m.mutex.Unlock()
 	if item, ok := m.cache[fragmentKey]; ok {
 		// update LRU
-		m.order.Remove(item.element)
-		m.order.PushFront(fragmentKey)
+		m.order.MoveToFront(item.element)
 		return item.fragment, true
 	}
 	return nil, false

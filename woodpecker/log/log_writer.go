@@ -42,9 +42,9 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		writerClose:        make(chan struct{}, 1),
 	}
 	// TODO: Add support for other storage auditors once they implement merge/compact functionality
-	if cfg.Woodpecker.Storage.IsStorageMinio() {
-		go w.runAuditor()
-	}
+	//if cfg.Woodpecker.Storage.IsStorageMinio() {
+	//	go w.runAuditor()
+	//}
 	return w
 }
 

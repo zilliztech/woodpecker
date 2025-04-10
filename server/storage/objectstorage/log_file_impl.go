@@ -119,6 +119,7 @@ func (f *LogFile) run() {
 					zap.Error(err))
 			}
 			f.sealed.Store(true)
+			logger.Ctx(context.TODO()).Debug("close LogFile", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.String("logFileInst", fmt.Sprintf("%p", f)))
 			return
 		}
 	}
@@ -422,7 +423,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		} else {
 			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
 			successFrags = append(successFrags, r.target)
-			cacheErr := cache.AddCacheFragment(ctx, r.target)
+			cacheErr := cache.AddCacheFragment(ctx, r.target) // TODO use lock free cache
 			if cacheErr != nil {
 				logger.Ctx(ctx).Warn("add fragment to cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Error(cacheErr))
 			}
