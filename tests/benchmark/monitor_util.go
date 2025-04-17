@@ -102,6 +102,7 @@ func startReporting() {
 			select {
 			case <-ticker.C:
 				currentTimeMs := time.Now().UnixMilli()
+				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
 				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
 				if err != nil {
 					fmt.Printf("Failed to get metrics: %v\n", err)
@@ -179,6 +180,45 @@ func printMetrics() {
 }
 
 func getCurrentMetrics() (bytesSum, bytesCount, latencySum, latencyCount float64, err error) {
+	resp, err := http.Get("http://localhost:29092/metrics")
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	// Aggregate metrics from all threads
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "woodpecker_wp_server_append_bytes_sum"):
+			if value, e := parseMetricValue(line); e == nil {
+				bytesSum += value
+			}
+		case strings.HasPrefix(line, "woodpecker_wp_server_append_bytes_count"):
+			if value, e := parseMetricValue(line); e == nil {
+				bytesCount += value
+			}
+		case strings.HasPrefix(line, "woodpecker_wp_server_append_req_latency_sum"):
+			if value, e := parseMetricValue(line); e == nil {
+				latencySum += value
+			}
+		case strings.HasPrefix(line, "woodpecker_wp_server_append_req_latency_count"):
+			if value, e := parseMetricValue(line); e == nil {
+				latencyCount += value
+			}
+		}
+	}
+
+	return
+}
+
+func getCurrentMinioMetrics() (bytesSum, bytesCount, latencySum, latencyCount float64, err error) {
 	resp, err := http.Get("http://localhost:29092/metrics")
 	if err != nil {
 		return 0, 0, 0, 0, err

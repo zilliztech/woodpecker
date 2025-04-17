@@ -95,7 +95,6 @@ func (l *logStore) Register(ctx context.Context) error {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
-	start := time.Now()
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
 		return -1, nil, err
@@ -108,9 +107,6 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 		return -1, nil, werr.ErrSegmentWriteException.WithCauseErr(err)
 	}
 	//log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
-	cost := time.Now().Sub(start)
-	metrics.WpAppendReqLatency.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(cost.Milliseconds()))
-	metrics.WpAppendBytes.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(len(entry.Data)))
 	return entryId, syncedCh, nil
 }
 

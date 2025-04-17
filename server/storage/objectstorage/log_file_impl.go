@@ -37,7 +37,7 @@ type LogFile struct {
 	fragments []*FragmentObject // LogFile cached fragments
 	// write buffer
 	buffer           atomic.Pointer[cache.SequentialBuffer] // Write buffer
-	maxBufferSize    int                                    // Max buffer size to sync buffer to object storage
+	maxBufferSize    int64                                  // Max buffer size to sync buffer to object storage
 	maxIntervalMs    int                                    // Max interval to sync buffer to object storage
 	syncPolicyConfig *config.LogFileSyncPolicyConfig
 	syncedChan       map[int64]chan int64 // Synced entryId chan map
@@ -168,11 +168,11 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 
 	// trigger sync by max buffer entries bytes size
 	dataSize := currentBuffer.DataSize.Load()
-	if dataSize >= int64(f.maxBufferSize) {
-		logger.Ctx(context.TODO()).Debug("reach max buffer size, trigger flush", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", int64(f.maxBufferSize)))
+	if dataSize >= f.maxBufferSize {
+		logger.Ctx(context.TODO()).Debug("reach max buffer size, trigger flush", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize))
 		syncErr := f.Sync(ctx)
 		if syncErr != nil {
-			logger.Ctx(context.TODO()).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", int64(f.maxBufferSize)), zap.Error(syncErr))
+			logger.Ctx(context.TODO()).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize), zap.Error(syncErr))
 		}
 	}
 	return id, ch, nil
@@ -518,7 +518,7 @@ func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryI
 
 	for _, entry := range toFlushData {
 		entrySize := len(entry)
-		if currentSize+entrySize > maxPartitionSize && currentSize > 0 {
+		if int64(currentSize+entrySize) > maxPartitionSize && currentSize > 0 {
 			partitions = append(partitions, partition)
 			partition = make([][]byte, 0)
 			currentSize = 0

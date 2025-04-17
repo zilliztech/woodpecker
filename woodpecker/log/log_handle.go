@@ -70,7 +70,7 @@ func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
 
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), int64(cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize))
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	l := &logHandleImpl{
 		Name:               name,
 		logMetaCache:       logMeta,

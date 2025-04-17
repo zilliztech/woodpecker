@@ -358,3 +358,36 @@ func TestFileReadPerformance(t *testing.T) {
 		})
 	}
 }
+
+func TestFileFsyncPerformance(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestFileFsyncPerformance.log")
+	file, err := os.Create(rootPath)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	buf := make([]byte, 8*1024*1024) // write 1MB and flush immediately
+	total := 0
+	start := time.Now()
+
+	for i := 0; i < 100; i++ {
+		_, err := file.Write(buf)
+		if err != nil {
+			panic(err)
+		}
+
+		// 开启 fsync
+		err = file.Sync()
+		if err != nil {
+			panic(err)
+		}
+
+		total += len(buf)
+	}
+
+	duration := time.Since(start).Seconds()
+	fmt.Printf("Total written: %.2f MB, Time: %.2f s, Throughput: %.2f MB/s\n",
+		float64(total)/1024/1024, duration, float64(total)/1024/1024/duration)
+}

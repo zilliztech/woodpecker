@@ -36,6 +36,7 @@ type FragmentFileWriter struct {
 	filePath   string
 	fileSize   int64
 	mappedFile mmap.MMap
+	fd         *os.File
 
 	dataOffset  uint32 // Current data write position
 	indexOffset uint32 // Current index write position
@@ -78,6 +79,7 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to truncate the new fragment file:%s to size:%d", filePath, fileSize)
 	}
+	fw.fd = file
 
 	// 映射文件到内存
 	fw.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
@@ -133,14 +135,19 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 		return errors.New("fragment file is closed")
 	}
 
-	// 写入footer
+	// write footer
 	if err := fw.writeFooter(); err != nil {
 		return err
 	}
 
-	// 同步到磁盘
+	// flush content to OS
 	if err := fw.mappedFile.Flush(); err != nil {
 		return errors.Wrap(err, "failed to flush fragment file")
+	}
+
+	// sync OS file to disk
+	if err := fw.fd.Sync(); err != nil {
+		return errors.Wrap(err, "failed to sync fragment file")
 	}
 
 	return nil
@@ -313,7 +320,7 @@ func (fw *FragmentFileWriter) Release() error {
 		return nil
 	}
 
-	// 解除内存映射
+	// unmap the file
 	if fw.mappedFile != nil {
 		if err := fw.mappedFile.Unmap(); err != nil {
 			return errors.Wrap(err, "failed to unmap fragment file")
@@ -321,6 +328,13 @@ func (fw *FragmentFileWriter) Release() error {
 		fw.mappedFile = nil
 		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(fw.GetSize()))
 		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
+	}
+
+	// close the file
+	if fw.fd != nil {
+		if err := fw.fd.Close(); err != nil {
+			logger.Ctx(context.Background()).Warn("failed to close fragment file", zap.String("filePath", fw.filePath))
+		}
 	}
 
 	// mark data is not fetched in buff

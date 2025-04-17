@@ -34,8 +34,8 @@ type DiskLogFile struct {
 	currFragment *FragmentFileWriter
 
 	// Configuration parameters
-	fragmentSize    int // Maximum size of each fragment
-	maxEntryPerFile int // Maximum number of entries per fragment
+	fragmentSize    int64 // Maximum size of each fragment
+	maxEntryPerFile int   // Maximum number of entries per fragment
 	autoSync        bool
 
 	// State
@@ -44,7 +44,8 @@ type DiskLogFile struct {
 
 	// Use SequentialBuffer to store entries within the window
 	buffer        atomic.Pointer[cache.SequentialBuffer]
-	maxBufferSize int                  // Maximum buffer size (bytes)
+	maxBufferSize int64                // Maximum buffer size (bytes)
+	maxIntervalMs int                  // Maximum interval between syncs
 	lastSync      atomic.Int64         // Last sync time
 	syncedChan    map[int64]chan int64 // Channels for sync completion
 
@@ -60,8 +61,9 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		id:              id,
 		basePath:        filepath.Join(basePath, fmt.Sprintf("log_%d", id)),
 		fragmentSize:    128 * 1024 * 1024, // Default 128MB
-		maxEntryPerFile: 100000,            // Default 100k entries per fragment
+		maxEntryPerFile: 100000,            // Default 100k entries per flush
 		maxBufferSize:   32 * 1024 * 1024,  // Default 32MB buffer
+		maxIntervalMs:   1000,              // Default 1s
 		syncedChan:      make(map[int64]chan int64),
 		closeCh:         make(chan struct{}),
 		autoSync:        true, // Default is auto-sync enabled
@@ -565,7 +567,7 @@ func (dlf *DiskLogFile) needNewFragment() bool {
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
 			zap.Uint32("currentLeftSize", currentLeftSize),
-			zap.Int("fragmentSize", dlf.fragmentSize))
+			zap.Int64("fragmentSize", dlf.fragmentSize))
 		return true
 	}
 
@@ -637,7 +639,7 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 
 	// Create new fragment
 	fragmentPath := filepath.Join(dlf.basePath, fmt.Sprintf("fragment_%d", fragmentID))
-	fragment, err := NewFragmentFileWriter(fragmentPath, int64(dlf.fragmentSize), fragmentID, fragmentFirstEntryId)
+	fragment, err := NewFragmentFileWriter(fragmentPath, dlf.fragmentSize, fragmentID, fragmentFirstEntryId)
 	if err != nil {
 		return errors.Wrapf(err, "create new fragment: %s", fragmentPath)
 	}
@@ -1125,13 +1127,13 @@ func (dr *DiskReader) Close() error {
 type Option func(*DiskLogFile)
 
 // WithFragmentSize sets the fragment size
-func WithFragmentSize(size int) Option {
+func WithFragmentSize(size int64) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.fragmentSize = size
 	}
 }
 
-func WithMaxBufferSize(size int) Option {
+func WithMaxBufferSize(size int64) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxBufferSize = size
 	}
@@ -1141,6 +1143,12 @@ func WithMaxBufferSize(size int) Option {
 func WithMaxEntryPerFile(count int) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxEntryPerFile = count
+	}
+}
+
+func WithMaxIntervalMs(interval int) Option {
+	return func(dlf *DiskLogFile) {
+		dlf.maxIntervalMs = interval
 	}
 }
 

@@ -79,6 +79,7 @@ func TestE2EWrite(t *testing.T) {
 func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
+	startReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
 	writeCount := 10_000   // total rows to write

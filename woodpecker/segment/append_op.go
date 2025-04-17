@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/client"
@@ -79,13 +81,14 @@ func (op *AppendOp) Execute() {
 }
 
 func (op *AppendOp) sendWriteRequest(client client.LogStoreClient, serverIndex int) {
+	startRequestTime := time.Now()
 	// order request
 	entryId, syncedCh, err := client.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
 	// async received ack without order
-	go op.receivedAckCallback(entryId, syncedCh, err, serverIndex)
+	go op.receivedAckCallback(startRequestTime, entryId, syncedCh, err, serverIndex)
 }
 
-func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
+func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
@@ -110,6 +113,9 @@ func (op *AppendOp) receivedAckCallback(entryId int64, syncedCh <-chan int64, er
 				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
 					op.completed.Store(true)
 					op.handle.SendAppendSuccessCallbacks(op.entryId)
+					cost := time.Now().Sub(startRequestTime)
+					metrics.WpAppendReqLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
+					metrics.WpAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
 				}
 				return
 			}

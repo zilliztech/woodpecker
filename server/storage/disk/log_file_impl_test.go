@@ -40,7 +40,7 @@ func TestNewDiskLogFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
-	assert.Equal(t, 128*1024*1024, logFile.fragmentSize)
+	assert.Equal(t, int64(128*1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 100000, logFile.maxEntryPerFile)
 
 	// Cleanup
@@ -58,7 +58,7 @@ func TestDiskLogFileWithOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
-	assert.Equal(t, 1024*1024, logFile.fragmentSize)
+	assert.Equal(t, int64(1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 1000, logFile.maxEntryPerFile)
 
 	// Cleanup
@@ -1366,8 +1366,8 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 
 	// Use more reasonable fragment sizes that will still force rotation
 	// but allow entries to be written correctly
-	smallFragmentSize := 16 * 1024 // 16KB instead of 4KB
-	maxEntriesPerFragment := 100   // 100 entries per fragment instead of 200
+	smallFragmentSize := int64(16 * 1024) // 16KB instead of 4KB
+	maxEntriesPerFragment := 100          // 100 entries per fragment instead of 200
 
 	t.Logf("Creating log file with small fragment size: %d bytes, max %d entries per fragment",
 		smallFragmentSize, maxEntriesPerFragment)
