@@ -16,6 +16,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 var _ storage.Fragment = (*FragmentFileWriter)(nil)
@@ -476,6 +477,7 @@ type FragmentFileReader struct {
 	isGrowing    bool  // Whether this fragment will continue to receive writes
 
 	infoFetched bool
+	dataLoaded  bool
 	closed      bool // Whether the file is closed
 }
 
@@ -493,6 +495,8 @@ func NewFragmentFileReader(filePath string, fileSize int64, fragmentId int64) (*
 		isGrowing:    true,
 
 		infoFetched: false,
+		dataLoaded:  false,
+		closed:      false,
 	}
 	return ff, nil
 }
@@ -533,7 +537,16 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 		file.Close()
 		return errors.Wrapf(err, "failed to map fragment file %s", fr.filePath)
 	}
+
+	// update metrics
+	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(fr.fileSize))
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
+
+	// update cache
+	err = cache.AddCacheFragment(ctx, fr) // TODO use lock free cache
+	if err != nil {
+		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
+	}
 
 	// Read file header
 	if !fr.validateHeader() {
@@ -547,6 +560,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 
 	// Set infoFetched flag
 	fr.infoFetched = true
+	fr.dataLoaded = true
 
 	logger.Ctx(ctx).Debug("fragment file loaded", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 	return nil
@@ -601,13 +615,16 @@ func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
 		return 0, errors.New("fragment file is closed")
 	}
 
-	if !fr.infoFetched {
-		err := fr.Load(context.Background())
+	if fr.infoFetched && fr.dataLoaded && fr.isGrowing {
+		// already fetch but it is growing, refresh
+		err := fr.refreshFooter()
 		if err != nil {
 			return -1, err
 		}
-	} else if fr.isGrowing {
-		// refresh
+	} else if fr.infoFetched && !fr.isGrowing {
+		// already fetch and not growing, return
+		return fr.lastEntryID, nil
+	} else {
 		err := fr.Load(context.Background())
 		if err != nil {
 			return -1, err
@@ -660,7 +677,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	// Load data if not loaded
-	if !fr.infoFetched {
+	if !fr.dataLoaded {
 		err := fr.Load(context.Background())
 		if err != nil {
 			return nil, err
@@ -862,6 +879,11 @@ func (fr *FragmentFileReader) Release() error {
 		return nil
 	}
 
+	if !fr.dataLoaded {
+		// no data to release
+		return nil
+	}
+
 	// Unmap memory mapping
 	if fr.mappedFile != nil {
 		if err := fr.mappedFile.Unmap(); err != nil {
@@ -873,7 +895,7 @@ func (fr *FragmentFileReader) Release() error {
 	}
 
 	// Mark data as not fetched in buffer
-	fr.infoFetched = false
+	fr.dataLoaded = false
 
 	return nil
 }
