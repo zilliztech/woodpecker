@@ -945,6 +945,54 @@ func (_c *MetadataProvider_StoreSegmentMetadata_Call) RunAndReturn(run func(cont
 	return _c
 }
 
+// UpdateLogMeta provides a mock function with given fields: ctx, logName, logMeta
+func (_m *MetadataProvider) UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error {
+	ret := _m.Called(ctx, logName, logMeta)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLogMeta")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, *proto.LogMeta) error); ok {
+		r0 = rf(ctx, logName, logMeta)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_UpdateLogMeta_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLogMeta'
+type MetadataProvider_UpdateLogMeta_Call struct {
+	*mock.Call
+}
+
+// UpdateLogMeta is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logName string
+//   - logMeta *proto.LogMeta
+func (_e *MetadataProvider_Expecter) UpdateLogMeta(ctx interface{}, logName interface{}, logMeta interface{}) *MetadataProvider_UpdateLogMeta_Call {
+	return &MetadataProvider_UpdateLogMeta_Call{Call: _e.mock.On("UpdateLogMeta", ctx, logName, logMeta)}
+}
+
+func (_c *MetadataProvider_UpdateLogMeta_Call) Run(run func(ctx context.Context, logName string, logMeta *proto.LogMeta)) *MetadataProvider_UpdateLogMeta_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(*proto.LogMeta))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateLogMeta_Call) Return(_a0 error) *MetadataProvider_UpdateLogMeta_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_UpdateLogMeta_Call) RunAndReturn(run func(context.Context, string, *proto.LogMeta) error) *MetadataProvider_UpdateLogMeta_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateSegmentMetadata provides a mock function with given fields: _a0, _a1, _a2
 func (_m *MetadataProvider) UpdateSegmentMetadata(_a0 context.Context, _a1 string, _a2 *proto.SegmentMetadata) error {
 	ret := _m.Called(_a0, _a1, _a2)

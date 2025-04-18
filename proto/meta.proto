@@ -16,6 +16,9 @@ message LogMeta{
   int64 max_compaction_file_count = 5;
   fixed64 creation_timestamp = 6;
   fixed64 modification_timestamp = 7;
+  // The truncated position of the log (inclusive)
+  int64 truncated_segment_id = 8;
+  int64 truncated_entry_id = 9;
 }
 
 /**

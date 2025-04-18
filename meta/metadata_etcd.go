@@ -164,6 +164,8 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		MaxCompactionFileCount:    600,
 		CreationTimestamp:         uint64(time.Now().Unix()),
 		ModificationTimestamp:     uint64(time.Now().Unix()),
+		TruncatedSegmentId:        -1,
+		TruncatedEntryId:          -1,
 	}
 	// Serialize to binary
 	logMetaValue, err := pb.Marshal(logMeta)
@@ -217,6 +219,36 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	return logMeta, nil
+}
+
+func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error {
+	logKey := BuildLogKey(logName)
+	logMetaValue, err := pb.Marshal(logMeta)
+	if err != nil {
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+
+	// Start a transaction to update the log metadata
+	txn := e.client.Txn(ctx)
+
+	// Update the log metadata if it exists
+	txnResp, err := txn.If(
+		// Ensure the log exists
+		clientv3.Compare(clientv3.CreateRevision(logKey), ">", 0),
+	).Then(
+		// Update the log metadata
+		clientv3.OpPut(logKey, string(logMetaValue)),
+	).Commit()
+
+	if err != nil {
+		return werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	if !txnResp.Succeeded {
+		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
+	}
+
+	return nil
 }
 
 func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error) {
