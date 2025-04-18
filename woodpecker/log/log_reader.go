@@ -22,24 +22,27 @@ type LogReader interface {
 	// Close closes the log reader.
 	// It returns an error if any occurs during the closing process.
 	Close(context.Context) error
+	// GetName returns the name of this reader.
+	GetName() string
 }
 
-func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId) LogReader {
+func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string) LogReader {
 	return &logReaderImpl{
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,
 		pendingReadSegmentId: from.SegmentId,
 		pendingReadEntryId:   from.EntryId,
+		readerName:           readerName,
 	}
 }
 
 var _ LogReader = (*logReaderImpl)(nil)
 
 type logReaderImpl struct {
-	logHandle LogHandle
-	from      *LogMessageId
-
+	logHandle            LogHandle
+	from                 *LogMessageId
+	readerName           string
 	pendingReadSegmentId int64
 	pendingReadEntryId   int64
 	currentSegmentHandle segment.SegmentHandle
@@ -65,6 +68,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
 		logger.Ctx(ctx).Debug("get next segment handle and ids",
 			zap.String("logName", l.logHandle.GetName()),
+			zap.String("readerName", l.readerName),
 			zap.Int64("pendingReadSegmentId", segId),
 			zap.Int64("pendingReadEntryId", entryId),
 			zap.Error(err))
@@ -76,6 +80,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			l.pendingReadEntryId = entryId
 			logger.Ctx(ctx).Debug("no segment to read, sleep 200ms.",
 				zap.String("logName", l.logHandle.GetName()),
+				zap.String("readerName", l.readerName),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId))
 
@@ -116,6 +121,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			// 2.2) if no next segment exists, just wait and read again
 			logger.Ctx(ctx).Debug("no entry to read, wait with timeout.",
 				zap.String("logName", l.logHandle.GetName()),
+				zap.String("readerName", l.readerName),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId),
 				zap.Error(checkErr))
@@ -288,4 +294,8 @@ func (l *logReaderImpl) isBeforeTruncationPoint(truncatedId *LogMessageId) bool 
 	}
 
 	return false
+}
+
+func (l *logReaderImpl) GetName() string {
+	return l.readerName
 }

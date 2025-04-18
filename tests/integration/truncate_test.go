@@ -92,7 +92,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 
 			// 4. Try to read from earliest and verify we start at the truncation point+1
 			earliest := log.EarliestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-basic-reader")
 			assert.NoError(t, err)
 
 			// The first message we read should be message 5 (the one after truncation point)
@@ -236,7 +236,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 
 				// Read from earliest
 				earliest := log.EarliestLogMessageID()
-				logReader, err := logHandle.OpenLogReader(context.Background(), &earliest)
+				logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-concurrent-reader")
 				assert.NoError(t, err)
 
 				readCount := 0
@@ -453,7 +453,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 
 			// 5. Read from earliest and verify we start after truncation point
 			earliest := log.EarliestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-multi-segment-reader")
 			assert.NoError(t, err)
 
 			// Read the first message

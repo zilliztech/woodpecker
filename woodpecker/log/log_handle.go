@@ -27,7 +27,7 @@ type LogHandle interface {
 	// OpenLogWriter opens a writer for the log.
 	OpenLogWriter(context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
-	OpenLogReader(context.Context, *LogMessageId) (LogReader, error)
+	OpenLogReader(context.Context, *LogMessageId, string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
 	GetLastRecordId(context.Context) (*LogMessageId, error)
 	// Truncate truncates the log to the specified record ID (inclusive).
@@ -371,8 +371,12 @@ func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 	return nextSeqNo, nil
 }
 
-func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId) (LogReader, error) {
-	return NewLogReader(ctx, l, nil, from), nil
+func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error) {
+	readerName := fmt.Sprintf("%s-r-%d", l.Name, time.Now().UnixNano())
+	if len(readerBaseName) > 0 {
+		readerName = fmt.Sprintf("%s-r-%s-%d", l.Name, readerBaseName, time.Now().UnixNano())
+	}
+	return NewLogReader(ctx, l, nil, from, readerName), nil
 }
 
 // Truncate truncate log by recordId

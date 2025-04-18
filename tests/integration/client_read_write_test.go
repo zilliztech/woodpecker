@@ -107,7 +107,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			// Test read all from earliest
 			{
 				earliest := log.EarliestLogMessageID()
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "client-earliest-reader")
 				assert.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 1000; i++ {
@@ -141,7 +141,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 					SegmentId: 0,
 					EntryId:   50,
 				}
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "client-specific-position-reader")
 				assert.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 950; i++ {
@@ -171,7 +171,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			// Test read from latest
 			{
 				latest := log.LatestLogMessageID()
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader")
 				assert.NoError(t, openReaderErr)
 				readOne := false
 				go func() {
@@ -298,7 +298,7 @@ func testRead(t *testing.T, client woodpecker.Client, logName string, writtenIds
 	assert.NoError(t, openErr)
 	// Test read all from earliest
 	from := writtenIds[0]
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), from)
+	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), from, "client-from-position-reader")
 	assert.NoError(t, openReaderErr)
 	readMsgs := make([]*log.LogMessage, 0)
 	for i := 0; i < count; i++ {
@@ -513,7 +513,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 			// First open a reader starting from the "latest" position
 			latest := log.LatestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader-sync")
 			assert.NoError(t, err)
 
 			totalMessages := 20
@@ -686,7 +686,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 
 			// Verify that tail read timeout
 			latest := log.LatestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader-async")
 			assert.NoError(t, err)
 			more := false
 			go func() {
