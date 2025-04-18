@@ -21,6 +21,7 @@ type MetadataProvider interface {
 	ListLogs(ctx context.Context) ([]string, error)
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error)
+	UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error
 	AcquireLogWriterLock(ctx context.Context, logName string) error
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
 

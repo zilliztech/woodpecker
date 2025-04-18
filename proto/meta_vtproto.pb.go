@@ -33,6 +33,8 @@ func (m *LogMeta) CloneVT() *LogMeta {
 	r.MaxCompactionFileCount = m.MaxCompactionFileCount
 	r.CreationTimestamp = m.CreationTimestamp
 	r.ModificationTimestamp = m.ModificationTimestamp
+	r.TruncatedSegmentId = m.TruncatedSegmentId
+	r.TruncatedEntryId = m.TruncatedEntryId
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -147,6 +149,12 @@ func (this *LogMeta) EqualVT(that *LogMeta) bool {
 		return false
 	}
 	if this.ModificationTimestamp != that.ModificationTimestamp {
+		return false
+	}
+	if this.TruncatedSegmentId != that.TruncatedSegmentId {
+		return false
+	}
+	if this.TruncatedEntryId != that.TruncatedEntryId {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -308,6 +316,16 @@ func (m *LogMeta) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.TruncatedEntryId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.TruncatedEntryId))
+		i--
+		dAtA[i] = 0x48
+	}
+	if m.TruncatedSegmentId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.TruncatedSegmentId))
+		i--
+		dAtA[i] = 0x40
 	}
 	if m.ModificationTimestamp != 0 {
 		i -= 8
@@ -601,6 +619,12 @@ func (m *LogMeta) SizeVT() (n int) {
 	if m.ModificationTimestamp != 0 {
 		n += 9
 	}
+	if m.TruncatedSegmentId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.TruncatedSegmentId))
+	}
+	if m.TruncatedEntryId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.TruncatedEntryId))
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -844,6 +868,44 @@ func (m *LogMeta) UnmarshalVT(dAtA []byte) error {
 			}
 			m.ModificationTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
 			iNdEx += 8
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TruncatedSegmentId", wireType)
+			}
+			m.TruncatedSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TruncatedSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TruncatedEntryId", wireType)
+			}
+			m.TruncatedEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TruncatedEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -1632,6 +1694,44 @@ func (m *LogMeta) UnmarshalVTUnsafe(dAtA []byte) error {
 			}
 			m.ModificationTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
 			iNdEx += 8
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TruncatedSegmentId", wireType)
+			}
+			m.TruncatedSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TruncatedSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TruncatedEntryId", wireType)
+			}
+			m.TruncatedEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TruncatedEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
