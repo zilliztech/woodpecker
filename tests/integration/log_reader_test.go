@@ -70,7 +70,7 @@ func TestActiveSegmentRead(t *testing.T) {
 	// Test LogReader read entries 0,1 from segment#0
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest)
+	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestActiveSegmentRead")
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(0))
@@ -156,7 +156,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 	// Test LogReader read entries 0,1 from segment#1, bypass segment#0
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest)
+	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestSegmentInExceptionState")
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(1))
@@ -237,7 +237,7 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 	// Test LogReader read entries 0,1 from segment#2
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &earliest)
+	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &earliest, "TestReadFromEarlyNotExistsPoint")
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(2))
@@ -301,7 +301,7 @@ func TestReadFromSeekPoint(t *testing.T) {
 	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &log.LogMessageId{
 		SegmentId: int64(2),
 		EntryId:   int64(1),
-	})
+	}, "TestReadFromSeekPoint")
 	msg, readErr := logReader.ReadNext(ctx) // read entry#1
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(2))
@@ -340,7 +340,7 @@ func TestReadFromLatestWhenLatestIsCompleted(t *testing.T) {
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest)
+	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsCompleted")
 	// no data to read, block until timeout
 	more := false
 	go func() {
@@ -382,7 +382,7 @@ func TestReadFromLatestWhenLatestIsActive(t *testing.T) {
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest)
+	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsActive")
 	// no data to read, block until timeout
 	more := false
 	go func() {
