@@ -296,9 +296,8 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			<-doneWriting
 			<-doneReading
 
-			// Verification: should have read exactly 15 messages (5 before + 10 after truncation)
-			assert.Equal(t, pauseReadPoint+(totalMessages-truncatePoint), len(readMessages),
-				"Should have read 5 messages before truncation + messages after truncation point")
+			// Verification: should have read exactly 20 messages (5 before + 15 after truncation)
+			assert.Equal(t, totalMessages, len(readMessages), "Should have read all messages, because it is opened before truncate action")
 
 			// Verify message indices
 			indices := make([]int, 0, len(readMessages))
@@ -318,11 +317,11 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			for i := 0; i < pauseReadPoint; i++ {
 				assert.Contains(t, indices, i, "Should have read message with index %d", i)
 			}
+			for i := pauseReadPoint; i < truncatePoint; i++ {
+				assert.Contains(t, indices, i, "The Reader open before truncate, should have read truncated message with index %d", i)
+			}
 			for i := truncatePoint; i < totalMessages; i++ {
 				assert.Contains(t, indices, i, "Should have read message with index %d", i)
-			}
-			for i := pauseReadPoint; i < truncatePoint; i++ {
-				assert.NotContains(t, indices, i, "Should not have read truncated message with index %d", i)
 			}
 
 			// Final verification
@@ -470,6 +469,162 @@ func TestMultiSegmentTruncation(t *testing.T) {
 
 			// Close everything
 			err = logReader.Close(context.Background())
+			assert.NoError(t, err)
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestReadBeforeTruncationPoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadBeforeTruncationPoint")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Initialize client
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// Create log
+			logName := "truncate_read_before_truncation_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Write 20 messages (reduced from 100)
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			totalMsgs := 20 // Reduced from 100
+			writtenIds := make([]*log.LogMessageId, totalMsgs)
+			for i := 0; i < totalMsgs; i++ {
+				result := logWriter.Write(context.Background(), &log.WriterMessage{
+					Payload:    []byte(fmt.Sprintf("message-%d", i)),
+					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
+				})
+				assert.NoError(t, result.Err)
+				writtenIds[i] = result.LogMessageId
+
+				t.Logf("Written message %d: segmentId=%d, entryId=%d",
+					i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+			}
+
+			// Start reading from message 0 (earliest)
+			earliest := log.EarliestLogMessageID()
+
+			// Create a reader starting at earliest position
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "read-before-truncation-reader")
+			assert.NoError(t, err)
+
+			// Read 5 messages to simulate an active reader at position 5
+			var readMessages []*log.LogMessage
+			for i := 0; i < 5; i++ {
+				msg, err := logReader.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+				readMessages = append(readMessages, msg)
+			}
+
+			// Verify we read messages 0-4
+			for i, msg := range readMessages {
+				indexStr := msg.Properties["index"]
+				index, err := strconv.Atoi(indexStr)
+				assert.NoError(t, err)
+				assert.Equal(t, i, index, "Should have read message with index %d", i)
+			}
+
+			t.Log("Successfully read first 5 messages (0-4)")
+
+			// Now truncate at message 10 (inclusive)
+			truncatePoint := writtenIds[9] // 0-based index, message 10 is at index 9
+			err = logHandle.Truncate(context.Background(), truncatePoint)
+			assert.NoError(t, err)
+
+			// Verify truncation point
+			truncatedId, err := logHandle.GetTruncatedRecordId(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
+			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
+
+			t.Logf("Truncated at message 10: segmentId=%d, entryId=%d",
+				truncatedId.SegmentId, truncatedId.EntryId)
+
+			// Continue reading with the existing reader (which is at position 5)
+			// It should still be able to read messages 5-19 even though 0-9 are truncated
+			// Reading 15 more messages (for a total of 20)
+			for i := 0; i < 15; i++ {
+				msg, err := logReader.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+
+				indexStr := msg.Properties["index"]
+				index, err := strconv.Atoi(indexStr)
+				assert.NoError(t, err)
+				assert.Equal(t, 5+i, index, "Should have read message with index %d", 5+i)
+
+				readMessages = append(readMessages, msg)
+				t.Logf("Read message after truncation: index=%d, segmentId=%d, entryId=%d",
+					index, msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			t.Log("Successfully read messages 5-19 with reader that started before truncation point")
+			assert.Equal(t, 20, len(readMessages), "Should have read a total of 20 messages")
+
+			// Now create a new reader from earliest position
+			// It should start reading from position 11
+			newReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "new-reader-after-truncation")
+			assert.NoError(t, err)
+
+			// Read first message
+			msg, err := newReader.ReadNext(context.Background())
+			assert.NoError(t, err)
+			assert.NotNil(t, msg)
+
+			// Extract index to verify we're starting after truncation point
+			indexStr := msg.Properties["index"]
+			index, err := strconv.Atoi(indexStr)
+			assert.NoError(t, err)
+
+			t.Logf("New reader first message: index=%d, segmentId=%d, entryId=%d",
+				index, msg.Id.SegmentId, msg.Id.EntryId)
+
+			// The first message should be message 11 (index 10) or later
+			assert.GreaterOrEqual(t, index, 10, "New reader should start at or after truncation point")
+
+			// Clean up
+			err = logReader.Close(context.Background())
+			assert.NoError(t, err)
+			err = newReader.Close(context.Background())
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)

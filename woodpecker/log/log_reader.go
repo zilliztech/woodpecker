@@ -27,7 +27,7 @@ type LogReader interface {
 }
 
 func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string) LogReader {
-	return &logReaderImpl{
+	l := &logReaderImpl{
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,
@@ -35,6 +35,12 @@ func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segmen
 		pendingReadEntryId:   from.EntryId,
 		readerName:           readerName,
 	}
+
+	// Check and adjust if reading from a position before the truncation point
+	l.adjustPendingReadPointIfTruncated(ctx)
+
+	// Adjust pending read point if truncated
+	return l
 }
 
 var _ LogReader = (*logReaderImpl)(nil)
@@ -61,10 +67,6 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		default:
 			// Continue with read operation
 		}
-
-		// Check if reading from a position before the truncation point
-		l.adjustPendingReadPointIfTruncated(ctx)
-
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
 		logger.Ctx(ctx).Debug("get next segment handle and ids",
 			zap.String("logName", l.logHandle.GetName()),
@@ -165,9 +167,6 @@ func (l *logReaderImpl) Close(ctx context.Context) error {
 }
 
 func (l *logReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.SegmentHandle, int64, int64, error) {
-	// Check if reading from a position before the truncation point
-	l.adjustPendingReadPointIfTruncated(ctx)
-
 	// if current segmentHandle is the same as pendingSegmentId, check if the segmentHandle is completed
 	if l.currentSegmentHandle != nil && l.currentSegmentHandle.GetId(context.Background()) == l.pendingReadSegmentId {
 		m := l.currentSegmentHandle.GetMetadata(context.Background())
@@ -254,16 +253,17 @@ func (l *logReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.Seg
 func (l *logReaderImpl) adjustPendingReadPointIfTruncated(ctx context.Context) {
 	truncatedId, err := l.logHandle.GetTruncatedRecordId(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get truncated record ID, continuing without truncation check",
+		logger.Ctx(ctx).Warn("Failed to get truncated record ID, continuing open reader without truncation check",
+			zap.String("logName", l.logHandle.GetName()),
+			zap.String("readerName", l.readerName),
+			zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId),
+			zap.Int64("pendingReadEntryId", l.pendingReadEntryId),
 			zap.Error(err))
 	} else if truncatedId != nil {
 		// If trying to read from before truncation point, adjust to next valid position
 		if l.isBeforeTruncationPoint(truncatedId) {
-			logger.Ctx(ctx).Info("Adjusting read position to after truncation point",
-				zap.Int64("originalSegmentId", l.pendingReadSegmentId),
-				zap.Int64("originalEntryId", l.pendingReadEntryId),
-				zap.Int64("truncatedSegmentId", truncatedId.SegmentId),
-				zap.Int64("truncatedEntryId", truncatedId.EntryId))
+			originalPendingReadSegmentId := l.pendingReadSegmentId
+			originalPendingReadEntryId := l.pendingReadEntryId
 
 			// If we're trying to read from a truncated segment that's been completely truncated,
 			// move to the next segment
@@ -276,6 +276,14 @@ func (l *logReaderImpl) adjustPendingReadPointIfTruncated(ctx context.Context) {
 			if l.pendingReadSegmentId == truncatedId.SegmentId && l.pendingReadEntryId <= truncatedId.EntryId {
 				l.pendingReadEntryId = truncatedId.EntryId + 1
 			}
+
+			logger.Ctx(ctx).Info("Adjusting opening reader start position to after truncation point",
+				zap.Int64("originalPendingReadSegmentId", originalPendingReadSegmentId),
+				zap.Int64("originalPendingReadEntryId", originalPendingReadEntryId),
+				zap.Int64("truncatedSegmentId", truncatedId.SegmentId),
+				zap.Int64("truncatedEntryId", truncatedId.EntryId),
+				zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId),
+				zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 
 			// Reset current segment handle as position changed
 			l.currentSegmentHandle = nil
