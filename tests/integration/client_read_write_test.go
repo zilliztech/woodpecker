@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ import (
 )
 
 func TestReadTheWrittenDataSequentially(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadTheWrittenDataSequentially")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -24,7 +27,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadTheWrittenDataSequentially",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -104,7 +107,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			// Test read all from earliest
 			{
 				earliest := log.EarliestLogMessageID()
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "client-earliest-reader")
 				assert.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 1000; i++ {
@@ -138,7 +141,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 					SegmentId: 0,
 					EntryId:   50,
 				}
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "client-specific-position-reader")
 				assert.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 950; i++ {
@@ -168,7 +171,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			// Test read from latest
 			{
 				latest := log.LatestLogMessageID()
-				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest)
+				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader")
 				assert.NoError(t, openReaderErr)
 				readOne := false
 				go func() {
@@ -188,6 +191,8 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 }
 
 func TestReadWriteLoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadWriteLoop")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -196,7 +201,7 @@ func TestReadWriteLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestReadWriteLoop",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -293,7 +298,7 @@ func testRead(t *testing.T, client woodpecker.Client, logName string, writtenIds
 	assert.NoError(t, openErr)
 	// Test read all from earliest
 	from := writtenIds[0]
-	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), from)
+	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), from, "client-from-position-reader")
 	assert.NoError(t, openReaderErr)
 	readMsgs := make([]*log.LogMessage, 0)
 	for i := 0; i < count; i++ {
@@ -323,6 +328,8 @@ func testRead(t *testing.T, client woodpecker.Client, logName string, writtenIds
 }
 
 func TestMultiAppendSyncLoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMultiAppendSyncLoop")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -331,7 +338,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestMultiAppendSyncLoop",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -461,6 +468,8 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 }
 
 func TestTailReadBlockingBehavior(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestTailReadBlockingBehavior")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -469,7 +478,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -504,7 +513,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 			// First open a reader starting from the "latest" position
 			latest := log.LatestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader-sync")
 			assert.NoError(t, err)
 
 			totalMessages := 20
@@ -605,6 +614,8 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 }
 
 func TestTailReadBlockingAfterWriting(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestTailReadBlockingBehavior")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -613,7 +624,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestTailReadBlockingBehavior",
+			rootPath:    rootPath,
 		},
 		{
 			name:        "ObjectStorage",
@@ -675,7 +686,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 
 			// Verify that tail read timeout
 			latest := log.LatestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &latest)
+			logReader, err := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader-async")
 			assert.NoError(t, err)
 			more := false
 			go func() {

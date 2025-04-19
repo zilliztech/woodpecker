@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -431,19 +430,16 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			successIds = append(successIds, entryId)
 		}
 		callbackMap[int64(i)] = callback
-		op := &AppendOp{
-			logId:      1,
-			segmentId:  1,
-			entryId:    int64(i),
-			value:      []byte(fmt.Sprintf("test_%d", i)),
-			callback:   callback,
-			handle:     segmentHandle,
-			clientPool: mockClientPool,
-			ackSet:     &bitset.BitSet{},
-			quorumInfo: nil,
-			completed:  false,
-			attempt:    1,
-		}
+		op := NewAppendOp(
+			1,
+			1,
+			int64(i),
+			[]byte(fmt.Sprintf("test_%d", i)),
+			callback,
+			mockClientPool,
+			segmentHandle,
+			nil,
+			1)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -451,14 +447,14 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 	// success 3-9, but 0-2 is not finish
 	for i := 3; i < 10; i++ {
 		ops[i].ackSet.Set(0)
-		ops[i].completed = true
+		ops[i].completed.Store(true)
 		segmentHandle.SendAppendSuccessCallbacks(int64(i))
 	}
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 0, successCount)
 	for i := 0; i < 3; i++ {
 		ops[i].ackSet.Set(0)
-		ops[i].completed = true
+		ops[i].completed.Store(true)
 		segmentHandle.SendAppendSuccessCallbacks(int64(i))
 	}
 	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
@@ -502,19 +498,16 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			}
 		}
 		callbackMap[int64(i)] = callback
-		op := &AppendOp{
-			logId:      1,
-			segmentId:  1,
-			entryId:    int64(i),
-			value:      []byte(fmt.Sprintf("test_%d", i)),
-			callback:   callback,
-			handle:     segmentHandle,
-			clientPool: mockClientPool,
-			ackSet:     &bitset.BitSet{},
-			quorumInfo: nil,
-			completed:  false,
-			attempt:    1,
-		}
+		op := NewAppendOp(
+			1,
+			1,
+			int64(i),
+			[]byte(fmt.Sprintf("test_%d", i)),
+			callback,
+			mockClientPool,
+			segmentHandle,
+			nil,
+			1)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -528,7 +521,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		} else {
 			// success
 			ops[i].ackSet.Set(0)
-			ops[i].completed = true
+			ops[i].completed.Store(true)
 			segmentHandle.SendAppendSuccessCallbacks(int64(i))
 		}
 	}

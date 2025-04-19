@@ -15,8 +15,8 @@ type MetaConfig struct {
 
 // SegmentRollingPolicyConfig stores the segment rolling policy configuration.
 type SegmentRollingPolicyConfig struct {
-	MaxSize     int `yaml:"maxSize"`
-	MaxInterval int `yaml:"maxInterval"`
+	MaxSize     int64 `yaml:"maxSize"`
+	MaxInterval int   `yaml:"maxInterval"`
 }
 
 type SegmentAppendConfig struct {
@@ -37,13 +37,13 @@ type AuditorConfig struct {
 
 // LogFileSyncPolicyConfig stores the log file sync policy configuration.
 type LogFileSyncPolicyConfig struct {
-	MaxInterval     int `yaml:"maxInterval"`
-	MaxEntries      int `yaml:"maxEntries"`
-	MaxBytes        int `yaml:"maxBytes"`
-	MaxFlushRetries int `yaml:"maxFlushRetries"`
-	RetryInterval   int `yaml:"retryInterval"`
-	MaxFlushSize    int `yaml:"maxFlushSize"`
-	MaxFlushThreads int `yaml:"maxFlushThreads"`
+	MaxInterval     int   `yaml:"maxInterval"`
+	MaxEntries      int   `yaml:"maxEntries"`
+	MaxBytes        int64 `yaml:"maxBytes"`
+	MaxFlushRetries int   `yaml:"maxFlushRetries"`
+	RetryInterval   int   `yaml:"retryInterval"`
+	MaxFlushSize    int64 `yaml:"maxFlushSize"`
+	MaxFlushThreads int   `yaml:"maxFlushThreads"`
 }
 
 // FragmentManagerConfig stores the fragment manager configuration.

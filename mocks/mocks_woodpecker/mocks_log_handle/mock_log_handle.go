@@ -513,9 +513,67 @@ func (_c *LogHandle_GetSegments_Call) RunAndReturn(run func(context.Context) (ma
 	return _c
 }
 
-// OpenLogReader provides a mock function with given fields: _a0, _a1
-func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId) (log.LogReader, error) {
-	ret := _m.Called(_a0, _a1)
+// GetTruncatedRecordId provides a mock function with given fields: _a0
+func (_m *LogHandle) GetTruncatedRecordId(_a0 context.Context) (*log.LogMessageId, error) {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetTruncatedRecordId")
+	}
+
+	var r0 *log.LogMessageId
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (*log.LogMessageId, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) *log.LogMessageId); ok {
+		r0 = rf(_a0)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*log.LogMessageId)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogHandle_GetTruncatedRecordId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetTruncatedRecordId'
+type LogHandle_GetTruncatedRecordId_Call struct {
+	*mock.Call
+}
+
+// GetTruncatedRecordId is a helper method to define mock.On call
+//   - _a0 context.Context
+func (_e *LogHandle_Expecter) GetTruncatedRecordId(_a0 interface{}) *LogHandle_GetTruncatedRecordId_Call {
+	return &LogHandle_GetTruncatedRecordId_Call{Call: _e.mock.On("GetTruncatedRecordId", _a0)}
+}
+
+func (_c *LogHandle_GetTruncatedRecordId_Call) Run(run func(_a0 context.Context)) *LogHandle_GetTruncatedRecordId_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *LogHandle_GetTruncatedRecordId_Call) Return(_a0 *log.LogMessageId, _a1 error) *LogHandle_GetTruncatedRecordId_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogHandle_GetTruncatedRecordId_Call) RunAndReturn(run func(context.Context) (*log.LogMessageId, error)) *LogHandle_GetTruncatedRecordId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// OpenLogReader provides a mock function with given fields: ctx, from, readerName
+func (_m *LogHandle) OpenLogReader(ctx context.Context, from *log.LogMessageId, readerName string) (log.LogReader, error) {
+	ret := _m.Called(ctx, from, readerName)
 
 	if len(ret) == 0 {
 		panic("no return value specified for OpenLogReader")
@@ -523,19 +581,19 @@ func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId) (
 
 	var r0 log.LogReader
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId) (log.LogReader, error)); ok {
-		return rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) (log.LogReader, error)); ok {
+		return rf(ctx, from, readerName)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId) log.LogReader); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) log.LogReader); ok {
+		r0 = rf(ctx, from, readerName)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(log.LogReader)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, *log.LogMessageId) error); ok {
-		r1 = rf(_a0, _a1)
+	if rf, ok := ret.Get(1).(func(context.Context, *log.LogMessageId, string) error); ok {
+		r1 = rf(ctx, from, readerName)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -549,15 +607,16 @@ type LogHandle_OpenLogReader_Call struct {
 }
 
 // OpenLogReader is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 *log.LogMessageId
-func (_e *LogHandle_Expecter) OpenLogReader(_a0 interface{}, _a1 interface{}) *LogHandle_OpenLogReader_Call {
-	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", _a0, _a1)}
+//   - ctx context.Context
+//   - from *log.LogMessageId
+//   - readerName string
+func (_e *LogHandle_Expecter) OpenLogReader(ctx interface{}, from interface{}, readerName interface{}) *LogHandle_OpenLogReader_Call {
+	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", ctx, from, readerName)}
 }
 
-func (_c *LogHandle_OpenLogReader_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId)) *LogHandle_OpenLogReader_Call {
+func (_c *LogHandle_OpenLogReader_Call) Run(run func(ctx context.Context, from *log.LogMessageId, readerName string)) *LogHandle_OpenLogReader_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*log.LogMessageId))
+		run(args[0].(context.Context), args[1].(*log.LogMessageId), args[2].(string))
 	})
 	return _c
 }
@@ -567,7 +626,7 @@ func (_c *LogHandle_OpenLogReader_Call) Return(_a0 log.LogReader, _a1 error) *Lo
 	return _c
 }
 
-func (_c *LogHandle_OpenLogReader_Call) RunAndReturn(run func(context.Context, *log.LogMessageId) (log.LogReader, error)) *LogHandle_OpenLogReader_Call {
+func (_c *LogHandle_OpenLogReader_Call) RunAndReturn(run func(context.Context, *log.LogMessageId, string) (log.LogReader, error)) *LogHandle_OpenLogReader_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -631,7 +690,7 @@ func (_c *LogHandle_OpenLogWriter_Call) RunAndReturn(run func(context.Context) (
 }
 
 // Truncate provides a mock function with given fields: _a0, _a1
-func (_m *LogHandle) Truncate(_a0 context.Context, _a1 int64) error {
+func (_m *LogHandle) Truncate(_a0 context.Context, _a1 *log.LogMessageId) error {
 	ret := _m.Called(_a0, _a1)
 
 	if len(ret) == 0 {
@@ -639,7 +698,7 @@ func (_m *LogHandle) Truncate(_a0 context.Context, _a1 int64) error {
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId) error); ok {
 		r0 = rf(_a0, _a1)
 	} else {
 		r0 = ret.Error(0)
@@ -655,14 +714,14 @@ type LogHandle_Truncate_Call struct {
 
 // Truncate is a helper method to define mock.On call
 //   - _a0 context.Context
-//   - _a1 int64
+//   - _a1 *log.LogMessageId
 func (_e *LogHandle_Expecter) Truncate(_a0 interface{}, _a1 interface{}) *LogHandle_Truncate_Call {
 	return &LogHandle_Truncate_Call{Call: _e.mock.On("Truncate", _a0, _a1)}
 }
 
-func (_c *LogHandle_Truncate_Call) Run(run func(_a0 context.Context, _a1 int64)) *LogHandle_Truncate_Call {
+func (_c *LogHandle_Truncate_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId)) *LogHandle_Truncate_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64))
+		run(args[0].(context.Context), args[1].(*log.LogMessageId))
 	})
 	return _c
 }
@@ -672,7 +731,7 @@ func (_c *LogHandle_Truncate_Call) Return(_a0 error) *LogHandle_Truncate_Call {
 	return _c
 }
 
-func (_c *LogHandle_Truncate_Call) RunAndReturn(run func(context.Context, int64) error) *LogHandle_Truncate_Call {
+func (_c *LogHandle_Truncate_Call) RunAndReturn(run func(context.Context, *log.LogMessageId) error) *LogHandle_Truncate_Call {
 	_c.Call.Return(run)
 	return _c
 }

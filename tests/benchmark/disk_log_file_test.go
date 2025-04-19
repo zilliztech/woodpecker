@@ -36,8 +36,8 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 	// Test parameters
 	testCases := []struct {
 		name         string
-		fragmentSize int           // Fragment file size
-		bufferSize   int           // Maximum buffer size
+		fragmentSize int64         // Fragment file size
+		bufferSize   int64         // Maximum buffer size
 		dataSize     int           // Size of each data entry
 		writeCount   int           // Total number of writes
 		flushRate    time.Duration // Flush frequency, 0 means no auto flush
@@ -440,11 +440,11 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 	// Test parameters
 	testCases := []struct {
 		name           string
-		fragmentSize   int // Fragment file size
-		bufferSize     int // Buffer size
-		dataSize       int // Size of each data entry
-		totalOps       int // Total operations
-		readPercentage int // Read operation percentage
+		fragmentSize   int64 // Fragment file size
+		bufferSize     int64 // Buffer size
+		dataSize       int   // Size of each data entry
+		totalOps       int   // Total operations
+		readPercentage int   // Read operation percentage
 	}{
 		{"SmallFile_BalancedReadWrite", 10 * 1024 * 1024, 1 * 1024 * 1024, 4 * 1024, 1000, 50},
 		{"SmallFile_ReadHeavy", 10 * 1024 * 1024, 1 * 1024 * 1024, 4 * 1024, 1000, 80},

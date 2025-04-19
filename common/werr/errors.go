@@ -111,6 +111,10 @@ const (
 	ConfigError
 	// DiskFragmentNoSpace indicates that the disk fragment is full.
 	DiskFragmentNoSpace
+	// TruncateLogError indicates an error occurred during log truncation
+	TruncateLogError
+	// GetTruncationPointError indicates an error occurred when retrieving truncation point
+	GetTruncationPointError
 )
 
 var (
@@ -142,7 +146,7 @@ var (
 	ErrFragmentNotFound    = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
 	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
-	//
+	// Reader&Writer related
 	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
 	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
 	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
@@ -152,6 +156,10 @@ var (
 
 	// Storage Related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
+
+	// Truncation related
+	ErrTruncateLog        = newWoodpeckerError("failed to truncate log", TruncateLogError, true)
+	ErrGetTruncationPoint = newWoodpeckerError("failed to get truncation point", GetTruncationPointError, true)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.

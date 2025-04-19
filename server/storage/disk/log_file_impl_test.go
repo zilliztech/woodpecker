@@ -40,7 +40,7 @@ func TestNewDiskLogFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
-	assert.Equal(t, 128*1024*1024, logFile.fragmentSize)
+	assert.Equal(t, int64(128*1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 100000, logFile.maxEntryPerFile)
 
 	// Cleanup
@@ -58,7 +58,7 @@ func TestDiskLogFileWithOptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
-	assert.Equal(t, 1024*1024, logFile.fragmentSize)
+	assert.Equal(t, int64(1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 1000, logFile.maxEntryPerFile)
 
 	// Cleanup
@@ -1366,8 +1366,8 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 
 	// Use more reasonable fragment sizes that will still force rotation
 	// but allow entries to be written correctly
-	smallFragmentSize := 16 * 1024 // 16KB instead of 4KB
-	maxEntriesPerFragment := 100   // 100 entries per fragment instead of 200
+	smallFragmentSize := int64(16 * 1024) // 16KB instead of 4KB
+	maxEntriesPerFragment := 100          // 100 entries per fragment instead of 200
 
 	t.Logf("Creating log file with small fragment size: %d bytes, max %d entries per fragment",
 		smallFragmentSize, maxEntriesPerFragment)
@@ -1554,10 +1554,8 @@ func TestFragmentDataValueCheck(t *testing.T) {
 	cfg.Log.Level = "debug"
 	logger.InitLogger(cfg)
 
-	for i := 0; i <= 0; i++ {
-		//filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/1/0/log_0/fragment_%d", i)
-		filePath := fmt.Sprintf("/var/folders/gq/gybc_zm17nz50mp3kfr_nzdr0000gn/T/disk_log_test_2431546518/log_1/fragment_%d", i)
-
+	for i := 0; i <= 14; i++ {
+		filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/14/0/log_0/fragment_%d", i)
 		ff, err := NewFragmentFileReader(filePath, 128*1024*1024, int64(i))
 		assert.NoError(t, err)
 		err = ff.IteratorPrint()

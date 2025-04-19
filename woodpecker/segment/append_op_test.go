@@ -55,7 +55,7 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	// check result
 	assert.True(t, appendOp.ackSet.Count() == 1)
-	assert.True(t, appendOp.completed)
+	assert.True(t, appendOp.completed.Load())
 	assert.Nil(t, appendOp.err)
 }
 
@@ -98,6 +98,6 @@ func TestAppendOp_Execute_Error(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	// check result
 	assert.Equal(t, 0, appendOp.ackSet.Count())
-	assert.False(t, appendOp.completed)
+	assert.False(t, appendOp.completed.Load())
 	assert.Error(t, appendOp.err)
 }

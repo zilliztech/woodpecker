@@ -16,6 +16,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 var _ storage.Fragment = (*FragmentFileWriter)(nil)
@@ -36,6 +37,7 @@ type FragmentFileWriter struct {
 	filePath   string
 	fileSize   int64
 	mappedFile mmap.MMap
+	fd         *os.File
 
 	dataOffset  uint32 // Current data write position
 	indexOffset uint32 // Current index write position
@@ -78,6 +80,7 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to truncate the new fragment file:%s to size:%d", filePath, fileSize)
 	}
+	fw.fd = file
 
 	// 映射文件到内存
 	fw.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
@@ -133,14 +136,19 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 		return errors.New("fragment file is closed")
 	}
 
-	// 写入footer
+	// write footer
 	if err := fw.writeFooter(); err != nil {
 		return err
 	}
 
-	// 同步到磁盘
+	// flush content to OS
 	if err := fw.mappedFile.Flush(); err != nil {
 		return errors.Wrap(err, "failed to flush fragment file")
+	}
+
+	// sync OS file to disk
+	if err := fw.fd.Sync(); err != nil {
+		return errors.Wrap(err, "failed to sync fragment file")
 	}
 
 	return nil
@@ -313,7 +321,7 @@ func (fw *FragmentFileWriter) Release() error {
 		return nil
 	}
 
-	// 解除内存映射
+	// unmap the file
 	if fw.mappedFile != nil {
 		if err := fw.mappedFile.Unmap(); err != nil {
 			return errors.Wrap(err, "failed to unmap fragment file")
@@ -321,6 +329,13 @@ func (fw *FragmentFileWriter) Release() error {
 		fw.mappedFile = nil
 		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(fw.GetSize()))
 		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
+	}
+
+	// close the file
+	if fw.fd != nil {
+		if err := fw.fd.Close(); err != nil {
+			logger.Ctx(context.Background()).Warn("failed to close fragment file", zap.String("filePath", fw.filePath))
+		}
 	}
 
 	// mark data is not fetched in buff
@@ -462,6 +477,7 @@ type FragmentFileReader struct {
 	isGrowing    bool  // Whether this fragment will continue to receive writes
 
 	infoFetched bool
+	dataLoaded  bool
 	closed      bool // Whether the file is closed
 }
 
@@ -479,6 +495,8 @@ func NewFragmentFileReader(filePath string, fileSize int64, fragmentId int64) (*
 		isGrowing:    true,
 
 		infoFetched: false,
+		dataLoaded:  false,
+		closed:      false,
 	}
 	return ff, nil
 }
@@ -519,7 +537,16 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 		file.Close()
 		return errors.Wrapf(err, "failed to map fragment file %s", fr.filePath)
 	}
+
+	// update metrics
+	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(fr.fileSize))
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
+
+	// update cache
+	err = cache.AddCacheFragment(ctx, fr) // TODO use lock free cache
+	if err != nil {
+		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
+	}
 
 	// Read file header
 	if !fr.validateHeader() {
@@ -533,7 +560,9 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 
 	// Set infoFetched flag
 	fr.infoFetched = true
+	fr.dataLoaded = true
 
+	logger.Ctx(ctx).Debug("fragment file loaded", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 	return nil
 }
 
@@ -586,13 +615,16 @@ func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
 		return 0, errors.New("fragment file is closed")
 	}
 
-	if !fr.infoFetched {
-		err := fr.Load(context.Background())
+	if fr.infoFetched && fr.dataLoaded && fr.isGrowing {
+		// already fetch but it is growing, refresh
+		err := fr.refreshFooter()
 		if err != nil {
 			return -1, err
 		}
-	} else if fr.isGrowing {
-		// refresh
+	} else if fr.infoFetched && !fr.isGrowing {
+		// already fetch and not growing, return
+		return fr.lastEntryID, nil
+	} else {
 		err := fr.Load(context.Background())
 		if err != nil {
 			return -1, err
@@ -645,7 +677,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	// Load data if not loaded
-	if !fr.infoFetched {
+	if !fr.dataLoaded {
 		err := fr.Load(context.Background())
 		if err != nil {
 			return nil, err
@@ -847,6 +879,11 @@ func (fr *FragmentFileReader) Release() error {
 		return nil
 	}
 
+	if !fr.dataLoaded {
+		// no data to release
+		return nil
+	}
+
 	// Unmap memory mapping
 	if fr.mappedFile != nil {
 		if err := fr.mappedFile.Unmap(); err != nil {
@@ -858,7 +895,7 @@ func (fr *FragmentFileReader) Release() error {
 	}
 
 	// Mark data as not fetched in buffer
-	fr.infoFetched = false
+	fr.dataLoaded = false
 
 	return nil
 }

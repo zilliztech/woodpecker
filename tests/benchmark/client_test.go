@@ -79,9 +79,10 @@ func TestE2EWrite(t *testing.T) {
 func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
+	startReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
-	writeCount := 20_000   // total rows to write
+	writeCount := 10_000   // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -282,7 +283,7 @@ func TestReadThroughput(t *testing.T) {
 
 			//	### OpenReader
 			earliest := log.EarliestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest)
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "TestReadThroughput")
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -364,7 +365,7 @@ func TestReadFromEarliest(t *testing.T) {
 
 			//	### OpenReader
 			start := log.EarliestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &start)
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &start, "TestReadFromEarliest")
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -432,7 +433,7 @@ func TestReadFromLatest(t *testing.T) {
 
 			//	### OpenReader
 			latest := log.LatestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest)
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "TestReadFromLatest")
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -504,7 +505,7 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 				SegmentId: 5,
 				EntryId:   0,
 			}
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "TestReadFromSpecifiedPosition")
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
