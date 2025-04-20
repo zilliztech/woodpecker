@@ -33,4 +33,6 @@ type MetadataProvider interface {
 
 	StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error
 	GetQuorumInfo(context.Context, int64) (*proto.QuorumInfo, error)
+
+	CreateReaderTempInfo(context.Context, string, int64, int64, int64) error
 }

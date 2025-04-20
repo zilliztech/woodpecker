@@ -277,6 +277,56 @@ func (_c *MetadataProvider_CreateLog_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
+// CreateReaderTempInfo provides a mock function with given fields: _a0, _a1, _a2, _a3, _a4
+func (_m *MetadataProvider) CreateReaderTempInfo(_a0 context.Context, _a1 string, _a2 int64, _a3 int64, _a4 int64) error {
+	ret := _m.Called(_a0, _a1, _a2, _a3, _a4)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateReaderTempInfo")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, int64, int64, int64) error); ok {
+		r0 = rf(_a0, _a1, _a2, _a3, _a4)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MetadataProvider_CreateReaderTempInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateReaderTempInfo'
+type MetadataProvider_CreateReaderTempInfo_Call struct {
+	*mock.Call
+}
+
+// CreateReaderTempInfo is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 string
+//   - _a2 int64
+//   - _a3 int64
+//   - _a4 int64
+func (_e *MetadataProvider_Expecter) CreateReaderTempInfo(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}, _a4 interface{}) *MetadataProvider_CreateReaderTempInfo_Call {
+	return &MetadataProvider_CreateReaderTempInfo_Call{Call: _e.mock.On("CreateReaderTempInfo", _a0, _a1, _a2, _a3, _a4)}
+}
+
+func (_c *MetadataProvider_CreateReaderTempInfo_Call) Run(run func(_a0 context.Context, _a1 string, _a2 int64, _a3 int64, _a4 int64)) *MetadataProvider_CreateReaderTempInfo_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(int64), args[3].(int64), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_CreateReaderTempInfo_Call) Return(_a0 error) *MetadataProvider_CreateReaderTempInfo_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MetadataProvider_CreateReaderTempInfo_Call) RunAndReturn(run func(context.Context, string, int64, int64, int64) error) *MetadataProvider_CreateReaderTempInfo_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllSegmentMetadata provides a mock function with given fields: _a0, _a1
 func (_m *MetadataProvider) GetAllSegmentMetadata(_a0 context.Context, _a1 string) (map[int64]*proto.SegmentMetadata, error) {
 	ret := _m.Called(_a0, _a1)

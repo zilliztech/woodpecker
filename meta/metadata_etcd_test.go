@@ -28,6 +28,8 @@ func TestAll(t *testing.T) {
 	t.Run("test store segment meta", testStoreSegmentMeta)
 	t.Run("test logWrite lock", testLogWriterLock)
 	t.Run("test update segment meta", testUpdateSegmentMeta)
+	// TODO add update truncate logMeta test
+	// TODO add create reader temp info test
 }
 
 func testInitIfNecessary(t *testing.T) {

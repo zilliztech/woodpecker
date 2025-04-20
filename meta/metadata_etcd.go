@@ -515,6 +515,51 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	return quorumInfo, nil
 }
 
+func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, fromSegmentId int64, fromEntryId int64) error {
+	// Create a key path for the reader temporary information
+	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
+
+	// Create reader info structure
+	readerInfo := &proto.ReaderTempInfo{
+		ReaderName:          readerName,
+		OpenTimestamp:       uint64(time.Now().UnixMilli()),
+		LogId:               logId,
+		OpenSegmentId:       fromSegmentId,
+		OpenEntryId:         fromEntryId,
+		RecentReadSegmentId: fromSegmentId,
+		RecentReadEntryId:   fromEntryId,
+		RecentReadTimestamp: uint64(time.Now().UnixMilli()),
+	}
+
+	// Serialize to binary
+	readerInfoValue, err := pb.Marshal(readerInfo)
+	if err != nil {
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+
+	// Create a lease with TTL of 60 seconds
+	lease, err := e.client.Grant(ctx, 60)
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	// Put reader info in etcd with the lease
+	_, err = e.client.Put(ctx, readerKey, string(readerInfoValue), clientv3.WithLease(lease.ID))
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	logger.Ctx(ctx).Debug("Created reader temporary information with lease",
+		zap.String("readerName", readerName),
+		zap.Int64("logId", logId),
+		zap.Int64("openSegmentId", fromSegmentId),
+		zap.Int64("openEntryId", fromEntryId),
+		zap.Int64("leaseTTL", 60),
+		zap.Int64("leaseID", int64(lease.ID)))
+
+	return nil
+}
+
 func (e *metadataProviderEtcd) Close() error {
 	e.Lock()
 	defer e.Unlock()

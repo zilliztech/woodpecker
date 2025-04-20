@@ -68,4 +68,18 @@ message QuorumInfo{
   repeated string nodes = 5;
 }
 
+/**
+ * ReaderTempInfo defines temporary information for a log reader.
+ */
+message ReaderTempInfo{
+  string reader_name = 1;
+  fixed64 open_timestamp = 2;
+  int64 log_id = 3;
+  int64 open_segment_id = 4;
+  int64 open_entry_id = 5;
+  int64 recent_read_segment_id = 6;
+  int64 recent_read_entry_id = 7;
+  fixed64 recent_read_timestamp = 8;
+}
+
 

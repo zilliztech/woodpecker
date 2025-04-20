@@ -21,6 +21,8 @@ const (
 	QuorumIdGeneratorKey = ServicePrefix + "/quorumidgen"
 	// NodesPrefix is the prefix for logstore instances.
 	NodesPrefix = ServicePrefix + "logstores"
+	// ReaderTempInfoPrefix is the prefix for reader temporary information.
+	ReaderTempInfoPrefix = ServicePrefix + "/readers"
 )
 
 // BuildLogKey builds the key for a log.
@@ -46,4 +48,9 @@ func BuildQuorumInfoKey(quorumId string) string {
 // BuildNodeKey builds the key for a node.
 func BuildNodeKey(nodeId string) string {
 	return fmt.Sprintf("%s/%s", NodesPrefix, nodeId)
+}
+
+// BuildLogReaderTempInfoKey builds the key for reader temporary information.
+func BuildLogReaderTempInfoKey(logId int64, readerName string) string {
+	return fmt.Sprintf("%s/%d/%s", ReaderTempInfoPrefix, logId, readerName)
 }

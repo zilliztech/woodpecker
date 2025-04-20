@@ -30,6 +30,8 @@ const (
 	MetadataDecodeError
 	// MetadataReadError failed in decode metadata
 	MetadataReadError
+	// MetadataWriteError failed in write metadata
+	MetadataWriteError
 	// MetadataCreateLogError failed in create log metadata
 	MetadataCreateLogError
 	// MetadataCreateSegmentError failed in create segment metadata
@@ -38,6 +40,8 @@ const (
 	MetadataUpdateSegmentError
 	// MetadataUpdateQuorumError failed in update quorum metadata
 	MetadataUpdateQuorumError
+	// MetadataCreateReaderError failed in create reader temp info
+	MetadataCreateReaderError
 	// LogAlreadyExists means log already exists
 	LogAlreadyExists
 	// MetadataSegmentNotFound means segment not found
@@ -121,6 +125,7 @@ var (
 	// Metadata related
 	ErrMetadataInit             = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
 	ErrMetadataRead             = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
+	ErrMetadataWrite            = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
 	ErrMetadataEncode           = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
 	ErrMetadataDecode           = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
 	ErrCreateLogMetadata        = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
@@ -147,12 +152,13 @@ var (
 	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
 	// Reader&Writer related
-	ErrInvalidEntryId = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
-	ErrBufferIsEmpty  = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
-	ErrEntryNotFound  = newWoodpeckerError("Entry is not found", EntryNotFound, false)
-	ErrNotSupport     = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
-	ErrInternalError  = newWoodpeckerError("internal error", InternalError, true)
-	ErrConfigError    = newWoodpeckerError("config error", ConfigError, false)
+	ErrInvalidEntryId      = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
+	ErrBufferIsEmpty       = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
+	ErrEntryNotFound       = newWoodpeckerError("Entry is not found", EntryNotFound, false)
+	ErrNotSupport          = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
+	ErrInternalError       = newWoodpeckerError("internal error", InternalError, true)
+	ErrConfigError         = newWoodpeckerError("config error", ConfigError, false)
+	ErrReaderTempInfoError = newWoodpeckerError("reader temp info error", MetadataCreateReaderError, true)
 
 	// Storage Related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)

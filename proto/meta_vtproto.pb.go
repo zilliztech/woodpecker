@@ -124,6 +124,30 @@ func (m *QuorumInfo) CloneMessageVT() proto.Message {
 	return m.CloneVT()
 }
 
+func (m *ReaderTempInfo) CloneVT() *ReaderTempInfo {
+	if m == nil {
+		return (*ReaderTempInfo)(nil)
+	}
+	r := new(ReaderTempInfo)
+	r.ReaderName = m.ReaderName
+	r.OpenTimestamp = m.OpenTimestamp
+	r.LogId = m.LogId
+	r.OpenSegmentId = m.OpenSegmentId
+	r.OpenEntryId = m.OpenEntryId
+	r.RecentReadSegmentId = m.RecentReadSegmentId
+	r.RecentReadEntryId = m.RecentReadEntryId
+	r.RecentReadTimestamp = m.RecentReadTimestamp
+	if len(m.unknownFields) > 0 {
+		r.unknownFields = make([]byte, len(m.unknownFields))
+		copy(r.unknownFields, m.unknownFields)
+	}
+	return r
+}
+
+func (m *ReaderTempInfo) CloneMessageVT() proto.Message {
+	return m.CloneVT()
+}
+
 func (this *LogMeta) EqualVT(that *LogMeta) bool {
 	if this == that {
 		return true
@@ -282,6 +306,46 @@ func (this *QuorumInfo) EqualVT(that *QuorumInfo) bool {
 
 func (this *QuorumInfo) EqualMessageVT(thatMsg proto.Message) bool {
 	that, ok := thatMsg.(*QuorumInfo)
+	if !ok {
+		return false
+	}
+	return this.EqualVT(that)
+}
+func (this *ReaderTempInfo) EqualVT(that *ReaderTempInfo) bool {
+	if this == that {
+		return true
+	} else if this == nil || that == nil {
+		return false
+	}
+	if this.ReaderName != that.ReaderName {
+		return false
+	}
+	if this.OpenTimestamp != that.OpenTimestamp {
+		return false
+	}
+	if this.LogId != that.LogId {
+		return false
+	}
+	if this.OpenSegmentId != that.OpenSegmentId {
+		return false
+	}
+	if this.OpenEntryId != that.OpenEntryId {
+		return false
+	}
+	if this.RecentReadSegmentId != that.RecentReadSegmentId {
+		return false
+	}
+	if this.RecentReadEntryId != that.RecentReadEntryId {
+		return false
+	}
+	if this.RecentReadTimestamp != that.RecentReadTimestamp {
+		return false
+	}
+	return string(this.unknownFields) == string(that.unknownFields)
+}
+
+func (this *ReaderTempInfo) EqualMessageVT(thatMsg proto.Message) bool {
+	that, ok := thatMsg.(*ReaderTempInfo)
 	if !ok {
 		return false
 	}
@@ -592,6 +656,83 @@ func (m *QuorumInfo) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *ReaderTempInfo) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ReaderTempInfo) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *ReaderTempInfo) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.RecentReadTimestamp != 0 {
+		i -= 8
+		binary.LittleEndian.PutUint64(dAtA[i:], uint64(m.RecentReadTimestamp))
+		i--
+		dAtA[i] = 0x41
+	}
+	if m.RecentReadEntryId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.RecentReadEntryId))
+		i--
+		dAtA[i] = 0x38
+	}
+	if m.RecentReadSegmentId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.RecentReadSegmentId))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.OpenEntryId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.OpenEntryId))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.OpenSegmentId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.OpenSegmentId))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.LogId != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.OpenTimestamp != 0 {
+		i -= 8
+		binary.LittleEndian.PutUint64(dAtA[i:], uint64(m.OpenTimestamp))
+		i--
+		dAtA[i] = 0x11
+	}
+	if len(m.ReaderName) > 0 {
+		i -= len(m.ReaderName)
+		copy(dAtA[i:], m.ReaderName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.ReaderName)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *LogMeta) SizeVT() (n int) {
 	if m == nil {
 		return 0
@@ -719,6 +860,41 @@ func (m *QuorumInfo) SizeVT() (n int) {
 			l = len(s)
 			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 		}
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *ReaderTempInfo) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.ReaderName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	if m.OpenTimestamp != 0 {
+		n += 9
+	}
+	if m.LogId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
+	}
+	if m.OpenSegmentId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.OpenSegmentId))
+	}
+	if m.OpenEntryId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.OpenEntryId))
+	}
+	if m.RecentReadSegmentId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.RecentReadSegmentId))
+	}
+	if m.RecentReadEntryId != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.RecentReadEntryId))
+	}
+	if m.RecentReadTimestamp != 0 {
+		n += 9
 	}
 	n += len(m.unknownFields)
 	return n
@@ -1550,6 +1726,204 @@ func (m *QuorumInfo) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *ReaderTempInfo) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return protohelpers.ErrIntOverflow
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ReaderTempInfo: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ReaderTempInfo: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ReaderName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ReaderName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenTimestamp", wireType)
+			}
+			m.OpenTimestamp = 0
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OpenTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
+			}
+			m.LogId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LogId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenSegmentId", wireType)
+			}
+			m.OpenSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.OpenSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenEntryId", wireType)
+			}
+			m.OpenEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.OpenEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadSegmentId", wireType)
+			}
+			m.RecentReadSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RecentReadSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadEntryId", wireType)
+			}
+			m.RecentReadEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RecentReadEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadTimestamp", wireType)
+			}
+			m.RecentReadTimestamp = 0
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RecentReadTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
+		default:
+			iNdEx = preIndex
+			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *LogMeta) UnmarshalVTUnsafe(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -2358,6 +2732,208 @@ func (m *QuorumInfo) UnmarshalVTUnsafe(dAtA []byte) error {
 			}
 			m.Nodes = append(m.Nodes, stringValue)
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *ReaderTempInfo) UnmarshalVTUnsafe(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return protohelpers.ErrIntOverflow
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ReaderTempInfo: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ReaderTempInfo: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ReaderName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.ReaderName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenTimestamp", wireType)
+			}
+			m.OpenTimestamp = 0
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OpenTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
+			}
+			m.LogId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LogId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenSegmentId", wireType)
+			}
+			m.OpenSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.OpenSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OpenEntryId", wireType)
+			}
+			m.OpenEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.OpenEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadSegmentId", wireType)
+			}
+			m.RecentReadSegmentId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RecentReadSegmentId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadEntryId", wireType)
+			}
+			m.RecentReadEntryId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RecentReadEntryId |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 1 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RecentReadTimestamp", wireType)
+			}
+			m.RecentReadTimestamp = 0
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RecentReadTimestamp = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
