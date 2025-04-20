@@ -466,8 +466,17 @@ func testCreateReaderTempInfo(t *testing.T) {
 	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
 	assert.NoError(t, err)
 
-	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	// Create etcd session with a short TTL for testing
+	session, err := concurrency.NewSession(etcdCli, concurrency.WithTTL(3))
+	assert.NoError(t, err)
+
+	// Create a metadata provider with the session
+	provider := &metadataProviderEtcd{
+		client:         etcdCli,
+		session:        session,
+		logWriterLocks: make(map[string]*concurrency.Mutex),
+	}
+
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -485,7 +494,7 @@ func testCreateReaderTempInfo(t *testing.T) {
 	segmentId := int64(3)
 	entryId := int64(42)
 
-	// Create the reader temp info
+	// Create the reader temp info - this will use the session's lease
 	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.LogId, segmentId, entryId)
 	assert.NoError(t, err)
 
@@ -493,7 +502,7 @@ func testCreateReaderTempInfo(t *testing.T) {
 	readerKey := BuildLogReaderTempInfoKey(logMeta.LogId, readerName)
 	resp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(resp.Kvs))
+	assert.Equal(t, 1, len(resp.Kvs), "Reader temp info should exist")
 
 	// Decode the reader temp info
 	readerInfo := &proto.ReaderTempInfo{}
@@ -510,11 +519,27 @@ func testCreateReaderTempInfo(t *testing.T) {
 	assert.Greater(t, readerInfo.OpenTimestamp, uint64(0))
 	assert.Greater(t, readerInfo.RecentReadTimestamp, uint64(0))
 
-	// Verify the key has a lease (TTL)
+	// Verify the key is attached to the session's lease
 	leaseInfo, err := etcdCli.TimeToLive(context.Background(), clientv3.LeaseID(resp.Kvs[0].Lease))
 	assert.NoError(t, err)
 	assert.True(t, leaseInfo.TTL > 0, "Key should have a TTL")
 	assert.True(t, leaseInfo.TTL <= 60, "TTL should be 60 seconds or less")
 
-	t.Logf("Reader temp info has a TTL of %d seconds", leaseInfo.TTL)
+	t.Logf("Reader temp info is created with TTL of %d seconds", leaseInfo.TTL)
+
+	// Close the etcd session to simulate reader disconnection
+	t.Log("Closing the session to simulate reader disconnection...")
+	err = session.Close()
+	assert.NoError(t, err)
+
+	// Wait for the lease to expire (a bit more than the TTL)
+	t.Log("Waiting for session lease to expire...")
+	time.Sleep(65 * time.Second)
+
+	// Check if the key has been automatically removed after session ended
+	checkResp, err := etcdCli.Get(context.Background(), readerKey)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(checkResp.Kvs), "Reader temp info should be automatically removed after session ends")
+
+	t.Log("Reader temp info was automatically removed after session ended as expected")
 }
