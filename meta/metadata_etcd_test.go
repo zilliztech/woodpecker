@@ -28,8 +28,8 @@ func TestAll(t *testing.T) {
 	t.Run("test store segment meta", testStoreSegmentMeta)
 	t.Run("test logWrite lock", testLogWriterLock)
 	t.Run("test update segment meta", testUpdateSegmentMeta)
-	// TODO add update truncate logMeta test
-	// TODO add create reader temp info test
+	t.Run("test update truncate logMeta", testUpdateLogMetaForTruncation)
+	t.Run("test create reader temp info", testCreateReaderTempInfo)
 }
 
 func testInitIfNecessary(t *testing.T) {
@@ -413,4 +413,108 @@ func testLogWriterLock(t *testing.T) {
 		assert.NoError(t, lockErr)
 		newSession.Close()
 	}
+}
+
+func testUpdateLogMetaForTruncation(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	// Create a test log
+	logName := "truncate_test_log_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Get the initial log metadata
+	initialLogMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), initialLogMeta.TruncatedSegmentId)
+	assert.Equal(t, int64(-1), initialLogMeta.TruncatedEntryId)
+
+	// Update truncation point
+	truncatedSegmentId := int64(5)
+	truncatedEntryId := int64(100)
+	initialLogMeta.TruncatedSegmentId = truncatedSegmentId
+	initialLogMeta.TruncatedEntryId = truncatedEntryId
+	initialLogMeta.ModificationTimestamp = uint64(time.Now().Unix())
+
+	// Update the log metadata
+	err = provider.UpdateLogMeta(context.Background(), logName, initialLogMeta)
+	assert.NoError(t, err)
+
+	// Get the updated log metadata
+	updatedLogMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Verify truncation point is updated
+	assert.Equal(t, truncatedSegmentId, updatedLogMeta.TruncatedSegmentId)
+	assert.Equal(t, truncatedEntryId, updatedLogMeta.TruncatedEntryId)
+	assert.GreaterOrEqual(t, updatedLogMeta.ModificationTimestamp, initialLogMeta.ModificationTimestamp)
+}
+
+func testCreateReaderTempInfo(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	// Create a test log
+	logName := "reader_temp_info_test_log_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Get log metadata to get the logId
+	logMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Create reader temp info
+	readerName := "test-reader-" + time.Now().Format("20060102150405")
+	segmentId := int64(3)
+	entryId := int64(42)
+
+	// Create the reader temp info
+	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.LogId, segmentId, entryId)
+	assert.NoError(t, err)
+
+	// Verify the reader temp info was created
+	readerKey := BuildLogReaderTempInfoKey(logMeta.LogId, readerName)
+	resp, err := etcdCli.Get(context.Background(), readerKey)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(resp.Kvs))
+
+	// Decode the reader temp info
+	readerInfo := &proto.ReaderTempInfo{}
+	err = pb.Unmarshal(resp.Kvs[0].Value, readerInfo)
+	assert.NoError(t, err)
+
+	// Verify the reader temp info content
+	assert.Equal(t, readerName, readerInfo.ReaderName)
+	assert.Equal(t, logMeta.LogId, readerInfo.LogId)
+	assert.Equal(t, segmentId, readerInfo.OpenSegmentId)
+	assert.Equal(t, entryId, readerInfo.OpenEntryId)
+	assert.Equal(t, segmentId, readerInfo.RecentReadSegmentId)
+	assert.Equal(t, entryId, readerInfo.RecentReadEntryId)
+	assert.Greater(t, readerInfo.OpenTimestamp, uint64(0))
+	assert.Greater(t, readerInfo.RecentReadTimestamp, uint64(0))
+
+	// Verify the key has a lease (TTL)
+	leaseInfo, err := etcdCli.TimeToLive(context.Background(), clientv3.LeaseID(resp.Kvs[0].Lease))
+	assert.NoError(t, err)
+	assert.True(t, leaseInfo.TTL > 0, "Key should have a TTL")
+	assert.True(t, leaseInfo.TTL <= 60, "TTL should be 60 seconds or less")
+
+	t.Logf("Reader temp info has a TTL of %d seconds", leaseInfo.TTL)
 }
