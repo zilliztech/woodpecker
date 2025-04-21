@@ -25,10 +25,6 @@ type LogWriter interface {
 	// It takes a context and a byte slice representing the log message.
 	WriteAsync(context.Context, *WriterMessage) <-chan *WriteResult
 
-	// Truncate truncates the log to the specified log message ID.
-	// It takes a context and a LogMessageId.
-	Truncate(context.Context, *LogMessageId) error
-
 	// Close closes the log writer.
 	// It takes a context and returns an error if any occurs.
 	Close(context.Context) error
@@ -160,11 +156,6 @@ func (l *logWriterImpl) runAuditor() {
 			return
 		}
 	}
-}
-
-func (l *logWriterImpl) Truncate(ctx context.Context, id *LogMessageId) error {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {

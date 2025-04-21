@@ -68,53 +68,6 @@ func (_c *LogWriter_Close_Call) RunAndReturn(run func(context.Context) error) *L
 	return _c
 }
 
-// Truncate provides a mock function with given fields: _a0, _a1
-func (_m *LogWriter) Truncate(_a0 context.Context, _a1 *log.LogMessageId) error {
-	ret := _m.Called(_a0, _a1)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Truncate")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId) error); ok {
-		r0 = rf(_a0, _a1)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// LogWriter_Truncate_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Truncate'
-type LogWriter_Truncate_Call struct {
-	*mock.Call
-}
-
-// Truncate is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 *log.LogMessageId
-func (_e *LogWriter_Expecter) Truncate(_a0 interface{}, _a1 interface{}) *LogWriter_Truncate_Call {
-	return &LogWriter_Truncate_Call{Call: _e.mock.On("Truncate", _a0, _a1)}
-}
-
-func (_c *LogWriter_Truncate_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId)) *LogWriter_Truncate_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*log.LogMessageId))
-	})
-	return _c
-}
-
-func (_c *LogWriter_Truncate_Call) Return(_a0 error) *LogWriter_Truncate_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *LogWriter_Truncate_Call) RunAndReturn(run func(context.Context, *log.LogMessageId) error) *LogWriter_Truncate_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // Write provides a mock function with given fields: _a0, _a1
 func (_m *LogWriter) Write(_a0 context.Context, _a1 *log.WriterMessage) *log.WriteResult {
 	ret := _m.Called(_a0, _a1)
