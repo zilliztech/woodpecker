@@ -108,31 +108,67 @@ func (m *fragmentManagerImpl) GetUsedMemory() int64 {
 }
 
 func (m *fragmentManagerImpl) GetFragment(ctx context.Context, fragmentKey string) (storage.Fragment, bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if item, ok := m.cache[fragmentKey]; ok {
-		// update LRU
-		m.order.MoveToFront(item.element)
-		return item.fragment, true
+	// First use read lock to check if the fragment exists in cache
+	m.mutex.RLock()
+	item, ok := m.cache[fragmentKey]
+	if !ok {
+		// Fragment not in cache, release read lock and return
+		m.mutex.RUnlock()
+		return nil, false
 	}
-	return nil, false
+
+	// Fragment exists in cache, get the fragment reference
+	fragment := item.fragment
+	m.mutex.RUnlock()
+
+	// Then use write lock to update LRU order
+	m.mutex.Lock()
+
+	// Check again if the fragment is still in cache (may have been removed after releasing read lock)
+	item, stillExists := m.cache[fragmentKey]
+	if stillExists {
+		m.order.MoveToFront(item.element)
+	}
+	m.mutex.Unlock()
+
+	return fragment, true
 }
 
 func (m *fragmentManagerImpl) RemoveFragment(ctx context.Context, fragment storage.Fragment) error {
+	key := fragment.GetFragmentKey()
+
+	// First check if the fragment is in cache
+	m.mutex.RLock()
+	item, ok := m.cache[key]
+	if !ok {
+		// Fragment not in cache, release read lock and return error
+		m.mutex.RUnlock()
+		return werr.ErrFragmentNotFound
+	}
+
+	// Record information we need to save
+	fragmentSize := calculateSize(item.fragment)
+	m.mutex.RUnlock()
+
+	// Acquire write lock to perform deletion
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	key := fragment.GetFragmentKey()
-	if item, ok := m.cache[key]; ok {
-		delete(m.cache, key)
-		m.order.Remove(item.element)
-		fragmentSize := calculateSize(item.fragment)
-		m.usedMemory -= fragmentSize
-		item.fragment.Release()
-		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
-		logger.Ctx(m.evictionCtx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
-		return nil
+
+	// Double check
+	item, stillExists := m.cache[key]
+	if !stillExists {
+		return werr.ErrFragmentNotFound
 	}
-	return werr.ErrFragmentNotFound
+
+	// Perform deletion
+	delete(m.cache, key)
+	m.order.Remove(item.element)
+	m.usedMemory -= fragmentSize
+	item.fragment.Release()
+	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+	logger.Ctx(m.evictionCtx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+
+	return nil
 }
 
 func (m *fragmentManagerImpl) StopEvictionLoop() error {
@@ -147,24 +183,36 @@ func (m *fragmentManagerImpl) StopEvictionLoop() error {
 }
 
 func (m *fragmentManagerImpl) AddFragment(ctx context.Context, fragment storage.Fragment) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	key := fragment.GetFragmentKey()
 
-	// check if fragment already exists
-	if _, ok := m.cache[key]; ok {
-		// already exists
+	// First check if fragment already exists to avoid duplicates
+	m.mutex.RLock()
+	_, exists := m.cache[key]
+	m.mutex.RUnlock()
+
+	if exists {
+		// Already exists, no need to add
 		return nil
 	}
 
-	// push to front of list
+	// Perform add operation
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	// Double check to ensure it wasn't added by another thread while acquiring write lock
+	if _, ok := m.cache[key]; ok {
+		// Already exists, no need to add
+		return nil
+	}
+
+	// Add to cache
 	pushedElement := m.order.PushFront(key)
 	m.cache[key] = &CacheItem{
 		fragment: fragment,
 		element:  pushedElement,
 	}
 
-	// update used memory
+	// Update memory usage statistics
 	fragmentSize := calculateSize(fragment)
 	m.usedMemory += fragmentSize
 	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Add(float64(fragmentSize))
@@ -173,35 +221,78 @@ func (m *fragmentManagerImpl) AddFragment(ctx context.Context, fragment storage.
 }
 
 func (m *fragmentManagerImpl) EvictFragments() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	// First check if eviction is needed
+	m.mutex.RLock()
+	needEviction := m.usedMemory > m.maxMemory && m.order.Len() > 0
+	m.mutex.RUnlock()
 
-	// it is not necessary to evict if the used memory is less than the max memory
-	if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
+	if !needEviction {
 		return nil
 	}
 
+	// Maximum number of fragments to evict in one call to prevent holding lock for too long
+	maxEvictionCount := 10
+	evictCount := 0
+
 	for {
-		// evict the least recently used fragment
-		evictElement := m.order.Back()
-		if evictElement == nil {
-			return nil
-		}
-		key := evictElement.Value.(string)
-		if item, ok := m.cache[key]; ok {
-			delete(m.cache, key)
-			fragmentSize := calculateSize(item.fragment)
-			m.usedMemory -= fragmentSize
-			item.fragment.Release()
-			metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
-			m.order.Remove(evictElement)
-			logger.Ctx(m.evictionCtx).Debug("evict fragment automatically", zap.String("key", key), zap.String("fragInst", fmt.Sprintf("%p", item.fragment)))
-		}
-		// break if the used memory is less than the max memory
-		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
+		if evictCount >= maxEvictionCount {
+			// Reached maximum eviction count for a single call, return to allow other operations to proceed
 			break
 		}
+
+		// Get the least recently used fragment
+		var keyToEvict string
+		var itemToEvict *CacheItem
+
+		m.mutex.RLock()
+		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
+			m.mutex.RUnlock()
+			return nil
+		}
+
+		evictElement := m.order.Back()
+		if evictElement != nil {
+			keyToEvict = evictElement.Value.(string)
+			if item, ok := m.cache[keyToEvict]; ok {
+				itemToEvict = item
+			}
+		}
+		m.mutex.RUnlock()
+
+		if itemToEvict == nil {
+			// No fragment found to evict
+			return nil
+		}
+
+		// Acquire write lock to perform eviction
+		m.mutex.Lock()
+		// Verify this key is still in cache
+		if item, ok := m.cache[keyToEvict]; ok {
+			// Ensure this is still the last element
+			if m.order.Back().Value.(string) == keyToEvict {
+				delete(m.cache, keyToEvict)
+				fragmentSize := calculateSize(item.fragment)
+				m.usedMemory -= fragmentSize
+				item.fragment.Release()
+				metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+				m.order.Remove(m.order.Back())
+				logger.Ctx(m.evictionCtx).Debug("evict fragment automatically",
+					zap.String("key", keyToEvict),
+					zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
+					zap.Int64("fragmentSize", fragmentSize),
+					zap.Int64("currentUsedMemory", m.usedMemory))
+				evictCount++
+			}
+		}
+
+		// Check if we've reached target memory usage
+		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
+			m.mutex.Unlock()
+			break
+		}
+		m.mutex.Unlock()
 	}
+
 	return nil
 }
 
