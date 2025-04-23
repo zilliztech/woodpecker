@@ -676,8 +676,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 		zap.Int64("logFileId", f.id),
 		zap.Int("flag", flag))
 
-	// 列出对象存储中的所有 fragment 对象
-
+	// List all fragment objects in object storage
 	listPrefix := fmt.Sprintf("%s/%d/", f.segmentPrefixKey, f.id)
 	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{})
 
@@ -685,7 +684,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 	var normalFragmentCount int = 0
 	var mergedFragmentCount int = 0
 
-	// 遍历所有找到的对象
+	// Iterate through all found objects
 	for objInfo := range objectCh {
 		if objInfo.Err != nil {
 			logger.Ctx(ctx).Warn("Error listing objects",
@@ -696,17 +695,17 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 			continue
 		}
 
-		// 只处理 fragment 文件
+		// Only process fragment files
 		if !strings.HasSuffix(objInfo.Key, ".frag") {
 			continue
 		}
 
-		// 从缓存中移除
+		// Remove from cache
 		if cachedFrag, found := cache.GetCachedFragment(ctx, objInfo.Key); found {
 			_ = cache.RemoveCachedFragment(ctx, cachedFrag)
 		}
 
-		// 删除对象
+		// Delete object
 		err := f.client.RemoveObject(ctx, f.bucket, objInfo.Key, minio.RemoveObjectOptions{})
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to delete fragment object",
@@ -718,7 +717,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 			continue
 		}
 
-		// 统计删除的 fragment 类型
+		// Count deleted fragment types
 		if strings.Contains(objInfo.Key, "/m_") {
 			logger.Ctx(ctx).Debug("Successfully deleted merged fragment object",
 				zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -734,7 +733,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 		}
 	}
 
-	// 清理内部状态
+	// Clean up internal state
 	f.fragments = make([]*FragmentObject, 0)
 	f.sealed.Store(true)
 

@@ -1180,7 +1180,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/m_1.frag", mock.Anything).Return(nil)
-		// 不再需要 StatObject 调用
+		// No need for StatObject call anymore
 
 		// Create the LogFile
 		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
@@ -1226,7 +1226,7 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Set up expectations
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(errorObjectCh)
-		// 不再需要 StatObject 调用
+		// No need for StatObject call anymore
 
 		// Create the LogFile
 		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
@@ -1265,7 +1265,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(errors.New("remove error"))
-		// 不再需要 StatObject 调用
+		// No need for StatObject call anymore
 
 		// Create the LogFile
 		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
@@ -1300,7 +1300,7 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Set up expectations
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
-		// 不再需要 StatObject 调用
+		// No need for StatObject call anymore
 
 		// Create the LogFile
 		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)

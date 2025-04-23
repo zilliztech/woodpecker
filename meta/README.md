@@ -44,3 +44,19 @@
 - Delete QuorumInfo: a delete operation on key "`root`/quorums/`<quorum_id>`"
 - Read QuorumInfo: a get operation on key "`root`/quorums/`<quorum_id>`" 
 
+#### Status information
+
+##### Reader Temporary Information
+- Create Reader Temp Info: a put operation with lease to key "`root`/readers/`<log_id>`/`<reader_unique_name>`" containing reader's position
+- Update Reader Temp Info: a put operation to key "`root`/readers/`<log_id>`/`<reader_unique_name>`" to update reader's current position
+- Get Reader Temp Info: a get operation on key "`root`/readers/`<log_id>`/`<reader_unique_name>`"
+- List All Readers for Log: a range operation to fetch keys between "`root`/readers/`<log_id>`/" and "`root`/readers/`<log_id>`_end/"
+- Delete Reader Temp Info: a delete operation on key "`root`/readers/`<log_id>`/`<reader_unique_name>`" when reader closes
+
+##### Segment Cleanup Status Information
+- Create Cleanup Status: a txn operation to put cleanup status to key "`root`/cleaning/`<log_id>`/`<segment_id>`" when this key doesn't exist
+- Update Cleanup Status: a txn operation to put cleanup status to key "`root`/cleaning/`<log_id>`/`<segment_id>`" when key exists
+- Get Cleanup Status: a get operation on key "`root`/cleaning/`<log_id>`/`<segment_id>`"
+- List All Cleanup Statuses: a range operation to fetch keys between "`root`/cleaning/`<log_id>`/" and "`root`/cleaning/`<log_id>`_end/"
+- Delete Cleanup Status: a delete operation on key "`root`/cleaning/`<log_id>`/`<segment_id>`" when cleanup completes or fails
+

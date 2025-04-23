@@ -498,6 +498,10 @@ func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 	if currentSegmentMeta.State == proto.SegmentState_Active {
 		return s.recoveryFromInProgress(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_Completed {
+		if s.cfg.Woodpecker.Storage.IsStorageLocal() {
+			// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
+			return nil
+		}
 		return s.compactToSealed(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_InRecovery {
 		return s.recoveryFromInRecovery(ctx)
@@ -540,6 +544,8 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	newSegmentMeta.Size = recoverySegMetaInfo.Size
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
 	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
+	// update segmentHandle meta cache
+	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr
 }
 
@@ -581,6 +587,8 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	newSegmentMeta.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
 	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
+	// update segmentHandle meta cache
+	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr
 }
 
