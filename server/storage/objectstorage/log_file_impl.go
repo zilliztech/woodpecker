@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -664,6 +665,91 @@ func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	//
 	lastFragment := f.fragments[len(f.fragments)-1]
 	return int64(totalSize), lastFragment, nil
+}
+
+func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	logger.Ctx(ctx).Info("Starting to delete fragments",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id),
+		zap.Int("flag", flag))
+
+	// 列出对象存储中的所有 fragment 对象
+
+	listPrefix := fmt.Sprintf("%s/%d/", f.segmentPrefixKey, f.id)
+	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{})
+
+	var deleteErrors []error
+	var normalFragmentCount int = 0
+	var mergedFragmentCount int = 0
+
+	// 遍历所有找到的对象
+	for objInfo := range objectCh {
+		if objInfo.Err != nil {
+			logger.Ctx(ctx).Warn("Error listing objects",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Error(objInfo.Err))
+			deleteErrors = append(deleteErrors, objInfo.Err)
+			continue
+		}
+
+		// 只处理 fragment 文件
+		if !strings.HasSuffix(objInfo.Key, ".frag") {
+			continue
+		}
+
+		// 从缓存中移除
+		if cachedFrag, found := cache.GetCachedFragment(ctx, objInfo.Key); found {
+			_ = cache.RemoveCachedFragment(ctx, cachedFrag)
+		}
+
+		// 删除对象
+		err := f.client.RemoveObject(ctx, f.bucket, objInfo.Key, minio.RemoveObjectOptions{})
+		if err != nil {
+			logger.Ctx(ctx).Warn("Failed to delete fragment object",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.String("objectKey", objInfo.Key),
+				zap.Error(err))
+			deleteErrors = append(deleteErrors, err)
+			continue
+		}
+
+		// 统计删除的 fragment 类型
+		if strings.Contains(objInfo.Key, "/m_") {
+			logger.Ctx(ctx).Debug("Successfully deleted merged fragment object",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.String("objectKey", objInfo.Key))
+			mergedFragmentCount++
+		} else {
+			logger.Ctx(ctx).Debug("Successfully deleted normal fragment object",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.String("objectKey", objInfo.Key))
+			normalFragmentCount++
+		}
+	}
+
+	// 清理内部状态
+	f.fragments = make([]*FragmentObject, 0)
+	f.sealed.Store(true)
+
+	logger.Ctx(ctx).Info("Completed fragment deletion",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id),
+		zap.Int("normalFragmentCount", normalFragmentCount),
+		zap.Int("mergedFragmentCount", mergedFragmentCount),
+		zap.Int("errorCount", len(deleteErrors)))
+
+	if len(deleteErrors) > 0 {
+		return fmt.Errorf("failed to delete %d fragment objects", len(deleteErrors))
+	}
+
+	return nil
 }
 
 // NewLogFileReader creates a new LogFileReader instance.

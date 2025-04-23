@@ -22,6 +22,8 @@ import (
 type LogHandle interface {
 	// GetName returns the name of the log.
 	GetName() string
+	// GetId returns the ID of the log.
+	GetId() int64
 	// GetSegments retrieves the segment metadata for the log.
 	GetSegments(context.Context) (map[int64]*proto.SegmentMetadata, error)
 	// OpenLogWriter opens a writer for the log.
@@ -98,6 +100,10 @@ func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, err
 
 func (l *logHandleImpl) GetName() string {
 	return l.Name
+}
+
+func (l *logHandleImpl) GetId() int64 {
+	return l.logMetaCache.LogId
 }
 
 func (l *logHandleImpl) GetMetadataProvider() meta.MetadataProvider {

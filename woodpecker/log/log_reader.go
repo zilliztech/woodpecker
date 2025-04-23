@@ -71,6 +71,13 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		if err != nil {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
+		if segId > l.pendingReadSegmentId {
+			// update reader info
+			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName, segId, entryId)
+			if updateReaderErr != nil {
+				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logHandle.GetName()), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))
+			}
+		}
 		if segHandle == nil {
 			l.pendingReadSegmentId = segId
 			l.pendingReadEntryId = entryId
@@ -79,7 +86,6 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				zap.String("readerName", l.readerName),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId))
-
 			// Use a ticker for backoff with context timeout support
 			ticker := time.NewTicker(200 * time.Millisecond)
 			select {
@@ -156,7 +162,10 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 }
 
 func (l *logReaderImpl) Close(ctx context.Context) error {
-	// NO-OP
+	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)
+	if err != nil {
+		logger.Ctx(ctx).Warn("delete reader info failed", zap.String("logName", l.logHandle.GetName()), zap.String("readerName", l.readerName), zap.Error(err))
+	}
 	return nil
 }
 

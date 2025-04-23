@@ -980,6 +980,74 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 	return -1, nil
 }
 
+func (dlf *DiskLogFile) DeleteFragments(ctx context.Context, flag int) error {
+	dlf.mu.Lock()
+	defer dlf.mu.Unlock()
+
+	logger.Ctx(ctx).Info("Starting to delete fragments",
+		zap.String("basePath", dlf.basePath),
+		zap.Int64("logFileId", dlf.id),
+		zap.Int("flag", flag))
+
+	// 读取目录内容
+	entries, err := os.ReadDir(dlf.basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Ctx(ctx).Info("Directory does not exist, nothing to delete",
+				zap.String("basePath", dlf.basePath))
+			return nil
+		}
+		return err
+	}
+
+	var deleteErrors []error
+	deletedCount := 0
+
+	// 筛选并删除 fragment 文件
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasPrefix(entry.Name(), "fragment_") || strings.HasPrefix(entry.Name(), "m_")) {
+			fragmentPath := filepath.Join(dlf.basePath, entry.Name())
+
+			// 从缓存中移除，使用正确的方法名
+			// 从搜索结果看，应该使用 GetCachedFragment 和 RemoveFragment
+			if cachedFrag, found := cache.GetCachedFragment(ctx, fragmentPath); found {
+				_ = cache.RemoveCachedFragment(ctx, cachedFrag)
+			}
+
+			// 删除文件
+			if err := os.Remove(fragmentPath); err != nil {
+				logger.Ctx(ctx).Warn("Failed to delete fragment file",
+					zap.String("fragmentPath", fragmentPath),
+					zap.Error(err))
+				deleteErrors = append(deleteErrors, err)
+			} else {
+				logger.Ctx(ctx).Debug("Successfully deleted fragment file",
+					zap.String("fragmentPath", fragmentPath))
+				deletedCount++
+			}
+		}
+	}
+
+	// 清理内部状态
+	dlf.lastFragmentID.Store(-1)
+	dlf.lastEntryID.Store(-1)
+	if dlf.currFragment != nil {
+		dlf.currFragment.Close()
+		dlf.currFragment = nil
+	}
+
+	logger.Ctx(ctx).Info("Completed fragment deletion",
+		zap.String("basePath", dlf.basePath),
+		zap.Int64("logFileId", dlf.id),
+		zap.Int("deletedCount", deletedCount),
+		zap.Int("errorCount", len(deleteErrors)))
+
+	if len(deleteErrors) > 0 {
+		return fmt.Errorf("failed to delete %d fragment files: ", len(deleteErrors))
+	}
+	return nil
+}
+
 // DiskReader implements the Reader interface
 type DiskReader struct {
 	ctx             context.Context

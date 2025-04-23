@@ -1147,3 +1147,209 @@ func TestFindFragment(t *testing.T) {
 		assert.Equal(t, uint64(1), frag.fragmentId)
 	})
 }
+
+// TestDeleteFragments tests the DeleteFragments function.
+func TestDeleteFragments(t *testing.T) {
+	t.Run("SuccessfulDeletion", func(t *testing.T) {
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Create a list of mock objects to be returned by ListObjects
+		objectCh := make(chan minio.ObjectInfo, 3)
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/fragment_1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/fragment_2.frag", Size: 2048}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/m_1.frag", Size: 4096}
+		close(objectCh)
+
+		// Set up expectations
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/m_1.frag", mock.Anything).Return(nil)
+		// 不再需要 StatObject 调用
+
+		// Create the LogFile
+		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+
+		// Add some fragments to the LogFile to verify they're cleared
+		logFile.fragments = []*FragmentObject{
+			{fragmentId: 1, firstEntryId: 0, lastEntryId: 9},
+			{fragmentId: 2, firstEntryId: 10, lastEntryId: 19},
+		}
+
+		// Call DeleteFragments
+		err := logFile.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err)
+
+		// Verify internal state is reset
+		assert.Empty(t, logFile.fragments, "Fragments slice should be empty")
+		assert.True(t, logFile.sealed.Load(), "LogFile should be sealed")
+		assert.NotNil(t, logFile.buffer.Load(), "Buffer should be reset but not nil")
+	})
+
+	t.Run("ListObjectsError", func(t *testing.T) {
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Create an object channel with an error
+		errorObjectCh := make(chan minio.ObjectInfo, 1)
+		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
+		close(errorObjectCh)
+
+		// Set up expectations
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(errorObjectCh)
+		// 不再需要 StatObject 调用
+
+		// Create the LogFile
+		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+
+		// Call DeleteFragments
+		err := logFile.DeleteFragments(context.Background(), 0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to delete")
+	})
+
+	t.Run("RemoveObjectError", func(t *testing.T) {
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Create a list of mock objects to be returned by ListObjects
+		objectCh := make(chan minio.ObjectInfo, 2)
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/fragment_1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/fragment_2.frag", Size: 2048}
+		close(objectCh)
+
+		// Set up expectations
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(errors.New("remove error"))
+		// 不再需要 StatObject 调用
+
+		// Create the LogFile
+		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+
+		// Call DeleteFragments
+		err := logFile.DeleteFragments(context.Background(), 0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to delete")
+	})
+
+	t.Run("NoFragmentsToDelete", func(t *testing.T) {
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Empty object channel
+		objectCh := make(chan minio.ObjectInfo)
+		close(objectCh)
+
+		// Set up expectations
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
+		// 不再需要 StatObject 调用
+
+		// Create the LogFile
+		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+
+		// Call DeleteFragments
+		err := logFile.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err)
+
+		// Verify internal state is reset
+		assert.Empty(t, logFile.fragments, "Fragments slice should be empty")
+	})
+
+	t.Run("SkipNonFragmentFiles", func(t *testing.T) {
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Create a list of mock objects including non-fragment files
+		objectCh := make(chan minio.ObjectInfo, 3)
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/fragment_1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/metadata.json", Size: 256} // Not a fragment
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/m_1.frag", Size: 4096}
+		close(objectCh)
+
+		// Set up expectations
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/m_1.frag", mock.Anything).Return(nil)
+		// No call for metadata.json as it should be skipped
+		// 不再需要 StatObject 调用
+
+		// Create the LogFile
+		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+
+		// Call DeleteFragments
+		err := logFile.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err)
+	})
+}

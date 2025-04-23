@@ -16,6 +16,7 @@ type MinioHandler interface {
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
+	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
 var _ MinioHandler = (*minioHandlerImpl)(nil)
@@ -65,4 +66,10 @@ func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectN
 
 func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
 	return m.client.StatObject(ctx, bucketName, prefix, opts)
+}
+
+func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	opts.Recursive = recursive
+	opts.Prefix = prefix
+	return m.client.ListObjects(ctx, bucketName, opts)
 }

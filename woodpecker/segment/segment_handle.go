@@ -539,6 +539,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	newSegmentMeta.CompletionTime = recoverySegMetaInfo.CompletionTime
 	newSegmentMeta.Size = recoverySegMetaInfo.Size
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
 	return updateMetaErr
 }
 
