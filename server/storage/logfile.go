@@ -49,6 +49,8 @@ type LogFile interface {
 	Merge(ctx context.Context) ([]Fragment, []int32, []int32, error)
 	// Load the segment log file fragments info
 	Load(ctx context.Context) (int64, Fragment, error)
+	// DeleteFragments delete the segment log file fragments.
+	DeleteFragments(ctx context.Context, flag int) error
 	// Closer closes the log file.
 	io.Closer
 }

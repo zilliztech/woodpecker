@@ -35,4 +35,23 @@ type MetadataProvider interface {
 	GetQuorumInfo(context.Context, int64) (*proto.QuorumInfo, error)
 
 	CreateReaderTempInfo(context.Context, string, int64, int64, int64) error
+	// GetReaderTempInfo returns the temporary information for a specific reader
+	GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error)
+	// GetAllReaderTempInfoForLog returns all reader temporary information for a given log
+	GetAllReaderTempInfoForLog(ctx context.Context, logId int64) ([]*proto.ReaderTempInfo, error)
+	// UpdateReaderTempInfo updates the reader's recent read position
+	UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error
+	// DeleteReaderTempInfo deletes the temporary information for a reader when it closes
+	DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error
+
+	// CreateSegmentCleanupStatus creates a new segment cleanup status record
+	CreateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error
+	// UpdateSegmentCleanupStatus updates an existing segment cleanup status
+	UpdateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error
+	// GetSegmentCleanupStatus retrieves the cleanup status for a segment
+	GetSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCleanupStatus, error)
+	// DeleteSegmentCleanupStatus deletes the cleanup status for a segment
+	DeleteSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) error
+	// ListSegmentCleanupStatus lists all cleanup statuses for a log
+	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
 }

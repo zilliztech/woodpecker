@@ -26,6 +26,8 @@ type LogStoreClient interface {
 	SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentRecoveryFromInProgress recovers the specified log segment from the InProgress state and returns the updated metadata and an error if any.
 	SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	// SegmentClean cleans up the specified log segment and returns an error if any.
+	SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
 	GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
 }
@@ -72,6 +74,10 @@ func (l *logStoreClientLocal) SegmentRecoveryFromInRecovery(ctx context.Context,
 
 func (l *logStoreClientLocal) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	return l.store.RecoverySegmentFromInProgress(ctx, logId, segmentId)
+}
+
+func (l *logStoreClientLocal) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	return l.store.CleanSegment(ctx, logId, segmentId, flag)
 }
 
 var _ LogStoreClient = (*logStoreClientRemote)(nil)
@@ -122,6 +128,11 @@ func (l *logStoreClientRemote) SegmentRecoveryFromInRecovery(ctx context.Context
 }
 
 func (l *logStoreClientRemote) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (l *logStoreClientRemote) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
 	//TODO implement me
 	panic("implement me")
 }

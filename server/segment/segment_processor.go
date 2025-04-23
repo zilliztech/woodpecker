@@ -34,6 +34,7 @@ type SegmentProcessor interface {
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
+	Clean(ctx context.Context, flag int) error
 }
 
 func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler) SegmentProcessor {
@@ -283,4 +284,12 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 		LastEntryId:    lastEntryId,
 		Size:           size,
 	}, nil
+}
+
+func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
+	logFile, err := s.getOrCreateLogFileReader(ctx, 0) // TODO use a writer or special instance for maintain
+	if err != nil {
+		return err
+	}
+	return logFile.DeleteFragments(ctx, flag)
 }

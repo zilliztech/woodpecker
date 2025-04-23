@@ -133,6 +133,51 @@ func (_c *LogHandle_GetExistsReadonlySegmentHandle_Call) RunAndReturn(run func(c
 	return _c
 }
 
+// GetId provides a mock function with given fields:
+func (_m *LogHandle) GetId() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetId")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// LogHandle_GetId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetId'
+type LogHandle_GetId_Call struct {
+	*mock.Call
+}
+
+// GetId is a helper method to define mock.On call
+func (_e *LogHandle_Expecter) GetId() *LogHandle_GetId_Call {
+	return &LogHandle_GetId_Call{Call: _e.mock.On("GetId")}
+}
+
+func (_c *LogHandle_GetId_Call) Run(run func()) *LogHandle_GetId_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *LogHandle_GetId_Call) Return(_a0 int64) *LogHandle_GetId_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogHandle_GetId_Call) RunAndReturn(run func() int64) *LogHandle_GetId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetLastRecordId provides a mock function with given fields: _a0
 func (_m *LogHandle) GetLastRecordId(_a0 context.Context) (*log.LogMessageId, error) {
 	ret := _m.Called(_a0)
@@ -571,9 +616,9 @@ func (_c *LogHandle_GetTruncatedRecordId_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// OpenLogReader provides a mock function with given fields: ctx, from, readerName
-func (_m *LogHandle) OpenLogReader(ctx context.Context, from *log.LogMessageId, readerName string) (log.LogReader, error) {
-	ret := _m.Called(ctx, from, readerName)
+// OpenLogReader provides a mock function with given fields: _a0, _a1, _a2
+func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId, _a2 string) (log.LogReader, error) {
+	ret := _m.Called(_a0, _a1, _a2)
 
 	if len(ret) == 0 {
 		panic("no return value specified for OpenLogReader")
@@ -582,10 +627,10 @@ func (_m *LogHandle) OpenLogReader(ctx context.Context, from *log.LogMessageId, 
 	var r0 log.LogReader
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) (log.LogReader, error)); ok {
-		return rf(ctx, from, readerName)
+		return rf(_a0, _a1, _a2)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) log.LogReader); ok {
-		r0 = rf(ctx, from, readerName)
+		r0 = rf(_a0, _a1, _a2)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(log.LogReader)
@@ -593,7 +638,7 @@ func (_m *LogHandle) OpenLogReader(ctx context.Context, from *log.LogMessageId, 
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, *log.LogMessageId, string) error); ok {
-		r1 = rf(ctx, from, readerName)
+		r1 = rf(_a0, _a1, _a2)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -607,14 +652,14 @@ type LogHandle_OpenLogReader_Call struct {
 }
 
 // OpenLogReader is a helper method to define mock.On call
-//   - ctx context.Context
-//   - from *log.LogMessageId
-//   - readerName string
-func (_e *LogHandle_Expecter) OpenLogReader(ctx interface{}, from interface{}, readerName interface{}) *LogHandle_OpenLogReader_Call {
-	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", ctx, from, readerName)}
+//   - _a0 context.Context
+//   - _a1 *log.LogMessageId
+//   - _a2 string
+func (_e *LogHandle_Expecter) OpenLogReader(_a0 interface{}, _a1 interface{}, _a2 interface{}) *LogHandle_OpenLogReader_Call {
+	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", _a0, _a1, _a2)}
 }
 
-func (_c *LogHandle_OpenLogReader_Call) Run(run func(ctx context.Context, from *log.LogMessageId, readerName string)) *LogHandle_OpenLogReader_Call {
+func (_c *LogHandle_OpenLogReader_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId, _a2 string)) *LogHandle_OpenLogReader_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(*log.LogMessageId), args[2].(string))
 	})

@@ -61,6 +61,10 @@ func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
 	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
+func RemoveCachedFragment(ctx context.Context, frag storage.Fragment) error {
+	return GetInstance(maxMemory, interval).RemoveFragment(ctx, frag)
+}
+
 func newFragmentManager(maxMemory int64) FragmentManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &fragmentManagerImpl{

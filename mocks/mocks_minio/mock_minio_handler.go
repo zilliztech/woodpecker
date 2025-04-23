@@ -153,6 +153,58 @@ func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.
 	return _c
 }
 
+// ListObjects provides a mock function with given fields: ctx, bucketName, prefix, recursive, opts
+func (_m *MinioHandler) ListObjects(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	ret := _m.Called(ctx, bucketName, prefix, recursive, opts)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListObjects")
+	}
+
+	var r0 <-chan minio.ObjectInfo
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, bool, minio.ListObjectsOptions) <-chan minio.ObjectInfo); ok {
+		r0 = rf(ctx, bucketName, prefix, recursive, opts)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(<-chan minio.ObjectInfo)
+		}
+	}
+
+	return r0
+}
+
+// MinioHandler_ListObjects_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListObjects'
+type MinioHandler_ListObjects_Call struct {
+	*mock.Call
+}
+
+// ListObjects is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - prefix string
+//   - recursive bool
+//   - opts minio.ListObjectsOptions
+func (_e *MinioHandler_Expecter) ListObjects(ctx interface{}, bucketName interface{}, prefix interface{}, recursive interface{}, opts interface{}) *MinioHandler_ListObjects_Call {
+	return &MinioHandler_ListObjects_Call{Call: _e.mock.On("ListObjects", ctx, bucketName, prefix, recursive, opts)}
+}
+
+func (_c *MinioHandler_ListObjects_Call) Run(run func(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions)) *MinioHandler_ListObjects_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(bool), args[4].(minio.ListObjectsOptions))
+	})
+	return _c
+}
+
+func (_c *MinioHandler_ListObjects_Call) Return(_a0 <-chan minio.ObjectInfo) *MinioHandler_ListObjects_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MinioHandler_ListObjects_Call) RunAndReturn(run func(context.Context, string, string, bool, minio.ListObjectsOptions) <-chan minio.ObjectInfo) *MinioHandler_ListObjects_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PutObject provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, opts
 func (_m *MinioHandler) PutObject(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
 	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, opts)
