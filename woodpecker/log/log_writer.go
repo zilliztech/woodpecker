@@ -125,7 +125,14 @@ func (l *logWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
-			segs, err := l.logHandle.GetSegments(context.TODO())
+			// check and set segment truncate state if necessary
+			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(context.TODO()); err != nil {
+				logger.Ctx(context.TODO()).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
+				continue
+			}
+
+			// get all current segments meta
+			segs, err := l.logHandle.GetMetadataProvider().GetAllSegmentMetadata(context.TODO(), l.logHandle.GetName())
 			if err != nil {
 				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 				continue
@@ -135,7 +142,9 @@ func (l *logWriterImpl) runAuditor() {
 				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
 				continue
 			}
-			truncatedSegmentExists := 0
+
+			// compact/recover if necessary
+			truncatedSegmentExists := make([]int64, 0)
 			for _, seg := range segs {
 				if seg.SegNo >= nextSegId-1 {
 					// last segment maybe in-progress, no need to recover it
@@ -154,14 +163,14 @@ func (l *logWriterImpl) runAuditor() {
 						continue
 					}
 				} else if stateBefore == proto.SegmentState_Truncated {
-					truncatedSegmentExists++
+					truncatedSegmentExists = append(truncatedSegmentExists, seg.SegNo)
 				}
 			}
 
 			// Check for truncated segments to clean up
-			if truncatedSegmentExists > 0 {
-				logger.Ctx(context.TODO()).Info("auditor start to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int("truncatedSegmentExists", truncatedSegmentExists))
-				l.checkAndPrepareSegmentsForTruncationCleanup(context.TODO())
+			if len(truncatedSegmentExists) > 0 {
+				logger.Ctx(context.TODO()).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
+				l.cleanupTruncatedSegmentsIfNecessary(context.TODO())
 			}
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()))
@@ -170,9 +179,9 @@ func (l *logWriterImpl) runAuditor() {
 	}
 }
 
-// checkAndPrepareSegmentsForTruncationCleanup checks for truncated segments that can be cleaned up
+// cleanupTruncatedSegmentsIfNecessary checks for truncated segments that can be cleaned up
 // It identifies segments that are truncated and not being read by any reader
-func (l *logWriterImpl) checkAndPrepareSegmentsForTruncationCleanup(ctx context.Context) {
+func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context) {
 	// Ensure only one cleanup task runs at a time
 	l.cleanupMutex.Lock()
 	if l.cleanupInProgress {
@@ -221,7 +230,7 @@ func (l *logWriterImpl) checkAndPrepareSegmentsForTruncationCleanup(ctx context.
 	}
 
 	// Get all segments for this log
-	segments, err := l.logHandle.GetSegments(ctx)
+	segments, err := l.logHandle.GetMetadataProvider().GetAllSegmentMetadata(ctx, l.logHandle.GetName())
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to get segments during cleanup preparation",
 			zap.String("logName", l.logHandle.GetName()),
@@ -283,6 +292,10 @@ func (l *logWriterImpl) checkAndPrepareSegmentsForTruncationCleanup(ctx context.
 
 	// 开始并发清理所有符合条件的 segment
 	for _, segmentId := range segmentIdsToClean {
+		logger.Ctx(ctx).Info("Start segment cleanup",
+			zap.String("logName", l.logHandle.GetName()),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId))
 		err := l.cleanupManager.CleanupSegment(ctx, l.logHandle.GetName(), logId, segmentId)
 		if err != nil {
 			logger.Ctx(ctx).Error("Failed to start segment cleanup",

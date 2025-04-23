@@ -103,8 +103,16 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 ) error {
 	// Case where cleanup is already completed
 	if status.State == proto.SegmentCleanupState_CLEANUP_COMPLETED {
-		// TODO delete segmentMeta, delete segment clean info
 		logger.Ctx(ctx).Info("Segment cleanup already completed", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
+		// delete segmentMeta, delete segment clean info
+		deleteSegMetaErr := s.metadata.DeleteSegmentMetadata(ctx, logName, segmentId)
+		if deleteSegMetaErr != nil && !werr.ErrSegmentNotFound.Is(deleteSegMetaErr) {
+			logger.Ctx(ctx).Warn("failed to clean truncated segment metadata", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteSegMetaErr))
+		}
+		deleteCleanSegStatusErr := s.metadata.DeleteSegmentCleanupStatus(ctx, logId, segmentId)
+		if deleteCleanSegStatusErr != nil {
+			logger.Ctx(ctx).Warn("failed to clean truncated segment clean status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteCleanSegStatusErr))
+		}
 		return nil
 	}
 

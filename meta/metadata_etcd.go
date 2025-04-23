@@ -193,6 +193,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if !txnResp.Succeeded {
 		return werr.ErrCreateLogMetadata.WithCauseErrMsg("transaction failed due to idgen mismatch")
 	}
+	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
 	return nil
 }
 
@@ -465,6 +466,42 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 		return false, nil
 	}
 	return true, nil
+}
+
+// DeleteSegmentMetadata deletes a segment metadata entry.
+// It returns an error if the segment does not exist or if the deletion fails.
+func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error {
+	e.Lock()
+	defer e.Unlock()
+
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
+
+	// Start a transaction
+	txn := e.client.Txn(ctx)
+
+	// Delete the segment metadata if it exists
+	txnResp, err := txn.If(
+		// Ensure the segment exists
+		clientv3.Compare(clientv3.CreateRevision(segmentKey), ">", 0),
+	).Then(
+		// Delete the segment metadata
+		clientv3.OpDelete(segmentKey),
+	).Commit()
+
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	if !txnResp.Succeeded {
+		return werr.ErrSegmentNotFound.WithCauseErrMsg(
+			fmt.Sprintf("segment not found for logName:%s segmentId:%d", logName, segmentId))
+	}
+
+	logger.Ctx(ctx).Debug("Deleted segment metadata",
+		zap.String("logName", logName),
+		zap.Int64("segmentId", segmentId))
+
+	return nil
 }
 
 func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error {

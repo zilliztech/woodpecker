@@ -36,6 +36,8 @@ type LogHandle interface {
 	Truncate(context.Context, *LogMessageId) error
 	// GetTruncatedRecordId returns the last truncated record ID of the log.
 	GetTruncatedRecordId(context.Context) (*LogMessageId, error)
+	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
+	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
 	GetNextSegmentId() (int64, error)
 	// GetMetadataProvider returns the metadata provider instance.
@@ -455,21 +457,44 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 		return werr.ErrTruncateLog.WithCauseErr(err)
 	}
 
-	// 7. Mark segments as truncated in metadata
+	// 7. Update logMetaCache
+	l.logMetaCache = logMeta
+
+	logger.Ctx(ctx).Info("Truncation completed",
+		zap.String("logName", l.Name),
+		zap.Int64("truncatedSegmentId", recordId.SegmentId),
+		zap.Int64("truncatedEntryId", recordId.EntryId))
+
+	return nil
+}
+
+func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error {
+	// 1. Get current LogMeta
+	logMeta, err := l.Metadata.GetLogMeta(ctx, l.Name)
+	if err != nil {
+		return werr.ErrTruncateLog.WithCauseErr(err)
+	}
+
+	// 2. Check if the requested truncation point is set
+	if logMeta.TruncatedSegmentId <= 0 {
+		return nil
+	}
+
+	// 3. Mark segments as truncated in metadata
 	// Get all segments that are before the truncation point
-	segments, err := l.GetSegments(ctx)
+	segments, err := l.GetMetadataProvider().GetAllSegmentMetadata(ctx, l.Name)
 	if err != nil {
 		return werr.ErrTruncateLog.WithCauseErr(err)
 	}
 
 	for segId, segMetadata := range segments {
 		// Skip segments at or after truncation point
-		if segId > recordId.SegmentId {
+		if segId > logMeta.TruncatedSegmentId {
 			continue
 		}
 
 		// Skip current truncation segment (we'll keep it, but read from the entry ID)
-		if segId == recordId.SegmentId {
+		if segId == logMeta.TruncatedSegmentId {
 			continue
 		}
 
@@ -492,15 +517,6 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 			zap.String("logName", l.Name),
 			zap.Int64("segmentId", segId))
 	}
-
-	// 8. Update logMetaCache
-	l.logMetaCache = logMeta
-
-	logger.Ctx(ctx).Info("Truncation completed",
-		zap.String("logName", l.Name),
-		zap.Int64("truncatedSegmentId", recordId.SegmentId),
-		zap.Int64("truncatedEntryId", recordId.EntryId))
-
 	return nil
 }
 

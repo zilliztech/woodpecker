@@ -382,7 +382,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 func (dlf *DiskLogFile) getToFlushData(ctx context.Context, currentBuffer *cache.SequentialBuffer) ([][]byte, int64) {
 	entryCount := len(currentBuffer.Values)
 	if entryCount == 0 {
-		logger.Ctx(ctx).Info("Call Sync, but empty, skip ... ",
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id))
 		return nil, -1
@@ -393,7 +393,7 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context, currentBuffer *cache
 
 	// Check if there is data that needs to be flushed
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		logger.Ctx(ctx).Info("Call Sync, expected id not received yet, skip ... ",
+		logger.Ctx(ctx).Debug("Call Sync, expected id not received yet, skip ... ",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
 			zap.Int64("bufferSize", dataSize),

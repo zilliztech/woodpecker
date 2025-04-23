@@ -15,6 +15,7 @@ import (
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -22,23 +23,24 @@ func TestAll(t *testing.T) {
 	err := etcd.InitEtcdServer(true, "", "/tmp/testMetadata", "/tmp/testMetadata.log", "info")
 	assert.NoError(t, err)
 	defer etcd.StopEtcdServer()
-	t.Run("test meta init", testInitIfNecessary)
+	t.Run("test init if necessary", testInitIfNecessary)
 	t.Run("test create log and open", testCreateLogAndOpen)
-	t.Run("test check log exists", testCheckExists)
-	t.Run("test store quorum", testStoreQuorumInfo)
+	t.Run("test check exists", testCheckExists)
+	t.Run("test store quorum info", testStoreQuorumInfo)
 	t.Run("test store segment meta", testStoreSegmentMeta)
-	t.Run("test logWrite lock", testLogWriterLock)
 	t.Run("test update segment meta", testUpdateSegmentMeta)
-	t.Run("test update truncate logMeta", testUpdateLogMetaForTruncation)
+	t.Run("test delete segment meta", testDeleteSegmentMeta)
+	t.Run("test log writer lock", testLogWriterLock)
+	t.Run("test update log meta for truncation", testUpdateLogMetaForTruncation)
 	t.Run("test create reader temp info", testCreateReaderTempInfo)
 	t.Run("test get reader temp info", testGetReaderTempInfo)
-	t.Run("test get all reader temp info for log", testGetAllReaderTempInfoForLog)
 	t.Run("test update reader temp info", testUpdateReaderTempInfo)
+	t.Run("test get all reader temp info for log", testGetAllReaderTempInfoForLog)
 	t.Run("test delete reader temp info", testDeleteReaderTempInfo)
 	t.Run("test create segment cleanup status", testCreateSegmentCleanupStatus)
 	t.Run("test update segment cleanup status", testUpdateSegmentCleanupStatus)
 	t.Run("test list segment cleanup status", testListSegmentCleanupStatus)
-	t.Run("test failed segment cleanup status", testFailedCleanupStatus)
+	t.Run("test failed cleanup status", testFailedCleanupStatus)
 	t.Run("test delete segment cleanup status", testDeleteSegmentCleanupStatus)
 	t.Run("test non existent segment cleanup status", testNonExistentStatus)
 	t.Run("test empty list for non existent log", testEmptyListForNonExistentLog)
@@ -375,6 +377,63 @@ func testUpdateSegmentMeta(t *testing.T) {
 		assert.Equal(t, segmentMeta.EntryOffset, getSegmentMeta.EntryOffset)
 		assert.Equal(t, segmentMeta.State, getSegmentMeta.State)
 	}
+}
+
+// testDeleteSegmentMeta tests the DeleteSegmentMetadata method
+func testDeleteSegmentMeta(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	logName := "test_log" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Create segment metadata
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo: 1,
+		State: proto.SegmentState_Active,
+	}
+
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	assert.NoError(t, storeErr)
+
+	// Verify segment exists
+	exists, err := provider.CheckSegmentExists(context.Background(), logName, segmentMeta.SegNo)
+	assert.NoError(t, err)
+	assert.True(t, exists)
+
+	// Delete the segment
+	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, segmentMeta.SegNo)
+	assert.NoError(t, deleteErr)
+
+	// Verify segment no longer exists
+	exists, err = provider.CheckSegmentExists(context.Background(), logName, segmentMeta.SegNo)
+	assert.NoError(t, err)
+	assert.False(t, exists)
+
+	// Attempt to get the deleted segment should result in error
+	_, getErr := provider.GetSegmentMetadata(context.Background(), logName, segmentMeta.SegNo)
+	assert.Error(t, getErr)
+	assert.True(t, werr.ErrSegmentNotFound.Is(getErr))
+
+	// Attempt to delete a non-existent segment should result in error
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), logName, 999)
+	assert.Error(t, deleteErr)
+	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
+
+	// Test deleting from a non-existent log
+	nonExistentLogName := "non_existent_log"
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), nonExistentLogName, 1)
+	assert.Error(t, deleteErr)
+	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
 }
 
 func testLogWriterLock(t *testing.T) {
