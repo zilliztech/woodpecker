@@ -325,7 +325,7 @@ func extractLogName(path string) (string, error) {
 func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) error {
 	e.Lock()
 	defer e.Unlock()
-	if e.session == nil {
+	if e.session == nil { // TODO 要判断session 还活着，不活着的话，直接掉线close掉这个writer，或者自己保活。
 		// keep a session for this metadata cli
 		newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(5))
 		if err != nil {

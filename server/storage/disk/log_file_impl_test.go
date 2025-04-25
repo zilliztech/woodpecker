@@ -1569,35 +1569,35 @@ func TestFragmentDataValueCheck(t *testing.T) {
 // TestDeleteFragments tests the DeleteFragments function focusing on its ability
 // to handle directory and logging operations, rather than actual file operations.
 func TestDeleteFragments(t *testing.T) {
-	// 设置测试目录
+	// Set up test directory
 	testDir := getTempDir(t)
 	logId := int64(1)
 
-	// 创建一个带有模拟目录的 DiskLogFile 对象
+	// Create a DiskLogFile object with a mock directory
 	logDir := filepath.Join(testDir, fmt.Sprintf("log_%d", logId))
 	err := os.MkdirAll(logDir, 0755)
 	assert.NoError(t, err)
 
-	// 测试1: 创建一个空目录情况下的删除操作，确保函数正常返回
+	// Test 1: Test deletion operation with an empty directory, ensuring normal return
 	logFile, err := NewDiskLogFile(logId, testDir)
 	assert.NoError(t, err)
 
-	// 执行删除操作
+	// Execute deletion operation
 	err = logFile.DeleteFragments(context.Background(), 0)
 	assert.NoError(t, err, "DeleteFragments should not error with empty directory")
 
-	// 验证内部状态已重置
+	// Verify internal state has been reset
 	assert.Equal(t, int64(-1), logFile.lastFragmentID.Load(), "lastFragmentID should be -1")
 	assert.Equal(t, int64(-1), logFile.lastEntryID.Load(), "lastEntryID should be -1")
 	assert.Nil(t, logFile.currFragment, "currFragment should be nil")
 
-	// 关闭
+	// Close
 	err = logFile.Close()
 	assert.NoError(t, err)
 
-	// 测试2: 测试目录不存在的情况
+	// Test 2: Test case where directory does not exist
 	nonExistDir := getTempDir(t)
-	os.RemoveAll(nonExistDir) // 确保目录不存在
+	os.RemoveAll(nonExistDir) // Ensure directory does not exist
 
 	logFile2, err := NewDiskLogFile(2, nonExistDir)
 	assert.NoError(t, err)
@@ -1605,7 +1605,7 @@ func TestDeleteFragments(t *testing.T) {
 	err = logFile2.DeleteFragments(context.Background(), 0)
 	assert.NoError(t, err, "DeleteFragments should not error when directory doesn't exist")
 
-	// 验证状态也正确重置
+	// Verify state is also correctly reset
 	assert.Equal(t, int64(-1), logFile2.lastFragmentID.Load(), "lastFragmentID should be -1")
 	assert.Equal(t, int64(-1), logFile2.lastEntryID.Load(), "lastEntryID should be -1")
 	assert.Nil(t, logFile2.currFragment, "currFragment should be nil")
