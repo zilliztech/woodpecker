@@ -451,11 +451,11 @@ func testLogWriterLock(t *testing.T) {
 	logName := "test_log" + time.Now().Format("20060102150405")
 
 	// lock success
-	getLockErr := provider.AcquireLogWriterLock(context.Background(), logName)
+	_, getLockErr := provider.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
 
 	// reentrant lock success
-	getLockErr = provider.AcquireLogWriterLock(context.Background(), logName)
+	_, getLockErr = provider.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
 
 	// test lock fail from another session

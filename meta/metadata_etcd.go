@@ -27,12 +27,14 @@ type metadataProviderEtcd struct {
 
 	session        *concurrency.Session
 	logWriterLocks map[string]*concurrency.Mutex
+	lockSessions   map[string]*concurrency.Session
 }
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {
 	return &metadataProviderEtcd{
 		client:         client,
 		logWriterLocks: make(map[string]*concurrency.Mutex),
+		lockSessions:   make(map[string]*concurrency.Session),
 	}
 }
 
@@ -322,35 +324,85 @@ func extractLogName(path string) (string, error) {
 	return parts[2], nil
 }
 
-func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) error {
+func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error) {
 	e.Lock()
 	defer e.Unlock()
-	if e.session == nil { // TODO 要判断session 还活着，不活着的话，直接掉线close掉这个writer，或者自己保活。
-		// keep a session for this metadata cli
-		newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(5))
-		if err != nil {
-			return err
-		}
-		e.session = newSession
-	}
-	// try lock if the lock already exists
+
+	// Check if lock already exists for this log
 	if l, exists := e.logWriterLocks[logName]; exists {
-		return l.TryLock(ctx)
+		// We can't directly check session status through mutex, so try lock
+		// If it fails with a lease-related error, we'll create a new one
+		err := l.TryLock(ctx)
+		if err == nil {
+			// Find the associated session and return its keepAlive channel
+			if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+				return session, nil
+			}
+		}
+
+		// Assume session might be invalid, clean up and create new
+		logger.Ctx(ctx).Warn("Failed to acquire existing lock, creating new lock",
+			zap.String("logName", logName),
+			zap.Error(err))
+		delete(e.logWriterLocks, logName)
+
+		// Close the old session if it exists
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			_ = session.Close()
+			delete(e.lockSessions, logName)
+		}
 	}
-	// create a new lock
+
+	// Create a new session specifically for this lock with TTL
+	newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(10))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session for lock: %w", err)
+	}
+
+	// Create a new lock with this session
 	lockKey := BuildLogLockKey(logName)
-	lock := concurrency.NewMutex(e.session, lockKey)
+	lock := concurrency.NewMutex(newSession, lockKey)
+
+	// Try to acquire the lock
+	err = lock.TryLock(ctx)
+	if err != nil {
+		// If we can't acquire the lock, clean up the session
+		_ = newSession.Close()
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
+	}
+
+	// Store the lock and session for future reference
 	e.logWriterLocks[logName] = lock
-	//
-	return lock.TryLock(ctx)
+	e.lockSessions[logName] = newSession
+	return newSession, nil
 }
 
 func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName string) error {
 	e.Lock()
 	defer e.Unlock()
 	if l, exists := e.logWriterLocks[logName]; exists {
+		// First unlock the mutex
+		err := l.Unlock(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Warn("Failed to unlock writer lock",
+				zap.String("logName", logName),
+				zap.Error(err))
+		}
+
+		// Close the associated session
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			closeErr := session.Close()
+			if closeErr != nil {
+				logger.Ctx(ctx).Warn("Failed to close lock session",
+					zap.String("logName", logName),
+					zap.Error(closeErr))
+			}
+		}
+
+		// Remove the lock and session from our maps
 		delete(e.logWriterLocks, logName)
-		return l.Unlock(ctx)
+		delete(e.lockSessions, logName)
+		return err
 	}
 	return nil
 }
@@ -736,21 +788,45 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 func (e *metadataProviderEtcd) Close() error {
 	e.Lock()
 	defer e.Unlock()
+
+	// Close all individual writer locks and their sessions
 	for logName, lock := range e.logWriterLocks {
 		if lock == nil {
 			continue
 		}
+
+		// First unlock the mutex
 		err := lock.Unlock(context.Background())
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
+			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock during close",
+				zap.String("logName", logName),
+				zap.Error(err))
+		}
+
+		// Close the associated session
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			closeErr := session.Close()
+			if closeErr != nil {
+				logger.Ctx(context.Background()).Warn("Failed to close lock session during close",
+					zap.String("logName", logName),
+					zap.Error(closeErr))
+			}
 		}
 	}
+
+	// Clear the maps
+	e.logWriterLocks = make(map[string]*concurrency.Mutex)
+	e.lockSessions = make(map[string]*concurrency.Session)
+
+	// Close the main session if it exists (should be removed in the new implementation)
 	if e.session != nil {
 		err := e.session.Close()
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to close etcd session", zap.Error(err))
+			logger.Ctx(context.Background()).Warn("Failed to close main etcd session", zap.Error(err))
 		}
+		e.session = nil
 	}
+
 	return nil
 }
 

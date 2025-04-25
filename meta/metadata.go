@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 
+	"go.etcd.io/etcd/client/v3/concurrency"
+
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -22,7 +24,7 @@ type MetadataProvider interface {
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error)
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error
-	AcquireLogWriterLock(ctx context.Context, logName string) error
+	AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error)
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
 
 	StoreSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error

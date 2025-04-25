@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,14 +34,21 @@ type LogWriter interface {
 	Close(context.Context) error
 }
 
-func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
+func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
 	w := &logWriterImpl{
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		session:            session,
 	}
+
+	// Set sessionValid to true
+	w.sessionValid.Store(true)
+
+	// Monitor keepAlive channel
+	go w.monitorSession()
 	go w.runAuditor()
 	return w
 }
@@ -54,12 +63,39 @@ type logWriterImpl struct {
 	writerClose        chan struct{}
 	cleanupManager     segment.SegmentCleanupManager
 
+	// Session related fields
+	session      *concurrency.Session
+	sessionValid atomic.Bool
+
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
 	cleanupInProgress bool
 }
 
+func (l *logWriterImpl) monitorSession() {
+	for {
+		select {
+		case <-l.session.Done():
+			// Channel is closed, session is invalid
+			l.sessionValid.Store(false)
+			logger.Ctx(context.Background()).Warn("Writer lock session has expired",
+				zap.String("logName", l.logHandle.GetName()))
+			return
+		case <-l.writerClose:
+			return
+		}
+	}
+}
+
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+	// Check if session is valid
+	if !l.sessionValid.Load() {
+		return &WriteResult{
+			LogMessageId: nil,
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+		}
+	}
+
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
@@ -91,7 +127,19 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
 	l.Lock()
 	defer l.Unlock()
+
 	ch := make(chan *WriteResult, 1)
+
+	// Check if session is valid
+	if !l.sessionValid.Load() {
+		ch <- &WriteResult{
+			LogMessageId: nil,
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+		}
+		close(ch)
+		return ch
+	}
+
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback exec", zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		ch <- &WriteResult{
@@ -327,6 +375,11 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()))
 	}
 	return errors.Join(closeErr, releaseLockErr)
+}
+
+// GetWriterSession For Test only
+func (l *logWriterImpl) GetWriterSessionForTest() *concurrency.Session {
+	return l.session
 }
 
 type WriteResult struct {

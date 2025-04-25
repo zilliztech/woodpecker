@@ -119,6 +119,8 @@ const (
 	TruncateLogError
 	// GetTruncationPointError indicates an error occurred when retrieving truncation point
 	GetTruncationPointError
+	// WriterLockLost indicates the writer has lost its exclusive lock
+	WriterLockLost
 )
 
 var (
@@ -159,6 +161,7 @@ var (
 	ErrInternalError       = newWoodpeckerError("internal error", InternalError, true)
 	ErrConfigError         = newWoodpeckerError("config error", ConfigError, false)
 	ErrReaderTempInfoError = newWoodpeckerError("reader temp info error", MetadataCreateReaderError, true)
+	ErrWriterLockLost      = newWoodpeckerError("writer lock has been lost", WriterLockLost, false)
 
 	// Storage Related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)

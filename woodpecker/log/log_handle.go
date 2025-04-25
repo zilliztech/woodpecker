@@ -122,7 +122,7 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.Segme
 }
 
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
-	acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
+	se, acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
 	if acquireLockErr != nil {
 		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to acquire log writer lock for logName:%s", l.Name))
 		return nil, acquireLockErr
@@ -133,7 +133,7 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		return nil, err
 	}
 	// return LogWriter instance if writableSegmentHandle is created
-	return NewLogWriter(ctx, l, l.cfg), nil
+	return NewLogWriter(ctx, l, l.cfg, se), nil
 }
 
 func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
