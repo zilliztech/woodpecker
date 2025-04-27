@@ -14,30 +14,48 @@ type MetadataProvider interface {
 	io.Closer
 	// InitIfNecessary initializes the metadata provider if necessary.
 	InitIfNecessary(ctx context.Context) error
+	// GetVersionInfo returns the version information of the metadata provider.
+	GetVersionInfo(ctx context.Context) (*proto.Version, error)
 
-	GetVersionInfo(context.Context) (*proto.Version, error)
-
+	// CreateLog creates a new log in the metadata provider.
 	CreateLog(ctx context.Context, logName string) error
+	// OpenLog opens an existing log in the metadata provider.
 	OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error)
+	// CheckExists checks if a log exists in the metadata provider.
 	CheckExists(ctx context.Context, logName string) (bool, error)
+	// ListLogs returns a list of all logs in the metadata provider.
 	ListLogs(ctx context.Context) ([]string, error)
+	// ListLogsWithPrefix returns a list of all logs in the metadata provider with a given prefix.
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
+	// GetLogMeta returns the metadata for a specific log.
 	GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error)
+	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error
+	// AcquireLogWriterLock acquires a lock for writing to a specific log.
 	AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error)
+	// ReleaseLogWriterLock releases a lock for writing to a specific log.
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
 
-	StoreSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error
-	UpdateSegmentMetadata(context.Context, string, *proto.SegmentMetadata) error
-	DeleteSegmentMetadata(context.Context, string, int64) error
-	GetSegmentMetadata(context.Context, string, int64) (*proto.SegmentMetadata, error)
-	GetAllSegmentMetadata(context.Context, string) (map[int64]*proto.SegmentMetadata, error)
-	CheckSegmentExists(ctx context.Context, name string, i int64) (bool, error)
+	// StoreSegmentMetadata stores the metadata for a specific segment.
+	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *proto.SegmentMetadata) error
+	// UpdateSegmentMetadata updates the metadata for a specific segment.
+	UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *proto.SegmentMetadata) error
+	// DeleteSegmentMetadata deletes the metadata for a specific segment.
+	DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error
+	// GetSegmentMetadata returns the metadata for a specific segment.
+	GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*proto.SegmentMetadata, error)
+	// GetAllSegmentMetadata returns all segment metadata for a specific log.
+	GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*proto.SegmentMetadata, error)
+	// CheckSegmentExists checks if a segment exists in the metadata provider.
+	CheckSegmentExists(ctx context.Context, name string, segmentId int64) (bool, error)
 
+	// StoreQuorumInfo stores the quorum information for a specific quorum.
 	StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error
-	GetQuorumInfo(context.Context, int64) (*proto.QuorumInfo, error)
+	// GetQuorumInfo returns the quorum information for a specific quorum.
+	GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error)
 
-	CreateReaderTempInfo(context.Context, string, int64, int64, int64) error
+	// CreateReaderTempInfo creates a new reader temporary information record.
+	CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, segmentId int64, entryId int64) error
 	// GetReaderTempInfo returns the temporary information for a specific reader
 	GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error)
 	// GetAllReaderTempInfoForLog returns all reader temporary information for a given log

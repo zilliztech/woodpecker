@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -29,6 +30,7 @@ var _ storage.Fragment = (*FragmentObject)(nil)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
+	mu     sync.RWMutex
 	client minioHandler.MinioHandler
 
 	// info
@@ -114,6 +116,8 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 
 // Load reads the data from MinIO.
 func (f *FragmentObject) Load(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.dataLoaded {
 		// already loaded, no need to load again
 		return nil
@@ -215,6 +219,8 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 
 // Release releases the memory used by the fragment.
 func (f *FragmentObject) Release() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.dataLoaded {
 		// empty, no need to release again
 		return nil
