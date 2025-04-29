@@ -755,7 +755,7 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 	fileSize := fr.fileSize
 	filePath := fr.filePath
 	firstEntryID := fr.firstEntryID
-	fr.mu.RUnlock()
+	defer fr.mu.RUnlock()
 
 	// Calculate index position - relative position of entry ID in index area
 	idxPos := uint32(fileSize - footerSize - int64(indexItemSize)*(int64(entryId-firstEntryID+1)))
