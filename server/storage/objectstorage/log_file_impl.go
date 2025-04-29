@@ -567,11 +567,13 @@ func (f *LogFile) prefetchFragmentInfos() {
 			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true, false)
 			f.fragments = append(f.fragments, fragment)
 			fragId++
+			logger.Ctx(context.Background()).Debug("prefetch fragment info", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("lastFragId", fragId-1))
 		} else {
 			// no more fragment exists, cause the id sequence is broken
 			break
 		}
 	}
+	logger.Ctx(context.Background()).Debug("prefetch fragment infos", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int("fragments", len(f.fragments)), zap.Uint64("lastFragId", fragId-1))
 }
 
 func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
@@ -634,6 +636,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
+// TODO improve， here we just need to load the last fragment
 func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -662,8 +665,15 @@ func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 		f.fragments[fid] = frag.(*FragmentObject)
 	}
 
-	//
 	lastFragment := f.fragments[len(f.fragments)-1]
+
+	logger.Ctx(ctx).Debug("Load fragments", zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.Int64("logFileId", f.id),
+		zap.Int("fragments", len(f.fragments)),
+		zap.Int("totalSize", totalSize),
+		zap.Uint64("lastFragId", lastFragment.fragmentId),
+		zap.Int64("lastEntryId", lastFragment.lastEntryId),
+	)
 	return int64(totalSize), lastFragment, nil
 }
 
@@ -796,7 +806,15 @@ func (o *logFileReader) HasNext() bool {
 		// reach the end of range
 		return false
 	}
-	f, _ := o.logfile.getFragment(o.pendingReadEntryId)
+	f, err := o.logfile.getFragment(o.pendingReadEntryId)
+	if err != nil {
+		logger.Ctx(context.Background()).Warn("Failed to get fragment",
+			zap.String("segmentPrefixKey", o.logfile.segmentPrefixKey),
+			zap.Int64("logFileId", o.logfile.id),
+			zap.Int64("pendingReadEntryId", o.pendingReadEntryId),
+			zap.Error(err))
+		return false
+	}
 	if f == nil {
 		// no more fragment
 		return false

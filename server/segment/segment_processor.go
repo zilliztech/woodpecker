@@ -278,6 +278,7 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 	if err != nil {
 		return nil, err
 	}
+	logger.Ctx(ctx).Debug("recover segment load completed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("lastEntryId", lastEntryId), zap.String("lastFrag", lastFragment.GetFragmentKey()))
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Completed,
 		CompletionTime: lastFragment.GetLastModified(),

@@ -381,6 +381,7 @@ func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
 	if err != nil {
 		logger.Ctx(ctx).Warn("refresh segment meta failed",
 			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.Error(err))
 		return err
@@ -452,7 +453,10 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 		return nil
 	}
 
-	go s.compactToSealed(ctx)
+	go func() {
+		compactErr := s.compactToSealed(ctx)
+		logger.Ctx(ctx).Warn("segment compaction failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(compactErr))
+	}()
 	return nil
 }
 
@@ -532,6 +536,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	logger.Ctx(ctx).Info("start recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("state", fmt.Sprintf("%s", currentSegmentMeta.State)))
 	recoverySegMetaInfo, recoveryErr := client.SegmentRecoveryFromInProgress(ctx, s.logId, s.segmentId)
 	if recoveryErr != nil {
 		return recoveryErr
@@ -543,7 +548,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	newSegmentMeta.CompletionTime = recoverySegMetaInfo.CompletionTime
 	newSegmentMeta.Size = recoverySegMetaInfo.Size
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
+	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
 	// update segmentHandle meta cache
 	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr
@@ -552,6 +557,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State != proto.SegmentState_Completed {
+		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
 	if s.doingRecoveryOrCompact.Load() {
@@ -559,7 +565,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
 
-	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId))
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		return err
@@ -573,6 +579,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		return err
 	}
 	// wait compaction success
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId))
 	compactSegMetaInfo, compactErr := client.SegmentCompact(ctx, s.logId, s.segmentId)
 	if compactErr != nil {
 		return compactErr
@@ -586,7 +593,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	newSegmentMeta.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
 	newSegmentMeta.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
+	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
 	// update segmentHandle meta cache
 	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr

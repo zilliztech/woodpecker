@@ -267,7 +267,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 		return nil, nil, err
 	}
 
-	//
+	logger.Ctx(ctx).Info("log opened successfully", zap.String("logName", logName), zap.Int64("logId", logResp.LogId))
 	return logResp, segmentMetaList, nil
 }
 
@@ -499,13 +499,16 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 		return segmentMetaMap, nil
 	}
 
+	segIds := make([]int64, 0)
 	for _, kv := range getResp.Kvs {
 		segmentMeta := &proto.SegmentMetadata{}
 		if err := pb.Unmarshal(kv.Value, segmentMeta); err != nil {
 			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 		}
 		segmentMetaMap[segmentMeta.SegNo] = segmentMeta
+		segIds = append(segIds, segmentMeta.SegNo)
 	}
+	logger.Ctx(ctx).Debug("GetAllSegmentMetadata", zap.String("logName", logName), zap.Int("segmentCount", len(segmentMetaMap)), zap.Int64s("segmentIds", segIds))
 	return segmentMetaMap, nil
 }
 

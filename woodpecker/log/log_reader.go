@@ -64,9 +64,12 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
 		logger.Ctx(ctx).Debug("get next segment handle and ids",
 			zap.String("logName", l.logHandle.GetName()),
+			zap.Int64("logId", l.logHandle.GetId()),
 			zap.String("readerName", l.readerName),
-			zap.Int64("pendingReadSegmentId", segId),
-			zap.Int64("pendingReadEntryId", entryId),
+			zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId),
+			zap.Int64("pendingReadEntryId", l.pendingReadEntryId),
+			zap.Int64("actualReadSegmentId", segId),
+			zap.Int64("actualReadEntryId", entryId),
 			zap.Error(err))
 		if err != nil {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
@@ -153,6 +156,12 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		if err != nil {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
+		logger.Ctx(ctx).Debug("read one message complete",
+			zap.String("logName", l.logHandle.GetName()),
+			zap.Int64("logId", l.logHandle.GetId()),
+			zap.String("readerName", l.readerName),
+			zap.Int64("actualReadSegmentId", segId),
+			zap.Int64("actualReadEntryId", entryId))
 		logMsg.Id = &LogMessageId{
 			SegmentId: segId,
 			EntryId:   entryId,

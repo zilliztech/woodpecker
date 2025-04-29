@@ -276,6 +276,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	start := time.Now()
 	logger.Ctx(ctx).Debug("start to close segment",
 		zap.String("logName", l.Name),
+		zap.Int64("logId", l.GetId()),
 		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 1. close segmentHandle,
 	//  it will send fence request to logStores
@@ -365,9 +366,9 @@ func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 	nextSeqNo := maxSeqNo + 1
 	// try get dynamic max seqNo
 	for {
-		meta, err := l.Metadata.GetSegmentMetadata(context.Background(), l.Name, nextSeqNo)
-		if err == nil && meta != nil {
-			l.SegmentMetasCache.Store(nextSeqNo, meta)
+		segMeta, err := l.Metadata.GetSegmentMetadata(context.Background(), l.Name, nextSeqNo)
+		if err == nil && segMeta != nil {
+			l.SegmentMetasCache.Store(nextSeqNo, segMeta)
 			nextSeqNo++
 		} else if err != nil && werr.ErrSegmentNotFound.Is(err) {
 			break

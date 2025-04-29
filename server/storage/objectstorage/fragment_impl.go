@@ -255,6 +255,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		infoFetched:  true,
 	}
 	expectedEntryId := int64(-1)
+	fragIds := make([]uint64, 0)
 	for _, fragment := range fragments {
 		err := fragment.Load(ctx)
 		if err != nil {
@@ -284,6 +285,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		}
 		// merge data
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
+		fragIds = append(fragIds, fragment.fragmentId)
 	}
 	// mark dataLoaded
 	mergedFrag.dataLoaded = true
@@ -306,7 +308,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
 	}
 
-	//
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds))
 	return mergedFrag, nil
 }
 
