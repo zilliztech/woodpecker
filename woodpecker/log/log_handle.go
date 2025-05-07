@@ -59,7 +59,7 @@ type logHandleImpl struct {
 
 	Name              string
 	logMetaCache      *proto.LogMeta
-	SegmentMetasCache sync.Map
+	SegmentMetasCache sync.Map // TODO should not cache here, let segment handle maintain itself
 	SegmentHandles    map[int64]segment.SegmentHandle
 	// active writable segment handle index
 	WritableSegmentId int64

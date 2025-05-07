@@ -2,11 +2,12 @@ package integration
 
 import (
 	"context"
-	"go.etcd.io/etcd/client/v3/concurrency"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.etcd.io/etcd/client/v3/concurrency"
+
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/woodpecker"

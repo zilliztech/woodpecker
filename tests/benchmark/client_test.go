@@ -49,10 +49,11 @@ func TestE2EWrite(t *testing.T) {
 			assert.NoError(t, err)
 
 			// ###  CreateLog if not exists
-			client.GetMetadataProvider().CreateLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_e2e_log_%s", tc.name)
+			client.GetMetadataProvider().CreateLog(context.Background(), logName)
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			assert.NoError(t, openErr)
 			logHandle.GetName()
 
@@ -72,6 +73,10 @@ func TestE2EWrite(t *testing.T) {
 			assert.NoError(t, err)
 			err = client.Close()
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -120,10 +125,11 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			}
 
 			// ###  CreateLog if not exists
-			client.CreateLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			client.CreateLog(context.Background(), logName)
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			if openErr != nil {
 				fmt.Printf("Open log failed, err:%v\n", openErr)
 				panic(openErr)
@@ -227,6 +233,11 @@ func TestAsyncWriteThroughput(t *testing.T) {
 				fmt.Printf("close failed, err:%v\n", closeErr)
 				panic(closeErr)
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Printf("Test Write finished  %d entries\n", successCount)
 		})
 	}
@@ -272,10 +283,11 @@ func TestReadThroughput(t *testing.T) {
 			}
 
 			// ###  CreateLog if not exists
-			client.CreateLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			client.CreateLog(context.Background(), logName)
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			if openErr != nil {
 				fmt.Printf("Open log failed, err:%v\n", openErr)
 				panic(openErr)
@@ -310,6 +322,11 @@ func TestReadThroughput(t *testing.T) {
 					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
 				}
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Printf("final read %d success \n", totalEntries)
 			fmt.Printf("Test Read finished\n")
 		})
@@ -354,10 +371,11 @@ func TestReadFromEarliest(t *testing.T) {
 			}
 
 			// ###  CreateLog if not exists
-			client.CreateLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			client.CreateLog(context.Background(), logName)
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			if openErr != nil {
 				fmt.Printf("Open log failed, err:%v\n", openErr)
 				panic(openErr)
@@ -382,6 +400,11 @@ func TestReadFromEarliest(t *testing.T) {
 					fmt.Printf("read success, msg:%v\n", msg)
 				}
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Println("Test Read finished")
 		})
 	}
@@ -425,7 +448,8 @@ func TestReadFromLatest(t *testing.T) {
 			}
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			if openErr != nil {
 				fmt.Printf("Open log failed, err:%v\n", openErr)
 				panic(openErr)
@@ -452,6 +476,10 @@ func TestReadFromLatest(t *testing.T) {
 			}()
 			time.Sleep(time.Second * 2)
 			assert.False(t, more, "should read nothing and timeout")
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -494,7 +522,8 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 			}
 
 			// ### OpenLog
-			logHandle, openErr := client.OpenLog(context.Background(), "test_log")
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			if openErr != nil {
 				fmt.Printf("Open log failed, err:%v\n", openErr)
 				panic(openErr)
@@ -522,6 +551,10 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 					fmt.Printf("read success, msg:%v\n", msg)
 				}
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
 			fmt.Println("Test Read finished")
 		})

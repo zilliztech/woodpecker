@@ -116,6 +116,10 @@ func TestTruncateBasicOperation(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -330,6 +334,10 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("Final truncation point: segmentId=%d, entryId=%d",
 				truncatedId.SegmentId, truncatedId.EntryId)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -473,6 +481,10 @@ func TestMultiSegmentTruncation(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -629,6 +641,10 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -822,7 +838,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			time.Sleep(10 * time.Second)
 
 			// 9. Check if segments before truncation point were cleaned up
-			segments, err = logHandle.GetSegments(context.Background())
+			segments, err = logHandle.GetMetadataProvider().GetAllSegmentMetadata(context.Background(), logHandle.GetName())
 			assert.NoError(t, err)
 
 			var segmentsAfterCleanup []int64
@@ -844,7 +860,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 				if segId < truncatePoint.SegmentId {
 					// Segments completely before truncation point should be marked as truncated
 					assert.Equal(t, proto.SegmentState_Truncated, seg.State,
-						"Segment %d should be marked as truncated", segId)
+						"Segment %d should be marked as truncated, as truncated Point:%d/%d", segId, truncatePoint.SegmentId, truncatePoint.EntryId)
 				}
 			}
 
@@ -880,6 +896,10 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
 			t.Log("Test completed successfully")
 		})

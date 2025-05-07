@@ -2,7 +2,6 @@ package log
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"sort"
@@ -369,7 +368,7 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	if releaseLockErr != nil {
 		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 	}
-	return errors.Join(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, releaseLockErr)
 }
 
 // GetWriterSession For Test only
