@@ -160,7 +160,7 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	if err != nil {
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta, segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
+	newLogHandle := log.NewLogHandle(logName, logMeta.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
 	c.logHandles[logName] = newLogHandle
 	return newLogHandle, nil
 }

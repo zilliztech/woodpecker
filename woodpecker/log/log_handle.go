@@ -58,7 +58,7 @@ type logHandleImpl struct {
 	sync.RWMutex
 
 	Name              string
-	logMetaCache      *proto.LogMeta
+	Id                int64
 	SegmentMetasCache sync.Map // TODO should not cache here, let segment handle maintain itself
 	SegmentHandles    map[int64]segment.SegmentHandle
 	// active writable segment handle index
@@ -72,14 +72,14 @@ type logHandleImpl struct {
 	cfg                *config.Configuration
 }
 
-func NewLogHandle(name string, logMeta *proto.LogMeta, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) *logHandleImpl {
+func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
 
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	l := &logHandleImpl{
 		Name:               name,
-		logMetaCache:       logMeta,
+		Id:                 logId,
 		SegmentMetasCache:  sync.Map{},
 		SegmentHandles:     make(map[int64]segment.SegmentHandle),
 		WritableSegmentId:  -1,
@@ -105,7 +105,7 @@ func (l *logHandleImpl) GetName() string {
 }
 
 func (l *logHandleImpl) GetId() int64 {
-	return l.logMetaCache.LogId
+	return l.Id
 }
 
 func (l *logHandleImpl) GetMetadataProvider() meta.MetadataProvider {
@@ -166,7 +166,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 	return writeableSegmentHandle, nil
 }
 
-// getRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method
+// GetRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method
 func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	s, err := l.GetExistsReadonlySegmentHandle(ctx, segmentId)
 	if err != nil {
@@ -190,7 +190,7 @@ func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, se
 		segmentMeta, metaExists := l.SegmentMetasCache.Load(segmentId)
 		if metaExists {
 			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
+			handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
 			l.SegmentHandles[segmentId] = handle
 			return handle, nil
 		}
@@ -211,7 +211,7 @@ func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, se
 		segmentMeta, metaExists = l.SegmentMetasCache.Load(segmentId)
 		if metaExists {
 			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
+			handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
 			l.SegmentHandles[segmentId] = handle
 			return handle, nil
 		} else {
@@ -233,7 +233,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	segmentMeta, metaExists := l.SegmentMetasCache.Load(segmentId)
 	if metaExists {
 		// create a readonly segmentHandle and cache it
-		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
+		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -247,7 +247,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	}
 	if segMeta != nil {
 		l.SegmentMetasCache.Store(segmentId, segMeta)
-		handle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg)
+		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -259,7 +259,7 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 	if err != nil {
 		return nil, err
 	}
-	newSegHandle := segment.NewSegmentHandle(ctx, l.logMetaCache.LogId, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg)
+	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime
@@ -393,7 +393,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 	}
 	startPoint := l.adjustPendingReadPointIfTruncated(ctx, readerName, from)
 	r := NewLogReader(ctx, l, nil, startPoint, readerName)
-	err := l.Metadata.CreateReaderTempInfo(ctx, readerName, l.logMetaCache.LogId, startPoint.SegmentId, startPoint.EntryId)
+	err := l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
 	if err != nil {
 		return nil, werr.ErrReaderTempInfoError.WithCauseErr(err)
 	}
@@ -465,8 +465,6 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 	}
 
 	// 7. Update logMetaCache
-	l.logMetaCache = logMeta
-
 	logger.Ctx(ctx).Info("Truncation completed",
 		zap.String("logName", l.Name),
 		zap.Int64("truncatedSegmentId", recordId.SegmentId),
@@ -586,23 +584,11 @@ func (l *logHandleImpl) isBeforeTruncationPoint(from *LogMessageId, truncatedId 
 func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error) {
 	l.RLock()
 	defer l.RUnlock()
-
-	// If we have cached metadata, use it
-	if l.logMetaCache != nil {
-		return &LogMessageId{
-			SegmentId: l.logMetaCache.TruncatedSegmentId,
-			EntryId:   l.logMetaCache.TruncatedEntryId,
-		}, nil
-	}
-
-	// Otherwise, fetch the latest metadata
+	// fetch the latest metadata
 	logMeta, err := l.Metadata.GetLogMeta(ctx, l.Name)
 	if err != nil {
 		return nil, werr.ErrGetTruncationPoint.WithCauseErr(err)
 	}
-
-	// Update cache
-	l.logMetaCache = logMeta
 
 	// Return the truncation point
 	return &LogMessageId{
