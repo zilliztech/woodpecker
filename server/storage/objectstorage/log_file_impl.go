@@ -267,6 +267,9 @@ func (f *LogFile) findFragment(entryId int64) (*FragmentObject, error) {
 func (f *LogFile) objectExists(ctx context.Context, objectKey string) (bool, error) {
 	_, err := f.client.StatObject(ctx, f.bucket, objectKey, minio.StatObjectOptions{})
 	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil

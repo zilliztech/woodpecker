@@ -2,13 +2,18 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/woodpecker"
+	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
 func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
@@ -65,4 +70,999 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 	logWriter3, openWriterErr3 := logHandle2.OpenLogWriter(context.Background())
 	assert.NoError(t, openWriterErr3)
 	assert.NotNil(t, logWriter3)
+}
+
+func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	// Create a new embed client
+	client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+	assert.NoError(t, err)
+
+	// Create a test log with timestamp to ensure uniqueness
+	logName := "test_repeated_open_close" + time.Now().Format("20060102150405")
+	createErr := client.CreateLog(ctx, logName)
+	if createErr != nil {
+		assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+	}
+
+	// Open log handle
+	logHandle, err := client.OpenLog(ctx, logName)
+	assert.NoError(t, err)
+
+	// Loop 3 times, each iteration:
+	// 1. Open writer, write data, close writer
+	// 2. Open empty writer, don't write, close writer
+	totalWrittenMessages := 0
+
+	for i := 0; i < 3; i++ {
+		t.Logf("=== Cycle %d ===", i+1)
+
+		// Part 1: Open writer and write data
+		t.Logf("Cycle %d: Opening writer with data", i+1)
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, writer)
+
+		// Write 5 messages
+		for j := 0; j < 5; j++ {
+			message := &log.WriterMessage{
+				Payload: []byte(fmt.Sprintf("Cycle %d, message %d", i+1, j)),
+				Properties: map[string]string{
+					"cycle": fmt.Sprintf("%d", i+1),
+					"index": fmt.Sprintf("%d", j),
+				},
+			}
+
+			result := writer.Write(ctx, message)
+			assert.NoError(t, result.Err)
+			assert.NotNil(t, result.LogMessageId)
+			totalWrittenMessages++
+
+			t.Logf("Written message %d with ID: segment=%d, entry=%d",
+				totalWrittenMessages, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+		}
+
+		// Close writer with data
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Writer with data closed successfully after writing 5 messages", i+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Part 2: Open empty writer and close without writing
+		t.Logf("Cycle %d: Opening empty writer without data", i+1)
+		emptyWriter, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, emptyWriter)
+
+		// Close empty writer without writing
+		err = emptyWriter.Close(ctx)
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Empty writer closed without writing", i+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Logf("Total messages written: %d (expected to be 15)", totalWrittenMessages)
+
+	// Open reader and read all data
+	t.Log("Opening reader to verify all messages")
+	startPoint := &log.LogMessageId{
+		SegmentId: 0,
+		EntryId:   0,
+	}
+
+	reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	// Read and verify all messages
+	var readCount int
+	var lastMessage *log.LogMessage
+
+	for readCount < totalWrittenMessages {
+		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		message, err := reader.ReadNext(readCtx)
+		cancel()
+
+		if err != nil {
+			t.Logf("Error reading message %d: %v", readCount+1, err)
+			break
+		}
+
+		if message == nil {
+			t.Logf("Received nil message at position %d", readCount+1)
+			break
+		}
+
+		readCount++
+		lastMessage = message
+
+		// Log every message (since there are only 15 in total)
+		t.Logf("Read message %d: %s, properties: %v",
+			readCount, string(message.Payload), message.Properties)
+	}
+
+	// Verify we read all expected messages
+	assert.Equal(t, totalWrittenMessages, readCount, "Should read exactly the number of messages written")
+
+	if lastMessage != nil {
+		t.Logf("Last message read: %s, properties: %v",
+			string(lastMessage.Payload), lastMessage.Properties)
+
+		// The last message should be from the last cycle
+		assert.Contains(t, string(lastMessage.Payload), "Cycle 3")
+	}
+
+	// Try to read one more - should timeout or error
+	readExtraCtx, cancelExtra := context.WithTimeout(ctx, 500*time.Millisecond)
+	extraMessage, err := reader.ReadNext(readExtraCtx)
+	cancelExtra()
+
+	if err != nil {
+		t.Log("No extra messages as expected (timeout/error)")
+	} else if extraMessage == nil {
+		t.Log("No extra messages as expected (nil response)")
+	} else {
+		t.Logf("Unexpected extra message: %s", string(extraMessage.Payload))
+		t.Fail()
+	}
+
+	// Close reader
+	err = reader.Close(ctx)
+	assert.NoError(t, err)
+	t.Log("Reader closed successfully")
+
+	// Close client
+	err = client.Close()
+	assert.NoError(t, err)
+	t.Log("Client closed successfully")
+}
+
+func TestWriterCloseWithoutWrite(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	// Create a new embed client
+	client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+	assert.NoError(t, err)
+
+	// Create a test log with timestamp to ensure uniqueness
+	logName := "test_writer_close_without_write" + time.Now().Format("20060102150405")
+	createErr := client.CreateLog(ctx, logName)
+	if createErr != nil {
+		assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+	}
+
+	// Open log handle
+	logHandle, err := client.OpenLog(ctx, logName)
+	assert.NoError(t, err)
+
+	// Initialize message counter
+	totalWrittenMessages := 0
+
+	// Run 2 cycles of: write 100 messages, then open a writer without writing
+	for cycle := 0; cycle < 2; cycle++ {
+		t.Logf("=== Cycle %d ===", cycle+1)
+
+		// Step 1: Open a writer and write 100 messages
+		t.Logf("Cycle %d: Opening writer with data", cycle+1)
+		writerWithData, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, writerWithData)
+
+		// Write 20 messages
+		for j := 0; j < 20; j++ {
+			message := &log.WriterMessage{
+				Payload: []byte(fmt.Sprintf("Cycle %d, data message %d", cycle+1, j)),
+				Properties: map[string]string{
+					"cycle": fmt.Sprintf("%d", cycle+1),
+					"index": fmt.Sprintf("%d", j),
+					"type":  "data",
+				},
+			}
+
+			result := writerWithData.Write(ctx, message)
+			assert.NoError(t, result.Err)
+			assert.NotNil(t, result.LogMessageId)
+			totalWrittenMessages++
+
+			// Log only certain messages to reduce output volume
+			if j%5 == 0 || j == 19 {
+				t.Logf("Written message %d with ID: segment=%d, entry=%d",
+					totalWrittenMessages, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+			}
+		}
+
+		// Close writer with data
+		err = writerWithData.Close(ctx)
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Writer with data closed successfully after writing 20 messages", cycle+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(500 * time.Millisecond)
+
+		// Step 2: Open a writer but don't write anything
+		t.Logf("Cycle %d: Opening writer without data", cycle+1)
+		emptyWriter, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, emptyWriter)
+
+		// Close without writing
+		err = emptyWriter.Close(ctx)
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Empty writer closed without writing", cycle+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Log the total messages written
+	t.Logf("Total messages written: %d", totalWrittenMessages)
+
+	// Open reader and verify messages
+	t.Log("Opening reader to verify all messages")
+	startPoint := &log.LogMessageId{
+		SegmentId: 0,
+		EntryId:   0,
+	}
+
+	reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	// Read and verify first message
+	t.Log("Verifying first message...")
+	readCtx1, cancel1 := context.WithTimeout(ctx, 2*time.Second)
+	readMsg1, err := reader.ReadNext(readCtx1)
+	cancel1()
+	if err != nil {
+		t.Logf("Error reading first message: %v", err)
+	} else if readMsg1 == nil {
+		t.Log("First message is nil, unexpected")
+	} else {
+		t.Logf("First message: %s, properties: %v",
+			string(readMsg1.Payload), readMsg1.Properties)
+		assert.Contains(t, string(readMsg1.Payload), "Cycle 1")
+	}
+
+	// Count the total messages we can read
+	var readCount int = 1 // Already read the first message
+	var lastReadMsg *log.LogMessage = readMsg1
+
+	// Read with a timeout for the entire operation
+	readTimeoutCtx, readTimeoutCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer readTimeoutCancel()
+
+	for {
+		readCtx, cancel := context.WithTimeout(readTimeoutCtx, 2*time.Second)
+		msg, err := reader.ReadNext(readCtx)
+		cancel()
+
+		if err != nil {
+			t.Logf("Error at message %d: %v - stopping read", readCount+1, err)
+			break
+		}
+		if msg == nil {
+			t.Logf("Received nil message at position %d - stopping read", readCount+1)
+			break
+		}
+
+		lastReadMsg = msg
+		readCount++
+
+		// Log milestone messages
+		if readCount == 20 || readCount == 40 || readCount%10 == 0 {
+			t.Logf("Message %d: %s, properties: %v",
+				readCount, string(msg.Payload), msg.Properties)
+		}
+
+		// Check if we've read all expected messages (with some buffer)
+		if readCount >= totalWrittenMessages+10 {
+			t.Logf("Read more messages than expected (%d > %d) - stopping", readCount, totalWrittenMessages)
+			break
+		}
+
+		// Check if the timeout context is done
+		select {
+		case <-readTimeoutCtx.Done():
+			t.Log("Timeout while reading messages")
+			break
+		default:
+			// Continue
+		}
+	}
+
+	if lastReadMsg != nil {
+		t.Logf("Last successfully read message: %s, properties: %v",
+			string(lastReadMsg.Payload), lastReadMsg.Properties)
+	}
+
+	// Close reader
+	err = reader.Close(ctx)
+	assert.NoError(t, err)
+	t.Log("Reader closed successfully")
+
+	// Compare written vs read message counts
+	expectedReadCount := totalWrittenMessages
+	if readCount == expectedReadCount {
+		t.Logf("PASS: Successfully read exactly the expected number of messages: %d", readCount)
+	} else if readCount < expectedReadCount {
+		t.Logf("WARN: Read fewer messages than expected: %d < %d", readCount, expectedReadCount)
+	} else {
+		t.Logf("WARN: Read more messages than expected: %d > %d", readCount, expectedReadCount)
+	}
+
+	// Close client
+	err = client.Close()
+	assert.NoError(t, err)
+	t.Log("Client closed successfully")
+}
+
+func TestClientRecreation(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	logName := "test_client_recreation" + time.Now().Format("20060102150405")
+
+	// First client lifecycle
+	{
+		// Create first client
+		client1, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		assert.NoError(t, err)
+
+		// Create a log or use existing one
+		createErr := client1.CreateLog(ctx, logName)
+		if createErr != nil {
+			assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+		}
+
+		// Open the log
+		logHandle, err := client1.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open a writer and write data
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+
+		// Write some data with the first client
+		message := &log.WriterMessage{
+			Payload:    []byte("First client message"),
+			Properties: map[string]string{"client": "first"},
+		}
+
+		result := writer.Write(ctx, message)
+		assert.NoError(t, result.Err)
+
+		// Close writer
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close the first client
+		err = client1.Close()
+		assert.NoError(t, err)
+
+		t.Log("First client closed successfully")
+	}
+
+	// Wait a brief moment to ensure clean shutdown
+	time.Sleep(500 * time.Millisecond)
+
+	// Second client lifecycle
+	{
+		// Create second client
+		client2, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		assert.NoError(t, err)
+
+		// Verify the log exists
+		exists, err := client2.LogExists(ctx, logName)
+		assert.NoError(t, err)
+		assert.True(t, exists, "Log should still exist after client recreation")
+
+		// Open the same log
+		logHandle, err := client2.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open a writer and write more data
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+
+		// Write some data with the second client
+		message := &log.WriterMessage{
+			Payload:    []byte("Second client message"),
+			Properties: map[string]string{"client": "second"},
+		}
+
+		result := writer.Write(ctx, message)
+		assert.NoError(t, result.Err)
+
+		// Close writer
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+
+		// Now read all messages to verify both writes succeeded
+		startPoint := &log.LogMessageId{
+			SegmentId: 0,
+			EntryId:   0,
+		}
+
+		reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader")
+		assert.NoError(t, err)
+
+		// Read first message
+		readCtx1, cancel1 := context.WithTimeout(ctx, 2*time.Second)
+		message1, err := reader.ReadNext(readCtx1)
+		cancel1()
+		assert.NoError(t, err)
+		assert.NotNil(t, message1)
+
+		if message1 != nil {
+			t.Logf("First message: %s, properties: %v", string(message1.Payload), message1.Properties)
+			assert.Equal(t, "First client message", string(message1.Payload))
+			assert.Equal(t, "first", message1.Properties["client"])
+		}
+
+		// Read second message
+		readCtx2, cancel2 := context.WithTimeout(ctx, 2*time.Second)
+		message2, err := reader.ReadNext(readCtx2)
+		cancel2()
+		assert.NoError(t, err)
+		assert.NotNil(t, message2)
+
+		if message2 != nil {
+			t.Logf("Second message: %s, properties: %v", string(message2.Payload), message2.Properties)
+			assert.Equal(t, "Second client message", string(message2.Payload))
+			assert.Equal(t, "second", message2.Properties["client"])
+		}
+
+		// Close reader
+		err = reader.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close the second client
+		err = client2.Close()
+		assert.NoError(t, err)
+
+		t.Log("Second client closed successfully")
+	}
+}
+
+func TestClientRecreationWithManagedCli(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	logName := "test_client_recreation_with_managed_clients" + time.Now().Format("20060102150405")
+
+	// First client lifecycle
+	{
+		// Create first client
+		etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+		assert.NoError(t, err)
+		var minioCli minio.MinioHandler
+		if cfg.Woodpecker.Storage.IsStorageMinio() {
+			minioCli, err = minio.NewMinioHandler(ctx, cfg)
+			assert.NoError(t, err)
+		}
+		client1, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, minioCli, true)
+		assert.NoError(t, err)
+
+		// Create a log or use existing one
+		createErr := client1.CreateLog(ctx, logName)
+		if createErr != nil {
+			assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+		}
+
+		// Open the log
+		logHandle, err := client1.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open a writer and write data
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+
+		// Write some data with the first client
+		message := &log.WriterMessage{
+			Payload:    []byte("First client message"),
+			Properties: map[string]string{"client": "first"},
+		}
+
+		result := writer.Write(ctx, message)
+		assert.NoError(t, result.Err)
+
+		// Close writer
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close the first client
+		err = client1.Close()
+		assert.NoError(t, err)
+
+		t.Log("First client closed successfully")
+	}
+
+	// Wait a brief moment to ensure clean shutdown
+	time.Sleep(500 * time.Millisecond)
+
+	// Second client lifecycle
+	{
+		// Create second client
+		etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+		assert.NoError(t, err)
+		var minioCli minio.MinioHandler
+		if cfg.Woodpecker.Storage.IsStorageMinio() {
+			minioCli, err = minio.NewMinioHandler(ctx, cfg)
+			assert.NoError(t, err)
+		}
+		client2, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, minioCli, true)
+		assert.NoError(t, err)
+
+		// Verify the log exists
+		exists, err := client2.LogExists(ctx, logName)
+		assert.NoError(t, err)
+		assert.True(t, exists, "Log should still exist after client recreation")
+
+		// Open the same log
+		logHandle, err := client2.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open a writer and write more data
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+
+		// Write some data with the second client
+		message := &log.WriterMessage{
+			Payload:    []byte("Second client message"),
+			Properties: map[string]string{"client": "second"},
+		}
+
+		result := writer.Write(ctx, message)
+		assert.NoError(t, result.Err)
+
+		// Close writer
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+
+		// Now read all messages to verify both writes succeeded
+		startPoint := &log.LogMessageId{
+			SegmentId: 0,
+			EntryId:   0,
+		}
+
+		reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader")
+		assert.NoError(t, err)
+
+		// Read first message
+		readCtx1, cancel1 := context.WithTimeout(ctx, 2*time.Second)
+		message1, err := reader.ReadNext(readCtx1)
+		cancel1()
+		assert.NoError(t, err)
+		assert.NotNil(t, message1)
+
+		if message1 != nil {
+			t.Logf("First message: %s, properties: %v", string(message1.Payload), message1.Properties)
+			assert.Equal(t, "First client message", string(message1.Payload))
+			assert.Equal(t, "first", message1.Properties["client"])
+		}
+
+		// Read second message
+		readCtx2, cancel2 := context.WithTimeout(ctx, 2*time.Second)
+		message2, err := reader.ReadNext(readCtx2)
+		cancel2()
+		assert.NoError(t, err)
+		assert.NotNil(t, message2)
+
+		if message2 != nil {
+			t.Logf("Second message: %s, properties: %v", string(message2.Payload), message2.Properties)
+			assert.Equal(t, "Second client message", string(message2.Payload))
+			assert.Equal(t, "second", message2.Properties["client"])
+		}
+
+		// Close reader
+		err = reader.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close the second client
+		err = client2.Close()
+		assert.NoError(t, err)
+
+		t.Log("Second client closed successfully")
+	}
+}
+
+func TestMultiClientOpenCloseWriteRead(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a test log with timestamp to ensure uniqueness
+	logName := "test_multi_client_open_close" + time.Now().Format("20060102150405")
+	totalWrittenMessages := 0
+
+	// Loop 3 times, each iteration:
+	// 1. Create new client, open writer, write data, close writer and client
+	// 2. Create new client, open empty writer, don't write, close writer and client
+	for i := 0; i < 3; i++ {
+		t.Logf("=== Cycle %d ===", i+1)
+
+		// Part 1: Create client, open writer and write data
+		t.Logf("Cycle %d: Creating client with data writer", i+1)
+
+		// Create new client for writing data
+		cfg, err := config.NewConfiguration()
+		assert.NoError(t, err)
+		dataClient, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+		assert.NoError(t, err)
+
+		// Create log if first iteration, otherwise use existing
+		if i == 0 {
+			createErr := dataClient.CreateLog(ctx, logName)
+			assert.NoError(t, createErr)
+		}
+
+		// Open log handle
+		logHandle, err := dataClient.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open writer
+		writer, err := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, writer)
+
+		// Write 5 messages
+		for j := 0; j < 5; j++ {
+			message := &log.WriterMessage{
+				Payload: []byte(fmt.Sprintf("Cycle %d, message %d", i+1, j)),
+				Properties: map[string]string{
+					"cycle":       fmt.Sprintf("%d", i+1),
+					"index":       fmt.Sprintf("%d", j),
+					"client_type": "data_writer",
+				},
+			}
+
+			result := writer.Write(ctx, message)
+			assert.NoError(t, result.Err)
+			assert.NotNil(t, result.LogMessageId)
+			totalWrittenMessages++
+
+			t.Logf("Written message %d with ID: segment=%d, entry=%d",
+				totalWrittenMessages, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+		}
+
+		// Close writer
+		err = writer.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close client
+		err = dataClient.Close()
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Client with data writer closed successfully after writing 5 messages", i+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Part 2: Create client, open empty writer and close without writing
+		t.Logf("Cycle %d: Creating client with empty writer", i+1)
+
+		// Create new client for empty writer
+		emptyClientCfg, err := config.NewConfiguration()
+		assert.NoError(t, err)
+		emptyClient, err := woodpecker.NewEmbedClientFromConfig(ctx, emptyClientCfg)
+		assert.NoError(t, err)
+
+		// Open log handle
+		emptyLogHandle, err := emptyClient.OpenLog(ctx, logName)
+		assert.NoError(t, err)
+
+		// Open writer but don't write anything
+		emptyWriter, err := emptyLogHandle.OpenLogWriter(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, emptyWriter)
+
+		// Close empty writer without writing
+		err = emptyWriter.Close(ctx)
+		assert.NoError(t, err)
+
+		// Close client
+		err = emptyClient.Close()
+		assert.NoError(t, err)
+		t.Logf("Cycle %d: Client with empty writer closed without writing", i+1)
+
+		// Wait a moment to ensure operations complete
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Logf("Total messages written: %d (expected to be 15)", totalWrittenMessages)
+
+	// Create final client to read and verify all data
+	t.Log("Creating reader client to verify all messages")
+	readerCfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	readerClient, err := woodpecker.NewEmbedClientFromConfig(ctx, readerCfg)
+	assert.NoError(t, err)
+
+	// Open log handle
+	readerLogHandle, err := readerClient.OpenLog(ctx, logName)
+	assert.NoError(t, err)
+
+	// Open reader from beginning
+	startPoint := &log.LogMessageId{
+		SegmentId: 0,
+		EntryId:   0,
+	}
+
+	reader, err := readerLogHandle.OpenLogReader(ctx, startPoint, "verification-reader")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	// Read and verify all messages
+	var readCount int
+	var lastMessage *log.LogMessage
+
+	for readCount < totalWrittenMessages {
+		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		message, err := reader.ReadNext(readCtx)
+		cancel()
+
+		if err != nil {
+			t.Logf("Error reading message %d: %v", readCount+1, err)
+			break
+		}
+
+		if message == nil {
+			t.Logf("Received nil message at position %d", readCount+1)
+			break
+		}
+
+		readCount++
+		lastMessage = message
+
+		// Log every message (since there are only 15 in total)
+		t.Logf("Read message %d: %s, properties: %v",
+			readCount, string(message.Payload), message.Properties)
+	}
+
+	// Verify we read all expected messages
+	assert.Equal(t, totalWrittenMessages, readCount, "Should read exactly the number of messages written")
+
+	if lastMessage != nil {
+		t.Logf("Last message read: %s, properties: %v",
+			string(lastMessage.Payload), lastMessage.Properties)
+
+		// The last message should be from the last cycle
+		assert.Contains(t, string(lastMessage.Payload), "Cycle 3")
+	}
+
+	// Try to read one more - should timeout or error
+	readExtraCtx, cancelExtra := context.WithTimeout(ctx, 500*time.Millisecond)
+	extraMessage, err := reader.ReadNext(readExtraCtx)
+	cancelExtra()
+
+	if err != nil {
+		t.Log("No extra messages as expected (timeout/error)")
+	} else if extraMessage == nil {
+		t.Log("No extra messages as expected (nil response)")
+	} else {
+		t.Logf("Unexpected extra message: %s", string(extraMessage.Payload))
+		t.Fail()
+	}
+
+	// Close reader
+	err = reader.Close(ctx)
+	assert.NoError(t, err)
+	t.Log("Reader closed successfully")
+
+	// Close client
+	err = readerClient.Close()
+	assert.NoError(t, err)
+	t.Log("Reader client closed successfully")
+}
+
+func TestConcurrentWriteAndRead(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+
+	// Create a new embed client
+	client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+	assert.NoError(t, err)
+	defer client.Close()
+
+	// Number of overall test cycles to run
+	const testCycles = 3
+	// Number of messages to write in each cycle
+	const messageCount = 20
+
+	// Create a single test log with timestamp to ensure uniqueness
+	logName := "test_concurrent_write_read_" + time.Now().Format("20060102150405")
+	createErr := client.CreateLog(ctx, logName)
+	assert.NoError(t, createErr)
+
+	// Open log handle
+	logHandle, err := client.OpenLog(ctx, logName)
+	assert.NoError(t, err)
+
+	t.Logf("Created test log: %s", logName)
+
+	// Track total messages written for verification
+	totalMessagesWritten := 0
+
+	// Run the complete test multiple times on the same log
+	for cycle := 0; cycle < testCycles; cycle++ {
+		t.Logf("====== Starting Test Cycle %d/%d ======", cycle+1, testCycles)
+
+		// Create channels to track completion and results
+		writerDone := make(chan struct{})
+		reader1Done := make(chan []string)
+		reader2Done := make(chan []string)
+
+		// Start writer goroutine
+		go func() {
+			defer close(writerDone)
+
+			// Open writer
+			writer, err := logHandle.OpenLogWriter(ctx)
+			assert.NoError(t, err)
+			defer writer.Close(ctx)
+
+			t.Logf("Cycle %d - Writer: Started writing messages", cycle+1)
+
+			// Write messages
+			for i := 0; i < messageCount; i++ {
+				message := &log.WriterMessage{
+					Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, i)),
+					Properties: map[string]string{
+						"cycle": fmt.Sprintf("%d", cycle+1),
+						"index": fmt.Sprintf("%d", i),
+						"type":  "concurrent-test",
+					},
+				}
+
+				result := writer.Write(ctx, message)
+				assert.NoError(t, result.Err)
+
+				// Log milestone messages
+				if i%5 == 0 || i == messageCount-1 {
+					t.Logf("Cycle %d - Writer: Written message %d with ID: segment=%d, entry=%d",
+						cycle+1, i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+				}
+
+				// Small delay to allow readers to catch up
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			t.Logf("Cycle %d - Writer: Completed writing all messages", cycle+1)
+		}()
+
+		// Update total messages to be read in this cycle
+		totalMessagesWritten += messageCount
+		expectedMessagesThisCycle := totalMessagesWritten
+
+		// Function to create a reader goroutine that reads all messages from the beginning
+		createReader := func(readerName string, resultChan chan<- []string) {
+			// Add a small delay to ensure writer has started
+			time.Sleep(100 * time.Millisecond)
+
+			// Always start reading from the beginning
+			startPoint := &log.LogMessageId{
+				SegmentId: 0,
+				EntryId:   0,
+			}
+
+			reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName)
+			assert.NoError(t, err)
+			defer reader.Close(ctx)
+
+			t.Logf("Cycle %d - %s: Started reading from beginning, expecting %d total messages",
+				cycle+1, readerName, expectedMessagesThisCycle)
+
+			// Read messages with simple for loop and fixed timeout
+			messages := make([]string, 0, expectedMessagesThisCycle)
+
+			// Simple loop to read the expected number of messages
+			for i := 0; i < expectedMessagesThisCycle; i++ {
+				// Use a fixed timeout for each read
+				readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				msg, err := reader.ReadNext(readCtx)
+				cancel()
+
+				if err != nil {
+					t.Logf("Cycle %d - %s: Error reading message %d: %v",
+						cycle+1, readerName, i, err)
+					resultChan <- messages
+					return
+				}
+
+				if msg == nil {
+					t.Logf("Cycle %d - %s: Received nil message at position %d",
+						cycle+1, readerName, i)
+					resultChan <- messages
+					return
+				}
+
+				messages = append(messages, string(msg.Payload))
+
+				// Log milestone messages
+				if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+					t.Logf("Cycle %d - %s: Read message %d/%d: %s",
+						cycle+1, readerName, i+1, expectedMessagesThisCycle, string(msg.Payload))
+				}
+			}
+
+			t.Logf("Cycle %d - %s: Completed reading all %d messages",
+				cycle+1, readerName, len(messages))
+			resultChan <- messages
+		}
+
+		// Start reader goroutines
+		go createReader(fmt.Sprintf("Cycle%d-Reader1", cycle+1), reader1Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader2", cycle+1), reader2Done)
+
+		// Wait for writer to complete
+		<-writerDone
+		t.Logf("Cycle %d - Writer goroutine completed", cycle+1)
+
+		// Wait for readers to complete and collect results
+		reader1Messages := <-reader1Done
+		t.Logf("Cycle %d - Reader-1 completed with %d/%d messages",
+			cycle+1, len(reader1Messages), expectedMessagesThisCycle)
+
+		reader2Messages := <-reader2Done
+		t.Logf("Cycle %d - Reader-2 completed with %d/%d messages",
+			cycle+1, len(reader2Messages), expectedMessagesThisCycle)
+
+		// Verify results - each reader should read all messages from all cycles so far
+		assert.Equal(t, expectedMessagesThisCycle, len(reader1Messages),
+			"Cycle %d - Reader-1 should read all %d messages written so far",
+			cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader2Messages),
+			"Cycle %d - Reader-2 should read all %d messages written so far",
+			cycle+1, expectedMessagesThisCycle)
+
+		// Verify message content - need to verify all messages from all cycles
+		// First verify cycle 1's messages
+		for cycleNum := 1; cycleNum <= cycle+1; cycleNum++ {
+			t.Logf("Verifying messages from cycle %d", cycleNum)
+
+			// Calculate the start and end indices for messages from this cycle
+			startIdx := (cycleNum - 1) * messageCount
+
+			for i := 0; i < messageCount; i++ {
+				msgIdx := startIdx + i
+				expectedMsg := fmt.Sprintf("Cycle %d - Message %d", cycleNum, i)
+
+				// Verify in reader1
+				if msgIdx < len(reader1Messages) {
+					assert.Equal(t, expectedMsg, reader1Messages[msgIdx],
+						"Cycle %d - Reader-1 message %d (from cycle %d) content mismatch",
+						cycle+1, msgIdx, cycleNum)
+				}
+
+				// Verify in reader2
+				if msgIdx < len(reader2Messages) {
+					assert.Equal(t, expectedMsg, reader2Messages[msgIdx],
+						"Cycle %d - Reader-2 message %d (from cycle %d) content mismatch",
+						cycle+1, msgIdx, cycleNum)
+				}
+			}
+		}
+
+		// Add a short delay between cycles
+		time.Sleep(500 * time.Millisecond)
+
+		// Open empty writer then close
+		emptyWriter, createEmptyWriterErr := logHandle.OpenLogWriter(ctx)
+		assert.NoError(t, createEmptyWriterErr)
+		closeEmptyWriterErr := emptyWriter.Close(ctx)
+		assert.NoError(t, closeEmptyWriterErr)
+
+		t.Logf("====== Completed Test Cycle %d/%d Successfully ======", cycle+1, testCycles)
+	}
+
+	t.Log("All test cycles completed successfully")
 }

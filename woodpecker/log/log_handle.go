@@ -146,6 +146,12 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 		return l.createAndCacheNewSegmentHandle(ctx)
 	}
 
+	// TODO Remove this test only code snippet, no need to refresh segment meta every time
+	err := writeableSegmentHandle.RefreshAndGetMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// check if writable segment handle should be closed and create new segment handle
 	if l.shouldCloseAndCreateNewSegment(ctx, writeableSegmentHandle) {
 		// close old writable segment handle
@@ -287,7 +293,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	}
 	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	err = oldSegmentHandle.Fence(ctx)
-	if err != nil {
+	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		return nil, err
 	}
 	lac, err := oldSegmentHandle.GetLastAddConfirmed(ctx)
@@ -608,6 +614,10 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Context) error {
 	l.Lock()
 	defer l.Unlock()
+	defer func() {
+		// finally clear writable segment index
+		l.WritableSegmentId = -1
+	}()
 
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
 	if !writableExists {
@@ -625,7 +635,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 		return err
 	}
 	err = writeableSegmentHandle.Fence(ctx)
-	if err != nil {
+	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		logger.Ctx(ctx).Warn("fence segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
@@ -642,8 +652,6 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 			zap.Error(err))
 	}
 
-	// 3. clear cache
-	l.WritableSegmentId = -1
 	return nil
 }
 
