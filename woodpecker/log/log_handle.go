@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -57,10 +58,10 @@ var _ LogHandle = (*logHandleImpl)(nil)
 type logHandleImpl struct {
 	sync.RWMutex
 
-	Name              string
-	Id                int64
-	SegmentMetasCache sync.Map // TODO should not cache here, let segment handle maintain itself
-	SegmentHandles    map[int64]segment.SegmentHandle
+	Name           string
+	Id             int64
+	LastSegmentId  atomic.Int64 // Holds the last segment ID for cache only; only used to fetch the next New segment ID.
+	SegmentHandles map[int64]segment.SegmentHandle
 	// active writable segment handle index
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
@@ -75,12 +76,16 @@ type logHandleImpl struct {
 func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
-
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
+	lastSegmentNo := int64(-1)
+	for _, segmentMeta := range segments {
+		if lastSegmentNo < segmentMeta.SegNo {
+			lastSegmentNo = segmentMeta.SegNo
+		}
+	}
 	l := &logHandleImpl{
 		Name:               name,
 		Id:                 logId,
-		SegmentMetasCache:  sync.Map{},
 		SegmentHandles:     make(map[int64]segment.SegmentHandle),
 		WritableSegmentId:  -1,
 		Metadata:           meta,
@@ -89,9 +94,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMet
 		rollingPolicy:      defaultRollingPolicy,
 		cfg:                cfg,
 	}
-	for _, segmentMeta := range segments {
-		l.SegmentMetasCache.Store(segmentMeta.SegNo, segmentMeta)
-	}
+	l.LastSegmentId.Store(lastSegmentNo)
 	return l
 }
 
@@ -113,12 +116,7 @@ func (l *logHandleImpl) GetMetadataProvider() meta.MetadataProvider {
 }
 
 func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.SegmentMetadata, error) {
-	cacheSegmentMetaSnapshot := make(map[int64]*proto.SegmentMetadata)
-	l.SegmentMetasCache.Range(func(key, value interface{}) bool {
-		cacheSegmentMetaSnapshot[key.(int64)] = value.(*proto.SegmentMetadata)
-		return true
-	})
-	return cacheSegmentMetaSnapshot, nil
+	return l.Metadata.GetAllSegmentMetadata(ctx, l.Name)
 }
 
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
@@ -187,14 +185,6 @@ func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, se
 	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
 	// create readable segment handle if not exists
 	if !exists {
-		segmentMeta, metaExists := l.SegmentMetasCache.Load(segmentId)
-		if metaExists {
-			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
-			l.SegmentHandles[segmentId] = handle
-			return handle, nil
-		}
-
 		// try to get the earliest readable segments
 		minSegId, maxSegId, err := l.getCurrentMinMaxSegmentId(ctx)
 		if err != nil {
@@ -208,15 +198,13 @@ func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, se
 			segmentId = maxSegId + 1
 			return nil, nil
 		}
-		segmentMeta, metaExists = l.SegmentMetasCache.Load(segmentId)
-		if metaExists {
-			// create a readonly segmentHandle and cache it
-			handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
-			l.SegmentHandles[segmentId] = handle
-			return handle, nil
-		} else {
-			return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("segment not found for logName:%s segmentId:%d,it may have been deleted", l.Name, segmentId))
+		segmentMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
+		if err != nil && werr.ErrSegmentNotFound.Is(err) {
+			return nil, err
 		}
+		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
+		l.SegmentHandles[segmentId] = handle
+		return handle, nil
 	}
 	return readableSegmentHandle, nil
 }
@@ -229,15 +217,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	if exists {
 		return readableSegmentHandle, nil
 	}
-	// create from exists meta cache
-	segmentMeta, metaExists := l.SegmentMetasCache.Load(segmentId)
-	if metaExists {
-		// create a readonly segmentHandle and cache it
-		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta.(*proto.SegmentMetadata), l.Metadata, l.ClientPool, l.cfg)
-		l.SegmentHandles[segmentId] = handle
-		return handle, nil
-	}
-	// refresh meta and create handle
+	// get segment meta and create handle
 	segMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
 	if err != nil && werr.ErrSegmentNotFound.Is(err) {
 		return nil, err
@@ -246,7 +226,6 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		return nil, err
 	}
 	if segMeta != nil {
-		l.SegmentMetasCache.Store(segmentId, segMeta)
 		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
@@ -270,10 +249,6 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 func (l *logHandleImpl) shouldCloseAndCreateNewSegment(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
 	size := segmentHandle.GetSize(ctx)
 	last := l.lastRolloverTimeMs
-	sm, exists := l.SegmentMetasCache.Load(segmentHandle.GetId(ctx))
-	if exists {
-		last = max(l.lastRolloverTimeMs, sm.(*proto.SegmentMetadata).CreateTime)
-	}
 	return l.rollingPolicy.ShouldRollover(size, last)
 }
 
@@ -305,7 +280,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	// 2. select one logStore to async compact segment
 	err = oldSegmentHandle.RequestCompactionAsync(ctx)
 	if err != nil {
-		return nil, err
+		logger.Ctx(ctx).Warn("request compaction failed", zap.String("logName", l.Name), zap.Int64("segId", oldSegmentHandle.GetId(ctx)), zap.Error(err))
 	}
 
 	logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
@@ -351,30 +326,21 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	// update local segment metadata cache
-	l.SegmentMetasCache.Store(segmentNo, newSegmentMeta)
 	// return
 	return newSegmentMeta, nil
 }
 
+// TODO To be optimized, reduce meta access, maybe use a param to indicate whether to refresh lastSegmentId, most of the time, the lastSegmentId is not changed
 // GetNextSegmentId get the next id according to max seq No
 func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 	// refresh meta
-	maxSeqNo := int64(-1)
-	l.SegmentMetasCache.Range(func(key, value interface{}) bool {
-		if segMeta, ok := value.(*proto.SegmentMetadata); ok {
-			if segMeta.SegNo > maxSeqNo {
-				maxSeqNo = segMeta.SegNo
-			}
-		}
-		return true
-	})
+	maxSeqNo := l.LastSegmentId.Load()
 	nextSeqNo := maxSeqNo + 1
 	// try get dynamic max seqNo
 	for {
 		segMeta, err := l.Metadata.GetSegmentMetadata(context.Background(), l.Name, nextSeqNo)
 		if err == nil && segMeta != nil {
-			l.SegmentMetasCache.Store(nextSeqNo, segMeta)
+			l.LastSegmentId.CompareAndSwap(nextSeqNo-1, nextSeqNo)
 			nextSeqNo++
 		} else if err != nil && werr.ErrSegmentNotFound.Is(err) {
 			break
@@ -515,7 +481,6 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 		}
 
 		// Update local cache
-		l.SegmentMetasCache.Store(segId, segMetadata)
 		l.SegmentHandles[segId] = nil
 
 		logger.Ctx(ctx).Debug("Marked segment as truncated",
