@@ -49,21 +49,19 @@ func TestNewLogFile(t *testing.T) {
 func TestNewROLogFile(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*LogFile)
+	logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
-	assert.Nil(t, logFile.buffer.Load())
-	assert.Equal(t, int64(16*1024*1024), logFile.maxBufferSize)
-	assert.Equal(t, 1000, logFile.maxIntervalMs)
+	assert.Empty(t, logFile.fragments)
 }
 
 // TestAppendAsyncReachBufferSize tests the AppendAsync function when the buffer size is reached.
 func TestAppendAsyncReachBufferSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -110,7 +108,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -157,7 +155,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -203,7 +201,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -235,7 +233,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -284,7 +282,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -358,7 +356,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -405,7 +403,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -465,7 +463,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 
 func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -624,7 +622,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 func TestSync(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -756,6 +754,7 @@ func TestGetId(t *testing.T) {
 func TestMerge(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -792,7 +791,8 @@ func TestMerge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Merge fragments
-	mergedFrags, entryOffset, fragmentIdOffset, err := logFile.Merge(context.Background())
+	roLogFile := NewROLogFile(1, "TestMerge", "test-bucket", client).(*ROLogFile)
+	mergedFrags, entryOffset, fragmentIdOffset, err := roLogFile.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
 	assert.Equal(t, []int32{0}, entryOffset)
@@ -809,6 +809,7 @@ func TestMerge(t *testing.T) {
 func TestLoad(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -837,7 +838,8 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Load data
-	totalSize, lastFragment, err := logFile.Load(context.Background())
+	roLogFile := NewROLogFile(1, "TestLoad", "test-bucket", client).(*ROLogFile)
+	totalSize, lastFragment, err := roLogFile.Load(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, int64(100*len("test_data")) < totalSize)
 	assert.NotNil(t, lastFragment)
@@ -882,7 +884,8 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a reader for [0, 100)
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile := NewROLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client).(*ROLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
 	})
@@ -930,7 +933,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	}
 	err := logFile.Sync(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(logFile.fragments))
+	assert.Equal(t, 1, int(logFile.lastFragmentId))
 
 	// Get 1.frag from cache, show no need to mock 1.frag
 	// mock read 1.frag data
@@ -941,7 +944,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client).(*LogFile)
+	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client).(*ROLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -973,6 +976,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
 	// 3.frag put success
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
 	//mock 1.frag exists
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
@@ -1030,7 +1034,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		}
 
 		// assert there 1 fragment created
-		assert.Equal(t, 1, len(logFile.fragments))
+		assert.Equal(t, 1, int(logFile.lastFragmentId))
 		assert.Equal(t, int64(0), logFile.getFirstEntryId())
 		flushedLastId, err := logFile.GetLastEntryId()
 		assert.NoError(t, err)
@@ -1046,7 +1050,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	// test read data with holes (fragment 1,x,3) in minio
 	// we should only read data in fragment 1
 	{
-		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*LogFile)
+		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*ROLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   3,
@@ -1075,7 +1079,7 @@ func TestFindFragment(t *testing.T) {
 	}
 
 	// Create LogFile instance and inject mock data
-	logFile := &LogFile{
+	logFile := &ROLogFile{
 		fragments: mockFragments,
 	}
 
@@ -1138,7 +1142,7 @@ func TestFindFragment(t *testing.T) {
 			{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
 			{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
 		}
-		newLogFile := &LogFile{
+		newLogFile := &ROLogFile{
 			fragments: overlappingFrags,
 		}
 
@@ -1152,21 +1156,21 @@ func TestFindFragment(t *testing.T) {
 func TestDeleteFragments(t *testing.T) {
 	t.Run("SuccessfulDeletion", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		cfg := &config.Configuration{
-			Woodpecker: config.WoodpeckerConfig{
-				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-						MaxEntries:      10,
-						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
-						MaxFlushThreads: 5,
-						MaxFlushSize:    1024 * 1024,
-						MaxFlushRetries: 3,
-						RetryInterval:   100,
-					},
-				},
-			},
-		}
+		//cfg := &config.Configuration{
+		//	Woodpecker: config.WoodpeckerConfig{
+		//		Logstore: config.LogstoreConfig{
+		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+		//				MaxEntries:      10,
+		//				MaxBytes:        1024 * 1024,
+		//				MaxInterval:     1000,
+		//				MaxFlushThreads: 5,
+		//				MaxFlushSize:    1024 * 1024,
+		//				MaxFlushRetries: 3,
+		//				RetryInterval:   100,
+		//			},
+		//		},
+		//	},
+		//}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1180,10 +1184,11 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/m_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Add some fragments to the LogFile to verify they're cleared
 		logFile.fragments = []*FragmentObject{
@@ -1197,27 +1202,25 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Verify internal state is reset
 		assert.Empty(t, logFile.fragments, "Fragments slice should be empty")
-		assert.True(t, logFile.sealed.Load(), "LogFile should be sealed")
-		assert.NotNil(t, logFile.buffer.Load(), "Buffer should be reset but not nil")
 	})
 
 	t.Run("ListObjectsError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		cfg := &config.Configuration{
-			Woodpecker: config.WoodpeckerConfig{
-				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-						MaxEntries:      10,
-						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
-						MaxFlushThreads: 5,
-						MaxFlushSize:    1024 * 1024,
-						MaxFlushRetries: 3,
-						RetryInterval:   100,
-					},
-				},
-			},
-		}
+		//cfg := &config.Configuration{
+		//	Woodpecker: config.WoodpeckerConfig{
+		//		Logstore: config.LogstoreConfig{
+		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+		//				MaxEntries:      10,
+		//				MaxBytes:        1024 * 1024,
+		//				MaxInterval:     1000,
+		//				MaxFlushThreads: 5,
+		//				MaxFlushSize:    1024 * 1024,
+		//				MaxFlushRetries: 3,
+		//				RetryInterval:   100,
+		//			},
+		//		},
+		//	},
+		//}
 
 		// Create an object channel with an error
 		errorObjectCh := make(chan minio.ObjectInfo, 1)
@@ -1226,10 +1229,11 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Set up expectations
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(errorObjectCh)
+		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1239,21 +1243,21 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("RemoveObjectError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		cfg := &config.Configuration{
-			Woodpecker: config.WoodpeckerConfig{
-				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-						MaxEntries:      10,
-						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
-						MaxFlushThreads: 5,
-						MaxFlushSize:    1024 * 1024,
-						MaxFlushRetries: 3,
-						RetryInterval:   100,
-					},
-				},
-			},
-		}
+		//cfg := &config.Configuration{
+		//	Woodpecker: config.WoodpeckerConfig{
+		//		Logstore: config.LogstoreConfig{
+		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+		//				MaxEntries:      10,
+		//				MaxBytes:        1024 * 1024,
+		//				MaxInterval:     1000,
+		//				MaxFlushThreads: 5,
+		//				MaxFlushSize:    1024 * 1024,
+		//				MaxFlushRetries: 3,
+		//				RetryInterval:   100,
+		//			},
+		//		},
+		//	},
+		//}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 2)
@@ -1265,10 +1269,10 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_2.frag", mock.Anything).Return(errors.New("remove error"))
-		// No need for StatObject call anymore
+		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 
 		// Create the LogFile
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1278,21 +1282,22 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		cfg := &config.Configuration{
-			Woodpecker: config.WoodpeckerConfig{
-				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-						MaxEntries:      10,
-						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
-						MaxFlushThreads: 5,
-						MaxFlushSize:    1024 * 1024,
-						MaxFlushRetries: 3,
-						RetryInterval:   100,
-					},
-				},
-			},
-		}
+		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+		//cfg := &config.Configuration{
+		//	Woodpecker: config.WoodpeckerConfig{
+		//		Logstore: config.LogstoreConfig{
+		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+		//				MaxEntries:      10,
+		//				MaxBytes:        1024 * 1024,
+		//				MaxInterval:     1000,
+		//				MaxFlushThreads: 5,
+		//				MaxFlushSize:    1024 * 1024,
+		//				MaxFlushRetries: 3,
+		//				RetryInterval:   100,
+		//			},
+		//		},
+		//	},
+		//}
 
 		// Empty object channel
 		objectCh := make(chan minio.ObjectInfo)
@@ -1303,7 +1308,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1315,21 +1320,21 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("SkipNonFragmentFiles", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		cfg := &config.Configuration{
-			Woodpecker: config.WoodpeckerConfig{
-				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-						MaxEntries:      10,
-						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
-						MaxFlushThreads: 5,
-						MaxFlushSize:    1024 * 1024,
-						MaxFlushRetries: 3,
-						RetryInterval:   100,
-					},
-				},
-			},
-		}
+		//cfg := &config.Configuration{
+		//	Woodpecker: config.WoodpeckerConfig{
+		//		Logstore: config.LogstoreConfig{
+		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+		//				MaxEntries:      10,
+		//				MaxBytes:        1024 * 1024,
+		//				MaxInterval:     1000,
+		//				MaxFlushThreads: 5,
+		//				MaxFlushSize:    1024 * 1024,
+		//				MaxFlushRetries: 3,
+		//				RetryInterval:   100,
+		//			},
+		//		},
+		//	},
+		//}
 
 		// Create a list of mock objects including non-fragment files
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1342,11 +1347,12 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/", false, mock.Anything).Return(objectCh)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/fragment_1.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/m_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// No call for metadata.json as it should be skipped
 		// 不再需要 StatObject 调用
 
 		// Create the LogFile
-		logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)

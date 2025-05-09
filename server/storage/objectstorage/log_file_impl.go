@@ -28,14 +28,13 @@ var _ storage.LogFile = (*LogFile)(nil)
 
 // LogFile is used to write data to object storage as a logical file
 type LogFile struct {
-	mu               sync.Mutex
-	lastSync         atomic.Int64
-	client           minioHandler.MinioHandler
-	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
-	bucket           string // The bucket name
+	mu                sync.Mutex
+	lastSyncTimestamp atomic.Int64
+	client            minioHandler.MinioHandler
+	segmentPrefixKey  string // The prefix key for the segment to which this LogFile belongs
+	bucket            string // The bucket name
+	id                int64  // LogFile Id in object storage
 
-	id        int64             // LogFile Id in object storage
-	fragments []*FragmentObject // LogFile cached fragments
 	// write buffer
 	buffer           atomic.Pointer[cache.SequentialBuffer] // Write buffer
 	maxBufferSize    int64                                  // Max buffer size to sync buffer to object storage
@@ -44,8 +43,10 @@ type LogFile struct {
 	syncedChan       map[int64]chan int64 // Synced entryId chan map
 	fileClose        chan struct{}        // Close signal
 
-	// status
-	sealed atomic.Bool // If this LogFile is sealed or growing
+	// written info
+	firstEntryId   int64  // The first entryId of this LogFile which already written to object storage
+	lastEntryId    int64  // The last entryId of this LogFile which already written to object storage
+	lastFragmentId uint64 // The last fragmentId of this LogFile which already written to object storage
 }
 
 // NewLogFile is used to create a new LogFile, which is used to write data to object storage
@@ -58,36 +59,19 @@ func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectC
 		client:           objectCli,
 		segmentPrefixKey: segmentPrefixKey,
 		bucket:           bucket,
-		fragments:        make([]*FragmentObject, 0),
 
 		maxBufferSize:    syncPolicyConfig.MaxBytes,
 		maxIntervalMs:    syncPolicyConfig.MaxInterval,
 		syncPolicyConfig: syncPolicyConfig,
 		fileClose:        make(chan struct{}),
 		syncedChan:       make(map[int64]chan int64),
+
+		firstEntryId:   -1,
+		lastEntryId:    -1,
+		lastFragmentId: 0,
 	}
-	objFile.sealed.Store(false)
 	objFile.buffer.Store(newBuffer)
 	go objFile.run()
-	return objFile
-}
-
-// NewROLogFile is used to read only LogFile
-func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.LogFile {
-	objFile := &LogFile{
-		id:               logFileId,
-		client:           objectCli,
-		segmentPrefixKey: segmentPrefixKey,
-		bucket:           bucket,
-		fragments:        make([]*FragmentObject, 0),
-
-		maxBufferSize: 16 * 1024 * 1024,
-		maxIntervalMs: 1000,
-		fileClose:     make(chan struct{}),
-		syncedChan:    make(map[int64]chan int64),
-	}
-	objFile.sealed.Store(false)
-	objFile.prefetchFragmentInfos()
 	return objFile
 }
 
@@ -96,11 +80,11 @@ func (f *LogFile) run() {
 	// time ticker
 	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
-	f.lastSync.Store(time.Now().UnixMilli())
+	f.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	for {
 		select {
 		case <-ticker.C:
-			if time.Now().UnixMilli()-f.lastSync.Load() < int64(f.maxIntervalMs) {
+			if time.Now().UnixMilli()-f.lastSyncTimestamp.Load() < int64(f.maxIntervalMs) {
 				continue
 			}
 			err := f.Sync(context.Background())
@@ -119,7 +103,6 @@ func (f *LogFile) run() {
 					zap.Int64("logFileId", f.id),
 					zap.Error(err))
 			}
-			f.sealed.Store(true)
 			logger.Ctx(context.TODO()).Debug("close LogFile", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.String("logFileInst", fmt.Sprintf("%p", f)))
 			return
 		}
@@ -192,145 +175,21 @@ func (f *LogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
 	return fmt.Sprintf("%s/%d/m_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
 }
 
-// get the fragment for the entryId
-func (f *LogFile) getFragment(entryId int64) (*FragmentObject, error) {
-	logger.Ctx(context.TODO()).Debug("get fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId))
-	// fragmentId: 0~n
-	foundFrag, err := f.findFragment(entryId)
-	if err != nil {
-		return nil, err
-	}
-	if foundFrag != nil {
-		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
-		return foundFrag, nil
-	}
-
-	// try next fragment which has been uploaded in objectStorage
-	nextFragmentId := f.LastFragmentId() + 1
-	nextFragmentKey := f.getFragmentKey(nextFragmentId)
-
-	// if the next fragment already cached
-	if cachedFrag, cached := cache.GetCachedFragment(context.TODO(), nextFragmentKey); cached {
-		logger.Ctx(context.TODO()).Debug("get cached fragment from FragmentManager for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", cachedFrag.GetFragmentId()))
-		return cachedFrag.(*FragmentObject), nil
-	}
-
-	// if the next fragment exists in objectStorage
-	exists, err := f.objectExists(context.Background(), nextFragmentKey)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		fragment := NewFragmentObject(f.client, f.bucket, nextFragmentId, nextFragmentKey, nil, 0, false, true, false)
-		f.fragments = append(f.fragments, fragment)
-		logger.Ctx(context.TODO()).Info("get basic fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Uint64("fragmentId", nextFragmentId))
-		return fragment, nil
-	}
-
-	//
-	return nil, nil
-}
-
-// findFragment finds the fragment for the entryId
-func (f *LogFile) findFragment(entryId int64) (*FragmentObject, error) {
-	low, high := 0, len(f.fragments)-1
-	var candidate *FragmentObject
-
-	for low <= high {
-		mid := (low + high) / 2
-		frag := f.fragments[mid]
-
-		first, err := frag.GetFirstEntryId()
-		if err != nil {
-			return nil, err
-		}
-
-		if first > entryId {
-			high = mid - 1
-		} else {
-			last, err := frag.GetLastEntryId()
-			if err != nil {
-				return nil, err
-			}
-			if last >= entryId {
-				candidate = frag
-				return candidate, nil
-			} else {
-				low = mid + 1
-			}
-		}
-	}
-	return candidate, nil
-}
-
-// objectExists checks if an object exists in the MinIO bucket
-func (f *LogFile) objectExists(ctx context.Context, objectKey string) (bool, error) {
-	_, err := f.client.StatObject(ctx, f.bucket, objectKey, minio.StatObjectOptions{})
-	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
 func (f *LogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	lastEntryIdInFile, err := f.GetLastEntryId()
-	if err != nil {
-		return nil, err
-	}
-	if opt.StartSequenceNum < 0 || opt.StartSequenceNum > lastEntryIdInFile && lastEntryIdInFile != -1 {
-		return nil, werr.ErrEntryNotFound.WithCauseErrMsg(
-			fmt.Sprintf("startEntryId:%d must less than lastEntryId:%d of the file",
-				opt.StartSequenceNum, lastEntryIdInFile))
-	}
-
-	reader := NewLogFileReader(opt, f)
-	return reader, nil
+	return nil, werr.ErrNotSupport.WithCauseErrMsg("LogFile writer support write only, cannot create reader")
 }
 
 // LastFragmentId returns the last fragmentId of the log file.
 func (f *LogFile) LastFragmentId() uint64 {
-	if len(f.fragments) == 0 {
-		return 0
-	}
-	return f.fragments[len(f.fragments)-1].fragmentId
+	return f.lastFragmentId
 }
 
 func (f *LogFile) getFirstEntryId() int64 {
-	if len(f.fragments) == 0 {
-		return -1
-	}
-	return f.fragments[0].firstEntryId
+	return f.firstEntryId
 }
 
 func (f *LogFile) GetLastEntryId() (int64, error) {
-	// prefetch fragmentInfos if any new fragment created
-	f.prefetchFragmentInfos()
-
-	// load dynamic fragment
-	if len(f.fragments) == 0 {
-		// -1 represent no entry data yet
-		return -1, nil
-	}
-
-	lastFrag := f.fragments[len(f.fragments)-1]
-	if !lastFrag.dataLoaded {
-		err := lastFrag.Load(context.Background())
-		if err != nil {
-			logger.Ctx(context.TODO()).Warn("get last entryId failed",
-				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("logFileId", f.id),
-				zap.Uint64("fragId", lastFrag.fragmentId),
-				zap.Error(err))
-			return -1, err
-		}
-	}
-	return lastFrag.lastEntryId, nil
+	return f.lastEntryId, nil
 }
 
 // flushResult is the result of flush operation
@@ -344,7 +203,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	defer func() {
-		f.lastSync.Store(time.Now().UnixMilli())
+		f.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	}()
 
 	currentBuffer := f.buffer.Load()
@@ -408,7 +267,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 	}
 
 	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
-	concurrentWg.Wait() // 等待所有任务结束
+	concurrentWg.Wait() // Wait for all tasks to complete
 	close(flushResultCh)
 	logger.Ctx(ctx).Debug("all parts of buffer have been flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id))
 	resultFrags := make([]*flushResult, 0)
@@ -419,6 +278,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		return resultFrags[i].target.fragmentId < resultFrags[j].target.fragmentId
 	})
 	successFrags := make([]*FragmentObject, 0)
+	flushedLastEntryId := int64(-1) // last entry id of the last fragment that was successfully flushed in sequence
+	flushedLastFragmentId := uint64(0)
 	for _, r := range resultFrags {
 		if r.err != nil {
 			logger.Ctx(ctx).Warn("flush fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
@@ -427,13 +288,24 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		} else {
 			logger.Ctx(ctx).Debug("flush fragment success", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Int64("firstEntryId", r.target.firstEntryId), zap.Int64("lastEntryId", r.target.lastEntryId))
 			successFrags = append(successFrags, r.target)
-			cacheErr := cache.AddCacheFragment(ctx, r.target) // TODO use lock free cache
+			flushedLastEntryId = r.target.lastEntryId
+			flushedLastFragmentId = r.target.fragmentId
+			cacheErr := cache.AddCacheFragment(ctx, r.target)
 			if cacheErr != nil {
 				logger.Ctx(ctx).Warn("add fragment to cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", r.target.fragmentId), zap.Error(cacheErr))
 			}
 		}
 	}
-	f.fragments = append(f.fragments, successFrags...)
+	// Update the first and last entry IDs after successful flush
+	if flushedLastEntryId >= 0 {
+		f.lastEntryId = flushedLastEntryId
+		f.lastFragmentId = flushedLastFragmentId
+		if f.firstEntryId == -1 {
+			// Initialize firstEntryId on first successful flush
+			// This should always be 0 for the initial flush
+			f.firstEntryId = toFlushDataFirstEntryId
+		}
+	}
 
 	// callback to notify all waiting append request channels
 	if len(successFrags) == len(resultFrags) {
@@ -544,7 +416,216 @@ func (f *LogFile) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryI
 	return partitions, partitionFirstEntryIds
 }
 
-func (f *LogFile) prefetchFragmentInfos() {
+func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to merge currently")
+}
+
+func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
+	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to load currently")
+}
+
+func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to delete fragments currently")
+}
+
+var _ storage.LogFile = (*ROLogFile)(nil)
+
+// ROLogFile is used to read data to object storage as a logical file
+type ROLogFile struct {
+	mu               sync.Mutex
+	lastSync         atomic.Int64
+	client           minioHandler.MinioHandler
+	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
+	bucket           string // The bucket name
+
+	id        int64             // LogFile Id in object storage
+	fragments []*FragmentObject // LogFile cached fragments
+}
+
+// NewROLogFile is used to read only LogFile
+func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.LogFile {
+	objFile := &ROLogFile{
+		id:               logFileId,
+		client:           objectCli,
+		segmentPrefixKey: segmentPrefixKey,
+		bucket:           bucket,
+		fragments:        make([]*FragmentObject, 0),
+	}
+	objFile.prefetchFragmentInfos()
+	return objFile
+}
+
+func (f *ROLogFile) GetId() int64 {
+	return f.id
+}
+
+func (f *ROLogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
+	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("read only LogFile reader cannot support append")
+}
+
+// Deprecated: use AppendAsync instead
+func (f *ROLogFile) Append(ctx context.Context, data []byte) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("read only LogFile reader cannot support append")
+}
+
+func (f *ROLogFile) getFragmentKey(fragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/%d.frag", f.segmentPrefixKey, f.id, fragmentId)
+}
+
+func (f *ROLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/m_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
+}
+
+// get the fragment for the entryId
+func (f *ROLogFile) getFragment(entryId int64) (*FragmentObject, error) {
+	logger.Ctx(context.TODO()).Debug("get fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId))
+	// fragmentId: 0~n
+	foundFrag, err := f.findFragment(entryId)
+	if err != nil {
+		return nil, err
+	}
+	if foundFrag != nil {
+		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		return foundFrag, nil
+	}
+
+	// try next fragment which has been uploaded in objectStorage
+	nextFragmentId := f.LastFragmentId() + 1
+	nextFragmentKey := f.getFragmentKey(nextFragmentId)
+
+	// if the next fragment already cached
+	if cachedFrag, cached := cache.GetCachedFragment(context.TODO(), nextFragmentKey); cached {
+		logger.Ctx(context.TODO()).Debug("get cached fragment from FragmentManager for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", cachedFrag.GetFragmentId()))
+		return cachedFrag.(*FragmentObject), nil
+	}
+
+	// if the next fragment exists in objectStorage
+	exists, err := f.objectExists(context.Background(), nextFragmentKey)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		fragment := NewFragmentObject(f.client, f.bucket, nextFragmentId, nextFragmentKey, nil, 0, false, true, false)
+		f.fragments = append(f.fragments, fragment) // TODO 多Readers并发的时候，可能会出现data race
+		logger.Ctx(context.TODO()).Info("get basic fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Uint64("fragmentId", nextFragmentId))
+		return fragment, nil
+	}
+
+	//
+	return nil, nil
+}
+
+// findFragment finds the fragment for the entryId
+func (f *ROLogFile) findFragment(entryId int64) (*FragmentObject, error) {
+	low, high := 0, len(f.fragments)-1
+	var candidate *FragmentObject
+
+	for low <= high {
+		mid := (low + high) / 2
+		frag := f.fragments[mid]
+
+		first, err := frag.GetFirstEntryId()
+		if err != nil {
+			return nil, err
+		}
+
+		if first > entryId {
+			high = mid - 1
+		} else {
+			last, err := frag.GetLastEntryId()
+			if err != nil {
+				return nil, err
+			}
+			if last >= entryId {
+				candidate = frag
+				return candidate, nil
+			} else {
+				low = mid + 1
+			}
+		}
+	}
+	return candidate, nil
+}
+
+// objectExists checks if an object exists in the MinIO bucket
+func (f *ROLogFile) objectExists(ctx context.Context, objectKey string) (bool, error) {
+	_, err := f.client.StatObject(ctx, f.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (f *ROLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	lastEntryIdInFile, err := f.GetLastEntryId()
+	if err != nil {
+		return nil, err
+	}
+	if opt.StartSequenceNum < 0 || opt.StartSequenceNum > lastEntryIdInFile && lastEntryIdInFile != -1 {
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg(
+			fmt.Sprintf("startEntryId:%d must less than lastEntryId:%d of the file",
+				opt.StartSequenceNum, lastEntryIdInFile))
+	}
+
+	reader := NewLogFileReader(opt, f)
+	return reader, nil
+}
+
+// LastFragmentId returns the last fragmentId of the log file.
+func (f *ROLogFile) LastFragmentId() uint64 {
+	if len(f.fragments) == 0 {
+		return 0
+	}
+	return f.fragments[len(f.fragments)-1].fragmentId
+}
+
+func (f *ROLogFile) getFirstEntryId() int64 {
+	if len(f.fragments) == 0 {
+		return -1
+	}
+	return f.fragments[0].firstEntryId
+}
+
+func (f *ROLogFile) GetLastEntryId() (int64, error) {
+	// prefetch fragmentInfos if any new fragment created
+	f.prefetchFragmentInfos()
+
+	// load dynamic fragment
+	if len(f.fragments) == 0 {
+		// -1 represent no entry data yet
+		return -1, nil
+	}
+
+	lastFrag := f.fragments[len(f.fragments)-1]
+	if !lastFrag.dataLoaded { // TODO 和Load方法中的 操作 会并发冲突，load方法会更新这个属性
+		err := lastFrag.Load(context.Background())
+		if err != nil {
+			logger.Ctx(context.TODO()).Warn("get last entryId failed",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Int64("logFileId", f.id),
+				zap.Uint64("fragId", lastFrag.fragmentId),
+				zap.Error(err))
+			return -1, err
+		}
+	}
+	return lastFrag.lastEntryId, nil
+}
+
+func (f *ROLogFile) Sync(ctx context.Context) error {
+	return nil
+}
+
+func (f *ROLogFile) Close() error {
+	return nil
+}
+
+func (f *ROLogFile) prefetchFragmentInfos() {
 	fragId := uint64(1)
 	if len(f.fragments) > 0 {
 		lastFrag := f.fragments[len(f.fragments)-1]
@@ -579,7 +660,7 @@ func (f *LogFile) prefetchFragmentInfos() {
 	logger.Ctx(context.Background()).Debug("prefetch fragment infos", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int("fragments", len(f.fragments)), zap.Uint64("lastFragId", fragId-1))
 }
 
-func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	start := time.Now()
@@ -640,7 +721,7 @@ func (f *LogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int
 }
 
 // TODO improve， here we just need to load the last fragment
-func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
+func (f *ROLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.fragments) == 0 {
@@ -680,7 +761,7 @@ func (f *LogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	return int64(totalSize), lastFragment, nil
 }
 
-func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
+func (f *ROLogFile) DeleteFragments(ctx context.Context, flag int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -748,7 +829,6 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 
 	// Clean up internal state
 	f.fragments = make([]*FragmentObject, 0)
-	f.sealed.Store(true)
 
 	logger.Ctx(ctx).Info("Completed fragment deletion",
 		zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -765,7 +845,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 }
 
 // NewLogFileReader creates a new LogFileReader instance.
-func NewLogFileReader(opt storage.ReaderOpt, objectFile *LogFile) storage.Reader {
+func NewLogFileReader(opt storage.ReaderOpt, objectFile *ROLogFile) storage.Reader {
 	return &logFileReader{
 		opt:                opt,
 		logfile:            objectFile,
@@ -777,7 +857,7 @@ var _ storage.Reader = (*logFileReader)(nil)
 
 type logFileReader struct {
 	opt     storage.ReaderOpt
-	logfile *LogFile
+	logfile *ROLogFile
 
 	pendingReadEntryId int64
 	currentFragment    *FragmentObject
