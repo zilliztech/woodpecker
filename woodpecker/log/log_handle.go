@@ -144,12 +144,6 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 		return l.createAndCacheNewSegmentHandle(ctx)
 	}
 
-	// TODO Remove this test only code snippet, no need to refresh segment meta every time
-	err := writeableSegmentHandle.RefreshAndGetMetadata(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	// check if writable segment handle should be closed and create new segment handle
 	if l.shouldCloseAndCreateNewSegment(ctx, writeableSegmentHandle) {
 		// close old writable segment handle
@@ -176,37 +170,6 @@ func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segment
 
 	//
 	return s, nil
-}
-
-// Deprecated
-func (l *logHandleImpl) GetOrCreateReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
-	l.Lock()
-	defer l.Unlock()
-	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
-	// create readable segment handle if not exists
-	if !exists {
-		// try to get the earliest readable segments
-		minSegId, maxSegId, err := l.getCurrentMinMaxSegmentId(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if segmentId < minSegId {
-			segmentId = minSegId
-		} else if segmentId > maxSegId && l.WritableSegmentId != -1 {
-			segmentId = l.WritableSegmentId
-		} else if segmentId > maxSegId {
-			segmentId = maxSegId + 1
-			return nil, nil
-		}
-		segmentMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
-		if err != nil && werr.ErrSegmentNotFound.Is(err) {
-			return nil, err
-		}
-		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segmentMeta, l.Metadata, l.ClientPool, l.cfg)
-		l.SegmentHandles[segmentId] = handle
-		return handle, nil
-	}
-	return readableSegmentHandle, nil
 }
 
 func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
@@ -453,7 +416,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 
 	// 3. Mark segments as truncated in metadata
 	// Get all segments that are before the truncation point
-	segments, err := l.GetMetadataProvider().GetAllSegmentMetadata(ctx, l.Name)
+	segments, err := l.GetSegments(ctx)
 	if err != nil {
 		return werr.ErrTruncateLog.WithCauseErr(err)
 	}
@@ -479,9 +442,6 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 				zap.Error(err))
 			// Continue with other segments, we'll log the error but not fail the operation
 		}
-
-		// Update local cache
-		l.SegmentHandles[segId] = nil
 
 		logger.Ctx(ctx).Debug("Marked segment as truncated",
 			zap.String("logName", l.Name),
