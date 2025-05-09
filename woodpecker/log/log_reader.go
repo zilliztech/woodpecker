@@ -28,6 +28,8 @@ type LogReader interface {
 
 func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string) LogReader {
 	return &logReaderImpl{
+		logName:              logHandle.GetName(),
+		logId:                logHandle.GetId(),
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,
@@ -40,6 +42,8 @@ func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segmen
 var _ LogReader = (*logReaderImpl)(nil)
 
 type logReaderImpl struct {
+	logName              string
+	logId                int64
 	logHandle            LogHandle
 	from                 *LogMessageId
 	readerName           string
@@ -63,8 +67,8 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		}
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
 		logger.Ctx(ctx).Debug("get next segment handle and ids",
-			zap.String("logName", l.logHandle.GetName()),
-			zap.Int64("logId", l.logHandle.GetId()),
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
 			zap.String("readerName", l.readerName),
 			zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId),
 			zap.Int64("pendingReadEntryId", l.pendingReadEntryId),
@@ -76,16 +80,23 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		}
 		if segId > l.pendingReadSegmentId {
 			// update reader info
-			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName, segId, entryId)
+			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.logId, l.readerName, segId, entryId)
 			if updateReaderErr != nil {
-				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logHandle.GetName()), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))
+				logger.Ctx(ctx).Warn("update reader info failed",
+					zap.String("logName", l.logName),
+					zap.Int64("logId", l.logId),
+					zap.String("readerName", l.readerName),
+					zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId),
+					zap.Int64("nextReadSegmentId", segId),
+					zap.Error(updateReaderErr))
 			}
 		}
 		if segHandle == nil {
 			l.pendingReadSegmentId = segId
 			l.pendingReadEntryId = entryId
 			logger.Ctx(ctx).Debug("no segment to read, sleep 200ms.",
-				zap.String("logName", l.logHandle.GetName()),
+				zap.String("logName", l.logName),
+				zap.Int64("logId", l.logId),
 				zap.String("readerName", l.readerName),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId))
@@ -125,7 +136,8 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2.2) if no next segment exists, just wait and read again
 			logger.Ctx(ctx).Debug("no entry to read, wait with timeout.",
-				zap.String("logName", l.logHandle.GetName()),
+				zap.String("logName", l.logName),
+				zap.Int64("logId", l.logId),
 				zap.String("readerName", l.readerName),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId),
@@ -157,8 +169,8 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		logger.Ctx(ctx).Debug("read one message complete",
-			zap.String("logName", l.logHandle.GetName()),
-			zap.Int64("logId", l.logHandle.GetId()),
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
 			zap.String("readerName", l.readerName),
 			zap.Int64("actualReadSegmentId", segId),
 			zap.Int64("actualReadEntryId", entryId))
@@ -173,7 +185,11 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 func (l *logReaderImpl) Close(ctx context.Context) error {
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)
 	if err != nil {
-		logger.Ctx(ctx).Warn("delete reader info failed", zap.String("logName", l.logHandle.GetName()), zap.String("readerName", l.readerName), zap.Error(err))
+		logger.Ctx(ctx).Warn("delete reader info failed",
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
+			zap.String("readerName", l.readerName),
+			zap.Error(err))
 	}
 	return nil
 }

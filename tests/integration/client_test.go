@@ -900,6 +900,12 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 		writerDone := make(chan struct{})
 		reader1Done := make(chan []string)
 		reader2Done := make(chan []string)
+		reader3Done := make(chan []string)
+		reader4Done := make(chan []string)
+		reader5Done := make(chan []string)
+		reader6Done := make(chan []string)
+		reader7Done := make(chan []string)
+		reader8Done := make(chan []string)
 
 		// Start writer goroutine
 		go func() {
@@ -1002,6 +1008,12 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 		// Start reader goroutines
 		go createReader(fmt.Sprintf("Cycle%d-Reader1", cycle+1), reader1Done)
 		go createReader(fmt.Sprintf("Cycle%d-Reader2", cycle+1), reader2Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader3", cycle+1), reader3Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader4", cycle+1), reader4Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader5", cycle+1), reader5Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader6", cycle+1), reader6Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader7", cycle+1), reader7Done)
+		go createReader(fmt.Sprintf("Cycle%d-Reader8", cycle+1), reader8Done)
 
 		// Wait for writer to complete
 		<-writerDone
@@ -1009,20 +1021,31 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 
 		// Wait for readers to complete and collect results
 		reader1Messages := <-reader1Done
-		t.Logf("Cycle %d - Reader-1 completed with %d/%d messages",
-			cycle+1, len(reader1Messages), expectedMessagesThisCycle)
-
+		t.Logf("Cycle %d - Reader-1 completed with %d/%d messages", cycle+1, len(reader1Messages), expectedMessagesThisCycle)
 		reader2Messages := <-reader2Done
-		t.Logf("Cycle %d - Reader-2 completed with %d/%d messages",
-			cycle+1, len(reader2Messages), expectedMessagesThisCycle)
+		t.Logf("Cycle %d - Reader-2 completed with %d/%d messages", cycle+1, len(reader2Messages), expectedMessagesThisCycle)
+		reader3Messages := <-reader3Done
+		t.Logf("Cycle %d - Reader-3 completed with %d/%d messages", cycle+1, len(reader3Messages), expectedMessagesThisCycle)
+		reader4Messages := <-reader4Done
+		t.Logf("Cycle %d - Reader-4 completed with %d/%d messages", cycle+1, len(reader4Messages), expectedMessagesThisCycle)
+		reader5Messages := <-reader5Done
+		t.Logf("Cycle %d - Reader-5 completed with %d/%d messages", cycle+1, len(reader5Messages), expectedMessagesThisCycle)
+		reader6Messages := <-reader6Done
+		t.Logf("Cycle %d - Reader-6 completed with %d/%d messages", cycle+1, len(reader6Messages), expectedMessagesThisCycle)
+		reader7Messages := <-reader7Done
+		t.Logf("Cycle %d - Reader-7 completed with %d/%d messages", cycle+1, len(reader7Messages), expectedMessagesThisCycle)
+		reader8Messages := <-reader8Done
+		t.Logf("Cycle %d - Reader-8 completed with %d/%d messages", cycle+1, len(reader8Messages), expectedMessagesThisCycle)
 
 		// Verify results - each reader should read all messages from all cycles so far
-		assert.Equal(t, expectedMessagesThisCycle, len(reader1Messages),
-			"Cycle %d - Reader-1 should read all %d messages written so far",
-			cycle+1, expectedMessagesThisCycle)
-		assert.Equal(t, expectedMessagesThisCycle, len(reader2Messages),
-			"Cycle %d - Reader-2 should read all %d messages written so far",
-			cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader1Messages), "Cycle %d - Reader-1 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader2Messages), "Cycle %d - Reader-2 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader3Messages), "Cycle %d - Reader-3 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader4Messages), "Cycle %d - Reader-4 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader5Messages), "Cycle %d - Reader-5 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader6Messages), "Cycle %d - Reader-6 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader7Messages), "Cycle %d - Reader-7 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+		assert.Equal(t, expectedMessagesThisCycle, len(reader8Messages), "Cycle %d - Reader-8 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
 
 		// Verify message content - need to verify all messages from all cycles
 		// First verify cycle 1's messages
@@ -1038,16 +1061,35 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 
 				// Verify in reader1
 				if msgIdx < len(reader1Messages) {
-					assert.Equal(t, expectedMsg, reader1Messages[msgIdx],
-						"Cycle %d - Reader-1 message %d (from cycle %d) content mismatch",
-						cycle+1, msgIdx, cycleNum)
+					assert.Equal(t, expectedMsg, reader1Messages[msgIdx], "Cycle %d - Reader-1 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
 				}
-
 				// Verify in reader2
 				if msgIdx < len(reader2Messages) {
-					assert.Equal(t, expectedMsg, reader2Messages[msgIdx],
-						"Cycle %d - Reader-2 message %d (from cycle %d) content mismatch",
-						cycle+1, msgIdx, cycleNum)
+					assert.Equal(t, expectedMsg, reader2Messages[msgIdx], "Cycle %d - Reader-2 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader3
+				if msgIdx < len(reader3Messages) {
+					assert.Equal(t, expectedMsg, reader3Messages[msgIdx], "Cycle %d - Reader-3 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader4
+				if msgIdx < len(reader4Messages) {
+					assert.Equal(t, expectedMsg, reader4Messages[msgIdx], "Cycle %d - Reader-4 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader5
+				if msgIdx < len(reader5Messages) {
+					assert.Equal(t, expectedMsg, reader5Messages[msgIdx], "Cycle %d - Reader-5 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader6
+				if msgIdx < len(reader6Messages) {
+					assert.Equal(t, expectedMsg, reader6Messages[msgIdx], "Cycle %d - Reader-6 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader7
+				if msgIdx < len(reader7Messages) {
+					assert.Equal(t, expectedMsg, reader7Messages[msgIdx], "Cycle %d - Reader-7 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+				}
+				// Verify in reader8
+				if msgIdx < len(reader8Messages) {
+					assert.Equal(t, expectedMsg, reader8Messages[msgIdx], "Cycle %d - Reader-8 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
 				}
 			}
 		}
