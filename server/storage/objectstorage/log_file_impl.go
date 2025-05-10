@@ -430,7 +430,7 @@ func (f *LogFile) DeleteFragments(ctx context.Context, flag int) error {
 
 var _ storage.LogFile = (*ROLogFile)(nil)
 
-// ROLogFile is used to read data to object storage as a logical file
+// ROLogFile is used to read data from object storage as a logical file
 type ROLogFile struct {
 	mu               sync.Mutex
 	lastSync         atomic.Int64
@@ -618,7 +618,7 @@ func (f *ROLogFile) GetLastEntryId() (int64, error) {
 }
 
 func (f *ROLogFile) Sync(ctx context.Context) error {
-	return nil
+	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support sync")
 }
 
 func (f *ROLogFile) Close() error {

@@ -52,8 +52,8 @@ func TestNewDiskLogFile(t *testing.T) {
 func TestDiskLogFileWithOptions(t *testing.T) {
 	dir := getTempDir(t)
 	logFile, err := NewDiskLogFile(1, dir,
-		WithFragmentSize(1024*1024), // 1MB
-		WithMaxEntryPerFile(1000),   // 1000 entries
+		WithWriteFragmentSize(1024*1024), // 1MB
+		WithWriteMaxEntryPerFile(1000),   // 1000 entries
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
@@ -221,7 +221,10 @@ func TestOutOfOrderAppend(t *testing.T) {
 	}
 
 	// Create reader to verify data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,  // Ensure we start before all IDs
 		EndSequenceNum:   10, // Ensure we include all IDs
 	})
@@ -322,7 +325,10 @@ func TestDelayedAppend(t *testing.T) {
 	assert.Equal(t, startID+2, lastEntryID, "Last entry ID should match the highest ID")
 
 	// Create reader to verify data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + 3,
 	})
@@ -456,7 +462,10 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	assert.NoError(t, syncErr)
 
 	// Create reader to verify data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID + 0,
 		EndSequenceNum:   startID + 2,
 	})
@@ -582,7 +591,10 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create reader to verify data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + 5,
 	})
@@ -671,8 +683,9 @@ func TestFragmentRotation(t *testing.T) {
 	logger.InitLogger(cfg)
 
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir, WithMaxEntryPerFile(10))
+	logFile, err := NewDiskLogFile(1, dir, WithWriteMaxEntryPerFile(10))
 	assert.NoError(t, err)
+	assert.NotNil(t, logFile)
 
 	entryData := make(map[int64][]byte)
 	// Append a few entries
@@ -703,7 +716,10 @@ func TestFragmentRotation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Confirm that 10 fragments were created through rotation
-	frags, err := logFile.getROFragments()
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	frags, err := roLogFile.getROFragments()
 	assert.NoError(t, err)
 	assert.NotNil(t, frags)
 	assert.Equal(t, 10, len(frags))
@@ -715,7 +731,7 @@ func TestFragmentRotation(t *testing.T) {
 
 	// Verify data from various fragments
 	// Create reader to verify data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
 	})
@@ -785,7 +801,10 @@ func TestNewReader(t *testing.T) {
 
 	// Reader for middle 80 entries
 	{
-		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+		roLogFile, err := NewRODiskLogFile(1, dir)
+		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
+		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 10,
 			EndSequenceNum:   90, // Read middle 80 entries
 		})
@@ -818,7 +837,10 @@ func TestNewReader(t *testing.T) {
 
 	// Read first 10 entries
 	{
-		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+		roLogFile, err := NewRODiskLogFile(1, dir)
+		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
+		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   10, // Read middle 80 entries
 		})
@@ -851,7 +873,10 @@ func TestNewReader(t *testing.T) {
 
 	// Read last 10 entries
 	{
-		reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+		roLogFile, err := NewRODiskLogFile(1, dir)
+		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
+		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 90,
 			EndSequenceNum:   100, // Read middle 80 entries
 		})
@@ -924,37 +949,26 @@ func TestLoad(t *testing.T) {
 
 	// Reload log file
 	{
-		logFile, err := NewDiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, dir)
 		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
 
 		// Load data
-		_, fragment, err := logFile.Load(context.Background())
+		_, fragment, err := roLogFile.Load(context.Background())
 		assert.NoError(t, err)
 		assert.NotNil(t, fragment)
 
 		// Get last entry ID after loading
-		loadedLastEntryID, err := logFile.GetLastEntryId()
+		loadedLastEntryID, err := roLogFile.GetLastEntryId()
 		assert.NoError(t, err)
 		assert.Equal(t, initialLastEntryID, loadedLastEntryID, "GetLastEntryId() should return the same value as loaded")
+	}
 
-		// Number of additional entries to write
-		const additionalEntries = 5
-
-		// Now append more entries to confirm it still works
-		for i := 1; i <= additionalEntries; i++ {
-			id, _, err := logFile.AppendAsync(context.Background(), loadedLastEntryID+int64(i), []byte("more_data"))
-			assert.NoError(t, err)
-			assert.Equal(t, loadedLastEntryID+int64(i), id)
-		}
-		err = logFile.Sync(context.TODO())
-		assert.NoError(t, err)
-		lastEntryId, err := logFile.GetLastEntryId()
-		assert.NoError(t, err)
-		assert.Equal(t, loadedLastEntryID+int64(additionalEntries), lastEntryId)
-
-		// Cleanup
-		err = logFile.Close()
-		assert.NoError(t, err)
+	{
+		// open exists log file for write
+		logFile, err := NewDiskLogFile(1, dir)
+		assert.Error(t, err)
+		assert.Nil(t, logFile)
 	}
 }
 
@@ -1010,18 +1024,22 @@ func TestInvalidReaderRange(t *testing.T) {
 	beyondLastID := lastID + 5 // An ID beyond the range
 
 	// Try to create a reader with start beyond available entries
-	_, err = logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	beyondReader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: beyondLastID, // Beyond available entries
 		EndSequenceNum:   beyondLastID + 5,
 	})
-	assert.NoError(t, err) // Should fail
+	assert.NoError(t, err)
+	assert.False(t, beyondReader.HasNext())
 
 	// Create another reader using verified actual ID range, and verify read results
 	// Explicitly read only from the 3rd to the 5th entry (indices 2 to 4)
 	startID := entryIDs[2]
 	endID := entryIDs[4] + 1 // +1 because the range is half-open
 
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   endID,
 	})
@@ -1054,8 +1072,7 @@ func TestInvalidReaderRange(t *testing.T) {
 // TestReadAfterClose tests reading from a closed log file.
 func TestReadAfterClose(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir,
-		WithDisableAutoSync())
+	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 
 	// Write a small amount of data
@@ -1081,15 +1098,35 @@ func TestReadAfterClose(t *testing.T) {
 	err = logFile.Close()
 	assert.NoError(t, err)
 
-	// Try to create reader after closing
-	fmt.Println("Trying to create reader after closing")
-	_, err = logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   2,
 	})
-	assert.Error(t, err) // Should fail because file is closed
-	assert.Contains(t, err.Error(), "closed")
-	fmt.Println("Test passed: Cannot create reader after closing")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+	for i := 0; i < 2; i++ {
+		hasNext := reader.HasNext()
+		assert.True(t, hasNext)
+		entry, err := reader.ReadNext()
+		assert.NoError(t, err)
+		expectedID := int64(i)
+		assert.Equal(t, expectedID, entry.EntryId, i)
+		assert.Equal(t, []byte(fmt.Sprintf("test_data_%d", i)), entry.Values)
+	}
+
+	// Verify no more entries
+	hasNext := reader.HasNext()
+	assert.False(t, hasNext)
+
+	// Cleanup
+	err = reader.Close()
+	assert.NoError(t, err)
+	err = roLogFile.Close()
+	assert.NoError(t, err)
 }
 
 // TestBasicReader tests basic reader functionality.
@@ -1120,7 +1157,10 @@ func TestBasicReader(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create reader for all entries
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: startID,
 		EndSequenceNum:   startID + int64(numEntries),
 	})
@@ -1210,7 +1250,10 @@ func TestSequentialBufferAppend(t *testing.T) {
 	assert.Equal(t, int64(4), lastID)
 
 	// Verify can read written data
-	reader, err := dlf.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, tempDir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   5, // Read all entries
 	})
@@ -1233,7 +1276,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	testEntryCount := 10000
 	dir := getTempDir(t)
 	// Create a larger fragment size to accommodate all data
-	logFile, err := NewDiskLogFile(1, dir, WithFragmentSize(10*1024*1024))
+	logFile, err := NewDiskLogFile(1, dir, WithWriteFragmentSize(10*1024*1024))
 	assert.NoError(t, err)
 
 	// Record write start time
@@ -1300,7 +1343,10 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	readStartTime := time.Now()
 
 	// Create reader to verify data, ensure read from ID 0 to all data
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	roLogFile, err := NewRODiskLogFile(1, dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   int64(testEntryCount),
 	})
@@ -1373,8 +1419,8 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		smallFragmentSize, maxEntriesPerFragment)
 
 	logFile, err := NewDiskLogFile(1, dir,
-		WithFragmentSize(smallFragmentSize),
-		WithMaxEntryPerFile(maxEntriesPerFragment))
+		WithWriteFragmentSize(smallFragmentSize),
+		WithWriteMaxEntryPerFile(maxEntriesPerFragment))
 	assert.NoError(t, err)
 
 	// Record write start time
@@ -1406,7 +1452,10 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			assert.NoError(t, err, "Failed to sync at entry %d", id+1)
 
 			// Get current fragment information
-			frags, err := logFile.getROFragments()
+			roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
+			assert.NoError(t, err)
+			assert.NotNil(t, roLogFile)
+			frags, err := roLogFile.getROFragments()
 			assert.NoError(t, err)
 			t.Logf("After %d entries, fragment count: %d", id+1, len(frags))
 
@@ -1454,7 +1503,10 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Get final fragment information
-	frags, err := logFile.getROFragments()
+	roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
+	assert.NoError(t, err)
+	assert.NotNil(t, roLogFile)
+	frags, err := roLogFile.getROFragments()
 	assert.NoError(t, err)
 	t.Logf("Final fragment count: %d", len(frags))
 
@@ -1473,7 +1525,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	readStartTime := time.Now()
 
 	// Create reader to verify data, ensure reading all data from ID 0
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   int64(testEntryCount),
 	})
@@ -1569,47 +1621,133 @@ func TestFragmentDataValueCheck(t *testing.T) {
 // TestDeleteFragments tests the DeleteFragments function focusing on its ability
 // to handle directory and logging operations, rather than actual file operations.
 func TestDeleteFragments(t *testing.T) {
-	// Set up test directory
-	testDir := getTempDir(t)
-	logId := int64(1)
+	t.Run("EmptyDirectory", func(t *testing.T) {
+		// Set up test directory
+		testDir := getTempDir(t)
+		logId := int64(1)
 
-	// Create a DiskLogFile object with a mock directory
-	logDir := filepath.Join(testDir, fmt.Sprintf("log_%d", logId))
-	err := os.MkdirAll(logDir, 0755)
-	assert.NoError(t, err)
+		// Create a DiskLogFile object with a mock directory
+		logDir := filepath.Join(testDir, fmt.Sprintf("log_%d", logId))
+		err := os.MkdirAll(logDir, 0755)
+		assert.NoError(t, err)
 
-	// Test 1: Test deletion operation with an empty directory, ensuring normal return
-	logFile, err := NewDiskLogFile(logId, testDir)
-	assert.NoError(t, err)
+		// Create read-only log file
+		roLogFile, err := NewRODiskLogFile(logId, testDir)
+		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
 
-	// Execute deletion operation
-	err = logFile.DeleteFragments(context.Background(), 0)
-	assert.NoError(t, err, "DeleteFragments should not error with empty directory")
+		// Execute deletion operation
+		err = roLogFile.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFragments should not error with empty directory")
 
-	// Verify internal state has been reset
-	assert.Equal(t, int64(-1), logFile.lastFragmentID.Load(), "lastFragmentID should be -1")
-	assert.Equal(t, int64(-1), logFile.lastEntryID.Load(), "lastEntryID should be -1")
-	assert.Nil(t, logFile.currFragment, "currFragment should be nil")
+		// Verify internal state has been reset
+		assert.Equal(t, int64(-1), roLogFile.lastFragmentID.Load(), "lastFragmentID should be -1")
+		assert.Equal(t, int64(-1), roLogFile.lastEntryID.Load(), "lastEntryID should be -1")
+		assert.Equal(t, int64(-1), roLogFile.firstEntryID.Load(), "firstEntryID should be -1")
 
-	// Close
-	err = logFile.Close()
-	assert.NoError(t, err)
+		// Close
+		err = roLogFile.Close()
+		assert.NoError(t, err)
+	})
 
-	// Test 2: Test case where directory does not exist
-	nonExistDir := getTempDir(t)
-	os.RemoveAll(nonExistDir) // Ensure directory does not exist
+	t.Run("NonExistentDirectory", func(t *testing.T) {
+		// Test case where directory does not exist
+		nonExistDir := getTempDir(t)
+		os.RemoveAll(nonExistDir) // Ensure directory does not exist
 
-	logFile2, err := NewDiskLogFile(2, nonExistDir)
-	assert.NoError(t, err)
+		logFile2, err := NewRODiskLogFile(2, nonExistDir)
+		assert.NoError(t, err)
 
-	err = logFile2.DeleteFragments(context.Background(), 0)
-	assert.NoError(t, err, "DeleteFragments should not error when directory doesn't exist")
+		err = logFile2.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFragments should not error when directory doesn't exist")
 
-	// Verify state is also correctly reset
-	assert.Equal(t, int64(-1), logFile2.lastFragmentID.Load(), "lastFragmentID should be -1")
-	assert.Equal(t, int64(-1), logFile2.lastEntryID.Load(), "lastEntryID should be -1")
-	assert.Nil(t, logFile2.currFragment, "currFragment should be nil")
+		// Verify state is also correctly reset
+		assert.Equal(t, int64(-1), logFile2.lastFragmentID.Load(), "lastFragmentID should be -1")
+		assert.Equal(t, int64(-1), logFile2.lastEntryID.Load(), "lastEntryID should be -1")
+		assert.Equal(t, int64(-1), logFile2.firstEntryID.Load(), "firstEntryID should be -1")
 
-	err = logFile2.Close()
-	assert.NoError(t, err)
+		err = logFile2.Close()
+		assert.NoError(t, err)
+	})
+
+	t.Run("WithFragmentFiles", func(t *testing.T) {
+		dir := getTempDir(t)
+
+		// first write multi fragments
+		{
+			cfg, _ := config.NewConfiguration()
+			cfg.Log.Level = "debug"
+			logger.InitLogger(cfg)
+
+			logFile, err := NewDiskLogFile(1, dir, WithWriteMaxEntryPerFile(10))
+			assert.NoError(t, err)
+			assert.NotNil(t, logFile)
+
+			entryData := make(map[int64][]byte)
+			// Append a few entries
+			{
+				// First write 100 entries
+				numEntries := 100
+				resultChannels := make([]<-chan int64, 0, numEntries)
+				entryIDs := make([]int64, 0, numEntries)
+				for i := 0; i < numEntries; i++ {
+					entryID := int64(i)
+					entryValue := []byte(fmt.Sprintf("test_data_%d", i))
+					entryData[entryID] = entryValue
+					id, ch, err := logFile.AppendAsync(context.Background(), entryID, entryValue)
+					assert.NoError(t, err)
+					assert.Equal(t, entryID, id)
+					resultChannels = append(resultChannels, ch)
+					entryIDs = append(entryIDs, entryID)
+				}
+				err := logFile.Sync(context.TODO())
+				assert.NoError(t, err)
+				lastEntryId, err := logFile.GetLastEntryId()
+				assert.NoError(t, err)
+				assert.Equal(t, int64(numEntries-1), lastEntryId)
+			}
+
+			// Ensure all data has been written
+			err = logFile.Sync(context.Background())
+			assert.NoError(t, err)
+
+			// Confirm that 10 fragments were created through rotation
+			roLogFile, err := NewRODiskLogFile(1, dir)
+			assert.NoError(t, err)
+			assert.NotNil(t, roLogFile)
+			frags, err := roLogFile.getROFragments()
+			assert.NoError(t, err)
+			assert.NotNil(t, frags)
+			assert.Equal(t, 10, len(frags))
+
+			// Check that at least one fragment file was created
+			files, err := os.ReadDir(logFile.basePath)
+			assert.NoError(t, err)
+			assert.Equal(t, 10, len(files), "Expected 10 fragment files")
+		}
+
+		// Create read-only log file
+		roLogFile, err := NewRODiskLogFile(1, dir)
+		assert.NoError(t, err)
+		assert.NotNil(t, roLogFile)
+
+		frags, err := roLogFile.getROFragments()
+		assert.NoError(t, err)
+		assert.Equal(t, 10, len(frags))
+
+		// Execute deletion operation
+		err = roLogFile.DeleteFragments(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFragments should successfully delete fragment files")
+
+		// Verify internal state has been reset
+		fragsAfterDelete, err := roLogFile.getROFragments()
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(fragsAfterDelete))
+		assert.Equal(t, int64(-1), roLogFile.lastFragmentID.Load(), "lastFragmentID should be -1")
+		assert.Equal(t, int64(-1), roLogFile.lastEntryID.Load(), "lastEntryID should be -1")
+		assert.Equal(t, int64(-1), roLogFile.firstEntryID.Load(), "firstEntryID should be -1")
+
+		err = roLogFile.Close()
+		assert.NoError(t, err)
+	})
 }
