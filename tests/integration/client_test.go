@@ -1215,10 +1215,10 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
-							t.Logf("Cycle %d - %s: Read message %d/%d: %s",
-								cycle+1, readerName, i+1, expectedMessagesThisCycle, string(msg.Payload))
-						}
+						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
+							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+						//}
 					}
 
 					t.Logf("Cycle %d - %s: Completed reading all %d messages",
