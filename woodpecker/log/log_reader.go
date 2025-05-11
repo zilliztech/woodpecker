@@ -121,7 +121,8 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			segMeta := segHandle.GetMetadata(ctx)
 			if segMeta.State != proto.SegmentState_Active {
-				if segMeta.CompletionTime < readTimestamp {
+				// if it is too close, it would be read empty, so check completion time with a little margin
+				if segMeta.CompletionTime+200 < readTimestamp {
 					// safely move to next segment
 					logger.Ctx(ctx).Debug("segment is completed, move to next segment's first entry.",
 						zap.String("logName", l.logName),
@@ -129,7 +130,9 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 						zap.String("readerName", l.readerName),
 						zap.Int64("pendingReadSegmentId", segId),
 						zap.Int64("pendingReadEntryId", entryId),
-						zap.Int64("moveToReadSegmentId", segId+1))
+						zap.Int64("moveToReadSegmentId", segId+1),
+						zap.Int64("completionTimestamp", segMeta.CompletionTime),
+						zap.Int64("readTimestamp", readTimestamp))
 					l.pendingReadSegmentId = segId + 1
 					l.pendingReadEntryId = 0
 					continue
@@ -153,6 +156,13 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				return nil, checkErr
 			}
 			if checkErr == nil && nextSegExists {
+				logger.Ctx(ctx).Debug("read no entry from current segment, and the next segment already exists, move to next segment's first entry.",
+					zap.String("logName", l.logName),
+					zap.Int64("logId", l.logId),
+					zap.String("readerName", l.readerName),
+					zap.Int64("pendingReadSegmentId", segId),
+					zap.Int64("pendingReadEntryId", entryId),
+					zap.Int64("moveToReadSegmentId", segId+1))
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
 				continue
