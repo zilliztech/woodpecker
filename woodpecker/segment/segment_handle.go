@@ -431,7 +431,9 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	newSegmentMeta.Size = s.commitedSize.Load()
 	newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
 	newSegmentMeta.CompletionTime = time.Now().UnixMilli()
-	return s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(err))
+	return err
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {

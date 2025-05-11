@@ -517,6 +517,10 @@ func (f *ROLogFile) getFragment(entryId int64) (*FragmentObject, error) {
 		// fast return, no fragment for this entryId
 		return nil, nil
 	}
+	if entryId == fetchedLastEntryId {
+		// fast return this fragment
+		return fetchedlastFragment, nil
+	}
 
 	// find again
 	foundFrag, err = f.findFragment(entryId)

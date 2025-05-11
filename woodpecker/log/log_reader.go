@@ -111,6 +111,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
 			}
 		}
+		readTimestamp := time.Now().UnixMilli()
 		entries, err := segHandle.Read(ctx, entryId, entryId)
 		if err != nil && werr.ErrEntryNotFound.Is(err) {
 			// 1) if the segmentHandle is completed, move to next segment's first entry
@@ -118,10 +119,32 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			if refreshMetaErr != nil && errors.IsAny(refreshMetaErr, context.Canceled, context.DeadlineExceeded) {
 				return nil, refreshMetaErr
 			}
-			if segHandle.GetMetadata(ctx).State != proto.SegmentState_Active {
-				l.pendingReadSegmentId = segId + 1
-				l.pendingReadEntryId = 0
-				continue
+			segMeta := segHandle.GetMetadata(ctx)
+			if segMeta.State != proto.SegmentState_Active {
+				if segMeta.CompletionTime < readTimestamp {
+					// safely move to next segment
+					logger.Ctx(ctx).Debug("segment is completed, move to next segment's first entry.",
+						zap.String("logName", l.logName),
+						zap.Int64("logId", l.logId),
+						zap.String("readerName", l.readerName),
+						zap.Int64("pendingReadSegmentId", segId),
+						zap.Int64("pendingReadEntryId", entryId),
+						zap.Int64("moveToReadSegmentId", segId+1))
+					l.pendingReadSegmentId = segId + 1
+					l.pendingReadEntryId = 0
+					continue
+				} else {
+					// maybe new entry flush after this read time, so retry again
+					logger.Ctx(ctx).Debug("segment is completed after this read timestamp, maybe entries flush after this read timestamp, try read again",
+						zap.String("logName", l.logName),
+						zap.Int64("logId", l.logId),
+						zap.String("readerName", l.readerName),
+						zap.Int64("pendingReadSegmentId", segId),
+						zap.Int64("pendingReadEntryId", entryId),
+						zap.Int64("completionTimestamp", segMeta.CompletionTime),
+						zap.Int64("readTimestamp", readTimestamp))
+					continue
+				}
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// 2.1) if next segment exists, indicate that current segment is completed in fact
