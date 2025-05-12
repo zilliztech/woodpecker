@@ -185,6 +185,11 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 				closeReaderErr := logReader.Close(context.Background())
 				assert.NoError(t, closeReaderErr)
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Println("Test Read finished")
 		})
 	}
@@ -237,6 +242,11 @@ func TestReadWriteLoop(t *testing.T) {
 				// test read
 				testRead(t, client, logName, writtenIds, 1000)
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Println("Test Read finished")
 		})
 	}
@@ -374,6 +384,11 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 				writtenIds := testMultiAppendSync(t, client, logName, count)
 				assert.Equal(t, count, len(writtenIds))
 			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Println("Test write finished")
 		})
 	}
@@ -608,6 +623,10 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
 
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
 			fmt.Println("Test completed successfully")
 		})
 	}
@@ -703,6 +722,10 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
 			fmt.Println("Test completed successfully")
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }

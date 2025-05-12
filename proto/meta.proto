@@ -68,4 +68,34 @@ message QuorumInfo{
   repeated string nodes = 5;
 }
 
+/**
+ * ReaderTempInfo defines temporary information for a log reader.
+ */
+message ReaderTempInfo{
+  string reader_name = 1;
+  fixed64 open_timestamp = 2;
+  int64 log_id = 3;
+  int64 open_segment_id = 4;
+  int64 open_entry_id = 5;
+  int64 recent_read_segment_id = 6;
+  int64 recent_read_entry_id = 7;
+  fixed64 recent_read_timestamp = 8;
+}
+
+enum SegmentCleanupState {
+  CLEANUP_IN_PROGRESS = 0;
+  CLEANUP_COMPLETED = 1;
+  CLEANUP_FAILED = 2;
+}
+
+message SegmentCleanupStatus {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  SegmentCleanupState state = 3;
+  uint64 start_time = 4;  // Unix timestamp in milliseconds when cleanup started
+  uint64 last_update_time = 5;  // Unix timestamp in milliseconds of the last update
+  map<string, bool> quorum_cleanup_status = 6;  // Map of node address to cleanup status
+  string error_message = 7;  // Error message if cleanup failed
+}
+
 

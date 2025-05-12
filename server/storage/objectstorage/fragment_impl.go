@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -29,6 +30,7 @@ var _ storage.Fragment = (*FragmentObject)(nil)
 
 // FragmentObject uses MinIO for object storage.
 type FragmentObject struct {
+	mu     sync.RWMutex
 	client minioHandler.MinioHandler
 
 	// info
@@ -42,6 +44,7 @@ type FragmentObject struct {
 	// data
 	entriesData []byte // Bytes of entries
 	indexes     []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
+	size        int64  // Size of the fragment, including entries and indexes. it is lock free, used for metrics only
 
 	// status
 	dataLoaded   bool // If this fragment has been loaded to memory
@@ -53,6 +56,7 @@ type FragmentObject struct {
 func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(entries, firstEntryId)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
+	size := int64(len(data) + len(index))
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
@@ -62,6 +66,7 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 		fragmentKey:  fragmentKey,
 		entriesData:  data,
 		indexes:      index,
+		size:         size,
 		firstEntryId: firstEntryId,
 		lastEntryId:  lastEntryId,
 		lastModified: time.Now().UnixMilli(),
@@ -72,22 +77,23 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 }
 
 func (f *FragmentObject) GetFragmentId() int64 {
+	// This field is immutable after initialization, so no lock is needed
 	return int64(f.fragmentId)
 }
 
 func (f *FragmentObject) GetFragmentKey() string {
+	// This field is immutable after initialization, so no lock is needed
 	return f.fragmentKey
 }
 
 func (f *FragmentObject) GetSize() int64 {
-	if !f.dataLoaded {
-		return 0
-	}
-	return int64(len(f.entriesData) + len(f.indexes))
+	return f.size
 }
 
 // Flush uploads the data to MinIO.
 func (f *FragmentObject) Flush(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.dataLoaded {
 		return werr.ErrFragmentEmpty
 	}
@@ -114,6 +120,8 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 
 // Load reads the data from MinIO.
 func (f *FragmentObject) Load(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.dataLoaded {
 		// already loaded, no need to load again
 		return nil
@@ -140,6 +148,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	// Reset the buffer with the loaded data
 	f.entriesData = tmpFrag.entriesData
 	f.indexes = tmpFrag.indexes
+	f.size = int64(len(tmpFrag.entriesData) + len(tmpFrag.indexes))
 	f.firstEntryId = tmpFrag.firstEntryId
 	f.lastEntryId = tmpFrag.lastEntryId
 	f.dataLoaded = true
@@ -155,17 +164,26 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 }
 
 func (f *FragmentObject) GetLastEntryId() (int64, error) {
-	// if info has been fetched, return directly
+	// First check with read lock
+	f.mu.RLock()
 	if f.infoFetched {
-		return f.lastEntryId, nil
+		lastId := f.lastEntryId
+		f.mu.RUnlock()
+		return lastId, nil
 	}
-	// if data has not been loaded, try to load it
+
+	// If we need to load data, we'll need to acquire the lock again
 	if !f.dataLoaded && f.dataUploaded {
+		f.mu.RUnlock()
 		err := f.Load(context.Background())
 		if err != nil {
 			return -1, err
 		}
+		f.mu.RLock()
 	}
+
+	// Check again with read lock
+	defer f.mu.RUnlock()
 	if !f.infoFetched {
 		return -1, errors.New("fragment no data&info to load")
 	}
@@ -173,17 +191,26 @@ func (f *FragmentObject) GetLastEntryId() (int64, error) {
 }
 
 func (f *FragmentObject) GetFirstEntryId() (int64, error) {
-	// if info has been fetched, return directly
+	// First check with read lock
+	f.mu.RLock()
 	if f.infoFetched {
-		return f.firstEntryId, nil
+		firstId := f.firstEntryId
+		f.mu.RUnlock()
+		return firstId, nil
 	}
-	// if data has not been loaded, try to load it
+
+	// If we need to load data, we'll need to acquire the lock again
 	if !f.dataLoaded && f.dataUploaded {
+		f.mu.RUnlock()
 		err := f.Load(context.Background())
 		if err != nil {
 			return -1, err
 		}
+		f.mu.RLock()
 	}
+
+	// Check again with read lock
+	defer f.mu.RUnlock()
 	if !f.infoFetched {
 		return -1, errors.New("fragment no data&info to load")
 	}
@@ -191,30 +218,53 @@ func (f *FragmentObject) GetFirstEntryId() (int64, error) {
 }
 
 func (f *FragmentObject) GetLastModified() int64 {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return f.lastModified
 }
 
 func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
-	if !f.dataLoaded && f.dataUploaded {
+	// First check if we need to load data
+	f.mu.RLock()
+	dataLoaded := f.dataLoaded
+	dataUploaded := f.dataUploaded
+	f.mu.RUnlock()
+
+	if !dataLoaded && dataUploaded {
 		err := f.Load(context.Background())
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	// Now read with lock held
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	dataLoaded = f.dataLoaded
+
 	if !f.dataLoaded {
 		return nil, errors.New("fragment no data to load")
 	}
+
 	relatedIdx := (entryId - f.firstEntryId) * 8
 	if relatedIdx+8 > int64(len(f.indexes)) {
 		return nil, werr.ErrEntryNotFound
 	}
+
 	entryOffset := binary.BigEndian.Uint32(f.indexes[relatedIdx : relatedIdx+4])
 	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
-	return f.entriesData[entryOffset : entryOffset+entryLength], nil
+
+	// Create a copy of the data to avoid potential race conditions after lock release
+	result := make([]byte, entryLength)
+	copy(result, f.entriesData[entryOffset:entryOffset+entryLength])
+
+	return result, nil
 }
 
 // Release releases the memory used by the fragment.
 func (f *FragmentObject) Release() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.dataLoaded {
 		// empty, no need to release again
 		return nil
@@ -249,6 +299,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		infoFetched:  true,
 	}
 	expectedEntryId := int64(-1)
+	fragIds := make([]uint64, 0)
 	for _, fragment := range fragments {
 		err := fragment.Load(ctx)
 		if err != nil {
@@ -278,6 +329,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		}
 		// merge data
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
+		fragIds = append(fragIds, fragment.fragmentId)
 	}
 	// mark dataLoaded
 	mergedFrag.dataLoaded = true
@@ -295,12 +347,12 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
 
 	// update cache
-	err := cache.AddCacheFragment(ctx, mergedFrag) // TODO use lock free cache
+	err := cache.AddCacheFragment(ctx, mergedFrag)
 	if err != nil {
 		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
 	}
 
-	//
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds))
 	return mergedFrag, nil
 }
 

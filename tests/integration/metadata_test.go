@@ -32,34 +32,40 @@ func TestLogWriterLock(t *testing.T) {
 	assert.False(t, exists)
 
 	// lock success
-	getLockErr := metaProvider.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr := metaProvider.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
+	assert.NotNil(t, se)
 
 	// reentrant lock success
-	getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
+	assert.NotNil(t, se)
 
 	// get lock fail from another session
-	getLockErr = metaProvider2.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr = metaProvider2.AcquireLogWriterLock(context.Background(), logName)
 	assert.Error(t, getLockErr)
+	assert.Nil(t, se)
 
 	// release lock
 	releaseLockErr := metaProvider.ReleaseLogWriterLock(context.Background(), logName)
 	assert.NoError(t, releaseLockErr)
 
 	// get lock success from another session after release by the first session
-	getLockErr = metaProvider2.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr = metaProvider2.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
+	assert.NotNil(t, se)
 
 	// session 1 try again
-	getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
 	assert.Error(t, getLockErr)
+	assert.Nil(t, se)
 
 	// session 2 close
 	closeErr := metaProvider2.Close()
 	assert.NoError(t, closeErr)
 
 	// session 1 try lock success
-	getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
+	se, getLockErr = metaProvider.AcquireLogWriterLock(context.Background(), logName)
 	assert.NoError(t, getLockErr)
+	assert.NotNil(t, se)
 }

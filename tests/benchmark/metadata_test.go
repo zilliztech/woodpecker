@@ -138,8 +138,9 @@ func TestAcquireLogWriterLockPerformance(t *testing.T) {
 	// lock success
 	start := time.Now()
 	for i := 0; i < 10000; i++ {
-		getLockErr := metaProvider.AcquireLogWriterLock(context.Background(), logName)
+		se, getLockErr := metaProvider.AcquireLogWriterLock(context.Background(), logName)
 		assert.NoError(t, getLockErr)
+		assert.NotNil(t, se)
 		//if i%100 == 0 {
 		//	c := time.Now().Sub(start)
 		//logger.Ctx(context.Background()).Debug(fmt.Sprintf("lock %d spend %d ms", i, c.Milliseconds()))

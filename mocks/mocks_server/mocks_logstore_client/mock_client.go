@@ -378,6 +378,55 @@ func (_c *LogStoreClient_ReadEntry_Call) RunAndReturn(run func(context.Context, 
 	return _c
 }
 
+// SegmentClean provides a mock function with given fields: ctx, logId, segmentId, flag
+func (_m *LogStoreClient) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	ret := _m.Called(ctx, logId, segmentId, flag)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SegmentClean")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int) error); ok {
+		r0 = rf(ctx, logId, segmentId, flag)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_SegmentClean_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SegmentClean'
+type LogStoreClient_SegmentClean_Call struct {
+	*mock.Call
+}
+
+// SegmentClean is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+//   - flag int
+func (_e *LogStoreClient_Expecter) SegmentClean(ctx interface{}, logId interface{}, segmentId interface{}, flag interface{}) *LogStoreClient_SegmentClean_Call {
+	return &LogStoreClient_SegmentClean_Call{Call: _e.mock.On("SegmentClean", ctx, logId, segmentId, flag)}
+}
+
+func (_c *LogStoreClient_SegmentClean_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, flag int)) *LogStoreClient_SegmentClean_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_SegmentClean_Call) Return(_a0 error) *LogStoreClient_SegmentClean_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_SegmentClean_Call) RunAndReturn(run func(context.Context, int64, int64, int) error) *LogStoreClient_SegmentClean_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SegmentCompact provides a mock function with given fields: ctx, logId, segmentId
 func (_m *LogStoreClient) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	ret := _m.Called(ctx, logId, segmentId)

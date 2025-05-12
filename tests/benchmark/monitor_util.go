@@ -196,19 +196,19 @@ func getCurrentMetrics() (bytesSum, bytesCount, latencySum, latencyCount float64
 	// Aggregate metrics from all threads
 	for _, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "woodpecker_wp_server_append_bytes_sum"):
+		case strings.HasPrefix(line, "woodpecker_server_append_bytes_sum"):
 			if value, e := parseMetricValue(line); e == nil {
 				bytesSum += value
 			}
-		case strings.HasPrefix(line, "woodpecker_wp_server_append_bytes_count"):
+		case strings.HasPrefix(line, "woodpecker_server_append_bytes_count"):
 			if value, e := parseMetricValue(line); e == nil {
 				bytesCount += value
 			}
-		case strings.HasPrefix(line, "woodpecker_wp_server_append_req_latency_sum"):
+		case strings.HasPrefix(line, "woodpecker_server_append_req_latency_sum"):
 			if value, e := parseMetricValue(line); e == nil {
 				latencySum += value
 			}
-		case strings.HasPrefix(line, "woodpecker_wp_server_append_req_latency_count"):
+		case strings.HasPrefix(line, "woodpecker_server_append_req_latency_count"):
 			if value, e := parseMetricValue(line); e == nil {
 				latencyCount += value
 			}

@@ -29,7 +29,7 @@ type FragmentManager interface {
 	RemoveFragment(ctx context.Context, fragment storage.Fragment) error
 	// EvictFragments evicts fragments to free up memory.
 	EvictFragments() error
-	// StartEvictionLoop starts a loop to periodically trigger evict fragments automatically .
+	// StartEvictionLoop starts a loop to periodically trigger evict fragments automatically.
 	StartEvictionLoop(interval time.Duration) error
 	// StopEvictionLoop stops the eviction loop.
 	StopEvictionLoop() error
@@ -47,7 +47,12 @@ func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 		maxMemory = maxMemoryBytes
 		interval = intervalMs
 		instance = newFragmentManager(maxMemory)
-		go instance.StartEvictionLoop(time.Duration(interval) * time.Millisecond) // Run cleanup every 10 seconds
+		go func() {
+			err := instance.StartEvictionLoop(time.Duration(interval) * time.Millisecond)
+			if err != nil {
+				logger.Ctx(context.Background()).Warn("start eviction loop error", zap.Error(err))
+			}
+		}()
 	})
 	return instance
 }
@@ -61,19 +66,35 @@ func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
 	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
-func newFragmentManager(maxMemory int64) FragmentManager {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &fragmentManagerImpl{
-		maxMemory:  maxMemory,
-		usedMemory: 0,
+func RemoveCachedFragment(ctx context.Context, frag storage.Fragment) error {
+	return GetInstance(maxMemory, interval).RemoveFragment(ctx, frag)
+}
 
-		cache: make(map[string]*CacheItem),
-		order: list.New(),
+// Operation types for the fragment manager
+type operationType int
 
-		mutex:          sync.RWMutex{},
-		evictionCtx:    ctx,
-		evictionCancel: cancel,
-	}
+const (
+	opAdd operationType = iota
+	opRemove
+	opGet
+	opEvict
+	opGetStats
+	opShutdown // Special operation to signal shutdown
+)
+
+// Request structure for operations
+type fragmentRequest struct {
+	op           operationType
+	fragmentKey  string
+	fragment     storage.Fragment
+	responseChan chan interface{}
+	ctx          context.Context
+}
+
+// Response for getStats operation
+type statsResponse struct {
+	maxMemory  int64
+	usedMemory int64
 }
 
 type CacheItem struct {
@@ -81,126 +102,327 @@ type CacheItem struct {
 	element  *list.Element
 }
 
+func newFragmentManager(maxMemory int64) FragmentManager {
+	ctx, cancel := context.WithCancel(context.Background())
+	fm := &fragmentManagerImpl{
+		maxMemory:      maxMemory,
+		usedMemory:     0,
+		cache:          make(map[string]*CacheItem),
+		order:          list.New(),
+		requestChan:    make(chan fragmentRequest, 100), // Buffer to prevent blocking
+		evictionCtx:    ctx,
+		evictionCancel: cancel,
+		shutdownChan:   make(chan struct{}), // Channel to signal shutdown completion
+	}
+
+	// Start the processing goroutine
+	go fm.processRequests()
+
+	return fm
+}
+
 var _ FragmentManager = (*fragmentManagerImpl)(nil)
 
 type fragmentManagerImpl struct {
-	maxMemory  int64
-	usedMemory int64
-
-	cache map[string]*CacheItem // key: fileId-fragmentId, value: fragment
-	order *list.List            // LRU order, front is the least recently used fragment key element
-
-	mutex          sync.RWMutex
+	maxMemory      int64
+	usedMemory     int64
+	cache          map[string]*CacheItem // key: fileId-fragmentId, value: fragment
+	order          *list.List            // LRU order, front is the least recently used fragment key element
+	requestChan    chan fragmentRequest  // Channel for all operations
 	evictionCtx    context.Context
 	evictionCancel context.CancelFunc
+	shutdownChan   chan struct{} // Channel to signal when shutdown is complete
+	isShutdown     bool          // Flag to indicate if shutdown has been requested
 }
 
-func (m *fragmentManagerImpl) GetMaxMemory() int64 {
-	return m.maxMemory
-}
+// processRequests handles all operations on the fragment cache
+func (m *fragmentManagerImpl) processRequests() {
+	for req := range m.requestChan {
+		// If we've received a shutdown request, only process the shutdown operation
+		if m.isShutdown && req.op != opShutdown {
+			if req.responseChan != nil {
+				req.responseChan <- fmt.Errorf("fragment manager is shutting down")
+			}
+			continue
+		}
 
-func (m *fragmentManagerImpl) GetUsedMemory() int64 {
-	return m.usedMemory
-}
-
-func (m *fragmentManagerImpl) GetFragment(ctx context.Context, fragmentKey string) (storage.Fragment, bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if item, ok := m.cache[fragmentKey]; ok {
-		// update LRU
-		m.order.MoveToFront(item.element)
-		return item.fragment, true
+		switch req.op {
+		case opAdd:
+			m.handleAddFragment(req)
+		case opRemove:
+			m.handleRemoveFragment(req)
+		case opGet:
+			m.handleGetFragment(req)
+		case opEvict:
+			m.handleEvictFragments(req)
+		case opGetStats:
+			m.handleGetStats(req)
+		case opShutdown:
+			// Release all fragments and clean up
+			m.handleShutdown(req)
+			// Signal that shutdown is complete
+			close(m.shutdownChan)
+			// Exit the goroutine
+			return
+		}
 	}
-	return nil, false
 }
 
-func (m *fragmentManagerImpl) RemoveFragment(ctx context.Context, fragment storage.Fragment) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	key := fragment.GetFragmentKey()
-	if item, ok := m.cache[key]; ok {
-		delete(m.cache, key)
-		m.order.Remove(item.element)
+// handleShutdown releases all fragments and cleans up resources
+func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
+	logger.Ctx(req.ctx).Debug("shutting down fragment manager",
+		zap.Int("fragments_count", m.order.Len()),
+		zap.Int64("used_memory", m.usedMemory))
+
+	// Release all fragments to prevent memory leaks
+	for key, item := range m.cache {
 		fragmentSize := calculateSize(item.fragment)
-		m.usedMemory -= fragmentSize
 		item.fragment.Release()
 		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
-		logger.Ctx(m.evictionCtx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
-		return nil
+		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
+			zap.String("key", key),
+			zap.Int64("size", fragmentSize))
 	}
-	return werr.ErrFragmentNotFound
+
+	// Clear the cache and order list
+	m.cache = make(map[string]*CacheItem)
+	m.order = list.New()
+	m.usedMemory = 0
+
+	// Signal completion
+	if req.responseChan != nil {
+		req.responseChan <- nil
+	}
 }
 
-func (m *fragmentManagerImpl) StopEvictionLoop() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if m.evictionCancel != nil {
-		m.evictionCancel()
-		m.evictionCtx = nil
-		m.evictionCancel = nil
-	}
-	return nil
-}
-
-func (m *fragmentManagerImpl) AddFragment(ctx context.Context, fragment storage.Fragment) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
+	fragment := req.fragment
 	key := fragment.GetFragmentKey()
 
-	// check if fragment already exists
+	// Check if fragment already exists
 	if _, ok := m.cache[key]; ok {
-		// already exists
-		return nil
+		// Already exists, no need to add
+		if req.responseChan != nil {
+			req.responseChan <- nil // Signal success with nil error
+		}
+		return
 	}
 
-	// push to front of list
+	// Add to cache
 	pushedElement := m.order.PushFront(key)
 	m.cache[key] = &CacheItem{
 		fragment: fragment,
 		element:  pushedElement,
 	}
 
-	// update used memory
+	// Update memory usage statistics
 	fragmentSize := calculateSize(fragment)
 	m.usedMemory += fragmentSize
 	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Add(float64(fragmentSize))
-	logger.Ctx(m.evictionCtx).Debug("add fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
-	return nil
+	logger.Ctx(req.ctx).Debug("add fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+
+	if req.responseChan != nil {
+		req.responseChan <- nil // Signal success with nil error
+	}
 }
 
-func (m *fragmentManagerImpl) EvictFragments() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	// it is not necessary to evict if the used memory is less than the max memory
-	if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
-		return nil
+func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
+	key := req.fragmentKey
+	if req.fragment != nil {
+		key = req.fragment.GetFragmentKey()
 	}
 
-	for {
-		// evict the least recently used fragment
+	// Check if the fragment is in cache
+	item, ok := m.cache[key]
+	if !ok {
+		if req.responseChan != nil {
+			req.responseChan <- werr.ErrFragmentNotFound
+		}
+		return
+	}
+
+	// Record information we need to save
+	fragmentSize := calculateSize(item.fragment)
+
+	// Perform deletion
+	delete(m.cache, key)
+	m.order.Remove(item.element)
+	m.usedMemory -= fragmentSize
+	item.fragment.Release()
+	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+	logger.Ctx(req.ctx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+
+	if req.responseChan != nil {
+		req.responseChan <- nil // Signal success with nil error
+	}
+}
+
+func (m *fragmentManagerImpl) handleGetFragment(req fragmentRequest) {
+	item, ok := m.cache[req.fragmentKey]
+	if !ok {
+		req.responseChan <- nil // Fragment not found
+		return
+	}
+
+	// Update LRU order
+	m.order.MoveToFront(item.element)
+
+	// Return the fragment
+	req.responseChan <- item.fragment
+}
+
+func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
+	// Check if eviction is needed
+	if m.usedMemory <= m.maxMemory || m.order.Len() == 0 {
+		if req.responseChan != nil {
+			req.responseChan <- nil // No eviction needed
+		}
+		return
+	}
+
+	// Maximum number of fragments to evict in one call
+	maxEvictionCount := 10
+	evictCount := 0
+
+	for m.usedMemory > m.maxMemory && m.order.Len() > 0 && evictCount < maxEvictionCount {
+		// Get the least recently used fragment
 		evictElement := m.order.Back()
 		if evictElement == nil {
-			return nil
+			break // No more elements to evict
 		}
-		key := evictElement.Value.(string)
-		if item, ok := m.cache[key]; ok {
-			delete(m.cache, key)
-			fragmentSize := calculateSize(item.fragment)
-			m.usedMemory -= fragmentSize
-			item.fragment.Release()
-			metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+
+		keyToEvict := evictElement.Value.(string)
+		item, ok := m.cache[keyToEvict]
+		if !ok {
+			// Should not happen, but just in case
 			m.order.Remove(evictElement)
-			logger.Ctx(m.evictionCtx).Debug("evict fragment automatically", zap.String("key", key), zap.String("fragInst", fmt.Sprintf("%p", item.fragment)))
+			continue
 		}
-		// break if the used memory is less than the max memory
-		if m.order.Len() == 0 || m.usedMemory <= m.maxMemory {
-			break
-		}
+
+		// Perform eviction
+		delete(m.cache, keyToEvict)
+		fragmentSize := calculateSize(item.fragment)
+		m.usedMemory -= fragmentSize
+		item.fragment.Release()
+		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
+		m.order.Remove(evictElement)
+		logger.Ctx(req.ctx).Debug("evict fragment automatically",
+			zap.String("key", keyToEvict),
+			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
+			zap.Int64("fragmentSize", fragmentSize),
+			zap.Int64("currentUsedMemory", m.usedMemory))
+		evictCount++
 	}
-	return nil
+
+	if req.responseChan != nil {
+		req.responseChan <- nil // Signal success with nil error
+	}
 }
 
+func (m *fragmentManagerImpl) handleGetStats(req fragmentRequest) {
+	if req.responseChan != nil {
+		req.responseChan <- statsResponse{
+			maxMemory:  m.maxMemory,
+			usedMemory: m.usedMemory,
+		}
+	}
+}
+
+// GetMaxMemory returns the maximum memory limit.
+func (m *fragmentManagerImpl) GetMaxMemory() int64 {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opGetStats,
+		responseChan: responseChan,
+		ctx:          context.Background(),
+	}
+	response := (<-responseChan).(statsResponse)
+	return response.maxMemory
+}
+
+// GetUsedMemory returns the current used memory.
+func (m *fragmentManagerImpl) GetUsedMemory() int64 {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opGetStats,
+		responseChan: responseChan,
+		ctx:          context.Background(),
+	}
+	response := (<-responseChan).(statsResponse)
+	return response.usedMemory
+}
+
+// GetFragment returns a fragment from the manager.
+func (m *fragmentManagerImpl) GetFragment(ctx context.Context, fragmentKey string) (storage.Fragment, bool) {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opGet,
+		fragmentKey:  fragmentKey,
+		responseChan: responseChan,
+		ctx:          ctx,
+	}
+	response := <-responseChan
+	if response == nil {
+		return nil, false
+	}
+
+	// Check if we got an error (fragment manager is shutting down)
+	if err, ok := response.(error); ok {
+		logger.Ctx(ctx).Debug("get fragment failed", zap.String("key", fragmentKey), zap.Error(err))
+		return nil, false
+	}
+
+	return response.(storage.Fragment), true
+}
+
+// AddFragment manually adds a fragment to the manager.
+func (m *fragmentManagerImpl) AddFragment(ctx context.Context, fragment storage.Fragment) error {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opAdd,
+		fragment:     fragment,
+		responseChan: responseChan,
+		ctx:          ctx,
+	}
+	response := <-responseChan
+	if response == nil {
+		return nil
+	}
+	return response.(error)
+}
+
+// RemoveFragment manually removes a fragment from the manager.
+func (m *fragmentManagerImpl) RemoveFragment(ctx context.Context, fragment storage.Fragment) error {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opRemove,
+		fragment:     fragment,
+		responseChan: responseChan,
+		ctx:          ctx,
+	}
+	response := <-responseChan
+	if response == nil {
+		return nil
+	}
+	return response.(error)
+}
+
+// EvictFragments evicts fragments to free up memory.
+func (m *fragmentManagerImpl) EvictFragments() error {
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opEvict,
+		responseChan: responseChan,
+		ctx:          m.evictionCtx,
+	}
+	response := <-responseChan
+	if response == nil {
+		return nil
+	}
+	return response.(error)
+}
+
+// StartEvictionLoop starts a loop to periodically trigger evict fragments automatically.
 func (m *fragmentManagerImpl) StartEvictionLoop(interval time.Duration) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.evictionCtx = ctx
@@ -222,20 +444,47 @@ func (m *fragmentManagerImpl) StartEvictionLoop(interval time.Duration) error {
 	return nil
 }
 
-func (m *fragmentManagerImpl) run(intervalMs int) error {
-	ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			err := m.EvictFragments()
-			if err != nil {
-				logger.Ctx(m.evictionCtx).Error("Failed to evict fragments", zap.Error(err))
-			}
-		case <-m.evictionCtx.Done():
-			return nil
-		}
+// StopEvictionLoop stops the eviction loop and shuts down the fragment manager.
+func (m *fragmentManagerImpl) StopEvictionLoop() error {
+	if m.evictionCancel != nil {
+		m.evictionCancel()
+		m.evictionCtx = nil
+		m.evictionCancel = nil
 	}
+
+	// Set the shutdown flag and send a shutdown operation
+	m.isShutdown = true
+
+	// Send shutdown request
+	responseChan := make(chan interface{})
+	m.requestChan <- fragmentRequest{
+		op:           opShutdown,
+		responseChan: responseChan,
+		ctx:          context.Background(),
+	}
+
+	// Wait for the response or a timeout
+	select {
+	case err := <-responseChan:
+		if err != nil {
+			return err.(error)
+		}
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("fragment manager shutdown timed out")
+	}
+
+	// Wait for the processing goroutine to complete
+	select {
+	case <-m.shutdownChan:
+		// Shutdown completed successfully
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("fragment manager shutdown completion timed out")
+	}
+
+	// Close the request channel after all in-flight requests are processed
+	close(m.requestChan)
+
+	return nil
 }
 
 func calculateSize(f storage.Fragment) int64 {

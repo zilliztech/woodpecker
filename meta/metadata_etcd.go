@@ -27,12 +27,14 @@ type metadataProviderEtcd struct {
 
 	session        *concurrency.Session
 	logWriterLocks map[string]*concurrency.Mutex
+	lockSessions   map[string]*concurrency.Session
 }
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataProvider {
 	return &metadataProviderEtcd{
 		client:         client,
 		logWriterLocks: make(map[string]*concurrency.Mutex),
+		lockSessions:   make(map[string]*concurrency.Session),
 	}
 }
 
@@ -193,6 +195,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if !txnResp.Succeeded {
 		return werr.ErrCreateLogMetadata.WithCauseErrMsg("transaction failed due to idgen mismatch")
 	}
+	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
 	return nil
 }
 
@@ -264,7 +267,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 		return nil, nil, err
 	}
 
-	//
+	logger.Ctx(ctx).Info("log opened successfully", zap.String("logName", logName), zap.Int64("logId", logResp.LogId))
 	return logResp, segmentMetaList, nil
 }
 
@@ -321,35 +324,85 @@ func extractLogName(path string) (string, error) {
 	return parts[2], nil
 }
 
-func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) error {
+func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error) {
 	e.Lock()
 	defer e.Unlock()
-	if e.session == nil {
-		// keep a session for this metadata cli
-		newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(5))
-		if err != nil {
-			return err
-		}
-		e.session = newSession
-	}
-	// try lock if the lock already exists
+
+	// Check if lock already exists for this log
 	if l, exists := e.logWriterLocks[logName]; exists {
-		return l.TryLock(ctx)
+		// We can't directly check session status through mutex, so try lock
+		// If it fails with a lease-related error, we'll create a new one
+		err := l.TryLock(ctx)
+		if err == nil {
+			// Find the associated session and return its keepAlive channel
+			if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+				return session, nil
+			}
+		}
+
+		// Assume session might be invalid, clean up and create new
+		logger.Ctx(ctx).Warn("Failed to acquire existing lock, creating new lock",
+			zap.String("logName", logName),
+			zap.Error(err))
+		delete(e.logWriterLocks, logName)
+
+		// Close the old session if it exists
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			_ = session.Close()
+			delete(e.lockSessions, logName)
+		}
 	}
-	// create a new lock
+
+	// Create a new session specifically for this lock with TTL
+	newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(10))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session for lock: %w", err)
+	}
+
+	// Create a new lock with this session
 	lockKey := BuildLogLockKey(logName)
-	lock := concurrency.NewMutex(e.session, lockKey)
+	lock := concurrency.NewMutex(newSession, lockKey)
+
+	// Try to acquire the lock
+	err = lock.TryLock(ctx)
+	if err != nil {
+		// If we can't acquire the lock, clean up the session
+		_ = newSession.Close()
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
+	}
+
+	// Store the lock and session for future reference
 	e.logWriterLocks[logName] = lock
-	//
-	return lock.TryLock(ctx)
+	e.lockSessions[logName] = newSession
+	return newSession, nil
 }
 
 func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName string) error {
 	e.Lock()
 	defer e.Unlock()
 	if l, exists := e.logWriterLocks[logName]; exists {
+		// First unlock the mutex
+		err := l.Unlock(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Warn("Failed to unlock writer lock",
+				zap.String("logName", logName),
+				zap.Error(err))
+		}
+
+		// Close the associated session
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			closeErr := session.Close()
+			if closeErr != nil {
+				logger.Ctx(ctx).Warn("Failed to close lock session",
+					zap.String("logName", logName),
+					zap.Error(closeErr))
+			}
+		}
+
+		// Remove the lock and session from our maps
 		delete(e.logWriterLocks, logName)
-		return l.Unlock(ctx)
+		delete(e.lockSessions, logName)
+		return err
 	}
 	return nil
 }
@@ -446,13 +499,16 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 		return segmentMetaMap, nil
 	}
 
+	segIds := make([]int64, 0)
 	for _, kv := range getResp.Kvs {
 		segmentMeta := &proto.SegmentMetadata{}
 		if err := pb.Unmarshal(kv.Value, segmentMeta); err != nil {
 			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 		}
 		segmentMetaMap[segmentMeta.SegNo] = segmentMeta
+		segIds = append(segIds, segmentMeta.SegNo)
 	}
+	logger.Ctx(ctx).Debug("GetAllSegmentMetadata", zap.String("logName", logName), zap.Int("segmentCount", len(segmentMetaMap)), zap.Int64s("segmentIds", segIds))
 	return segmentMetaMap, nil
 }
 
@@ -465,6 +521,42 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 		return false, nil
 	}
 	return true, nil
+}
+
+// DeleteSegmentMetadata deletes a segment metadata entry.
+// It returns an error if the segment does not exist or if the deletion fails.
+func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error {
+	e.Lock()
+	defer e.Unlock()
+
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
+
+	// Start a transaction
+	txn := e.client.Txn(ctx)
+
+	// Delete the segment metadata if it exists
+	txnResp, err := txn.If(
+		// Ensure the segment exists
+		clientv3.Compare(clientv3.CreateRevision(segmentKey), ">", 0),
+	).Then(
+		// Delete the segment metadata
+		clientv3.OpDelete(segmentKey),
+	).Commit()
+
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	if !txnResp.Succeeded {
+		return werr.ErrSegmentNotFound.WithCauseErrMsg(
+			fmt.Sprintf("segment not found for logName:%s segmentId:%d", logName, segmentId))
+	}
+
+	logger.Ctx(ctx).Debug("Deleted segment metadata",
+		zap.String("logName", logName),
+		zap.Int64("segmentId", segmentId))
+
+	return nil
 }
 
 func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error {
@@ -515,23 +607,343 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	return quorumInfo, nil
 }
 
+func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, fromSegmentId int64, fromEntryId int64) error {
+	// Create a key path for the reader temporary information
+	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
+
+	// Create reader info structure
+	ts := uint64(time.Now().UnixMilli())
+	readerInfo := &proto.ReaderTempInfo{
+		ReaderName:          readerName,
+		OpenTimestamp:       ts,
+		LogId:               logId,
+		OpenSegmentId:       fromSegmentId,
+		OpenEntryId:         fromEntryId,
+		RecentReadSegmentId: fromSegmentId,
+		RecentReadEntryId:   fromEntryId,
+		RecentReadTimestamp: ts,
+	}
+
+	// Serialize to binary
+	readerInfoValue, err := pb.Marshal(readerInfo)
+	if err != nil {
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+
+	// Create a lease with TTL of 60 seconds
+	lease, err := e.client.Grant(ctx, 60)
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	// Put reader info in etcd with the lease
+	_, err = e.client.Put(ctx, readerKey, string(readerInfoValue), clientv3.WithLease(lease.ID))
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	logger.Ctx(ctx).Debug("Created reader temporary information with lease",
+		zap.String("readerName", readerName),
+		zap.Int64("logId", logId),
+		zap.Int64("openSegmentId", fromSegmentId),
+		zap.Int64("openEntryId", fromEntryId),
+		zap.Int64("leaseTTL", 60),
+		zap.Int64("leaseID", int64(lease.ID)))
+
+	return nil
+}
+
+// GetReaderTempInfo returns the temporary information for a specific reader
+func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error) {
+	// Create the key path for the reader temporary information
+	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
+
+	// Get reader info from etcd
+	resp, err := e.client.Get(ctx, readerKey)
+	if err != nil {
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	// Check if reader info exists
+	if len(resp.Kvs) == 0 {
+		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
+	}
+
+	// Decode reader info
+	readerInfo := &proto.ReaderTempInfo{}
+	if err := pb.Unmarshal(resp.Kvs[0].Value, readerInfo); err != nil {
+		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
+	}
+
+	return readerInfo, nil
+}
+
+// GetAllReaderTempInfoForLog returns all reader temporary information for a given log
+func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, logId int64) ([]*proto.ReaderTempInfo, error) {
+	// Create the prefix for all readers of this log
+	readerPrefix := BuildLogAllReaderTempInfosKey(logId)
+
+	// Get all reader infos with this prefix
+	resp, err := e.client.Get(ctx, readerPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	// Create result slice
+	readers := make([]*proto.ReaderTempInfo, 0, len(resp.Kvs))
+
+	// Decode each reader info
+	for _, kv := range resp.Kvs {
+		readerInfo := &proto.ReaderTempInfo{}
+		if err := pb.Unmarshal(kv.Value, readerInfo); err != nil {
+			logger.Ctx(ctx).Warn("Failed to decode reader temp info",
+				zap.String("key", string(kv.Key)),
+				zap.Error(err))
+			continue
+		}
+		readers = append(readers, readerInfo)
+	}
+
+	return readers, nil
+}
+
+// UpdateReaderTempInfo updates the reader's recent read position
+func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error {
+	// Create the key path for the reader temporary information
+	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
+
+	// Get the current reader info
+	resp, err := e.client.Get(ctx, readerKey)
+	if err != nil {
+		return werr.ErrMetadataRead.WithCauseErr(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
+	}
+
+	// Decode reader info
+	readerInfo := &proto.ReaderTempInfo{}
+	if err := pb.Unmarshal(resp.Kvs[0].Value, readerInfo); err != nil {
+		return werr.ErrMetadataDecode.WithCauseErr(err)
+	}
+
+	// Only update the read position related fields
+	readerInfo.RecentReadSegmentId = recentReadSegmentId
+	readerInfo.RecentReadEntryId = recentReadEntryId
+	readerInfo.RecentReadTimestamp = uint64(time.Now().UnixMilli())
+
+	// Marshal the updated reader info
+	bytes, err := pb.Marshal(readerInfo)
+	if err != nil {
+		return werr.ErrMetadataEncode.WithCauseErr(err)
+	}
+
+	// Get the lease ID from the current key
+	leaseID := resp.Kvs[0].Lease
+
+	// Update the reader info with the existing lease
+	if leaseID != 0 {
+		_, err = e.client.Put(ctx, readerKey, string(bytes), clientv3.WithLease(clientv3.LeaseID(leaseID)))
+	} else {
+		// If no lease is attached (shouldn't happen normally), just update the value
+		_, err = e.client.Put(ctx, readerKey, string(bytes))
+	}
+
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	logger.Ctx(ctx).Debug("Updated reader temporary information",
+		zap.String("readerName", readerName),
+		zap.Int64("logId", logId),
+		zap.Int64("recentReadSegmentId", recentReadSegmentId),
+		zap.Int64("recentReadEntryId", recentReadEntryId))
+
+	return nil
+}
+
+// DeleteReaderTempInfo deletes the temporary information for a reader when it closes
+func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error {
+	// Create the key path for the reader temporary information
+	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
+
+	// Delete the reader information
+	resp, err := e.client.Delete(ctx, readerKey)
+	if err != nil {
+		return werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	// Check if the key existed
+	if resp.Deleted == 0 {
+		logger.Ctx(ctx).Warn("Reader temp info not found during deletion",
+			zap.String("readerName", readerName),
+			zap.Int64("logId", logId))
+		// We don't return an error here since the end result is the same - the reader info doesn't exist
+	} else {
+		logger.Ctx(ctx).Debug("Deleted reader temporary information",
+			zap.String("readerName", readerName),
+			zap.Int64("logId", logId))
+	}
+
+	return nil
+}
+
 func (e *metadataProviderEtcd) Close() error {
 	e.Lock()
 	defer e.Unlock()
+
+	// Close all individual writer locks and their sessions
 	for logName, lock := range e.logWriterLocks {
 		if lock == nil {
 			continue
 		}
+
+		// First unlock the mutex
 		err := lock.Unlock(context.Background())
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
+			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock during close",
+				zap.String("logName", logName),
+				zap.Error(err))
+		}
+
+		// Close the associated session
+		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			closeErr := session.Close()
+			if closeErr != nil {
+				logger.Ctx(context.Background()).Warn("Failed to close lock session during close",
+					zap.String("logName", logName),
+					zap.Error(closeErr))
+			}
 		}
 	}
+
+	// Clear the maps
+	e.logWriterLocks = make(map[string]*concurrency.Mutex)
+	e.lockSessions = make(map[string]*concurrency.Session)
+
+	// Close the main session if it exists (should be removed in the new implementation)
 	if e.session != nil {
 		err := e.session.Close()
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to close etcd session", zap.Error(err))
+			logger.Ctx(context.Background()).Warn("Failed to close main etcd session", zap.Error(err))
 		}
+		e.session = nil
 	}
+
 	return nil
+}
+
+// CreateSegmentCleanupStatus creates a new segment cleanup status record
+func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error {
+	key := BuildSegmentCleanupStatusKey(status.LogId, status.SegmentId)
+	bytes, err := proto.MarshalSegmentCleanupStatus(status)
+	if err != nil {
+		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
+	}
+
+	// Start a new transaction
+	txn := e.client.Txn(ctx)
+
+	// First check if it already exists
+	cmp := clientv3.Compare(clientv3.CreateRevision(key), "=", 0)
+	put := clientv3.OpPut(key, string(bytes))
+
+	resp, err := txn.If(cmp).Then(put).Commit()
+	if err != nil {
+		return fmt.Errorf("failed to create segment cleanup status: %w", err)
+	}
+
+	if !resp.Succeeded {
+		return fmt.Errorf("segment cleanup status already exists: %s", key)
+	}
+
+	return nil
+}
+
+// UpdateSegmentCleanupStatus updates an existing segment cleanup status
+func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error {
+	key := BuildSegmentCleanupStatusKey(status.LogId, status.SegmentId)
+	bytes, err := proto.MarshalSegmentCleanupStatus(status)
+	if err != nil {
+		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
+	}
+
+	// Start a new transaction
+	txn := e.client.Txn(ctx)
+
+	// Check if it exists
+	cmp := clientv3.Compare(clientv3.CreateRevision(key), ">", 0)
+	put := clientv3.OpPut(key, string(bytes))
+
+	resp, err := txn.If(cmp).Then(put).Commit()
+	if err != nil {
+		return fmt.Errorf("failed to update segment cleanup status: %w", err)
+	}
+
+	if !resp.Succeeded {
+		return fmt.Errorf("segment cleanup status does not exist: %s", key)
+	}
+
+	return nil
+}
+
+// GetSegmentCleanupStatus retrieves the cleanup status for a segment
+func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCleanupStatus, error) {
+	key := BuildSegmentCleanupStatusKey(logId, segmentId)
+
+	resp, err := e.client.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get segment cleanup status: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+
+	status := &proto.SegmentCleanupStatus{}
+	err = proto.UnmarshalSegmentCleanupStatus(resp.Kvs[0].Value, status)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
+	}
+
+	return status, nil
+}
+
+// DeleteSegmentCleanupStatus deletes the cleanup status for a segment
+func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) error {
+	key := BuildSegmentCleanupStatusKey(logId, segmentId)
+
+	_, err := e.client.Delete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("failed to delete segment cleanup status: %w", err)
+	}
+
+	return nil
+}
+
+// ListSegmentCleanupStatus lists all cleanup statuses for a log
+func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error) {
+	// Create a prefix key for the log to retrieve all segments
+	prefix := BuildAllSegmentsCleanupStatusKey(logId)
+
+	resp, err := e.client.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list segment cleanup statuses: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return []*proto.SegmentCleanupStatus{}, nil
+	}
+
+	statuses := make([]*proto.SegmentCleanupStatus, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		status := &proto.SegmentCleanupStatus{}
+		err = proto.UnmarshalSegmentCleanupStatus(kv.Value, status)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
+		}
+		statuses = append(statuses, status)
+	}
+
+	return statuses, nil
 }

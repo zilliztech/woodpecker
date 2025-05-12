@@ -33,6 +33,7 @@ type LogStore interface {
 	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	RecoverySegmentFromInRecovery(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
+	CleanSegment(context.Context, int64, int64, int) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -206,4 +207,12 @@ func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int6
 func (l *logStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	// same as RecoverySegmentFromInProgress currently
 	return l.RecoverySegmentFromInProgress(ctx, logId, segmentId)
+}
+
+func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		return err
+	}
+	return segmentProcessor.Clean(ctx, flag)
 }

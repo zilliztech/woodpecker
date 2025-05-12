@@ -543,7 +543,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
 	// update cache
-	err = cache.AddCacheFragment(ctx, fr) // TODO use lock free cache
+	err = cache.AddCacheFragment(ctx, fr)
 	if err != nil {
 		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
 	}
@@ -611,43 +611,70 @@ func (fr *FragmentFileReader) refreshFooter() error {
 
 // GetLastEntryId returns the last entry ID.
 func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
+	fr.mu.RLock()
 	if fr.closed {
+		fr.mu.RUnlock()
 		return 0, errors.New("fragment file is closed")
 	}
 
 	if fr.infoFetched && fr.dataLoaded && fr.isGrowing {
 		// already fetch but it is growing, refresh
+		fr.mu.RUnlock()
+		fr.mu.Lock()
+		defer fr.mu.Unlock()
 		err := fr.refreshFooter()
 		if err != nil {
 			return -1, err
 		}
+		return fr.lastEntryID, nil
 	} else if fr.infoFetched && !fr.isGrowing {
 		// already fetch and not growing, return
-		return fr.lastEntryID, nil
+		lastEntryID := fr.lastEntryID
+		fr.mu.RUnlock()
+		return lastEntryID, nil
 	} else {
+		// Need to load first
+		fr.mu.RUnlock()
+		// No need to lock before Load, as Load already acquires a write lock
 		err := fr.Load(context.Background())
 		if err != nil {
 			return -1, err
 		}
-	}
 
-	return fr.lastEntryID, nil
+		// Need to get the result with read lock
+		fr.mu.RLock()
+		lastEntryID := fr.lastEntryID
+		fr.mu.RUnlock()
+		return lastEntryID, nil
+	}
 }
 
 // GetFirstEntryId returns the first entry ID.
 func (fr *FragmentFileReader) GetFirstEntryId() (int64, error) {
+	fr.mu.RLock()
 	if fr.closed {
+		fr.mu.RUnlock()
 		return 0, errors.New("fragment file is closed")
 	}
 
-	if !fr.infoFetched {
-		err := fr.Load(context.Background())
-		if err != nil {
-			return 0, err
-		}
+	if fr.infoFetched {
+		firstEntryID := fr.firstEntryID
+		fr.mu.RUnlock()
+		return firstEntryID, nil
+	}
+	fr.mu.RUnlock()
+
+	// No need to lock before Load, as Load already acquires a write lock
+	err := fr.Load(context.Background())
+	if err != nil {
+		return 0, err
 	}
 
-	return fr.firstEntryID, nil
+	// Need to get the result with read lock
+	fr.mu.RLock()
+	firstEntryID := fr.firstEntryID
+	fr.mu.RUnlock()
+	return firstEntryID, nil
 }
 
 // GetLastModified returns the last modification time.
@@ -661,11 +688,13 @@ func (fr *FragmentFileReader) GetLastModified() int64 {
 
 // GetEntry returns the entry at the specified ID.
 func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
+	fr.mu.RLock()
 	if fr.closed {
 		logger.Ctx(context.Background()).Warn("failed to get entry from a closed fragment file",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("fragmentId", fr.fragmentId),
 			zap.Int64("readingEntryId", entryId))
+		fr.mu.RUnlock()
 		return nil, errors.New("fragment file is closed")
 	}
 
@@ -678,29 +707,129 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 
 	// Load data if not loaded
 	if !fr.dataLoaded {
+		fr.mu.RUnlock()
+		// No need to lock before Load, as Load already acquires a write lock
 		err := fr.Load(context.Background())
 		if err != nil {
 			return nil, err
 		}
-	}
 
-	// Refresh footer info only
-	if entryId > fr.lastEntryID && fr.isGrowing {
-		err := fr.refreshFooter()
-		if err != nil {
-			return nil, err
+		// Now check entry range with read lock
+		fr.mu.RLock()
+		// Refresh footer info only if entry is beyond the last known entry
+		if entryId > fr.lastEntryID && fr.isGrowing {
+			fr.mu.RUnlock()
+			fr.mu.Lock()
+			defer fr.mu.Unlock()
+
+			err := fr.refreshFooter()
+			if err != nil {
+				return nil, err
+			}
+
+			// Check if entryId is within range after refresh
+			if entryId < fr.firstEntryID || entryId > fr.lastEntryID {
+				logger.Ctx(context.Background()).Debug("entry ID out of range after refresh",
+					zap.Int64("requestedID", entryId),
+					zap.Int64("firstEntryID", fr.firstEntryID),
+					zap.Int64("lastEntryID", fr.lastEntryID))
+				return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("entry ID %d not in the range of this fragment", entryId))
+			}
+
+			return fr.getEntryLocked(entryId)
+		}
+
+		// Check if entryId is within range - either with read lock or write lock depending on path taken
+		if entryId < fr.firstEntryID || entryId > fr.lastEntryID {
+			logger.Ctx(context.Background()).Debug("entry ID out of range",
+				zap.Int64("requestedID", entryId),
+				zap.Int64("firstEntryID", fr.firstEntryID),
+				zap.Int64("lastEntryID", fr.lastEntryID))
+			fr.mu.RUnlock()
+			return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("entry ID %d not in the range of this fragment", entryId))
 		}
 	}
 
-	// Check if entryId is within range
-	if entryId < fr.firstEntryID || entryId > fr.lastEntryID {
-		logger.Ctx(context.Background()).Debug("entry ID out of range",
-			zap.Int64("requestedID", entryId),
-			zap.Int64("firstEntryID", fr.firstEntryID),
-			zap.Int64("lastEntryID", fr.lastEntryID))
-		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("entry ID %d not in the range of this fragment", entryId))
+	// Copy required data with read lock
+	mappedFile := fr.mappedFile
+	fileSize := fr.fileSize
+	filePath := fr.filePath
+	firstEntryID := fr.firstEntryID
+	defer fr.mu.RUnlock()
+
+	// Calculate index position - relative position of entry ID in index area
+	idxPos := uint32(fileSize - footerSize - int64(indexItemSize)*(int64(entryId-firstEntryID+1)))
+
+	if idxPos < headerSize || idxPos >= uint32(fileSize-footerSize) {
+		logger.Ctx(context.Background()).Debug("Invalid index position",
+			zap.Uint32("idxPos", idxPos),
+			zap.Uint32("headerSize", headerSize),
+			zap.Int64("fileSize", fileSize),
+			zap.Uint32("footerSize", footerSize))
+		return nil, fmt.Errorf("invalid index position: %d", idxPos)
 	}
 
+	// Read data offset
+	offset := binary.LittleEndian.Uint32(mappedFile[idxPos:])
+	if offset < headerSize || offset >= uint32(fileSize-footerSize) {
+		logger.Ctx(context.Background()).Debug("Invalid data offset",
+			zap.Uint32("offset", offset),
+			zap.Uint32("headerSize", headerSize),
+			zap.Int64("fileSize", fileSize))
+		return nil, fmt.Errorf("invalid data offset: %d", offset)
+	}
+
+	// Read data length
+	length := binary.LittleEndian.Uint32(mappedFile[offset:])
+	if length == 0 || length > uint32(fileSize-footerSize)-offset-8 {
+		logger.Ctx(context.Background()).Debug("Invalid data length",
+			zap.Uint32("length", length),
+			zap.Uint32("offset", offset),
+			zap.Int64("fileSize", fileSize))
+		return nil, fmt.Errorf("invalid data length: %d", length)
+	}
+
+	// Read CRC (4 bytes)
+	storedCRC := binary.LittleEndian.Uint32(mappedFile[offset+4:])
+
+	// Determine data region
+	dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
+	dataEnd := dataStart + length
+	if dataEnd > uint32(fileSize-footerSize) {
+		logger.Ctx(context.Background()).Debug("Data region out of bounds",
+			zap.Uint32("dataStart", dataStart),
+			zap.Uint32("dataEnd", dataEnd),
+			zap.Int64("fileSize", fileSize))
+		return nil, fmt.Errorf("data region out of bounds: %d-%d", dataStart, dataEnd)
+	}
+
+	// Read data
+	data := make([]byte, length)
+	copy(data, mappedFile[dataStart:dataEnd])
+
+	logger.Ctx(context.Background()).Debug("Fragment data read completed",
+		zap.String("fragmentFile", filePath),
+		zap.Int64("readingEntryId", entryId),
+		zap.Uint32("start", dataStart),
+		zap.Uint32("end", dataEnd),
+		zap.Uint32("idxPos", idxPos),
+		zap.Int("dataSize", len(data)),
+		zap.String("fragInst", fmt.Sprintf("%p", fr)))
+
+	// Verify CRC
+	if crc32.ChecksumIEEE(data) != storedCRC {
+		logger.Ctx(context.Background()).Debug("CRC mismatch",
+			zap.Int64("entryId", entryId),
+			zap.Uint32("computedCRC", crc32.ChecksumIEEE(data)),
+			zap.Uint32("storedCRC", storedCRC))
+		return nil, fmt.Errorf("CRC mismatch for entry ID %d", entryId)
+	}
+
+	return data, nil
+}
+
+// getEntryLocked is a helper method to retrieve an entry with lock already held
+func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 	// Calculate index position - relative position of entry ID in index area
 	idxPos := uint32(fr.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-fr.firstEntryID+1)))
 

@@ -202,16 +202,16 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
-	elementsToRemove := []*list.Element{}
+	elementsToRemove := make([]*list.Element, 0)
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed.Load() {
-			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not completed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 		// Check if it is the next entry in the sequence.
 		if op.entryId != s.lastAddConfirmed.Load()+1 {
-			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not the next lac", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not the next lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 
@@ -226,7 +226,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
-		logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks remove", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
@@ -236,7 +236,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
-	logger.Ctx(context.Background()).Warn("SendAppendFailedCallbacks", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.String("msg", err.Error()))
+	logger.Ctx(context.Background()).Warn("SendAppendFailedCallbacks", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.String("msg", err.Error()))
 
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
@@ -269,12 +269,12 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		op := element.Value.(*AppendOp)
 		if op.entryId == triggerEntryId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(context.Background()).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 			continue
 		}
 		if op.entryId < minRemoveId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(context.Background()).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 		} else {
 			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
 			elementsToRemove = append(elementsToRemove, element)
@@ -296,7 +296,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		op.callback(s.segmentId, op.entryId, err)
-		logger.Ctx(context.Background()).Debug("append fail after retry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		logger.Ctx(context.Background()).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpAppendOpEntriesGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Sub(float64(len(op.value)))
 		metrics.WpAppendOpRequestsGauge.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
@@ -313,7 +313,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 		return nil, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return nil, err
 	}
@@ -323,14 +323,14 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 	}
 
 	if from == to {
-		segmentEntry, err := client.ReadEntry(ctx, s.logId, s.segmentId, from)
+		segmentEntry, err := cli.ReadEntry(ctx, s.logId, s.segmentId, from)
 		if err != nil {
 			return nil, err
 		}
 		return []*segment.SegmentEntry{segmentEntry}, nil
 	}
 
-	segmentEntryList, err := client.ReadBatchEntries(ctx, s.logId, s.segmentId, from, to)
+	segmentEntryList, err := cli.ReadBatchEntries(ctx, s.logId, s.segmentId, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -355,12 +355,12 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 		return -1, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return -1, err
 	}
 
-	return client.GetLastAddConfirmed(ctx, s.logId, currentSegmentMeta.SegNo)
+	return cli.GetLastAddConfirmed(ctx, s.logId, currentSegmentMeta.SegNo)
 }
 
 // Deprecated
@@ -381,6 +381,7 @@ func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
 	if err != nil {
 		logger.Ctx(ctx).Warn("refresh segment meta failed",
 			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.Error(err))
 		return err
@@ -413,18 +414,26 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 	return s.segmentMetaCache.Load().State >= proto.SegmentState_Completed, nil
 }
 
+// Close marks the segment as read-only. Only writable segments can be closed.
+// TODO: Rename method to better reflect that segments remain readable after closing
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	// error out all pending append operations
 	s.SendAppendErrorCallbacks(-1, werr.ErrSegmentClosed)
 
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
+	if currentSegmentMeta.State != proto.SegmentState_Active {
+		// not active writable segmentHandle, just return
+		return nil
+	}
 	newSegmentMeta := currentSegmentMeta.CloneVT()
 	newSegmentMeta.State = proto.SegmentState_Completed
 	newSegmentMeta.Size = s.commitedSize.Load()
 	newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
 	newSegmentMeta.CompletionTime = time.Now().UnixMilli()
-	return s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(err))
+	return err
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
@@ -448,11 +457,16 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 
 	// TODO should maintain a async compactions queue
 	if s.doingRecoveryOrCompact.Load() {
-		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return nil
 	}
 
-	go s.compactToSealed(ctx)
+	go func() {
+		compactErr := s.compactToSealed(ctx)
+		if compactErr != nil {
+			logger.Ctx(ctx).Warn("segment compaction failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(compactErr))
+		}
+	}()
 	return nil
 }
 
@@ -465,11 +479,11 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return err
 	}
-	err = client.FenceSegment(ctx, s.logId, s.segmentId)
+	err = cli.FenceSegment(ctx, s.logId, s.segmentId)
 	if err != nil {
 		return err
 	}
@@ -485,15 +499,19 @@ func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return false, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return false, err
 	}
-	return client.IsSegmentFenced(ctx, s.logId, s.segmentMetaCache.Load().SegNo)
+	return cli.IsSegmentFenced(ctx, s.logId, s.segmentMetaCache.Load().SegNo)
 }
 
 // RecoveryOrCompact used for the auditor of this Log
 func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
+	err := s.RefreshAndGetMetadata(ctx)
+	if err != nil {
+		return err
+	}
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State == proto.SegmentState_Active {
 		return s.recoveryFromInProgress(ctx)
@@ -502,17 +520,17 @@ func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 	} else if currentSegmentMeta.State == proto.SegmentState_InRecovery {
 		return s.recoveryFromInRecovery(ctx)
 	}
-	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logId:%s, segId:%d", currentSegmentMeta.State, s.logName, currentSegmentMeta.SegNo))
+	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
 }
 
 func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State != proto.SegmentState_Active {
-		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logId:%s, segId:%d", s.logName, s.segmentId))
+		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	// only one recovery operation at the same time
 	if s.doingRecoveryOrCompact.Load() {
-		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return nil
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
@@ -524,11 +542,12 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return err
 	}
-	recoverySegMetaInfo, recoveryErr := client.SegmentRecoveryFromInProgress(ctx, s.logId, s.segmentId)
+	logger.Ctx(ctx).Info("start recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("state", fmt.Sprintf("%s", currentSegmentMeta.State)))
+	recoverySegMetaInfo, recoveryErr := cli.SegmentRecoveryFromInProgress(ctx, s.logId, s.segmentId)
 	if recoveryErr != nil {
 		return recoveryErr
 	}
@@ -539,12 +558,20 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	newSegmentMeta.CompletionTime = recoverySegMetaInfo.CompletionTime
 	newSegmentMeta.Size = recoverySegMetaInfo.Size
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
+	// update segmentHandle meta cache
+	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr
 }
 
 func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
+	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
+		// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
+		return nil
+	}
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State != proto.SegmentState_Completed {
+		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
 	if s.doingRecoveryOrCompact.Load() {
@@ -552,7 +579,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
 
-	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId))
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		return err
@@ -561,12 +588,13 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return err
 	}
 	// wait compaction success
-	compactSegMetaInfo, compactErr := client.SegmentCompact(ctx, s.logId, s.segmentId)
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId))
+	compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
 	if compactErr != nil {
 		return compactErr
 	}
@@ -579,14 +607,16 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	newSegmentMeta.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
 	newSegmentMeta.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
+	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
+	// update segmentHandle meta cache
+	_ = s.RefreshAndGetMetadata(ctx)
 	return updateMetaErr
 }
 
 func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State != proto.SegmentState_InRecovery {
-		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InRecovery, skip this compaction. logId:%s, segId:%d", s.logName, s.segmentId))
+		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InRecovery, skip this compaction. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	if s.doingRecoveryOrCompact.Load() {
 		return nil
@@ -600,11 +630,11 @@ func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
-	client, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		return err
 	}
-	recoverySegMetaInfo, recoveryErr := client.SegmentRecoveryFromInRecovery(ctx, s.logId, s.segmentId)
+	recoverySegMetaInfo, recoveryErr := cli.SegmentRecoveryFromInRecovery(ctx, s.logId, s.segmentId)
 	if recoveryErr != nil {
 		return recoveryErr
 	}

@@ -26,7 +26,7 @@ import (
 
 var _ storage.LogFile = (*DiskLogFile)(nil)
 
-// DiskLogFile implements the LogFile interface for disk-based storage
+// DiskLogFile is used to write data to disk-based storage as a logical file
 type DiskLogFile struct {
 	mu           sync.RWMutex
 	id           int64
@@ -36,11 +36,11 @@ type DiskLogFile struct {
 	// Configuration parameters
 	fragmentSize    int64 // Maximum size of each fragment
 	maxEntryPerFile int   // Maximum number of entries per fragment
-	autoSync        bool
 
 	// State
 	lastFragmentID atomic.Int64
 	lastEntryID    atomic.Int64
+	firstEntryID   atomic.Int64
 
 	// Use SequentialBuffer to store entries within the window
 	buffer        atomic.Pointer[cache.SequentialBuffer]
@@ -48,6 +48,8 @@ type DiskLogFile struct {
 	maxIntervalMs int                  // Maximum interval between syncs
 	lastSync      atomic.Int64         // Last sync time
 	syncedChan    map[int64]chan int64 // Channels for sync completion
+
+	autoSync bool // Whether to automatically sync data
 
 	// For async writes and control
 	closed  bool
@@ -66,9 +68,12 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		maxIntervalMs:   1000,              // Default 1s
 		syncedChan:      make(map[int64]chan int64),
 		closeCh:         make(chan struct{}),
-		autoSync:        true, // Default is auto-sync enabled
+		autoSync:        true,
 	}
 	dlf.lastSync.Store(time.Now().UnixMilli())
+	dlf.firstEntryID.Store(-1)
+	dlf.lastEntryID.Store(-1)
+	dlf.lastFragmentID.Store(-1)
 
 	// Apply options
 	for _, opt := range options {
@@ -80,34 +85,12 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		return nil, err
 	}
 
-	// Load existing fragments
-	fragments, err := dlf.getROFragments()
+	// writer should open an empty dir too begin
+	err := dlf.checkDirIsEmpty()
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize state from existing fragments
-	if len(fragments) > 0 {
-		// Find max fragment ID
-		maxFragID := fragments[len(fragments)-1].GetFragmentId()
-		dlf.lastFragmentID.Store(maxFragID)
-		// Find max entry ID
-		lastEntryID := int64(-1)
-		for i := 0; i < len(fragments); i++ {
-			id, err = fragments[len(fragments)-1-i].GetLastEntryId()
-			if err != nil {
-				return nil, err
-			}
-			if id > lastEntryID {
-				lastEntryID = id
-				break
-			}
-		}
-		dlf.lastEntryID.Store(lastEntryID)
-	} else {
-		dlf.lastEntryID.Store(-1)
-		dlf.lastFragmentID.Store(-1)
-	}
 	newBuffer := cache.NewSequentialBuffer(dlf.lastEntryID.Load()+1, 10000) // Default cache for 10000 entries
 	dlf.buffer.Store(newBuffer)
 
@@ -118,10 +101,6 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 
 	logger.Ctx(context.Background()).Info("NewDiskLogFile", zap.String("basePath", dlf.basePath), zap.Int64("id", dlf.id))
 	return dlf, nil
-}
-
-func NewRODiskLogFile(id int64, basePath string) (*DiskLogFile, error) {
-	return NewDiskLogFile(id, basePath, WithDisableAutoSync())
 }
 
 // run performs periodic sync operations, similar to the sync mechanism in objectstorage
@@ -301,9 +280,10 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	// Write data to fragment
 	var originWrittenEntryID int64 = dlf.lastEntryID.Load()
 	writeError := dlf.flushData(ctx, toFlushData, toFlushDataFirstEntryId)
+	afterFlushEntryID := dlf.lastEntryID.Load()
 
 	// Process result notifications
-	if originWrittenEntryID == dlf.lastEntryID.Load() {
+	if originWrittenEntryID == afterFlushEntryID {
 		// No entries were successfully written, notify all channels of write failure, let clients retry
 		// no flush success, callback all append sync error
 		for syncingId, ch := range dlf.syncedChan {
@@ -319,7 +299,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 		}
 		// reset buffer as empty
 		currentBuffer.Reset()
-	} else if originWrittenEntryID < dlf.lastEntryID.Load() {
+	} else if originWrittenEntryID < afterFlushEntryID {
 		if writeError == nil { // Indicates all successful
 			restDataFirstEntryId := currentBuffer.ExpectedNextEntryId.Load()
 			restData, err := currentBuffer.ReadEntriesToLast(restDataFirstEntryId)
@@ -341,7 +321,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 				}
 			}
 		} else { // Indicates partial success
-			restDataFirstEntryId := dlf.lastEntryID.Load() + 1
+			restDataFirstEntryId := afterFlushEntryID + 1
 			for syncingId, ch := range dlf.syncedChan {
 				if syncingId < restDataFirstEntryId { // Notify success for entries flushed to disk
 					// append success
@@ -368,10 +348,10 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	}
 
 	// Update lastEntryID
-	if originWrittenEntryID < dlf.lastEntryID.Load() {
+	if originWrittenEntryID < afterFlushEntryID {
 		logger.Ctx(ctx).Debug("Sync completed, lastEntryID updated",
 			zap.Int64("from", originWrittenEntryID),
-			zap.Int64("to", dlf.lastEntryID.Load()),
+			zap.Int64("to", afterFlushEntryID),
 			zap.String("filePath", dlf.currFragment.filePath))
 	}
 
@@ -382,7 +362,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 func (dlf *DiskLogFile) getToFlushData(ctx context.Context, currentBuffer *cache.SequentialBuffer) ([][]byte, int64) {
 	entryCount := len(currentBuffer.Values)
 	if entryCount == 0 {
-		logger.Ctx(ctx).Info("Call Sync, but empty, skip ... ",
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id))
 		return nil, -1
@@ -393,7 +373,7 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context, currentBuffer *cache
 
 	// Check if there is data that needs to be flushed
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		logger.Ctx(ctx).Info("Call Sync, expected id not received yet, skip ... ",
+		logger.Ctx(ctx).Debug("Call Sync, expected id not received yet, skip ... ",
 			zap.String("basePath", dlf.basePath),
 			zap.Int64("logFileId", dlf.id),
 			zap.Int64("bufferSize", dataSize),
@@ -651,11 +631,162 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 
 // NewReader creates a new Reader instance
 func (dlf *DiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	// Check if file is closed
-	if dlf.closed {
-		return nil, errors.New("logfile is closed")
+	return nil, werr.ErrNotSupport.WithCauseErrMsg("DiskLogFile writer support write only, cannot create reader")
+}
+
+// Load loads data from disk
+func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
+	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to load currently")
+}
+
+// Merge merges log file fragments
+func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to merge currently")
+}
+
+func (dlf *DiskLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/m_%d.frag", dlf.basePath, dlf.id, mergedFragmentId)
+}
+
+func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath string, mergeFragId uint64, mergeFragSize int, fragments []*FragmentFileReader) (storage.Fragment, error) {
+	// check args
+	if len(fragments) == 0 {
+		return nil, errors.New("no fragments to merge")
 	}
 
+	// merge
+	fragmentFirstEntryId := fragments[0].lastEntryID
+	mergedFragmentWriter, err := NewFragmentFileWriter(mergedFragPath, int64(mergeFragSize), int64(mergeFragId), fragmentFirstEntryId)
+	if err != nil {
+		return nil, errors.Wrapf(err, "create new fragment: %s", mergedFragPath)
+	}
+
+	expectedEntryId := int64(-1)
+	for _, fragment := range fragments {
+		err := fragment.Load(ctx)
+		if err != nil {
+			// Merge failed, explicitly release fragment
+			mergedFragmentWriter.Release()
+			return nil, err
+		}
+		// check the order of entries
+		if expectedEntryId == -1 {
+			// the first segment
+			expectedEntryId = fragment.lastEntryID + 1
+		} else {
+			if expectedEntryId != fragment.firstEntryID {
+				// Merge failed, explicitly release fragments
+				mergedFragmentWriter.Release()
+				return nil, errors.New("fragments are not in order")
+			}
+			expectedEntryId = fragment.lastEntryID + 1
+		}
+
+		// merge index
+		// TODO
+		// Copy fragment data to merged fragment data area
+		// Copy fragment index to merged fragment index area, adjusting all index lengths
+	}
+
+	// Add merged fragment to cache
+	mergedFragmentWriter.Release()
+
+	return mergedFragmentWriter, nil
+}
+
+// Close closes the log file and releases resources
+func (dlf *DiskLogFile) Close() error {
+	dlf.mu.Lock()
+	defer dlf.mu.Unlock()
+
+	if dlf.closed {
+		return nil
+	}
+
+	logger.Ctx(context.Background()).Info("Closing DiskLogFile",
+		zap.Int64("id", dlf.id),
+		zap.String("basePath", dlf.basePath))
+
+	// Mark as closed to prevent new operations
+	dlf.closed = true
+
+	// Send close signal
+	close(dlf.closeCh)
+
+	return nil
+}
+
+func (dlf *DiskLogFile) checkDirIsEmpty() error {
+	// Read directory contents
+	entries, err := os.ReadDir(dlf.basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(entries) > 0 {
+		return werr.ErrNotSupport.WithCauseErrMsg("DiskLogFile writer to should open en empty dir")
+	}
+	return nil
+}
+
+// LastFragmentId returns the last fragment ID
+func (dlf *DiskLogFile) LastFragmentId() uint64 {
+	return uint64(dlf.lastFragmentID.Load())
+}
+
+// GetLastEntryId returns the last entry ID
+func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
+	return dlf.lastEntryID.Load(), nil
+}
+
+func (dlf *DiskLogFile) DeleteFragments(ctx context.Context, flag int) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to delete fragments currently")
+}
+
+var _ storage.LogFile = (*RODiskLogFile)(nil)
+
+// RODiskLogFile is used to read data from disk-based storage as a logical file
+type RODiskLogFile struct {
+	mu       sync.RWMutex
+	id       int64
+	basePath string
+
+	// Configuration parameters
+	fragmentSize int64 // Maximum size of each fragment
+
+	// State
+	firstEntryID   atomic.Int64
+	lastEntryID    atomic.Int64
+	lastFragmentID atomic.Int64
+}
+
+// GetId returns the log file ID
+func (rlf *RODiskLogFile) GetId() int64 {
+	return rlf.id
+}
+
+func (dlf *RODiskLogFile) Append(ctx context.Context, data []byte) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support append")
+}
+
+// AppendAsync appends data to the log file asynchronously.
+func (dlf *RODiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
+	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support append")
+}
+
+// Sync syncs the log file to disk.
+func (dlf *RODiskLogFile) Sync(ctx context.Context) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support sync")
+}
+
+// NewReader creates a new Reader instance
+func (dlf *RODiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
+	dlf.mu.Lock()
+	defer dlf.mu.Unlock()
+
+	// TODO should use dlf instead, not scan all the time
 	// Get all synced fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
@@ -676,7 +807,7 @@ func (dlf *DiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (s
 }
 
 // Load loads data from disk
-func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
+func (dlf *RODiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	dlf.mu.Lock()
 	defer dlf.mu.Unlock()
 
@@ -706,7 +837,7 @@ func (dlf *DiskLogFile) Load(ctx context.Context) (int64, storage.Fragment, erro
 }
 
 // Merge merges log file fragments
-func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+func (dlf *RODiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	dlf.mu.Lock()
 	defer dlf.mu.Unlock()
 
@@ -787,80 +918,17 @@ func (dlf *DiskLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
-func (dlf *DiskLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
+func (dlf *RODiskLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
 	return fmt.Sprintf("%s/%d/m_%d.frag", dlf.basePath, dlf.id, mergedFragmentId)
 }
 
-func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath string, mergeFragId uint64, mergeFragSize int, fragments []*FragmentFileReader) (storage.Fragment, error) {
-	// check args
-	if len(fragments) == 0 {
-		return nil, errors.New("no fragments to merge")
-	}
-
-	// merge
-	fragmentFirstEntryId := fragments[0].lastEntryID
-	mergedFragmentWriter, err := NewFragmentFileWriter(mergedFragPath, int64(mergeFragSize), int64(mergeFragId), fragmentFirstEntryId)
-	if err != nil {
-		return nil, errors.Wrapf(err, "create new fragment: %s", mergedFragPath)
-	}
-
-	expectedEntryId := int64(-1)
-	for _, fragment := range fragments {
-		err := fragment.Load(ctx)
-		if err != nil {
-			// Merge failed, explicitly release fragment
-			mergedFragmentWriter.Release()
-			return nil, err
-		}
-		// check the order of entries
-		if expectedEntryId == -1 {
-			// the first segment
-			expectedEntryId = fragment.lastEntryID + 1
-		} else {
-			if expectedEntryId != fragment.firstEntryID {
-				// Merge failed, explicitly release fragments
-				mergedFragmentWriter.Release()
-				return nil, errors.New("fragments are not in order")
-			}
-			expectedEntryId = fragment.lastEntryID + 1
-		}
-
-		// merge index
-		// TODO
-		// Copy fragment data to merged fragment data area
-		// Copy fragment index to merged fragment index area, adjusting all index lengths
-	}
-
-	// Add merged fragment to cache
-	mergedFragmentWriter.Release()
-
-	return mergedFragmentWriter, nil
-}
-
 // Close closes the log file and releases resources
-func (dlf *DiskLogFile) Close() error {
-	dlf.mu.Lock()
-	defer dlf.mu.Unlock()
-
-	if dlf.closed {
-		return nil
-	}
-
-	logger.Ctx(context.Background()).Info("Closing DiskLogFile",
-		zap.Int64("id", dlf.id),
-		zap.String("basePath", dlf.basePath))
-
-	// Mark as closed to prevent new operations
-	dlf.closed = true
-
-	// Send close signal
-	close(dlf.closeCh)
-
+func (dlf *RODiskLogFile) Close() error {
 	return nil
 }
 
 // getFragments returns all exists fragments in the log file, which is readonly
-func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
+func (dlf *RODiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 	// Read directory contents
 	entries, err := os.ReadDir(dlf.basePath)
 	if err != nil {
@@ -904,15 +972,6 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 				continue
 			}
 
-			// TODO do lazy load
-			// Load fragment
-			//if err := fragment.Load(context.Background()); err != nil {
-			//	fragment.Release()
-			//	continue
-			//}
-			//
-			//// Add to cache
-			//cache.AddCacheFragment(context.Background(), fragment)
 			fragments = append(fragments, fragment.(*FragmentFileReader))
 		}
 	}
@@ -925,35 +984,21 @@ func (dlf *DiskLogFile) getROFragments() ([]*FragmentFileReader, error) {
 	return fragments, nil
 }
 
+// Deprecated, no use
 // LastFragmentId returns the last fragment ID
-func (dlf *DiskLogFile) LastFragmentId() uint64 {
+func (dlf *RODiskLogFile) LastFragmentId() uint64 {
 	return uint64(dlf.lastFragmentID.Load())
 }
 
 // GetLastEntryId returns the last entry ID
-func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
+func (dlf *RODiskLogFile) GetLastEntryId() (int64, error) {
 	dlf.mu.RLock()
 	defer dlf.mu.RUnlock()
-
-	// If file is closed, return error
-	if dlf.closed {
-		return -1, errors.New("log file is closed")
-	}
 
 	// Use lastEntryID stored in atomic variable
 	lastID := dlf.lastEntryID.Load()
 	if lastID >= 0 {
 		return lastID, nil
-	}
-
-	// If no value in atomic variable, try to get from current fragment
-	if dlf.currFragment != nil {
-		fragmentLastID, err := dlf.currFragment.GetLastEntryId() // TODO should distinguish between flushed lastEntryID and lastEntryID
-		if err == nil && fragmentLastID >= 0 {
-			// Update atomic variable
-			dlf.lastEntryID.Store(fragmentLastID)
-			return fragmentLastID, nil
-		}
 	}
 
 	// If no current fragment or get failed, try to find from all fragments
@@ -978,6 +1023,139 @@ func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
 
 	// If no fragments or unable to get ID, return -1
 	return -1, nil
+}
+
+func (dlf *RODiskLogFile) DeleteFragments(ctx context.Context, flag int) error {
+	dlf.mu.Lock()
+	defer dlf.mu.Unlock()
+
+	logger.Ctx(ctx).Info("Starting to delete fragments",
+		zap.String("basePath", dlf.basePath),
+		zap.Int64("logFileId", dlf.id),
+		zap.Int("flag", flag))
+
+	// 读取目录内容
+	entries, err := os.ReadDir(dlf.basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Ctx(ctx).Info("Directory does not exist, nothing to delete",
+				zap.String("basePath", dlf.basePath))
+			return nil
+		}
+		return err
+	}
+
+	var deleteErrors []error
+	deletedCount := 0
+
+	// 筛选并删除 fragment 文件
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasPrefix(entry.Name(), "fragment_") || strings.HasPrefix(entry.Name(), "m_")) {
+			fragmentPath := filepath.Join(dlf.basePath, entry.Name())
+
+			// 从缓存中移除，使用正确的方法名
+			// 从搜索结果看，应该使用 GetCachedFragment 和 RemoveFragment
+			if cachedFrag, found := cache.GetCachedFragment(ctx, fragmentPath); found {
+				_ = cache.RemoveCachedFragment(ctx, cachedFrag)
+			}
+
+			// 删除文件
+			if err := os.Remove(fragmentPath); err != nil {
+				logger.Ctx(ctx).Warn("Failed to delete fragment file",
+					zap.String("fragmentPath", fragmentPath),
+					zap.Error(err))
+				deleteErrors = append(deleteErrors, err)
+			} else {
+				logger.Ctx(ctx).Debug("Successfully deleted fragment file",
+					zap.String("fragmentPath", fragmentPath))
+				deletedCount++
+			}
+		}
+	}
+
+	// clear state
+	dlf.lastFragmentID.Store(-1)
+	dlf.lastEntryID.Store(-1)
+	dlf.firstEntryID.Store(-1)
+
+	logger.Ctx(ctx).Info("Completed fragment deletion",
+		zap.String("basePath", dlf.basePath),
+		zap.Int64("logFileId", dlf.id),
+		zap.Int("deletedCount", deletedCount),
+		zap.Int("errorCount", len(deleteErrors)))
+
+	if len(deleteErrors) > 0 {
+		return fmt.Errorf("failed to delete %d fragment files: ", len(deleteErrors))
+	}
+	return nil
+}
+
+func NewRODiskLogFile(id int64, basePath string, options ...ROption) (*RODiskLogFile, error) {
+	// Set default configuration
+	dlf := &RODiskLogFile{
+		id:           id,
+		basePath:     filepath.Join(basePath, fmt.Sprintf("log_%d", id)),
+		fragmentSize: 128 * 1024 * 1024, // Default 128MB
+	}
+
+	// Apply options
+	for _, opt := range options {
+		opt(dlf)
+	}
+
+	// Create log directory
+	if err := os.MkdirAll(dlf.basePath, 0755); err != nil {
+		return nil, err
+	}
+
+	// Load existing fragments
+	fragments, err := dlf.getROFragments()
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize state from existing fragments
+	if len(fragments) > 0 {
+		// Find max fragment ID
+		maxFragID := fragments[len(fragments)-1].GetFragmentId()
+		dlf.lastFragmentID.Store(maxFragID)
+		// Find max entry ID
+		lastEntryID := int64(-1)
+		for i := 0; i < len(fragments); i++ {
+			id, err = fragments[len(fragments)-1-i].GetLastEntryId()
+			if err != nil {
+				return nil, err
+			}
+			if id > lastEntryID {
+				lastEntryID = id
+				break
+			}
+		}
+		dlf.lastEntryID.Store(lastEntryID)
+		// find first entry ID
+		firstEntryID := int64(-1)
+		for i := 0; i < len(fragments); i++ {
+			id, err = fragments[i].GetLastEntryId()
+			if err != nil {
+				return nil, err
+			}
+			if id >= 0 {
+				first, err := fragments[i].GetFirstEntryId()
+				if err != nil {
+					return nil, err
+				}
+				firstEntryID = first
+				break
+			}
+		}
+		dlf.firstEntryID.Store(firstEntryID)
+	} else {
+		dlf.firstEntryID.Store(-1)
+		dlf.lastEntryID.Store(-1)
+		dlf.lastFragmentID.Store(-1)
+	}
+	logger.Ctx(context.Background()).Info("NewRODiskLogFile", zap.String("basePath", dlf.basePath), zap.Int64("id", dlf.id))
+	return dlf, nil
 }
 
 // DiskReader implements the Reader interface
@@ -1054,7 +1232,7 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	data, err := fragment.GetEntry(dr.currEntryID)
 	if err != nil {
 		// If current entryID not in fragment, may need to move to next fragment
-		logger.Ctx(context.Background()).Debug("Failed to read entry, may need to try next fragment",
+		logger.Ctx(context.Background()).Warn("Failed to read entry, may need to try next fragment",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.Int64("fragmentFirstId", firstID),
 			zap.Int64("fragmentLastId", lastID),
@@ -1126,35 +1304,44 @@ func (dr *DiskReader) Close() error {
 // Option is a function type for configuration options
 type Option func(*DiskLogFile)
 
-// WithFragmentSize sets the fragment size
-func WithFragmentSize(size int64) Option {
+// WithWriteFragmentSize sets the fragment size
+func WithWriteFragmentSize(size int64) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.fragmentSize = size
 	}
 }
 
-func WithMaxBufferSize(size int64) Option {
+func WithWriteMaxBufferSize(size int64) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxBufferSize = size
 	}
 }
 
-// WithMaxEntryPerFile sets the maximum number of entries per fragment
-func WithMaxEntryPerFile(count int) Option {
+// WithWriteMaxEntryPerFile sets the maximum number of entries per fragment
+func WithWriteMaxEntryPerFile(count int) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxEntryPerFile = count
 	}
 }
 
-func WithMaxIntervalMs(interval int) Option {
+func WithWriteMaxIntervalMs(interval int) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxIntervalMs = interval
 	}
 }
 
-// WithDisableAutoSync disables automatic sync
-func WithDisableAutoSync() Option {
+func WithWriteDisableAutoSync() Option {
 	return func(dlf *DiskLogFile) {
 		dlf.autoSync = false
+	}
+}
+
+// ROption is a function type for configuration options
+type ROption func(*RODiskLogFile)
+
+// WithReadFragmentSize sets the fragment size
+func WithReadFragmentSize(size int64) ROption {
+	return func(dlf *RODiskLogFile) {
+		dlf.fragmentSize = size
 	}
 }

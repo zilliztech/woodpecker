@@ -2,17 +2,20 @@ package log
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogWriter --structname=LogWriter --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_writer.go --with-expecter=true  --outpkg=mocks_log_handle
@@ -25,26 +28,28 @@ type LogWriter interface {
 	// It takes a context and a byte slice representing the log message.
 	WriteAsync(context.Context, *WriterMessage) <-chan *WriteResult
 
-	// Truncate truncates the log to the specified log message ID.
-	// It takes a context and a LogMessageId.
-	Truncate(context.Context, *LogMessageId) error
-
 	// Close closes the log writer.
 	// It takes a context and returns an error if any occurs.
 	Close(context.Context) error
 }
 
-func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
+func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
 	w := &logWriterImpl{
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
+		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		session:            session,
 	}
-	// TODO: Add support for other storage auditors once they implement merge/compact functionality
-	//if cfg.Woodpecker.Storage.IsStorageMinio() {
-	//	go w.runAuditor()
-	//}
+
+	// Set sessionValid to true
+	w.sessionValid.Store(true)
+
+	// Monitor keepAlive channel
+	go w.monitorSession()
+	go w.runAuditor()
+	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
 	return w
 }
 
@@ -56,9 +61,43 @@ type logWriterImpl struct {
 	auditorMaxInterval int
 	cfg                *config.Configuration
 	writerClose        chan struct{}
+	cleanupManager     segment.SegmentCleanupManager
+
+	// Session related fields
+	session      *concurrency.Session
+	sessionValid atomic.Bool
+
+	// Mutex to ensure only one truncation cleanup task is running at a time
+	cleanupMutex      sync.Mutex
+	cleanupInProgress bool
+}
+
+func (l *logWriterImpl) monitorSession() {
+	for {
+		select {
+		case <-l.session.Done():
+			// Channel is closed, session is invalid
+			l.sessionValid.Store(false)
+			logger.Ctx(context.Background()).Warn("Writer lock session has expired",
+				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+			return
+		case <-l.writerClose:
+			logger.Ctx(context.Background()).Debug("Monitor session end due to writer close",
+				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+			return
+		}
+	}
 }
 
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+	// Check if session is valid
+	if !l.sessionValid.Load() {
+		return &WriteResult{
+			LogMessageId: nil,
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+		}
+	}
+
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
@@ -90,9 +129,21 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
 	l.Lock()
 	defer l.Unlock()
+
 	ch := make(chan *WriteResult, 1)
+
+	// Check if session is valid
+	if !l.sessionValid.Load() {
+		ch <- &WriteResult{
+			LogMessageId: nil,
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+		}
+		close(ch)
+		return ch
+	}
+
 	callback := func(segmentId int64, entryId int64, err error) {
-		logger.Ctx(ctx).Debug("write log entry callback exec", zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -104,13 +155,13 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
+		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
@@ -124,47 +175,184 @@ func (l *logWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
-			segs, err := l.logHandle.GetSegments(context.TODO())
+			// check and set segment truncate state if necessary
+			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(context.TODO()); err != nil {
+				logger.Ctx(context.TODO()).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				continue
+			}
+
+			// get all current segments meta
+			segmentMetaList, err := l.logHandle.GetSegments(context.TODO())
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
+				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 				continue
 			}
 			nextSegId, err := l.logHandle.GetNextSegmentId()
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Error(err))
+				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 				continue
 			}
-			for _, seg := range segs {
-				if seg.SegNo >= nextSegId-1 {
+
+			// compact/recover if necessary
+			truncatedSegmentExists := make([]int64, 0)
+			for _, seg := range segmentMetaList {
+				if seg.SegNo >= nextSegId-2 {
 					// last segment maybe in-progress, no need to recover it
 					continue
 				}
 				stateBefore := seg.State
-				if stateBefore == proto.SegmentState_Sealed || stateBefore == proto.SegmentState_Truncated {
-					continue
+				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active || stateBefore == proto.SegmentState_InRecovery {
+					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
+					if getRecoverySegmentHandleErr != nil {
+						logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
+						continue
+					}
+					maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
+					if err != nil {
+						logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
+						continue
+					}
+				} else if stateBefore == proto.SegmentState_Truncated {
+					truncatedSegmentExists = append(truncatedSegmentExists, seg.SegNo)
 				}
-				recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
-				if getRecoverySegmentHandleErr != nil {
-					logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
-					continue
-				}
-				maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
-				if err != nil {
-					logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
-					continue
-				}
-				logger.Ctx(context.TODO()).Info("auditor maintain the log segment success", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", seg.SegNo), zap.String("stateBefore", stateBefore.String()), zap.String("stateAfter", seg.State.String()))
+			}
+
+			// Check for truncated segments to clean up
+			if len(truncatedSegmentExists) > 0 {
+				logger.Ctx(context.TODO()).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
+				l.cleanupTruncatedSegmentsIfNecessary(context.TODO())
 			}
 		case <-l.writerClose:
-			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()))
+			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			return
 		}
 	}
 }
 
-func (l *logWriterImpl) Truncate(ctx context.Context, id *LogMessageId) error {
-	//TODO implement me
-	panic("implement me")
+// cleanupTruncatedSegmentsIfNecessary checks for truncated segments that can be cleaned up
+// It identifies segments that are truncated and not being read by any reader
+func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context) {
+	// Get log Id/Name
+	logId := l.logHandle.GetId()
+	logName := l.logHandle.GetName()
+
+	// Ensure only one cleanup task runs at a time
+	l.cleanupMutex.Lock()
+	if l.cleanupInProgress {
+		l.cleanupMutex.Unlock()
+		logger.Ctx(ctx).Debug("Truncation cleanup already in progress, skipping", zap.String("logName", logName), zap.Int64("logId", logId))
+		return
+	}
+
+	l.cleanupInProgress = true
+	l.cleanupMutex.Unlock()
+
+	// Ensure we mark the task as complete when we're done
+	defer func() {
+		l.cleanupMutex.Lock()
+		l.cleanupInProgress = false
+		l.cleanupMutex.Unlock()
+	}()
+
+	// Get the truncation point
+	truncatedRecordId, err := l.logHandle.GetTruncatedRecordId(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get truncation point during cleanup preparation", zap.String("logName", logName), zap.Int64("logId", logId), zap.Error(err))
+		return
+	}
+
+	// Check if truncation has been performed
+	if truncatedRecordId.SegmentId < 0 || truncatedRecordId.EntryId < 0 {
+		logger.Ctx(ctx).Debug("No truncation point set yet, skipping cleanup", zap.String("logName", logName), zap.Int64("logId", logId))
+		return
+	}
+
+	// Get all reader information for this log
+	readers, err := l.logHandle.GetMetadataProvider().GetAllReaderTempInfoForLog(ctx, logId)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get reader information during cleanup preparation", zap.String("logName", logName), zap.Int64("logId", logId), zap.Error(err))
+		return
+	}
+
+	// Get all segments for this log
+	segments, err := l.logHandle.GetSegments(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get segments during cleanup preparation", zap.String("logName", logName), zap.Int64("logId", logId), zap.Error(err))
+		return
+	}
+
+	// get min segment id in use
+	minTruncatedSegmentId := truncatedRecordId.SegmentId
+	for _, reader := range readers {
+		if reader.RecentReadSegmentId < minTruncatedSegmentId {
+			minTruncatedSegmentId = reader.RecentReadSegmentId
+		}
+	}
+
+	// Find all segments that are truncated and not needed by any reader
+	// Process segments in ascending order by segment ID
+	var segmentIdsToClean []int64
+	for segId, segMeta := range segments {
+		// Only consider segments that are truncated
+		if segMeta.State != proto.SegmentState_Truncated {
+			continue
+		}
+
+		// Skip segments that are at or after the minTruncatedSegmentId point
+		if segId >= minTruncatedSegmentId {
+			logger.Ctx(ctx).Debug("Skipping truncated segment still in use by readers",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segId))
+			continue
+		}
+
+		// This segment is eligible for cleanup
+		segmentIdsToClean = append(segmentIdsToClean, segId)
+		logger.Ctx(ctx).Debug("Found truncated segment eligible for cleanup",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segId))
+	}
+
+	if len(segmentIdsToClean) == 0 {
+		logger.Ctx(ctx).Debug("No truncated segments eligible for cleanup",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId))
+		return
+	}
+
+	// Sort segments to clean in ascending order
+	sort.Slice(segmentIdsToClean, func(i, j int) bool {
+		return segmentIdsToClean[i] < segmentIdsToClean[j]
+	})
+
+	logger.Ctx(ctx).Info("Identified truncated segments eligible for cleanup",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int("count", len(segmentIdsToClean)),
+		zap.Int64s("segmentIds", segmentIdsToClean))
+
+	// Start concurrent cleanup of all eligible segments
+	for _, segmentId := range segmentIdsToClean {
+		logger.Ctx(ctx).Info("Start segment cleanup",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId))
+		err := l.cleanupManager.CleanupSegment(ctx, logName, logId, segmentId)
+		if err != nil {
+			logger.Ctx(ctx).Error("Failed to start segment cleanup",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segmentId),
+				zap.Error(err))
+		} else {
+			logger.Ctx(ctx).Info("Finish segment cleanup",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segmentId))
+		}
+	}
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {
@@ -172,16 +360,21 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	close(l.writerClose)
 	closeErr := l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
 	if closeErr != nil {
-		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Error(closeErr))
+		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
 		if werr.ErrSegmentNotFound.Is(closeErr) {
 			closeErr = nil
 		}
 	}
 	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
 	if releaseLockErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()))
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 	}
-	return errors.Join(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, releaseLockErr)
+}
+
+// GetWriterSession For Test only
+func (l *logWriterImpl) GetWriterSessionForTest() *concurrency.Session {
+	return l.session
 }
 
 type WriteResult struct {

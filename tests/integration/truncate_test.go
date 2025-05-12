@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -115,6 +116,10 @@ func TestTruncateBasicOperation(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -296,9 +301,8 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			<-doneWriting
 			<-doneReading
 
-			// Verification: should have read exactly 15 messages (5 before + 10 after truncation)
-			assert.Equal(t, pauseReadPoint+(totalMessages-truncatePoint), len(readMessages),
-				"Should have read 5 messages before truncation + messages after truncation point")
+			// Verification: should have read exactly 20 messages (5 before + 15 after truncation)
+			assert.Equal(t, totalMessages, len(readMessages), "Should have read all messages, because it is opened before truncate action")
 
 			// Verify message indices
 			indices := make([]int, 0, len(readMessages))
@@ -318,11 +322,11 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			for i := 0; i < pauseReadPoint; i++ {
 				assert.Contains(t, indices, i, "Should have read message with index %d", i)
 			}
+			for i := pauseReadPoint; i < truncatePoint; i++ {
+				assert.Contains(t, indices, i, "The Reader open before truncate, should have read truncated message with index %d", i)
+			}
 			for i := truncatePoint; i < totalMessages; i++ {
 				assert.Contains(t, indices, i, "Should have read message with index %d", i)
-			}
-			for i := pauseReadPoint; i < truncatePoint; i++ {
-				assert.NotContains(t, indices, i, "Should not have read truncated message with index %d", i)
 			}
 
 			// Final verification
@@ -330,6 +334,10 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("Final truncation point: segmentId=%d, entryId=%d",
 				truncatedId.SegmentId, truncatedId.EntryId)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
@@ -473,6 +481,427 @@ func TestMultiSegmentTruncation(t *testing.T) {
 			assert.NoError(t, err)
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+func TestReadBeforeTruncationPoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestReadBeforeTruncationPoint")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Initialize client
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// Create log
+			logName := "truncate_read_before_truncation_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Write 20 messages (reduced from 100)
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			totalMsgs := 20 // Reduced from 100
+			writtenIds := make([]*log.LogMessageId, totalMsgs)
+			for i := 0; i < totalMsgs; i++ {
+				result := logWriter.Write(context.Background(), &log.WriterMessage{
+					Payload:    []byte(fmt.Sprintf("message-%d", i)),
+					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
+				})
+				assert.NoError(t, result.Err)
+				writtenIds[i] = result.LogMessageId
+
+				t.Logf("Written message %d: segmentId=%d, entryId=%d",
+					i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+			}
+
+			// Start reading from message 0 (earliest)
+			earliest := log.EarliestLogMessageID()
+
+			// Create a reader starting at earliest position
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "read-before-truncation-reader")
+			assert.NoError(t, err)
+
+			// Read 5 messages to simulate an active reader at position 5
+			var readMessages []*log.LogMessage
+			for i := 0; i < 5; i++ {
+				msg, err := logReader.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+				readMessages = append(readMessages, msg)
+			}
+
+			// Verify we read messages 0-4
+			for i, msg := range readMessages {
+				indexStr := msg.Properties["index"]
+				index, err := strconv.Atoi(indexStr)
+				assert.NoError(t, err)
+				assert.Equal(t, i, index, "Should have read message with index %d", i)
+			}
+
+			t.Log("Successfully read first 5 messages (0-4)")
+
+			// Now truncate at message 10 (inclusive)
+			truncatePoint := writtenIds[9] // 0-based index, message 10 is at index 9
+			err = logHandle.Truncate(context.Background(), truncatePoint)
+			assert.NoError(t, err)
+
+			// Verify truncation point
+			truncatedId, err := logHandle.GetTruncatedRecordId(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
+			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
+
+			t.Logf("Truncated at message 10: segmentId=%d, entryId=%d",
+				truncatedId.SegmentId, truncatedId.EntryId)
+
+			// Continue reading with the existing reader (which is at position 5)
+			// It should still be able to read messages 5-19 even though 0-9 are truncated
+			// Reading 15 more messages (for a total of 20)
+			for i := 0; i < 15; i++ {
+				msg, err := logReader.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+
+				indexStr := msg.Properties["index"]
+				index, err := strconv.Atoi(indexStr)
+				assert.NoError(t, err)
+				assert.Equal(t, 5+i, index, "Should have read message with index %d", 5+i)
+
+				readMessages = append(readMessages, msg)
+				t.Logf("Read message after truncation: index=%d, segmentId=%d, entryId=%d",
+					index, msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			t.Log("Successfully read messages 5-19 with reader that started before truncation point")
+			assert.Equal(t, 20, len(readMessages), "Should have read a total of 20 messages")
+
+			// Now create a new reader from earliest position
+			// It should start reading from position 11
+			newReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "new-reader-after-truncation")
+			assert.NoError(t, err)
+
+			// Read first message
+			msg, err := newReader.ReadNext(context.Background())
+			assert.NoError(t, err)
+			assert.NotNil(t, msg)
+
+			// Extract index to verify we're starting after truncation point
+			indexStr := msg.Properties["index"]
+			index, err := strconv.Atoi(indexStr)
+			assert.NoError(t, err)
+
+			t.Logf("New reader first message: index=%d, segmentId=%d, entryId=%d",
+				index, msg.Id.SegmentId, msg.Id.EntryId)
+
+			// The first message should be message 11 (index 10) or later
+			assert.GreaterOrEqual(t, index, 10, "New reader should start at or after truncation point")
+
+			// Clean up
+			err = logReader.Close(context.Background())
+			assert.NoError(t, err)
+			err = newReader.Close(context.Background())
+			assert.NoError(t, err)
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+func TestSegmentCleanupAfterTruncation(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestSegmentCleanupAfterTruncation")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Initialize client with small segment size to force multiple segments
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			// Set small segment rolling policy to force multiple segments
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 1024 * 2 // 2KB
+			// Set short cleanup check interval for tests
+			cfg.Woodpecker.Client.Auditor.MaxInterval = 2 // 2 seconds
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// Create log
+			logName := "segment_cleanup_after_truncation_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// 1. Write enough messages to create multiple segments
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			// Write messages with enough data to force segment rotation
+			const totalMsgs = 30
+			const msgSize = 1024 // 1KB per message
+			writtenIds := make([]*log.LogMessageId, totalMsgs)
+
+			// Track segments seen
+			segmentsSeen := make(map[int64]bool)
+
+			for i := 0; i < totalMsgs; i++ {
+				// Create payload to force segment rotation
+				payload := make([]byte, msgSize)
+				for j := 0; j < msgSize; j++ {
+					payload[j] = byte(i % 256)
+				}
+
+				result := logWriter.Write(context.Background(), &log.WriterMessage{
+					Payload:    payload,
+					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
+				})
+				assert.NoError(t, result.Err)
+				writtenIds[i] = result.LogMessageId
+
+				// Track segments
+				segmentsSeen[result.LogMessageId.SegmentId] = true
+
+				// Print progress
+				if i%5 == 0 {
+					t.Logf("Written message %d: segmentId=%d, entryId=%d",
+						i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+				}
+			}
+
+			// Verify we've got multiple segments
+			numSegments := len(segmentsSeen)
+			t.Logf("Created %d segments", numSegments)
+			assert.Greater(t, numSegments, 5, "Expected at least 5 segments to be created")
+
+			// Get all segments
+			segments, err := logHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+
+			// Create a map of segment IDs to track which ones should be eligible for cleanup
+			initialSegments := make(map[int64]bool)
+			for segId := range segments {
+				initialSegments[segId] = true
+				t.Logf("Initial segment: %d", segId)
+			}
+
+			// 2. Scenario 1: Create readers at different positions
+			// Reader 1: Starts at beginning
+			earliest := log.EarliestLogMessageID()
+			reader1, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader1-from-beginning")
+			assert.NoError(t, err)
+
+			// Read a few messages to simulate active usage
+			for i := 0; i < 5; i++ {
+				msg, err := reader1.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+				t.Logf("Reader1 read message: %s, segmentId=%d, entryId=%d",
+					string(msg.Payload), msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			// Reader 2: Starts at middle segment
+			middleIndex := totalMsgs / 2
+			middlePoint := writtenIds[middleIndex]
+			reader2, err := logHandle.OpenLogReader(context.Background(), middlePoint, "reader2-from-middle")
+			assert.NoError(t, err)
+
+			// Read a few messages
+			for i := 0; i < 3; i++ {
+				msg, err := reader2.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+				t.Logf("Reader2 read message: %s, segmentId=%d, entryId=%d",
+					string(msg.Payload), msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			// 3. Perform truncation at 1/3 point
+			truncateIndex := totalMsgs / 3
+			truncatePoint := writtenIds[truncateIndex]
+			t.Logf("Truncating at message index %d: segmentId=%d, entryId=%d",
+				truncateIndex, truncatePoint.SegmentId, truncatePoint.EntryId)
+
+			err = logHandle.Truncate(context.Background(), truncatePoint)
+			assert.NoError(t, err)
+
+			// 4. Verify truncation point
+			truncatedId, err := logHandle.GetTruncatedRecordId(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
+			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
+
+			// 5. Reader 1 continues reading
+			for i := 0; i < 10; i++ {
+				msg, err := reader1.ReadNext(context.Background())
+				assert.NoError(t, err)
+				assert.NotNil(t, msg)
+				t.Logf("Reader1 after truncation read message: segmentId=%d, entryId=%d",
+					msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			// 6. Close reader 1 to allow cleanup of early segments
+			err = reader1.Close(context.Background())
+			assert.NoError(t, err)
+			t.Log("Closed reader1, early segments should now be eligible for cleanup")
+
+			// 7. Create reader 3 from earliest (which should now be after truncation point)
+			reader3, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader3-after-truncation")
+			assert.NoError(t, err)
+
+			// Read first message to verify it starts after truncation point
+			msg, err := reader3.ReadNext(context.Background())
+			assert.NoError(t, err)
+			assert.NotNil(t, msg)
+
+			// Verify it's after truncation point
+			isAfterTruncation := msg.Id.SegmentId > truncatePoint.SegmentId ||
+				(msg.Id.SegmentId == truncatePoint.SegmentId && msg.Id.EntryId > truncatePoint.EntryId)
+			assert.True(t, isAfterTruncation,
+				"Expected first message to be after truncation point, got segmentId=%d, entryId=%d",
+				msg.Id.SegmentId, msg.Id.EntryId)
+
+			t.Logf("Reader3 starts at correct position after truncation: segmentId=%d, entryId=%d",
+				msg.Id.SegmentId, msg.Id.EntryId)
+
+			// 8. Wait for segment cleanup to occur - the LogWriter's auditor should detect and clean up
+			// truncated segments that are no longer needed by any reader
+			t.Log("Waiting for segment cleanup to occur...")
+
+			// Wait for a reasonable time to allow cleanup to happen
+			// The auditor runs every few seconds (maxInterval configured earlier)
+			time.Sleep(10 * time.Second)
+
+			// 9. Check if segments before truncation point were cleaned up
+			segments, err = logHandle.GetMetadataProvider().GetAllSegmentMetadata(context.Background(), logHandle.GetName())
+			assert.NoError(t, err)
+
+			var segmentsAfterCleanup []int64
+			for segId := range segments {
+				segmentsAfterCleanup = append(segmentsAfterCleanup, segId)
+			}
+
+			// Sort segment IDs for readability
+			sort.Slice(segmentsAfterCleanup, func(i, j int) bool {
+				return segmentsAfterCleanup[i] < segmentsAfterCleanup[j]
+			})
+
+			t.Logf("Segments after cleanup: %v", segmentsAfterCleanup)
+
+			// 10. Verify segments that should be cleaned up are no longer in metadata
+			// Check if segments that were completely before the truncation point
+			// are marked as truncated and eventually cleaned up
+			for segId, seg := range segments {
+				if segId < truncatePoint.SegmentId {
+					// Segments completely before truncation point should be marked as truncated
+					assert.Equal(t, proto.SegmentState_Truncated, seg.State,
+						"Segment %d should be marked as truncated, as truncated Point:%d/%d", segId, truncatePoint.SegmentId, truncatePoint.EntryId)
+				}
+			}
+
+			// 11. Continue reading with reader 2 and reader 3 to ensure they still work
+			// Read more messages with reader 2
+			for i := 0; i < 5; i++ {
+				msg, err := reader2.ReadNext(context.Background())
+				if err != nil {
+					t.Logf("Reader2 reached end or error: %v", err)
+					break
+				}
+				assert.NotNil(t, msg)
+				t.Logf("Reader2 after cleanup read message: segmentId=%d, entryId=%d",
+					msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			// Read more messages with reader 3
+			for i := 0; i < 5; i++ {
+				msg, err := reader3.ReadNext(context.Background())
+				if err != nil {
+					t.Logf("Reader3 reached end or error: %v", err)
+					break
+				}
+				assert.NotNil(t, msg)
+				t.Logf("Reader3 after cleanup read message: segmentId=%d, entryId=%d",
+					msg.Id.SegmentId, msg.Id.EntryId)
+			}
+
+			// 12. Cleanup
+			err = reader2.Close(context.Background())
+			assert.NoError(t, err)
+			err = reader3.Close(context.Background())
+			assert.NoError(t, err)
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
+			t.Log("Test completed successfully")
 		})
 	}
 }

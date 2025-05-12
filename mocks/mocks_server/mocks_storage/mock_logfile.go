@@ -181,6 +181,53 @@ func (_c *LogFile_Close_Call) RunAndReturn(run func() error) *LogFile_Close_Call
 	return _c
 }
 
+// DeleteFragments provides a mock function with given fields: ctx, flag
+func (_m *LogFile) DeleteFragments(ctx context.Context, flag int) error {
+	ret := _m.Called(ctx, flag)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteFragments")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int) error); ok {
+		r0 = rf(ctx, flag)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogFile_DeleteFragments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteFragments'
+type LogFile_DeleteFragments_Call struct {
+	*mock.Call
+}
+
+// DeleteFragments is a helper method to define mock.On call
+//   - ctx context.Context
+//   - flag int
+func (_e *LogFile_Expecter) DeleteFragments(ctx interface{}, flag interface{}) *LogFile_DeleteFragments_Call {
+	return &LogFile_DeleteFragments_Call{Call: _e.mock.On("DeleteFragments", ctx, flag)}
+}
+
+func (_c *LogFile_DeleteFragments_Call) Run(run func(ctx context.Context, flag int)) *LogFile_DeleteFragments_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int))
+	})
+	return _c
+}
+
+func (_c *LogFile_DeleteFragments_Call) Return(_a0 error) *LogFile_DeleteFragments_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogFile_DeleteFragments_Call) RunAndReturn(run func(context.Context, int) error) *LogFile_DeleteFragments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetId provides a mock function with given fields:
 func (_m *LogFile) GetId() int64 {
 	ret := _m.Called()
