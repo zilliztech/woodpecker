@@ -463,7 +463,9 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 
 	go func() {
 		compactErr := s.compactToSealed(ctx)
-		logger.Ctx(ctx).Warn("segment compaction failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(compactErr))
+		if compactErr != nil {
+			logger.Ctx(ctx).Warn("segment compaction failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(compactErr))
+		}
 	}()
 	return nil
 }
@@ -514,10 +516,6 @@ func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 	if currentSegmentMeta.State == proto.SegmentState_Active {
 		return s.recoveryFromInProgress(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_Completed {
-		if s.cfg.Woodpecker.Storage.IsStorageLocal() {
-			// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
-			return nil
-		}
 		return s.compactToSealed(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_InRecovery {
 		return s.recoveryFromInRecovery(ctx)
@@ -567,6 +565,10 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
+	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
+		// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
+		return nil
+	}
 	currentSegmentMeta := s.GetMetadata(ctx)
 	if currentSegmentMeta.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))

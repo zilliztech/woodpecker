@@ -80,12 +80,12 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			var options []disk.Option
-			options = append(options, disk.WithFragmentSize(tc.fragmentSize))
-			options = append(options, disk.WithMaxBufferSize(tc.bufferSize))
+			options = append(options, disk.WithWriteFragmentSize(tc.fragmentSize))
+			options = append(options, disk.WithWriteMaxBufferSize(tc.bufferSize))
 
 			// If not auto-flushing, disable auto sync
 			if tc.flushRate == 0 {
-				options = append(options, disk.WithDisableAutoSync())
+				options = append(options, disk.WithWriteDisableAutoSync())
 			}
 
 			// Create DiskLogFile instance
@@ -268,7 +268,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			// Step 1: First create and populate DiskLogFile
 			t.Logf("Preparing test file, writing %d entries...", tc.entryCount)
 			options := []disk.Option{
-				disk.WithFragmentSize(128 * 1024 * 1024), // 128MB
+				disk.WithWriteFragmentSize(128 * 1024 * 1024), // 128MB
 			}
 			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)
 			if err != nil {
@@ -468,8 +468,8 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 
 			// Create DiskLogFile instance
 			options := []disk.Option{
-				disk.WithFragmentSize(tc.fragmentSize),
-				disk.WithMaxBufferSize(tc.bufferSize),
+				disk.WithWriteFragmentSize(tc.fragmentSize),
+				disk.WithWriteMaxBufferSize(tc.bufferSize),
 			}
 
 			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)

@@ -93,9 +93,9 @@ func TestFragmentManager(t *testing.T) {
 	err = fm.AddFragment(context.TODO(), fragment4)
 	assert.NoError(t, err)
 	time.Sleep(3 * time.Second)
+	assert.Equal(t, int64(80), fm.GetUsedMemory())
 	err = fm.StopEvictionLoop()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(80), fm.GetUsedMemory())
 }
 
 // TestConcurrentGetAddPattern simulates the scenario where multiple goroutines

@@ -38,9 +38,9 @@ type DiskLogFile struct {
 	maxEntryPerFile int   // Maximum number of entries per fragment
 
 	// State
-	lastFragmentID int64
-	lastEntryID    int64
-	firstEntryID   int64
+	lastFragmentID atomic.Int64
+	lastEntryID    atomic.Int64
+	firstEntryID   atomic.Int64
 
 	// Use SequentialBuffer to store entries within the window
 	buffer        atomic.Pointer[cache.SequentialBuffer]
@@ -48,6 +48,8 @@ type DiskLogFile struct {
 	maxIntervalMs int                  // Maximum interval between syncs
 	lastSync      atomic.Int64         // Last sync time
 	syncedChan    map[int64]chan int64 // Channels for sync completion
+
+	autoSync bool // Whether to automatically sync data
 
 	// For async writes and control
 	closed  bool
@@ -62,15 +64,16 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		basePath:        filepath.Join(basePath, fmt.Sprintf("log_%d", id)),
 		fragmentSize:    128 * 1024 * 1024, // Default 128MB
 		maxEntryPerFile: 100000,            // Default 100k entries per flush
-		firstEntryID:    -1,
-		lastEntryID:     -1,
-		lastFragmentID:  -1,
-		maxBufferSize:   32 * 1024 * 1024, // Default 32MB buffer
-		maxIntervalMs:   1000,             // Default 1s
+		maxBufferSize:   32 * 1024 * 1024,  // Default 32MB buffer
+		maxIntervalMs:   1000,              // Default 1s
 		syncedChan:      make(map[int64]chan int64),
 		closeCh:         make(chan struct{}),
+		autoSync:        true,
 	}
 	dlf.lastSync.Store(time.Now().UnixMilli())
+	dlf.firstEntryID.Store(-1)
+	dlf.lastEntryID.Store(-1)
+	dlf.lastFragmentID.Store(-1)
 
 	// Apply options
 	for _, opt := range options {
@@ -88,11 +91,13 @@ func NewDiskLogFile(id int64, basePath string, options ...Option) (*DiskLogFile,
 		return nil, err
 	}
 
-	newBuffer := cache.NewSequentialBuffer(dlf.lastEntryID+1, 10000) // Default cache for 10000 entries
+	newBuffer := cache.NewSequentialBuffer(dlf.lastEntryID.Load()+1, 10000) // Default cache for 10000 entries
 	dlf.buffer.Store(newBuffer)
 
 	// Start periodic sync goroutine
-	go dlf.run()
+	if dlf.autoSync {
+		go dlf.run()
+	}
 
 	logger.Ctx(context.Background()).Info("NewDiskLogFile", zap.String("basePath", dlf.basePath), zap.Int64("id", dlf.id))
 	return dlf, nil
@@ -163,8 +168,7 @@ func (dlf *DiskLogFile) GetId() int64 {
 // Deprecated TODO
 func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
 	// Get current max ID and increment by 1
-	entryId := dlf.lastEntryID + 1 // TODO delete this
-	dlf.lastEntryID += 1           // TODO delete this
+	entryId := dlf.lastEntryID.Add(1) // TODO delete this
 
 	logger.Ctx(ctx).Debug("Append: synchronous write", zap.Int64("entryId", entryId))
 
@@ -206,7 +210,7 @@ func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []
 	ch := make(chan int64, 1)
 
 	// First check if ID already exists in synced data
-	lastId := dlf.lastEntryID
+	lastId := dlf.lastEntryID.Load()
 	if entryId <= lastId {
 		logger.Ctx(ctx).Debug("AppendAsync: ID already exists, returning success", zap.Int64("entryId", entryId))
 		// For data already written to disk, don't try to rewrite, just return success
@@ -274,11 +278,12 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	}
 
 	// Write data to fragment
-	var originWrittenEntryID int64 = dlf.lastEntryID
+	var originWrittenEntryID int64 = dlf.lastEntryID.Load()
 	writeError := dlf.flushData(ctx, toFlushData, toFlushDataFirstEntryId)
+	afterFlushEntryID := dlf.lastEntryID.Load()
 
 	// Process result notifications
-	if originWrittenEntryID == dlf.lastEntryID {
+	if originWrittenEntryID == afterFlushEntryID {
 		// No entries were successfully written, notify all channels of write failure, let clients retry
 		// no flush success, callback all append sync error
 		for syncingId, ch := range dlf.syncedChan {
@@ -294,7 +299,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 		}
 		// reset buffer as empty
 		currentBuffer.Reset()
-	} else if originWrittenEntryID < dlf.lastEntryID {
+	} else if originWrittenEntryID < afterFlushEntryID {
 		if writeError == nil { // Indicates all successful
 			restDataFirstEntryId := currentBuffer.ExpectedNextEntryId.Load()
 			restData, err := currentBuffer.ReadEntriesToLast(restDataFirstEntryId)
@@ -316,7 +321,7 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 				}
 			}
 		} else { // Indicates partial success
-			restDataFirstEntryId := dlf.lastEntryID + 1
+			restDataFirstEntryId := afterFlushEntryID + 1
 			for syncingId, ch := range dlf.syncedChan {
 				if syncingId < restDataFirstEntryId { // Notify success for entries flushed to disk
 					// append success
@@ -343,10 +348,10 @@ func (dlf *DiskLogFile) Sync(ctx context.Context) error {
 	}
 
 	// Update lastEntryID
-	if originWrittenEntryID < dlf.lastEntryID {
+	if originWrittenEntryID < afterFlushEntryID {
 		logger.Ctx(ctx).Debug("Sync completed, lastEntryID updated",
 			zap.Int64("from", originWrittenEntryID),
-			zap.Int64("to", dlf.lastEntryID),
+			zap.Int64("to", afterFlushEntryID),
 			zap.String("filePath", dlf.currFragment.filePath))
 	}
 
@@ -395,13 +400,13 @@ func (dlf *DiskLogFile) getToFlushData(ctx context.Context, currentBuffer *cache
 
 func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toFlushDataFirstEntryId int64) error {
 	var writeError error
-	var lastWrittenToBuffEntryID int64 = dlf.lastEntryID
+	var lastWrittenToBuffEntryID int64 = dlf.lastEntryID.Load()
 	var pendingFlushBytes int = 0
 
 	// Ensure fragment is created
 	if dlf.currFragment == nil {
 		logger.Ctx(ctx).Debug("Sync needs to create a new fragment")
-		if err := dlf.rotateFragment(dlf.lastEntryID + 1); err != nil {
+		if err := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); err != nil {
 			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(err))
 			return err
 		}
@@ -426,7 +431,7 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			startFlush := time.Now()
 			logger.Ctx(ctx).Debug("Sync flushing current fragment",
 				zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
-				zap.Int64("lastEntryID", dlf.lastEntryID))
+				zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 			if err := dlf.currFragment.Flush(ctx); err != nil {
 				logger.Ctx(ctx).Warn("Sync failed to flush current fragment",
 					zap.Error(err))
@@ -436,11 +441,11 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			flushDuration := time.Now().Sub(startFlush)
 			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
 			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
-			dlf.lastEntryID = lastWrittenToBuffEntryID
+			dlf.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
 			// Create new fragment
-			if err := dlf.rotateFragment(dlf.lastEntryID + 1); err != nil {
+			if err := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); err != nil {
 				logger.Ctx(ctx).Debug("Sync failed to create new fragment",
 					zap.Error(err))
 				writeError = err
@@ -464,7 +469,7 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			startFlush := time.Now()
 			logger.Ctx(ctx).Debug("Sync flushing current fragment",
 				zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
-				zap.Int64("lastEntryID", dlf.lastEntryID))
+				zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 			if flushErr := dlf.currFragment.Flush(ctx); flushErr != nil {
 				logger.Ctx(ctx).Warn("Sync failed to flush current fragment",
 					zap.Error(flushErr))
@@ -474,10 +479,10 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			flushDuration := time.Now().Sub(startFlush)
 			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
 			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
-			dlf.lastEntryID = lastWrittenToBuffEntryID
+			dlf.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
-			if rotateErr := dlf.rotateFragment(dlf.lastEntryID + 1); rotateErr != nil {
+			if rotateErr := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); rotateErr != nil {
 				logger.Ctx(ctx).Warn("Sync failed to create new fragment",
 					zap.Error(rotateErr))
 				writeError = rotateErr
@@ -503,11 +508,11 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 	}
 
 	// If written data not yet flushed to disk, perform a flush
-	if lastWrittenToBuffEntryID > dlf.lastEntryID {
+	if lastWrittenToBuffEntryID > dlf.lastEntryID.Load() {
 		startFlush := time.Now()
 		logger.Ctx(ctx).Debug("Sync flushing current fragment",
 			zap.Int64("lastWrittenToBuffEntryID", lastWrittenToBuffEntryID),
-			zap.Int64("lastEntryID", dlf.lastEntryID))
+			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 		flushErr := dlf.currFragment.Flush(ctx)
 		if flushErr != nil {
 			logger.Ctx(ctx).Warn("Sync failed to flush current fragment", zap.Error(flushErr))
@@ -516,7 +521,7 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 			flushDuration := time.Now().Sub(startFlush)
 			metrics.WpFragmentFlushBytes.WithLabelValues("0").Observe(float64(pendingFlushBytes))
 			metrics.WpFragmentFlushLatency.WithLabelValues("0").Observe(float64(flushDuration.Milliseconds()))
-			dlf.lastEntryID = lastWrittenToBuffEntryID
+			dlf.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 		}
 	}
@@ -590,12 +595,12 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 	// If current fragment exists, close it first
 	if dlf.currFragment != nil {
 		logger.Ctx(context.Background()).Debug("Sync flushing current fragment before rotate",
-			zap.Int64("lastEntryID", dlf.lastEntryID))
+			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 		if err := dlf.currFragment.Flush(context.Background()); err != nil {
 			return errors.Wrap(err, "flush current fragment")
 		}
 		logger.Ctx(context.Background()).Debug("Sync flushing current fragment after rotate",
-			zap.Int64("lastEntryID", dlf.lastEntryID))
+			zap.Int64("lastEntryID", dlf.lastEntryID.Load()))
 
 		// Release immediately frees resources
 		if err := dlf.currFragment.Release(); err != nil {
@@ -604,8 +609,7 @@ func (dlf *DiskLogFile) rotateFragment(fragmentFirstEntryId int64) error {
 	}
 
 	// Create new fragment ID
-	fragmentID := dlf.lastFragmentID + 1
-	dlf.lastFragmentID += 1
+	fragmentID := dlf.lastFragmentID.Add(1)
 
 	logger.Ctx(context.Background()).Info("creating new fragment",
 		zap.String("basePath", dlf.basePath),
@@ -729,12 +733,12 @@ func (dlf *DiskLogFile) checkDirIsEmpty() error {
 
 // LastFragmentId returns the last fragment ID
 func (dlf *DiskLogFile) LastFragmentId() uint64 {
-	return uint64(dlf.lastFragmentID)
+	return uint64(dlf.lastFragmentID.Load())
 }
 
 // GetLastEntryId returns the last entry ID
 func (dlf *DiskLogFile) GetLastEntryId() (int64, error) {
-	return dlf.lastEntryID, nil
+	return dlf.lastEntryID.Load(), nil
 }
 
 func (dlf *DiskLogFile) DeleteFragments(ctx context.Context, flag int) error {
@@ -782,6 +786,7 @@ func (dlf *RODiskLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) 
 	dlf.mu.Lock()
 	defer dlf.mu.Unlock()
 
+	// TODO should use dlf instead, not scan all the time
 	// Get all synced fragments
 	fragments, err := dlf.getROFragments()
 	if err != nil {
@@ -1227,7 +1232,7 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	data, err := fragment.GetEntry(dr.currEntryID)
 	if err != nil {
 		// If current entryID not in fragment, may need to move to next fragment
-		logger.Ctx(context.Background()).Debug("Failed to read entry, may need to try next fragment",
+		logger.Ctx(context.Background()).Warn("Failed to read entry, may need to try next fragment",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.Int64("fragmentFirstId", firstID),
 			zap.Int64("fragmentLastId", lastID),
@@ -1322,6 +1327,12 @@ func WithWriteMaxEntryPerFile(count int) Option {
 func WithWriteMaxIntervalMs(interval int) Option {
 	return func(dlf *DiskLogFile) {
 		dlf.maxIntervalMs = interval
+	}
+}
+
+func WithWriteDisableAutoSync() Option {
+	return func(dlf *DiskLogFile) {
+		dlf.autoSync = false
 	}
 }
 

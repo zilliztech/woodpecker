@@ -543,7 +543,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
 	// update cache
-	err = cache.AddCacheFragment(ctx, fr) // TODO use lock free cache
+	err = cache.AddCacheFragment(ctx, fr)
 	if err != nil {
 		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
 	}

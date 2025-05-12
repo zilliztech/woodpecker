@@ -432,6 +432,11 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			continue
 		}
 
+		if segMetadata.State == proto.SegmentState_Truncated {
+			// already truncated, skip
+			continue
+		}
+
 		// Mark this segment as truncated
 		segMetadata.State = proto.SegmentState_Truncated
 		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMetadata)
