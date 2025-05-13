@@ -1450,7 +1450,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 
 func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteAndRead")
+	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteAndReadWithSegmentRollingFrequently")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1494,7 +1494,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 			const messageCount = 20
 
 			// Create a single test log with timestamp to ensure uniqueness
-			logName := "test_concurrent_write_read_" + tc.name + time.Now().Format("20060102150405")
+			logName := "test_concurrent_write_read_rolling_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			assert.NoError(t, createErr)
 

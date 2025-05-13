@@ -39,7 +39,7 @@ func TestNewDiskLogFile(t *testing.T) {
 	logFile, err := NewDiskLogFile(1, dir)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
-	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
+	assert.Equal(t, filepath.Join(dir, "1"), logFile.logFileDir)
 	assert.Equal(t, int64(128*1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 100000, logFile.maxEntryPerFile)
 
@@ -57,7 +57,7 @@ func TestDiskLogFileWithOptions(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
-	assert.Equal(t, filepath.Join(dir, "log_1"), logFile.basePath)
+	assert.Equal(t, filepath.Join(dir, "1"), logFile.logFileDir)
 	assert.Equal(t, int64(1024*1024), logFile.fragmentSize)
 	assert.Equal(t, 1000, logFile.maxEntryPerFile)
 
@@ -719,13 +719,13 @@ func TestFragmentRotation(t *testing.T) {
 	roLogFile, err := NewRODiskLogFile(1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
-	frags, err := roLogFile.getROFragments()
+	_, _, err = roLogFile.fetchROFragments()
 	assert.NoError(t, err)
-	assert.NotNil(t, frags)
-	assert.Equal(t, 10, len(frags))
+	assert.NotNil(t, roLogFile.fragments)
+	assert.Equal(t, 10, len(roLogFile.fragments))
 
 	// Check that at least one fragment file was created
-	files, err := os.ReadDir(logFile.basePath)
+	files, err := os.ReadDir(logFile.logFileDir)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, len(files), "Expected 10 fragment files")
 
@@ -1455,12 +1455,12 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
 			assert.NoError(t, err)
 			assert.NotNil(t, roLogFile)
-			frags, err := roLogFile.getROFragments()
+			_, _, err = roLogFile.fetchROFragments()
 			assert.NoError(t, err)
-			t.Logf("After %d entries, fragment count: %d", id+1, len(frags))
+			t.Logf("After %d entries, fragment count: %d", id+1, len(roLogFile.fragments))
 
-			if len(frags) > 0 {
-				lastFrag := frags[len(frags)-1]
+			if len(roLogFile.fragments) > 0 {
+				lastFrag := roLogFile.fragments[len(roLogFile.fragments)-1]
 				firstID, _ := lastFrag.GetFirstEntryId()
 				lastID, _ := lastFrag.GetLastEntryId()
 				t.Logf("Last fragment: ID=%d, first entry=%d, last entry=%d",
@@ -1506,14 +1506,14 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
-	frags, err := roLogFile.getROFragments()
+	_, _, err = roLogFile.fetchROFragments()
 	assert.NoError(t, err)
-	t.Logf("Final fragment count: %d", len(frags))
+	t.Logf("Final fragment count: %d", len(roLogFile.fragments))
 
 	// Verify multiple fragments were created (confirm rotation occurred)
-	assert.Greater(t, len(frags), 1, "Multiple fragments should be created due to small fragment size")
+	assert.Greater(t, len(roLogFile.fragments), 1, "Multiple fragments should be created due to small fragment size")
 
-	for i, frag := range frags {
+	for i, frag := range roLogFile.fragments {
 		firstID, _ := frag.GetFirstEntryId()
 		lastID, _ := frag.GetLastEntryId()
 		entryCount := lastID - firstID + 1
@@ -1641,9 +1641,7 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NoError(t, err, "DeleteFragments should not error with empty directory")
 
 		// Verify internal state has been reset
-		assert.Equal(t, int64(-1), roLogFile.lastFragmentID.Load(), "lastFragmentID should be -1")
-		assert.Equal(t, int64(-1), roLogFile.lastEntryID.Load(), "lastEntryID should be -1")
-		assert.Equal(t, int64(-1), roLogFile.firstEntryID.Load(), "firstEntryID should be -1")
+		assert.Equal(t, 0, len(roLogFile.fragments), "fragments should be empty")
 
 		// Close
 		err = roLogFile.Close()
@@ -1662,9 +1660,7 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NoError(t, err, "DeleteFragments should not error when directory doesn't exist")
 
 		// Verify state is also correctly reset
-		assert.Equal(t, int64(-1), logFile2.lastFragmentID.Load(), "lastFragmentID should be -1")
-		assert.Equal(t, int64(-1), logFile2.lastEntryID.Load(), "lastEntryID should be -1")
-		assert.Equal(t, int64(-1), logFile2.firstEntryID.Load(), "firstEntryID should be -1")
+		assert.Equal(t, 0, len(logFile2.fragments), "fragments should be empty")
 
 		err = logFile2.Close()
 		assert.NoError(t, err)
@@ -1715,13 +1711,13 @@ func TestDeleteFragments(t *testing.T) {
 			roLogFile, err := NewRODiskLogFile(1, dir)
 			assert.NoError(t, err)
 			assert.NotNil(t, roLogFile)
-			frags, err := roLogFile.getROFragments()
+			_, _, err = roLogFile.fetchROFragments()
 			assert.NoError(t, err)
-			assert.NotNil(t, frags)
-			assert.Equal(t, 10, len(frags))
+			assert.NotNil(t, roLogFile.fragments)
+			assert.Equal(t, 10, len(roLogFile.fragments))
 
 			// Check that at least one fragment file was created
-			files, err := os.ReadDir(logFile.basePath)
+			files, err := os.ReadDir(logFile.logFileDir)
 			assert.NoError(t, err)
 			assert.Equal(t, 10, len(files), "Expected 10 fragment files")
 		}
@@ -1731,21 +1727,18 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 
-		frags, err := roLogFile.getROFragments()
+		_, _, err = roLogFile.fetchROFragments()
 		assert.NoError(t, err)
-		assert.Equal(t, 10, len(frags))
+		assert.Equal(t, 10, len(roLogFile.fragments))
 
 		// Execute deletion operation
 		err = roLogFile.DeleteFragments(context.Background(), 0)
 		assert.NoError(t, err, "DeleteFragments should successfully delete fragment files")
 
 		// Verify internal state has been reset
-		fragsAfterDelete, err := roLogFile.getROFragments()
+		_, _, err = roLogFile.fetchROFragments()
 		assert.NoError(t, err)
-		assert.Equal(t, 0, len(fragsAfterDelete))
-		assert.Equal(t, int64(-1), roLogFile.lastFragmentID.Load(), "lastFragmentID should be -1")
-		assert.Equal(t, int64(-1), roLogFile.lastEntryID.Load(), "lastEntryID should be -1")
-		assert.Equal(t, int64(-1), roLogFile.firstEntryID.Load(), "firstEntryID should be -1")
+		assert.Equal(t, 0, len(roLogFile.fragments), "fragments should be empty")
 
 		err = roLogFile.Close()
 		assert.NoError(t, err)
