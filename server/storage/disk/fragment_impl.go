@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/edsrzf/mmap-go"
@@ -561,18 +562,47 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	// update cache
 	err = cache.AddCacheFragment(ctx, fr)
 	if err != nil {
-		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("filePath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
 	}
 	return nil
 }
 
 // validateHeader validates the file header.
 func (fr *FragmentFileReader) validateHeader() error {
+	// Add retry logic for file size check
+	const maxRetries = 5
+	const retryInterval = 10 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		if int64(len(fr.mappedFile)) >= fr.fileSize {
+			// File size check passed, continue with validation
+			break
+		}
+
+		// Log the retry attempt
+		logger.Ctx(context.Background()).Warn("file size smaller than expected, retrying",
+			zap.String("filePath", fr.filePath),
+			zap.Int64("expectedSize", fr.fileSize),
+			zap.Int64("actualSize", int64(len(fr.mappedFile))),
+			zap.Int("attempt", i+1),
+			zap.Int("maxRetries", maxRetries))
+
+		// Wait before retrying
+		time.Sleep(retryInterval)
+	}
+
+	// Final check after retries
 	if int64(len(fr.mappedFile)) < fr.fileSize {
+		logger.Ctx(context.Background()).Warn("invalid file size after retries, file maybe creating",
+			zap.String("filePath", fr.filePath),
+			zap.Int64("expectedSize", fr.fileSize),
+			zap.Int64("actualSize", int64(len(fr.mappedFile))))
 		return errors.New("invalid file size, file maybe creating")
 	}
+
 	// Check magic string
 	if string(fr.mappedFile[0:8]) != "FRAGMENT" {
+		logger.Ctx(context.Background()).Warn("invalid magic bytes, file maybe creating", zap.String("filePath", fr.filePath), zap.Int64("fileSize", fr.fileSize))
 		return errors.New("invalid magic bytes, file maybe creating")
 	}
 
@@ -586,9 +616,33 @@ func (fr *FragmentFileReader) validateHeader() error {
 
 // readFooter reads the file footer.
 func (fr *FragmentFileReader) readFooter() error {
+	// Add retry logic for file size check
+	const maxRetries = 5
+	const retryInterval = 10 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		if int64(len(fr.mappedFile)) >= fr.fileSize {
+			// File size check passed, continue with footer reading
+			break
+		}
+
+		// Log the retry attempt
+		logger.Ctx(context.Background()).Warn("file size smaller than expected when reading footer, retrying",
+			zap.String("filePath", fr.filePath),
+			zap.Int64("expectedSize", fr.fileSize),
+			zap.Int64("actualSize", int64(len(fr.mappedFile))),
+			zap.Int("attempt", i+1),
+			zap.Int("maxRetries", maxRetries))
+
+		// Wait before retrying
+		time.Sleep(retryInterval)
+	}
+
+	// Final check after retries
 	if int64(len(fr.mappedFile)) < fr.fileSize {
 		return errors.New("invalid file size, file maybe creating")
 	}
+
 	footerOffset := fr.fileSize - footerSize
 	if footerOffset > fr.fileSize || footerOffset <= 0 {
 		return errors.New("invalid footer offset, file maybe creating")
