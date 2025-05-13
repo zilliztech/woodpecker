@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -806,4 +807,284 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	err = roFF.Release()
 	assert.NoError(t, err, "Failed to release read-only file resources")
 	t.Log("All alternating write/flush/read tests passed!")
+}
+
+func TestFragmentFileReader_InvalidFile(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	// Create temporary directory
+	tmpDir := t.TempDir()
+
+	// Test case 1: File does not exist yet
+	t.Run("NonExistentFile", func(t *testing.T) {
+		nonExistentPath := filepath.Join(tmpDir, "non_existent.frag")
+		fr, err := NewFragmentFileReader(nonExistentPath, 1024*1024, 1)
+		assert.NoError(t, err, "Creating reader for non-existent file should succeed")
+
+		// Try to load the file - should fail with file not found error
+		err = fr.Load(context.Background())
+		assert.Error(t, err, "Loading non-existent file should fail")
+		assert.Contains(t, err.Error(), "failed to open fragment file")
+	})
+
+	// Test case 2: Empty file (file exists but has zero size)
+	t.Run("EmptyFile", func(t *testing.T) {
+		emptyFilePath := filepath.Join(tmpDir, "empty.frag")
+		emptyFile, err := os.Create(emptyFilePath)
+		assert.NoError(t, err, "Failed to create empty file")
+		emptyFile.Close()
+
+		fr, err := NewFragmentFileReader(emptyFilePath, 1024*1024, 1)
+		assert.NoError(t, err, "Creating reader for empty file should succeed")
+
+		// Try to load the file - should fail during validation
+		err = fr.Load(context.Background())
+		assert.Error(t, err, "Loading empty file should fail")
+		// The error should indicate invalid file header
+		assert.Contains(t, err.Error(), "failed to map fragment file")
+	})
+
+	// Test case 3: File with invalid magic string
+	t.Run("InvalidMagicString", func(t *testing.T) {
+		invalidMagicPath := filepath.Join(tmpDir, "invalid_magic.frag")
+
+		// Create file with invalid magic string
+		file, err := os.Create(invalidMagicPath)
+		assert.NoError(t, err, "Failed to create file")
+
+		// Write some garbage data with incorrect magic string
+		_, err = file.Write([]byte("NOT_FRAG"))
+		assert.NoError(t, err, "Failed to write to file")
+
+		// Truncate to proper size
+		err = file.Truncate(1024 * 1024)
+		assert.NoError(t, err, "Failed to truncate file")
+		file.Close()
+
+		fr, err := NewFragmentFileReader(invalidMagicPath, 1024*1024, 1)
+		assert.NoError(t, err, "Creating reader should succeed")
+
+		// Try to load the file - should fail during magic string validation
+		err = fr.Load(context.Background())
+		assert.Error(t, err, "Loading file with invalid magic string should fail")
+		assert.Contains(t, err.Error(), "invalid magic bytes")
+	})
+
+	// Test case 4: File with header but no footer (partial write)
+	t.Run("HeaderButNoFooter", func(t *testing.T) {
+		partialFilePath := filepath.Join(tmpDir, "partial.frag")
+
+		// Create file and write only a valid header
+		file, err := os.Create(partialFilePath)
+		assert.NoError(t, err, "Failed to create file")
+
+		// Write valid magic string
+		_, err = file.Write([]byte("FRAGMENT"))
+		assert.NoError(t, err, "Failed to write magic string")
+
+		// Write version (4 bytes, little endian)
+		versionBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(versionBytes, 1) // Version 1
+		_, err = file.Write(versionBytes)
+		assert.NoError(t, err, "Failed to write version")
+
+		// Truncate to header size only (no footer)
+		err = file.Truncate(headerSize)
+		assert.NoError(t, err, "Failed to truncate file")
+		file.Close()
+
+		fr, err := NewFragmentFileReader(partialFilePath, 1024*1024, 1)
+		assert.NoError(t, err, "Creating reader should succeed")
+
+		// Try to load - should fail during footer reading
+		err = fr.Load(context.Background())
+		assert.Error(t, err, "Loading file with header but no footer should fail")
+		assert.Contains(t, err.Error(), "invalid file size")
+	})
+
+	// Test case 5: File with incorrect size (smaller than expected)
+	t.Run("FileSmallerThanExpected", func(t *testing.T) {
+		smallFilePath := filepath.Join(tmpDir, "small_file.frag")
+
+		// Write a properly initialized fragment file
+		fw, err := NewFragmentFileWriter(smallFilePath, 1024*1024, 1, 100)
+		assert.NoError(t, err, "Failed to create fragment writer")
+
+		// Write some data and flush
+		err = fw.Write(context.Background(), []byte("test data"), 100)
+		assert.NoError(t, err, "Failed to write data")
+		err = fw.Flush(context.Background())
+		assert.NoError(t, err, "Failed to flush data")
+
+		// Release to close the file
+		err = fw.Release()
+		assert.NoError(t, err, "Failed to release writer")
+
+		// Truncate the file to a size smaller than expected (but larger than header)
+		file, err := os.OpenFile(smallFilePath, os.O_RDWR, 0644)
+		assert.NoError(t, err, "Failed to open file for truncation")
+		err = file.Truncate(headerSize + 1000) // Smaller than original size but has header
+		assert.NoError(t, err, "Failed to truncate file")
+		file.Close()
+
+		// Try to read with a reader expecting the original size
+		fr, err := NewFragmentFileReader(smallFilePath, 1024*1024, 1)
+		assert.NoError(t, err, "Creating reader should succeed")
+
+		// Load should fail
+		err = fr.Load(context.Background())
+		assert.Error(t, err, "Loading truncated file should fail")
+	})
+}
+
+func TestFragmentFileReader_ConcurrentAccess(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "concurrent_access.frag")
+
+	// File size to use for tests
+	fileSize := int64(10 * 1024 * 1024) // 10MB
+
+	// Test case: Read while file is still being created/written
+	t.Run("ReadDuringWrite", func(t *testing.T) {
+		// Channel to signal writing has begun
+		writeStarted := make(chan struct{})
+		writeFinished := make(chan struct{})
+
+		// Number of concurrent readers to create
+		numReaders := 5
+		readErrors := make(chan error, numReaders)
+
+		// Start a goroutine to create and write to the file
+		go func() {
+			defer close(writeFinished)
+
+			// Create fragment file
+			fw, err := NewFragmentFileWriter(filePath, fileSize, 1, 100)
+			if err != nil {
+				t.Logf("Writer creation failed: %v", err)
+				return
+			}
+
+			// Signal that writing has started
+			close(writeStarted)
+
+			// Write entries slowly to simulate ongoing writing
+			for i := 0; i < 20; i++ {
+				data := []byte(fmt.Sprintf("test data %d", i))
+				err = fw.Write(context.Background(), data, 100+int64(i))
+				if err != nil {
+					t.Logf("Write failed at entry %d: %v", i, err)
+					return
+				}
+
+				// Flush after every 5 entries
+				if i > 0 && i%5 == 0 {
+					err = fw.Flush(context.Background())
+					if err != nil {
+						t.Logf("Flush failed: %v", err)
+						return
+					}
+					t.Logf("Flushed after entry %d", i)
+				}
+
+				// Sleep to allow readers to attempt reading during writing
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			// Final flush
+			err = fw.Flush(context.Background())
+			if err != nil {
+				t.Logf("Final flush failed: %v", err)
+			}
+
+			// Release resources
+			fw.Release()
+		}()
+
+		// Wait for writing to start
+		<-writeStarted
+
+		// Start multiple readers trying to access the file while it's being written
+		for i := 0; i < numReaders; i++ {
+			go func(readerID int) {
+				// Try to read from the file
+				fr, err := NewFragmentFileReader(filePath, fileSize, 1)
+				if err != nil {
+					readErrors <- fmt.Errorf("reader %d creation failed: %v", readerID, err)
+					return
+				}
+
+				// Try loading the file
+				err = fr.Load(context.Background())
+				if err != nil {
+					// It's expected that some loads will fail during writing
+					t.Logf("Reader %d load failed (expected): %v", readerID, err)
+				} else {
+					t.Logf("Reader %d loaded successfully", readerID)
+
+					// Try reading entries that may or may not exist yet
+					for entryID := int64(100); entryID < 120; entryID++ {
+						data, err := fr.GetEntry(entryID)
+						if err != nil {
+							// Expected for entries that haven't been written yet
+							t.Logf("Reader %d: GetEntry(%d) failed (possibly expected): %v",
+								readerID, entryID, err)
+						} else {
+							t.Logf("Reader %d: GetEntry(%d) succeeded: %s",
+								readerID, entryID, string(data))
+						}
+
+						// Sleep briefly to simulate slower reading
+						time.Sleep(30 * time.Millisecond)
+					}
+				}
+
+				// Release reader resources
+				if fr != nil {
+					fr.Release()
+				}
+
+				readErrors <- nil
+			}(i)
+		}
+
+		// Wait for writing to finish
+		<-writeFinished
+
+		// Collect reader results
+		errorCount := 0
+		for i := 0; i < numReaders; i++ {
+			if err := <-readErrors; err != nil {
+				errorCount++
+				t.Logf("Reader error: %v", err)
+			}
+		}
+
+		// Some errors are expected during concurrent access
+		t.Logf("%d out of %d readers reported errors", errorCount, numReaders)
+
+		// Verify the file can be read correctly after writing is complete
+		fr, err := NewFragmentFileReader(filePath, fileSize, 1)
+		assert.NoError(t, err, "Creating reader after write should succeed")
+
+		err = fr.Load(context.Background())
+		assert.NoError(t, err, "Loading file after write should succeed")
+
+		// Try reading a few entries
+		for i := 0; i < 20; i++ {
+			entryID := int64(100 + i)
+			data, err := fr.GetEntry(entryID)
+			if err != nil {
+				t.Logf("Final read: GetEntry(%d) failed: %v", entryID, err)
+			} else {
+				expectedData := []byte(fmt.Sprintf("test data %d", i))
+				assert.Equal(t, expectedData, data, "Data mismatch for entry %d", entryID)
+			}
+		}
+
+		fr.Release()
+	})
 }

@@ -526,13 +526,13 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	}
 
 	// Create or open file
-	file, err := os.OpenFile(fr.filePath, os.O_CREATE|os.O_RDWR, 0644)
+	file, err := os.OpenFile(fr.filePath, os.O_RDONLY, 0644)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open fragment file %s", fr.filePath)
 	}
 
 	// Map file to memory
-	fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
+	fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDONLY, 0, 0)
 	if err != nil {
 		file.Close()
 		return errors.Wrapf(err, "failed to map fragment file %s", fr.filePath)
@@ -542,20 +542,14 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(fr.fileSize))
 	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
-	// update cache
-	err = cache.AddCacheFragment(ctx, fr)
-	if err != nil {
-		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
-	}
-
 	// Read file header
-	if !fr.validateHeader() {
-		return errors.New("invalid fragment file header")
+	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+		return validateHeaderErr
 	}
 
 	// Read footer
-	if err := fr.readFooter(); err != nil {
-		return err
+	if readFootErr := fr.readFooter(); readFootErr != nil {
+		return readFootErr
 	}
 
 	// Set infoFetched flag
@@ -563,24 +557,43 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	fr.dataLoaded = true
 
 	logger.Ctx(ctx).Debug("fragment file loaded", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+
+	// update cache
+	err = cache.AddCacheFragment(ctx, fr)
+	if err != nil {
+		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
+	}
 	return nil
 }
 
 // validateHeader validates the file header.
-func (fr *FragmentFileReader) validateHeader() bool {
+func (fr *FragmentFileReader) validateHeader() error {
+	if int64(len(fr.mappedFile)) < fr.fileSize {
+		return errors.New("invalid file size, file maybe creating")
+	}
 	// Check magic string
 	if string(fr.mappedFile[0:8]) != "FRAGMENT" {
-		return false
+		return errors.New("invalid magic bytes, file maybe creating")
 	}
 
 	// Check version number
 	version := binary.LittleEndian.Uint32(fr.mappedFile[8:12])
-	return version == 1
+	if version != 1 {
+		return errors.New("invalid version number, only support version 1")
+	}
+	return nil
 }
 
 // readFooter reads the file footer.
 func (fr *FragmentFileReader) readFooter() error {
-	footerOffset := uint32(fr.fileSize - footerSize)
+	if int64(len(fr.mappedFile)) < fr.fileSize {
+		return errors.New("invalid file size, file maybe creating")
+	}
+	footerOffset := fr.fileSize - footerSize
+	if footerOffset > fr.fileSize || footerOffset <= 0 {
+		return errors.New("invalid footer offset, file maybe creating")
+	}
+
 	// Read entry count
 	fr.entryCount = int32(binary.LittleEndian.Uint32(fr.mappedFile[footerOffset:]))
 
@@ -602,9 +615,8 @@ func (fr *FragmentFileReader) readFooter() error {
 
 func (fr *FragmentFileReader) refreshFooter() error {
 	// Read file header
-	if !fr.validateHeader() {
-		// Unchanged
-		return nil
+	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+		return validateHeaderErr
 	}
 	return fr.readFooter()
 }

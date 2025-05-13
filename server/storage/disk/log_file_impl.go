@@ -193,7 +193,7 @@ func (dlf *DiskLogFile) Append(ctx context.Context, data []byte) error {
 
 // AppendAsync appends data to the log file asynchronously.
 func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
-	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)))
+	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("logFileDir", dlf.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)))
 
 	// Handle closed file
 	if dlf.closed.Load() {
@@ -1148,7 +1148,6 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	}
 
 	// Get current fragment
-	//fragment := dr.fragments[dr.currFragmentIdx]
 	lastID, err := dr.currFragment.GetLastEntryId()
 	if err != nil {
 		return nil, err
@@ -1161,8 +1160,6 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 		logger.Ctx(context.Background()).Warn("Failed to read entry",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.String("fragmentFile", dr.currFragment.filePath),
-			//zap.Int64("fragmentFirstId", firstID),
-			//zap.Int64("fragmentLastId", lastID),
 			zap.Error(err))
 		return nil, err
 	}
