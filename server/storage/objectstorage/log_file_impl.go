@@ -167,14 +167,6 @@ func (f *LogFile) Append(ctx context.Context, data []byte) error {
 	panic("not support sync append, it's too slow")
 }
 
-func (f *LogFile) getFragmentKey(fragmentId uint64) string {
-	return fmt.Sprintf("%s/%d/%d.frag", f.segmentPrefixKey, f.id, fragmentId)
-}
-
-func (f *LogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
-	return fmt.Sprintf("%s/%d/m_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
-}
-
 func (f *LogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
 	return nil, werr.ErrNotSupport.WithCauseErrMsg("LogFile writer support write only, cannot create reader")
 }
@@ -241,7 +233,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			concurrentCh <- i                        // take one flush goroutine to start
 			fragId := lastFragmentId + 1 + uint64(i) // fragment id
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
-			key := f.getFragmentKey(fragId)
+			key := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 			part := partition
 			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
 			err = retry.Do(ctx,
@@ -442,7 +434,7 @@ type ROLogFile struct {
 	bucket           string // The bucket name
 
 	id        int64             // LogFile Id in object storage
-	fragments []*FragmentObject // LogFile cached fragments
+	fragments []*FragmentObject // LogFile cached fragments in order
 }
 
 // NewROLogFile is used to read only LogFile
@@ -478,30 +470,24 @@ func (f *ROLogFile) Append(ctx context.Context, data []byte) error {
 	return werr.ErrNotSupport.WithCauseErrMsg("read only LogFile reader cannot support append")
 }
 
-func (f *ROLogFile) getFragmentKey(fragmentId uint64) string {
-	return fmt.Sprintf("%s/%d/%d.frag", f.segmentPrefixKey, f.id, fragmentId)
-}
-
-func (f *ROLogFile) getMergedFragmentKey(mergedFragmentId uint64) string {
-	return fmt.Sprintf("%s/%d/m_%d.frag", f.segmentPrefixKey, f.id, mergedFragmentId)
-}
-
 // get the fragment for the entryId
 func (f *ROLogFile) getFragment(entryId int64) (*FragmentObject, error) {
 	logger.Ctx(context.TODO()).Debug("get fragment for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId))
 	// fragmentId: 0~n
 	foundFrag, err := f.findFragment(entryId)
 	if err != nil {
+		logger.Ctx(context.TODO()).Warn("get fragment from cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		logger.Ctx(context.TODO()).Debug("get no fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
 		return foundFrag, nil
 	}
 
 	// try to fetch new fragments if exists
 	existsNewFragment, fetchedlastFragment, err := f.prefetchFragmentInfos()
 	if err != nil {
+		logger.Ctx(context.TODO()).Warn("prefetch fragment info failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 	if !existsNewFragment {
@@ -511,6 +497,7 @@ func (f *ROLogFile) getFragment(entryId int64) (*FragmentObject, error) {
 
 	fetchedLastEntryId, err := fetchedlastFragment.GetLastEntryId()
 	if err != nil {
+		logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedlastFragment.fragmentKey), zap.Error(err))
 		return nil, err
 	}
 	if entryId > fetchedLastEntryId {
@@ -583,15 +570,6 @@ func (f *ROLogFile) objectExists(ctx context.Context, objectKey string) (bool, e
 }
 
 func (f *ROLogFile) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	//lastEntryIdInFile, err := f.GetLastEntryId()
-	//if err != nil {
-	//	return nil, err
-	//}
-	//if opt.StartSequenceNum < 0 || opt.StartSequenceNum > lastEntryIdInFile && lastEntryIdInFile != -1 {
-	//	return nil, werr.ErrEntryNotFound.WithCauseErrMsg(
-	//		fmt.Sprintf("startEntryId:%d must less than lastEntryId:%d of the file",
-	//			opt.StartSequenceNum, lastEntryIdInFile))
-	//}
 	reader := NewLogFileReader(opt, f)
 	return reader, nil
 }
@@ -659,7 +637,7 @@ func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 	}
 	existsNewFragment := false
 	for {
-		fragKey := f.getFragmentKey(fragId)
+		fragKey := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 		// check if the fragment is already cached
 		if frag, cached := cache.GetCachedFragment(context.TODO(), fragKey); cached {
 			cachedFrag := frag.(*FragmentObject)
@@ -719,7 +697,7 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 		pendingMergeSize += frag.GetSize()
 		if pendingMergeSize >= fileMaxSize {
 			// merge immediately
-			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags)
 			if mergeErr != nil {
 				return nil, nil, nil, mergeErr
 			}
@@ -735,7 +713,7 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 	}
 	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
 		// merge immediately
-		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, f.getMergedFragmentKey(mergedFragId), mergedFragId, pendingMergeFrags)
+		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags)
 		if mergeErr != nil {
 			return nil, nil, nil, mergeErr
 		}
@@ -943,4 +921,14 @@ func (o *logFileReader) HasNext() bool {
 	//
 	o.currentFragment = f
 	return true
+}
+
+// utils for fragment object key
+func getFragmentObjectKey(segmentPrefixKey string, logFileId int64, fragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/%d.frag", segmentPrefixKey, logFileId, fragmentId)
+}
+
+// utils for merged fragment object key
+func getMergedFragmentObjectKey(segmentPrefixKey string, logFileId int64, mergedFragmentId uint64) string {
+	return fmt.Sprintf("%s/%d/m_%d.frag", segmentPrefixKey, logFileId, mergedFragmentId)
 }
