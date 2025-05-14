@@ -471,6 +471,7 @@ type FragmentFileReader struct {
 	filePath   string
 	fileSize   int64
 	mappedFile mmap.MMap
+	fd         *os.File
 
 	firstEntryID int64 // ID of the first entry
 	lastEntryID  int64 // ID of the last entry
@@ -526,14 +527,14 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 		return errors.New("fragment file is closed")
 	}
 
-	// Create or open file
-	file, err := os.OpenFile(fr.filePath, os.O_RDONLY, 0644)
+	// Open file
+	file, err := os.OpenFile(fr.filePath, os.O_RDWR, 0644)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open fragment file %s", fr.filePath)
 	}
 
 	// Map file to memory
-	fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDONLY, 0, 0)
+	fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
 	if err != nil {
 		file.Close()
 		return errors.Wrapf(err, "failed to map fragment file %s", fr.filePath)
@@ -545,11 +546,19 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 
 	// Read file header
 	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+		fr.mappedFile.Unmap()
+		fr.mappedFile = nil
+		fr.fd.Close()
+		fr.fd = nil
 		return validateHeaderErr
 	}
 
 	// Read footer
 	if readFootErr := fr.readFooter(); readFootErr != nil {
+		fr.mappedFile.Unmap()
+		fr.mappedFile = nil
+		fr.fd.Close()
+		fr.fd = nil
 		return readFootErr
 	}
 
@@ -562,38 +571,15 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	// update cache
 	err = cache.AddCacheFragment(ctx, fr)
 	if err != nil {
-		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("filePath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
 	}
 	return nil
 }
 
 // validateHeader validates the file header.
 func (fr *FragmentFileReader) validateHeader() error {
-	// Add retry logic for file size check
-	const maxRetries = 5
-	const retryInterval = 10 * time.Millisecond
-
-	for i := 0; i < maxRetries; i++ {
-		if int64(len(fr.mappedFile)) >= fr.fileSize {
-			// File size check passed, continue with validation
-			break
-		}
-
-		// Log the retry attempt
-		logger.Ctx(context.Background()).Warn("file size smaller than expected, retrying",
-			zap.String("filePath", fr.filePath),
-			zap.Int64("expectedSize", fr.fileSize),
-			zap.Int64("actualSize", int64(len(fr.mappedFile))),
-			zap.Int("attempt", i+1),
-			zap.Int("maxRetries", maxRetries))
-
-		// Wait before retrying
-		time.Sleep(retryInterval)
-	}
-
-	// Final check after retries
 	if int64(len(fr.mappedFile)) < fr.fileSize {
-		logger.Ctx(context.Background()).Warn("invalid file size after retries, file maybe creating",
+		logger.Ctx(context.Background()).Warn("invalid file size retries, file maybe creating",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("expectedSize", fr.fileSize),
 			zap.Int64("actualSize", int64(len(fr.mappedFile))))
@@ -616,35 +602,20 @@ func (fr *FragmentFileReader) validateHeader() error {
 
 // readFooter reads the file footer.
 func (fr *FragmentFileReader) readFooter() error {
-	// Add retry logic for file size check
-	const maxRetries = 5
-	const retryInterval = 10 * time.Millisecond
-
-	for i := 0; i < maxRetries; i++ {
-		if int64(len(fr.mappedFile)) >= fr.fileSize {
-			// File size check passed, continue with footer reading
-			break
-		}
-
-		// Log the retry attempt
-		logger.Ctx(context.Background()).Warn("file size smaller than expected when reading footer, retrying",
+	if int64(len(fr.mappedFile)) < fr.fileSize {
+		logger.Ctx(context.Background()).Warn("invalid file size after retries, file maybe creating",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("expectedSize", fr.fileSize),
-			zap.Int64("actualSize", int64(len(fr.mappedFile))),
-			zap.Int("attempt", i+1),
-			zap.Int("maxRetries", maxRetries))
-
-		// Wait before retrying
-		time.Sleep(retryInterval)
-	}
-
-	// Final check after retries
-	if int64(len(fr.mappedFile)) < fr.fileSize {
+			zap.Int64("actualSize", int64(len(fr.mappedFile))))
 		return errors.New("invalid file size, file maybe creating")
 	}
 
 	footerOffset := fr.fileSize - footerSize
 	if footerOffset > fr.fileSize || footerOffset <= 0 {
+		logger.Ctx(context.Background()).Warn("invalid footer offset, file maybe creating",
+			zap.String("filePath", fr.filePath),
+			zap.Int64("fileSize", fr.fileSize),
+			zap.Int64("footerOffset", footerOffset))
 		return errors.New("invalid footer offset, file maybe creating")
 	}
 
@@ -665,6 +636,105 @@ func (fr *FragmentFileReader) readFooter() error {
 		zap.String("fragmentInst", fmt.Sprintf("%p", fr)))
 
 	return nil
+}
+
+// check and release resource immediately, avoid memory surges when catching up read
+func (fr *FragmentFileReader) isMMapReadable(ctx context.Context) bool {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+
+	// Add retry logic for file size check with increasing intervals
+	// Define increasing retry intervals
+	retryIntervals := []time.Duration{
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		20 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+		100 * time.Millisecond}
+	isReady := false
+	for i := 0; i < len(retryIntervals); i++ {
+		// open file
+		file, err := os.OpenFile(fr.filePath, os.O_RDWR, 0644)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to open fragment file %",
+				zap.String("fragmentPath", fr.filePath),
+				zap.Error(err),
+				zap.Int("attempt", i+1),
+				zap.Duration("retryAfter", retryIntervals[i]))
+
+			// Use the appropriate retry interval for current attempt
+			retryInterval := retryIntervals[i]
+			time.Sleep(retryInterval)
+			continue
+		}
+		// map file to memory
+		fr.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
+		if err != nil {
+			file.Close()
+			logger.Ctx(ctx).Warn("failed to map fragment file",
+				zap.String("fragmentPath", fr.filePath),
+				zap.Error(err),
+				zap.Int("attempt", i+1),
+				zap.Duration("retryAfter", retryIntervals[i]))
+
+			// Use the appropriate retry interval for current attempt
+			retryInterval := retryIntervals[i]
+			time.Sleep(retryInterval)
+			continue
+		}
+		// check header
+		if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+			fr.mappedFile.Unmap()
+			fr.mappedFile = nil
+			file.Close()
+			logger.Ctx(ctx).Warn("failed to validate header",
+				zap.String("fragmentPath", fr.filePath),
+				zap.Error(validateHeaderErr),
+				zap.Int("attempt", i+1),
+				zap.Duration("retryAfter", retryIntervals[i]))
+
+			// Use the appropriate retry interval for current attempt
+			retryInterval := retryIntervals[i]
+			time.Sleep(retryInterval)
+			continue
+		}
+
+		// check footer
+		if readFootErr := fr.readFooter(); readFootErr != nil {
+			fr.mappedFile.Unmap()
+			fr.mappedFile = nil
+			file.Close()
+
+			logger.Ctx(ctx).Warn("failed to read footer",
+				zap.String("fragmentPath", fr.filePath),
+				zap.Error(readFootErr),
+				zap.Int("attempt", i+1),
+				zap.Duration("retryAfter", retryIntervals[i]))
+
+			// Use the appropriate retry interval for current attempt
+			retryInterval := retryIntervals[i]
+			time.Sleep(retryInterval)
+			continue
+		}
+
+		// close resource after check
+		fr.mappedFile.Unmap()
+		fr.mappedFile = nil
+		file.Close()
+
+		// mark it is ready to read
+		isReady = true
+		// Set infoFetched flag
+		fr.infoFetched = true
+		fr.dataLoaded = false
+		break
+	}
+
+	logger.Ctx(ctx).Debug("check fragment file ready state", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Bool("ready", isReady))
+	return isReady
 }
 
 func (fr *FragmentFileReader) refreshFooter() error {
@@ -1087,6 +1157,13 @@ func (fr *FragmentFileReader) Release() error {
 		fr.mappedFile = nil
 		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(fr.GetSize()))
 		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
+	}
+
+	// close the file
+	if fr.fd != nil {
+		if err := fr.fd.Close(); err != nil {
+			logger.Ctx(context.Background()).Warn("failed to close fragment file", zap.String("filePath", fr.filePath))
+		}
 	}
 
 	// Mark data as not fetched in buffer

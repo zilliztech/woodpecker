@@ -64,7 +64,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.Equal(t, "fenced", result.Err.Error(), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())
@@ -150,7 +150,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.Equal(t, "fenced", result.Err.Error(), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())

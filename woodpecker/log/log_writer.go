@@ -3,7 +3,6 @@ package log
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -97,8 +96,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
 		return &WriteResult{
 			LogMessageId: nil,
-			//Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
-			Err: errors.New("fenced"), // A kind of agreed-upon incorrect content. The writer session has expired and the segment that the writer is writing to has been fenced
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 	}
 
@@ -140,8 +138,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	if !l.sessionValid.Load() {
 		ch <- &WriteResult{
 			LogMessageId: nil,
-			//Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
-			Err: errors.New("fenced"), // A kind of agreed-upon incorrect content. The writer session has expired and the segment that the writer is writing to has been fenced
+			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 		close(ch)
 		return ch

@@ -903,8 +903,13 @@ func (dlf *RODiskLogFile) fetchROFragments() (bool, *FragmentFileReader, error) 
 		// Create FragmentFile instance and load
 		fragment, err := NewFragmentFileReader(fragmentPath, fileInfo.Size(), fragId)
 		if err != nil {
-			continue
+			break
 		}
+		if !fragment.isMMapReadable(context.TODO()) {
+			logger.Ctx(context.TODO()).Warn("found a new fragment unreadable", zap.String("logFileDir", dlf.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
+			break
+		}
+
 		fetchedLastFragment = fragment
 		dlf.fragments = append(dlf.fragments, fragment)
 		existsNewFragment = true
