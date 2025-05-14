@@ -3,6 +3,7 @@ package benchmark
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -359,7 +360,12 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 
 			if tc.sequential {
 				// Sequential read
-				for reader.HasNext() {
+				for {
+					hasNext, err := reader.HasNext()
+					assert.NoError(t, err)
+					if !hasNext {
+						break
+					}
 					entry, err := reader.ReadNext()
 					if err != nil {
 						readErrors++
@@ -387,7 +393,9 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 						continue
 					}
 
-					if singleReader.HasNext() {
+					hasNext, err := singleReader.HasNext()
+					assert.NoError(t, err)
+					if hasNext {
 						entry, err := singleReader.ReadNext()
 						if err != nil {
 							readErrors++
@@ -613,7 +621,9 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 							t.Fatalf("Failed to create Reader: %v", err)
 						}
 
-						if reader.HasNext() {
+						hasNext, err := reader.HasNext()
+						assert.NoError(t, err)
+						if hasNext {
 							entry, err := reader.ReadNext()
 							if err == nil {
 								totalBytesRead += len(entry.Values)

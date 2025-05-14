@@ -296,23 +296,18 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 // TODO To be optimized, reduce meta access, maybe use a param to indicate whether to refresh lastSegmentId, most of the time, the lastSegmentId is not changed
 // GetNextSegmentId get the next id according to max seq No
 func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
-	// refresh meta
-	maxSeqNo := l.LastSegmentId.Load()
-	nextSeqNo := maxSeqNo + 1
 	// try get dynamic max seqNo
-	for {
-		segMeta, err := l.Metadata.GetSegmentMetadata(context.Background(), l.Name, nextSeqNo)
-		if err == nil && segMeta != nil {
-			l.LastSegmentId.CompareAndSwap(nextSeqNo-1, nextSeqNo)
-			nextSeqNo++
-		} else if err != nil && werr.ErrSegmentNotFound.Is(err) {
-			break
-		} else if err != nil {
-			// get meta err
-			return -1, err
+	existsSeg, err := l.GetSegments(context.Background())
+	if err != nil {
+		return -1, err
+	}
+	maxSegNo := int64(-1)
+	for _, seg := range existsSeg {
+		if maxSegNo < seg.SegNo {
+			maxSegNo = seg.SegNo
 		}
 	}
-	return nextSeqNo, nil
+	return maxSegNo + 1, nil
 }
 
 func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error) {
