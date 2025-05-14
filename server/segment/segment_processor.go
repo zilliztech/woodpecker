@@ -144,12 +144,19 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 		return nil, err
 	}
 
-	if !r.HasNext() {
+	hasNext, err := r.HasNext()
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to check has next", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.Error(err))
+		return nil, err
+	}
+	if !hasNext {
+		logger.Ctx(ctx).Debug("no entry found", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId))
 		return nil, werr.ErrEntryNotFound
 	}
 
 	e, err := r.ReadNext()
 	if err != nil {
+		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 

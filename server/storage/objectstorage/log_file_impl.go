@@ -480,7 +480,7 @@ func (f *ROLogFile) getFragment(entryId int64) (*FragmentObject, error) {
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(context.TODO()).Debug("get no fragment from cache for entryId", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId completed", zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
 		return foundFrag, nil
 	}
 
@@ -900,10 +900,10 @@ func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
 	return entry, nil
 }
 
-func (o *logFileReader) HasNext() bool {
+func (o *logFileReader) HasNext() (bool, error) {
 	if o.pendingReadEntryId >= int64(o.opt.EndSequenceNum) && o.opt.EndSequenceNum > 0 {
 		// reach the end of range
-		return false
+		return false, nil
 	}
 	f, err := o.logfile.getFragment(o.pendingReadEntryId)
 	if err != nil {
@@ -912,15 +912,15 @@ func (o *logFileReader) HasNext() bool {
 			zap.Int64("logFileId", o.logfile.id),
 			zap.Int64("pendingReadEntryId", o.pendingReadEntryId),
 			zap.Error(err))
-		return false
+		return false, err
 	}
 	if f == nil {
 		// no more fragment
-		return false
+		return false, nil
 	}
 	//
 	o.currentFragment = f
-	return true
+	return true, nil
 }
 
 // utils for fragment object key

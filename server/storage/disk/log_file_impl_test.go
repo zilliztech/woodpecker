@@ -233,7 +233,12 @@ func TestOutOfOrderAppend(t *testing.T) {
 
 	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -337,7 +342,12 @@ func TestDelayedAppend(t *testing.T) {
 
 	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -474,7 +484,12 @@ func TestOutOfBoundsAppend(t *testing.T) {
 
 	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -603,7 +618,12 @@ func TestMixedAppendScenarios(t *testing.T) {
 
 	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -740,7 +760,12 @@ func TestFragmentRotation(t *testing.T) {
 
 	// Collect all read entries
 	readEntries := make(map[int64]*proto.LogEntry)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -811,7 +836,12 @@ func TestNewReader(t *testing.T) {
 		assert.NoError(t, err)
 		defer reader.Close()
 		readEntries := make(map[int64]*proto.LogEntry)
-		for reader.HasNext() {
+		for {
+			hasNext, err := reader.HasNext()
+			assert.NoError(t, err)
+			if !hasNext {
+				break
+			}
 			entry, err := reader.ReadNext()
 			if err != nil {
 				t.Logf("Error reading entry: %v", err)
@@ -847,7 +877,12 @@ func TestNewReader(t *testing.T) {
 		assert.NoError(t, err)
 		defer reader.Close()
 		readEntries := make(map[int64]*proto.LogEntry)
-		for reader.HasNext() {
+		for {
+			hasNext, err := reader.HasNext()
+			assert.NoError(t, err)
+			if !hasNext {
+				break
+			}
 			entry, err := reader.ReadNext()
 			if err != nil {
 				t.Logf("Error reading entry: %v", err)
@@ -883,7 +918,12 @@ func TestNewReader(t *testing.T) {
 		assert.NoError(t, err)
 		defer reader.Close()
 		readEntries := make(map[int64]*proto.LogEntry)
-		for reader.HasNext() {
+		for {
+			hasNext, err := reader.HasNext()
+			assert.NoError(t, err)
+			if !hasNext {
+				break
+			}
 			entry, err := reader.ReadNext()
 			if err != nil {
 				t.Logf("Error reading entry: %v", err)
@@ -1032,7 +1072,9 @@ func TestInvalidReaderRange(t *testing.T) {
 		EndSequenceNum:   beyondLastID + 5,
 	})
 	assert.NoError(t, err)
-	assert.False(t, beyondReader.HasNext())
+	hasNext, err := beyondReader.HasNext()
+	assert.NoError(t, err)
+	assert.False(t, hasNext)
 
 	// Create another reader using verified actual ID range, and verify read results
 	// Explicitly read only from the 3rd to the 5th entry (indices 2 to 4)
@@ -1048,7 +1090,9 @@ func TestInvalidReaderRange(t *testing.T) {
 
 	// Verify that expected entries can be read
 	for i := 2; i <= 4; i++ {
-		assert.True(t, reader.HasNext(), "Should have entry at index %d", i)
+		hasNextMsg, err := reader.HasNext()
+		assert.NoError(t, err)
+		assert.True(t, hasNextMsg, "Should have entry at index %d", i)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, entryIDs[i], entry.EntryId, "Entry ID should match")
@@ -1056,12 +1100,14 @@ func TestInvalidReaderRange(t *testing.T) {
 	}
 
 	// After reading all 3 entries, there should be no more entries
-	assert.False(t, reader.HasNext(), "Should not have more entries after reading all valid ones")
+	hasNextMsg, err := reader.HasNext()
+	assert.NoError(t, err)
+	assert.False(t, hasNextMsg, "Should not have more entries after reading all valid ones")
 
 	// Try to read again, should return error
 	_, err = reader.ReadNext()
 	assert.Error(t, err, "Reading out of range should return error")
-	assert.True(t, strings.Contains(err.Error(), "no more entries to read"))
+	assert.True(t, strings.Contains(err.Error(), "invalid data offset"))
 	t.Logf("Reading out of range returned expected error: %v", err)
 
 	// Cleanup
@@ -1109,7 +1155,8 @@ func TestReadAfterClose(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 	for i := 0; i < 2; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
@@ -1119,7 +1166,8 @@ func TestReadAfterClose(t *testing.T) {
 	}
 
 	// Verify no more entries
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 
 	// Cleanup
@@ -1168,7 +1216,8 @@ func TestBasicReader(t *testing.T) {
 
 	// Read and verify all entries
 	for i := 0; i < numEntries; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
@@ -1178,7 +1227,8 @@ func TestBasicReader(t *testing.T) {
 	}
 
 	// Verify no more entries
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 
 	// Cleanup
@@ -1261,7 +1311,12 @@ func TestSequentialBufferAppend(t *testing.T) {
 
 	// Read and verify data
 	entryCount := 0
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, []byte(fmt.Sprintf("data-%d", entry.EntryId)), entry.Values)
@@ -1360,7 +1415,12 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	t.Logf("Starting to read entries...")
 	readCount := 0
 
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Logf("Error reading entry: %v", err)
@@ -1539,7 +1599,12 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	t.Logf("Starting to read entries across multiple fragments...")
 	readCount := 0
 
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		if err != nil {
 			t.Errorf("Error reading entry: %v", err)

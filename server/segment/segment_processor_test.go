@@ -62,8 +62,8 @@ func TestSegmentProcessor_ReadEntry(t *testing.T) {
 	mockLogFile.EXPECT().NewReader(mock.Anything, mock.Anything).Return(mockReader, nil)
 
 	// mock reader HasNext/ReadNext
-	mockReader.On("HasNext").Return(true).Once()
-	mockReader.On("HasNext").Return(false)
+	mockReader.On("HasNext").Return(true, nil).Once()
+	mockReader.On("HasNext").Return(false, nil)
 	mockReader.On("ReadNext").Return(&proto.LogEntry{
 		SegId:   1,
 		EntryId: 0,
@@ -154,7 +154,7 @@ func (m *mockLogFileReader) ReadNext() (*proto.LogEntry, error) {
 	return args.Get(0).(*proto.LogEntry), args.Error(1)
 }
 
-func (m *mockLogFileReader) HasNext() bool {
+func (m *mockLogFileReader) HasNext() (bool, error) {
 	args := m.Called()
-	return args.Bool(0)
+	return args.Bool(0), nil
 }

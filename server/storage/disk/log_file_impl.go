@@ -954,11 +954,19 @@ func (dlf *RODiskLogFile) findFragmentFrom(fromIdx int, currEntryID int64, endEn
 		firstID, err := fragment.GetFirstEntryId()
 		if err != nil {
 			dlf.mu.RUnlock()
+			logger.Ctx(context.TODO()).Warn("get fragment firstEntryId failed",
+				zap.String("logFileDir", dlf.logFileDir),
+				zap.String("fragmentFile", fragment.filePath),
+				zap.Error(err))
 			return -1, nil, -1, err
 		}
 		lastID, err := fragment.GetLastEntryId()
 		if err != nil {
 			dlf.mu.RUnlock()
+			logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed",
+				zap.String("logFileDir", dlf.logFileDir),
+				zap.String("fragmentFile", fragment.filePath),
+				zap.Error(err))
 			return -1, nil, -1, err
 		}
 
@@ -982,6 +990,9 @@ func (dlf *RODiskLogFile) findFragmentFrom(fromIdx int, currEntryID int64, endEn
 	dlf.mu.RUnlock()
 	newFragmentExists, _, err := dlf.fetchROFragments()
 	if err != nil {
+		logger.Ctx(context.TODO()).Warn("fetch fragments failed",
+			zap.String("logFileDir", dlf.logFileDir),
+			zap.Error(err))
 		return -1, nil, -1, err
 	}
 
@@ -1093,16 +1104,16 @@ type DiskReader struct {
 }
 
 // HasNext returns true if there are more entries to read
-func (dr *DiskReader) HasNext() bool {
+func (dr *DiskReader) HasNext() (bool, error) {
 	if dr.closed {
 		logger.Ctx(context.Background()).Debug("No more entries to read, current reader is closed", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
-		return false
+		return false, nil
 	}
 
 	// If reached endID, return false
 	if dr.endEntryID > 0 && dr.currEntryID >= dr.endEntryID {
-		logger.Ctx(context.Background()).Debug("No more entries to read", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
-		return false
+		logger.Ctx(context.Background()).Debug("No more entries to read, reach the end entryID", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
+		return false, nil
 	}
 
 	// current fragment contains this entry, fast return
@@ -1110,41 +1121,37 @@ func (dr *DiskReader) HasNext() bool {
 		first, err := dr.currFragment.GetFirstEntryId()
 		if err != nil {
 			logger.Ctx(context.Background()).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
-			return false
+			return false, err
 		}
 		last, err := dr.currFragment.GetLastEntryId()
 		if err != nil {
 			logger.Ctx(context.Background()).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
-			return false
+			return false, err
 		}
 		// fast return if current entry is in this current fragment
 		if dr.currEntryID >= first && dr.currEntryID < last {
-			return true
+			return true, nil
 		}
 	}
 
 	idx, f, pendingReadEntryID, err := dr.logFile.findFragmentFrom(dr.currFragmentIdx, dr.currEntryID, dr.endEntryID)
 	if err != nil {
-		return false
+		return false, err
 	}
 	if f == nil {
 		// no more fragment
-		return false
+		return false, nil
 	}
 	dr.currFragmentIdx = idx
 	dr.currFragment = f
 	dr.currEntryID = pendingReadEntryID
-	return true
+	return true, nil
 }
 
 // ReadNext reads the next entry
 func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	if dr.closed {
 		return nil, errors.New("reader is closed")
-	}
-
-	if !dr.HasNext() {
-		return nil, errors.New("no more entries to read")
 	}
 
 	// Get current fragment

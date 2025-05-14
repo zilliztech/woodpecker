@@ -894,7 +894,8 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 100; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
 		entry, err := reader.ReadNext()
@@ -903,7 +904,8 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 		assert.Equal(t, []byte("test_data"), entry.Values)
 	}
 
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
 
@@ -954,7 +956,8 @@ func TestNewReaderInROLogFile(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 100; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
 		entry, err := reader.ReadNext()
@@ -963,7 +966,8 @@ func TestNewReaderInROLogFile(t *testing.T) {
 		assert.Equal(t, []byte("test_data"), entry.Values)
 	}
 
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
 
@@ -976,12 +980,13 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
 	// 3.frag put success
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
 	//mock 1.frag exists
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
 	// mock 2.frag not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, minio.ErrorResponse{
+		Code: "NoSuchKey",
+	})
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1058,14 +1063,16 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		// read data from frag 1 success
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), entry.EntryId)
 		assert.Equal(t, data1000, entry.Values)
 		// read data from frag 2 fail, no more data
-		hasNext = reader.HasNext()
+		hasNext, err = reader.HasNext()
+		assert.NoError(t, err)
 		assert.False(t, hasNext)
 	}
 }

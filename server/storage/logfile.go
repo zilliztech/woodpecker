@@ -22,7 +22,7 @@ type Reader interface {
 	// ReadNext returns the next entry in the log according to the Reader's direction.
 	ReadNext() (*proto.LogEntry, error)
 	// HasNext returns true if there is an entry to read.
-	HasNext() bool
+	HasNext() (bool, error)
 }
 
 // LogFile represents a log file interface with read and write operations.
