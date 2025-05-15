@@ -697,7 +697,7 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 		pendingMergeSize += frag.GetSize()
 		if pendingMergeSize >= fileMaxSize {
 			// merge immediately
-			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags)
+			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags, true)
 			if mergeErr != nil {
 				return nil, nil, nil, mergeErr
 			}
@@ -713,7 +713,7 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 	}
 	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
 		// merge immediately
-		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags)
+		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, f.id, mergedFragId), mergedFragId, pendingMergeFrags, true)
 		if mergeErr != nil {
 			return nil, nil, nil, mergeErr
 		}

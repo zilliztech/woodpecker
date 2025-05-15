@@ -1,8 +1,8 @@
 package objectstorage
 
 import (
-	"bytes"
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -56,7 +56,9 @@ func TestFragmentObject_Load(t *testing.T) {
 	data = append(data, []byte("entry1entry2")...)
 
 	lastModifiedTime := time.Now().UnixMilli()
-	client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-key", mock.Anything).Return(bytes.NewReader(data), lastModifiedTime, nil)
+	client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "test-key", mock.Anything).Return(&mockObjectReader{
+		value: data,
+	}, lastModifiedTime, nil)
 	err := fragment.Load(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, true, fragment.dataLoaded)
@@ -65,6 +67,20 @@ func TestFragmentObject_Load(t *testing.T) {
 	assert.Equal(t, int64(100), fragment.firstEntryId)
 	assert.Equal(t, int64(101), fragment.lastEntryId)
 	client.AssertExpectations(t)
+}
+
+type mockObjectReader struct {
+	io.Closer
+	io.Reader
+	value []byte
+}
+
+func (m *mockObjectReader) Read(p []byte) (n int, err error) {
+	return copy(p, m.value), io.EOF
+}
+
+func (m *mockObjectReader) Close() error {
+	return nil
 }
 
 func TestFragmentObject_Load_NotUploaded(t *testing.T) {
@@ -122,7 +138,7 @@ func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
 	fragment2 := NewFragmentObject(client, "test-bucket", 2, "test-key2", [][]byte{[]byte("entry2")}, 101, true, false, true)
 	fragments := []*FragmentObject{fragment1, fragment2}
 
-	mergedFragment, err := mergeFragmentsAndReleaseAfterCompleted(context.Background(), "merged-key", 3, fragments)
+	mergedFragment, err := mergeFragmentsAndReleaseAfterCompleted(context.Background(), "merged-key", 3, fragments, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, mergedFragment)
 	firstEntryId, err := mergedFragment.GetFirstEntryId()

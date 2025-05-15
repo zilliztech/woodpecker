@@ -9,10 +9,15 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
+type ObjectReader interface {
+	io.Reader
+	io.Closer
+}
+
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio
 type MinioHandler interface {
 	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
-	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (io.Reader, int64, error)
+	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
@@ -44,7 +49,7 @@ func NewMinioHandlerWithClient(ctx context.Context, minioCli *minio.Client) (Min
 func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
 	return m.client.GetObject(ctx, bucketName, objectName, opts)
 }
-func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (io.Reader, int64, error) {
+func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, error) {
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
 		return nil, -1, err

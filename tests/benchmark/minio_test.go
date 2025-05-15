@@ -59,6 +59,7 @@ func TestMinioReadPerformance(t *testing.T) {
 				fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
 				getOpts)
 			assert.NoError(t, getErr)
+			defer obj.Close()
 
 			readData, err := ioutil.ReadAll(obj)
 			assert.NoError(t, err)

@@ -125,7 +125,12 @@ func TestNewReader(t *testing.T) {
 
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		entries = append(entries, entry)
@@ -171,7 +176,12 @@ func TestNewReaderForManyFragments(t *testing.T) {
 
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
-	for reader.HasNext() {
+	for {
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
+		if !hasNext {
+			break
+		}
 		fmt.Printf("read one ... ")
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)

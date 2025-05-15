@@ -134,6 +134,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
+	defer fragObjectReader.Close()
 	f.lastModified = objLastModified
 	// Read the entire object into memory
 	data, err := io.ReadAll(fragObjectReader)
@@ -278,7 +279,7 @@ func (f *FragmentObject) Release() error {
 }
 
 // mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
-func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject) (storage.Fragment, error) {
+func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
 	// check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -331,7 +332,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
 		fragIds = append(fragIds, fragment.fragmentId)
 	}
-	// mark dataLoaded
+
+	// set data cache ready
 	mergedFrag.dataLoaded = true
 
 	// upload the mergedFragment
@@ -339,17 +341,16 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	if flushErr != nil {
 		return nil, flushErr
 	}
-	// mark dataUploaded
+	// set flag
 	mergedFrag.dataUploaded = true
+	mergedFrag.infoFetched = true
 
-	// update metrics
-	metrics.WpFragmentBufferBytes.WithLabelValues(mergedFrag.bucket).Add(float64(len(mergedFrag.entriesData) + len(mergedFrag.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
-
-	// update cache
-	err := cache.AddCacheFragment(ctx, mergedFrag)
-	if err != nil {
-		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
+	// release immediately
+	if releaseImmediately {
+		// release immediately
+		mergedFrag.entriesData = nil
+		mergedFrag.indexes = nil
+		mergedFrag.dataLoaded = false
 	}
 
 	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds))
