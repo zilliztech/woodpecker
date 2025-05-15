@@ -193,7 +193,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	}
 
 	if !txnResp.Succeeded {
-		return werr.ErrCreateLogMetadata.WithCauseErrMsg("transaction failed due to idgen mismatch")
+		return werr.ErrCreateLogMetadataTxn.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
 	}
 	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
 	return nil

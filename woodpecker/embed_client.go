@@ -3,8 +3,10 @@ package woodpecker
 import (
 	"context"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
@@ -142,8 +144,41 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	if _, exists := c.logHandles[logName]; exists {
 		return werr.ErrLogAlreadyExists
 	}
+
 	// otherwise try create new log
-	return c.Metadata.CreateLog(ctx, logName)
+	// Add retry logic for CreateLog when encountering ErrCreateLogMetadataTxn
+	const maxRetries = 5
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		// Try to create the log
+		err := c.Metadata.CreateLog(ctx, logName)
+		if err == nil {
+			// Success, return immediately
+			return nil
+		}
+
+		// Check if the error is txn (ErrCreateLogMetadataTxn)
+		if werr.ErrCreateLogMetadataTxn.Is(err) {
+			// auto retry
+			logger.Ctx(ctx).Info("Retrying create log due to transaction conflict",
+				zap.String("logName", logName),
+				zap.Int("attempt", i+1),
+				zap.Int("maxRetries", maxRetries),
+				zap.Error(err))
+
+			// Keep the last error for potential return
+			lastErr = err
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+
+		// For non-txn errors or final attempt, return the error directly
+		return err
+	}
+
+	// If we exhausted all retries, return the last error
+	return lastErr
 }
 
 // OpenLog opens an existing log with the specified name and returns a log handle.

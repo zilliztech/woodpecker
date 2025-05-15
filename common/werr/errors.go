@@ -34,6 +34,8 @@ const (
 	MetadataWriteError
 	// MetadataCreateLogError failed in create log metadata
 	MetadataCreateLogError
+	// MetadataCreateLogTxnError failed execute create log metadata txn
+	MetadataCreateLogTxnError
 	// MetadataCreateSegmentError failed in create segment metadata
 	MetadataCreateSegmentError
 	// MetadataUpdateSegmentError failed in update segment metadata
@@ -131,6 +133,7 @@ var (
 	ErrMetadataEncode           = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
 	ErrMetadataDecode           = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
 	ErrCreateLogMetadata        = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrCreateLogMetadataTxn     = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
 	ErrCreateSegmentMetadata    = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
 	ErrUpdateSegmentMetadata    = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
 	ErrUpdateQuorumInfoMetadata = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
