@@ -82,7 +82,7 @@ func TestE2EWrite(t *testing.T) {
 }
 
 func TestAsyncWriteThroughput(t *testing.T) {
-	startGopsAgent()
+	startGopsAgentWithPort(6060)
 	startMetrics()
 	startReporting()
 	entrySize := 1_000_000 // 1MB per row
@@ -244,7 +244,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 }
 
 func TestReadThroughput(t *testing.T) {
-	startGopsAgent()
+	startGopsAgentWithPort(6060)
 	startMetrics()
 	startReporting()
 

@@ -3,15 +3,17 @@ package benchmark
 import (
 	"crypto/rand"
 	"fmt"
+	"github.com/google/gops/agent"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/http/pprof"
+	_ "net/http/pprof"
+
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/gops/agent"
+	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -19,17 +21,17 @@ import (
 )
 
 func startGopsAgent() {
+	startGopsAgentWithPort(6060)
+}
+
+func startGopsAgentWithPort(port int) {
 	// start gops agent
 	if err := agent.Listen(agent.Options{}); err != nil {
 		panic(err)
 	}
-	http.HandleFunc("/pprof/cmdline", pprof.Cmdline)
-	http.HandleFunc("/pprof/profile", pprof.Profile)
-	http.HandleFunc("/pprof/symbol", pprof.Symbol)
-	http.HandleFunc("/pprof/trace", pprof.Trace)
 	go func() {
-		fmt.Println("Starting gops agent on :6060")
-		http.ListenAndServe(":6060", nil)
+		fmt.Printf("Starting gops agent on localhost:%d\n", port)
+		http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 	}()
 }
 
