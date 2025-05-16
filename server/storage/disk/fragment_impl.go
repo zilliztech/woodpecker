@@ -653,7 +653,11 @@ func (fr *FragmentFileReader) isMMapReadable(ctx context.Context) bool {
 		100 * time.Millisecond,
 		100 * time.Millisecond,
 		100 * time.Millisecond,
-		100 * time.Millisecond}
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond}
 	isReady := false
 	for i := 0; i < len(retryIntervals); i++ {
 		// open file

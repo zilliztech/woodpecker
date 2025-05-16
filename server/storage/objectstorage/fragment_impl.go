@@ -54,7 +54,7 @@ type FragmentObject struct {
 
 // NewFragmentObject initializes a new FragmentObject.
 func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
-	index, data := genFragmentDataFromRaw(entries, firstEntryId)
+	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
@@ -115,6 +115,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
 	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
 	f.dataUploaded = true
+
+	// Put back to pool
+	cache.PutByteBuffer(fullData)
 	return nil
 }
 
@@ -137,7 +140,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	defer fragObjectReader.Close()
 	f.lastModified = objLastModified
 	// Read the entire object into memory
-	data, err := io.ReadAll(fragObjectReader)
+	data, err := io.ReadAll(fragObjectReader) // TODO also use byte pool and io.ReadFull
 	if err != nil {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
@@ -272,6 +275,15 @@ func (f *FragmentObject) Release() error {
 	}
 	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Sub(float64(len(f.entriesData) + len(f.indexes)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Dec()
+
+	// Return buffers to the pool
+	if f.entriesData != nil {
+		cache.PutByteBuffer(f.entriesData)
+	}
+	if f.indexes != nil {
+		cache.PutByteBuffer(f.indexes)
+	}
+
 	f.indexes = nil
 	f.entriesData = nil
 	f.dataLoaded = false
@@ -359,12 +371,22 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 
 // serializeFragment to object data bytes
 func serializeFragment(f *FragmentObject) ([]byte, error) {
-	fullData := make([]byte, 0)
+	// Calculate required space
+	headerSize := 24 // 3 int64 fields (version+firstEntryId+lastEntryId)
+	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
+
+	// Get buffer from pool
+	fullData := cache.GetByteBuffer(totalSize)
+
+	// Write header information
 	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
+
+	// Write indexes and data
 	fullData = append(fullData, f.indexes...)
 	fullData = append(fullData, f.entriesData...)
+
 	return fullData, nil
 }
 
@@ -413,21 +435,48 @@ func deserializeFragment(data []byte) (*FragmentObject, error) {
 	}, nil
 }
 
-func genFragmentDataFromRaw(rawEntries [][]byte, firstEntryId int64) ([]byte, []byte) {
-	data := make([]byte, 0)
-	index := make([]byte, 0)
+func genFragmentDataFromRaw(rawEntries [][]byte) ([]byte, []byte) {
+	// Calculate total data size
+	entriesCount := len(rawEntries)
+	if entriesCount == 0 {
+		return make([]byte, 0), make([]byte, 0)
+	}
+
+	// Calculate total data and index size
+	totalDataSize := 0
+	for _, entry := range rawEntries {
+		totalDataSize += len(entry)
+	}
+	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
+
+	// Get buffers from byte pool
+	data := cache.GetByteBuffer(totalDataSize)
+	index := cache.GetByteBuffer(indexSize)
+
+	// Temporary index buffer, reuse to reduce memory allocation
+	entryIndex := make([]byte, 8)
+
+	// Fill data and indexes
 	offset := 0
-	for i := 0; i < len(rawEntries); i++ {
-		entryLength := uint32(len(rawEntries[i]))
-		entryOffset := offset
-		entryIndex := make([]byte, 8)
-		binary.BigEndian.PutUint32(entryIndex[:4], uint32(entryOffset))
+	for i := 0; i < entriesCount; i++ {
+		entry := rawEntries[i]
+		entryLength := uint32(len(entry))
+		entryOffset := uint32(offset)
+
+		// Fill index data
+		binary.BigEndian.PutUint32(entryIndex[:4], entryOffset)
 		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
 
-		data = append(data, rawEntries[i]...)
+		// Add to index buffer
 		index = append(index, entryIndex...)
 
-		offset = offset + len(rawEntries[i])
+		// Add to data buffer
+		data = append(data, entry...)
+
+		offset += len(entry)
 	}
+
+	// No need to return buffers before returning, as they will be held by FragmentObject
+	// They will be returned to the pool when FragmentObject is released
 	return index, data
 }
