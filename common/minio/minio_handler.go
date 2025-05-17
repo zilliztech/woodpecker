@@ -7,11 +7,52 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/pool"
 )
 
 type ObjectReader interface {
 	io.Reader
 	io.Closer
+}
+
+// ReadObjectFull reads all content from ObjectReader and returns a byte slice
+// It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
+func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+	// Initial buffer size - 1MB is a reasonable starting point
+	initialSize := initReadBufSize
+	buf := pool.GetByteBuffer(int(initialSize))
+
+	// Temporary read buffer
+	readBuf := make([]byte, 32*1024) // 32KB read block
+
+	for {
+		// Read a chunk of data
+		n, err := objectReader.Read(readBuf)
+
+		if len(buf)+32*1024 >= cap(buf) {
+			// Increase buffer size if necessary
+			initialSize = int64(cap(buf) * 2)
+			newBuf := pool.GetByteBuffer(int(initialSize))
+			newBuf = append(newBuf, buf...)
+			pool.PutByteBuffer(buf)
+			buf = newBuf
+		}
+
+		// If data is read, append to result buffer
+		if n > 0 {
+			buf = append(buf, readBuf[:n]...)
+		}
+
+		// Handle EOF and errors
+		if err == io.EOF {
+			// Normal completion
+			break
+		} else if err != nil {
+			// Error occurred
+			return nil, err
+		}
+	}
+	return buf, nil
 }
 
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio

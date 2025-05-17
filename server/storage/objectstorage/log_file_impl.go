@@ -235,7 +235,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 			part := partition
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
+			fragment := NewFragmentObject(f.client, f.bucket, f.syncPolicyConfig.MaxFlushSize, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
 			err = retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -427,7 +427,9 @@ var _ storage.LogFile = (*ROLogFile)(nil)
 
 // ROLogFile is used to read data from object storage as a logical file
 type ROLogFile struct {
-	mu               sync.RWMutex
+	mu              sync.RWMutex
+	maxFragmentSize int64 // The maximum size of a fragment in object storage
+
 	lastSync         atomic.Int64
 	client           minioHandler.MinioHandler
 	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
@@ -438,8 +440,9 @@ type ROLogFile struct {
 }
 
 // NewROLogFile is used to read only LogFile
-func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.LogFile {
+func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, fragmentMaxSize int64) storage.LogFile {
 	objFile := &ROLogFile{
+		maxFragmentSize:  fragmentMaxSize,
 		id:               logFileId,
 		client:           objectCli,
 		segmentPrefixKey: segmentPrefixKey,
@@ -657,7 +660,7 @@ func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 		}
 
 		if exists {
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true, false)
+			fragment := NewFragmentObject(f.client, f.bucket, f.maxFragmentSize, fragId, fragKey, nil, 0, false, true, false)
 			fetchedLastFragment = fragment
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true

@@ -257,7 +257,8 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 			s.currentLogFileId,
 			s.getSegmentKeyPrefix(),
 			s.getInstanceBucket(),
-			s.minioClient)
+			s.minioClient,
+			s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize)
 		logger.Ctx(ctx).Info("create LogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentLogFileReader)))
 	}
 	return s.currentLogFileReader, nil

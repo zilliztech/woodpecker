@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/pool"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -32,6 +32,8 @@ var _ storage.Fragment = (*FragmentObject)(nil)
 type FragmentObject struct {
 	mu     sync.RWMutex
 	client minioHandler.MinioHandler
+	// cfg
+	maxFragmentSize int64 // Maximum size of a fragment, used for buff pre alloc
 
 	// info
 	bucket       string
@@ -53,26 +55,27 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, maxFragmentSize int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
-		client:       client,
-		bucket:       bucket,
-		fragmentId:   fragmentId,
-		fragmentKey:  fragmentKey,
-		entriesData:  data,
-		indexes:      index,
-		size:         size,
-		firstEntryId: firstEntryId,
-		lastEntryId:  lastEntryId,
-		lastModified: time.Now().UnixMilli(),
-		dataLoaded:   dataLoaded,
-		dataUploaded: dataUploaded,
-		infoFetched:  infoFetched,
+		client:          client,
+		bucket:          bucket,
+		maxFragmentSize: maxFragmentSize,
+		fragmentId:      fragmentId,
+		fragmentKey:     fragmentKey,
+		entriesData:     data,
+		indexes:         index,
+		size:            size,
+		firstEntryId:    firstEntryId,
+		lastEntryId:     lastEntryId,
+		lastModified:    time.Now().UnixMilli(),
+		dataLoaded:      dataLoaded,
+		dataUploaded:    dataUploaded,
+		infoFetched:     infoFetched,
 	}
 }
 
@@ -117,7 +120,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	f.dataUploaded = true
 
 	// Put back to pool
-	cache.PutByteBuffer(fullData)
+	pool.PutByteBuffer(fullData)
 	return nil
 }
 
@@ -139,12 +142,14 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	}
 	defer fragObjectReader.Close()
 	f.lastModified = objLastModified
+
 	// Read the entire object into memory
-	data, err := io.ReadAll(fragObjectReader) // TODO also use byte pool and io.ReadFull
+	data, err := minioHandler.ReadObjectFull(fragObjectReader, f.maxFragmentSize)
 	if err != nil {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
-	tmpFrag, deserializeErr := deserializeFragment(data)
+
+	tmpFrag, deserializeErr := deserializeFragment(data, f.maxFragmentSize)
 	if deserializeErr != nil {
 		return deserializeErr
 	}
@@ -278,10 +283,10 @@ func (f *FragmentObject) Release() error {
 
 	// Return buffers to the pool
 	if f.entriesData != nil {
-		cache.PutByteBuffer(f.entriesData)
+		pool.PutByteBuffer(f.entriesData)
 	}
 	if f.indexes != nil {
-		cache.PutByteBuffer(f.indexes)
+		pool.PutByteBuffer(f.indexes)
 	}
 
 	f.indexes = nil
@@ -376,7 +381,7 @@ func serializeFragment(f *FragmentObject) ([]byte, error) {
 	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
 
 	// Get buffer from pool
-	fullData := cache.GetByteBuffer(totalSize)
+	fullData := pool.GetByteBuffer(totalSize)
 
 	// Write header information
 	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
@@ -391,7 +396,7 @@ func serializeFragment(f *FragmentObject) ([]byte, error) {
 }
 
 // deserializeFragment from object data bytes
-func deserializeFragment(data []byte) (*FragmentObject, error) {
+func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, error) {
 	// Create a buffer to read from the data
 	buf := bytes.NewBuffer(data)
 
@@ -450,8 +455,8 @@ func genFragmentDataFromRaw(rawEntries [][]byte) ([]byte, []byte) {
 	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
 
 	// Get buffers from byte pool
-	data := cache.GetByteBuffer(totalDataSize)
-	index := cache.GetByteBuffer(indexSize)
+	data := pool.GetByteBuffer(totalDataSize)
+	index := pool.GetByteBuffer(indexSize)
 
 	// Temporary index buffer, reuse to reduce memory allocation
 	entryIndex := make([]byte, 8)

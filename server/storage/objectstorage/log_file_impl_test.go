@@ -49,7 +49,7 @@ func TestNewLogFile(t *testing.T) {
 func TestNewROLogFile(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+	logFile := NewROLogFile(1, "test-segment", "test-bucket", client, int64(1024*1024)).(*ROLogFile)
 
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
@@ -791,7 +791,7 @@ func TestMerge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Merge fragments
-	roLogFile := NewROLogFile(1, "TestMerge", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, "TestMerge", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 	mergedFrags, entryOffset, fragmentIdOffset, err := roLogFile.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
@@ -838,7 +838,7 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Load data
-	roLogFile := NewROLogFile(1, "TestLoad", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, "TestLoad", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 	totalSize, lastFragment, err := roLogFile.Load(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, int64(100*len("test_data")) < totalSize)
@@ -884,7 +884,7 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -946,7 +946,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -1055,7 +1055,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	// test read data with holes (fragment 1,x,3) in minio
 	// we should only read data in fragment 1
 	{
-		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*ROLogFile)
+		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   3,
@@ -1163,21 +1163,21 @@ func TestFindFragment(t *testing.T) {
 func TestDeleteFragments(t *testing.T) {
 	t.Run("SuccessfulDeletion", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1195,7 +1195,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 
 		// Add some fragments to the LogFile to verify they're cleared
 		logFile.fragments = []*FragmentObject{
@@ -1213,21 +1213,21 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("ListObjectsError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Create an object channel with an error
 		errorObjectCh := make(chan minio.ObjectInfo, 1)
@@ -1240,7 +1240,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1250,21 +1250,21 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("RemoveObjectError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 2)
@@ -1279,7 +1279,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1290,21 +1290,21 @@ func TestDeleteFragments(t *testing.T) {
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
 		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Empty object channel
 		objectCh := make(chan minio.ObjectInfo)
@@ -1315,7 +1315,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1327,21 +1327,21 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("SkipNonFragmentFiles", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects including non-fragment files
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1359,7 +1359,7 @@ func TestDeleteFragments(t *testing.T) {
 		// 不再需要 StatObject 调用
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, "test-segment", "test-bucket", client, cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
