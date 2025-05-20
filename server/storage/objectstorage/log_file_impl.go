@@ -235,7 +235,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 			part := partition
-			fragment := NewFragmentObject(f.client, f.bucket, f.syncPolicyConfig.MaxFlushSize, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
+			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
 			err = retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -601,7 +601,7 @@ func (f *ROLogFile) GetLastEntryId() (int64, error) {
 	// prefetch fragmentInfos if any new fragment created
 	_, lastFragment, err := f.prefetchFragmentInfos()
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get last entryId failed",
+		logger.Ctx(context.TODO()).Warn("get last entryId failed when fetch the last fragment",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Int64("logFileId", f.id),
 			zap.Error(err))
@@ -609,9 +609,13 @@ func (f *ROLogFile) GetLastEntryId() (int64, error) {
 	}
 	lastEntryId, err := lastFragment.GetLastEntryId()
 	if err != nil {
+		logger.Ctx(context.TODO()).Warn("get last entryId failed",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Error(err))
 		return -1, err
 	}
-	logger.Ctx(context.TODO()).Debug("get last entryId failed",
+	logger.Ctx(context.TODO()).Debug("get last entryId finish",
 		zap.String("segmentPrefixKey", f.segmentPrefixKey),
 		zap.Int64("logFileId", f.id),
 		zap.Int64("lastFragId", lastFragment.GetFragmentId()),
@@ -660,7 +664,7 @@ func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 		}
 
 		if exists {
-			fragment := NewFragmentObject(f.client, f.bucket, f.maxFragmentSize, fragId, fragKey, nil, 0, false, true, false)
+			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true, false)
 			fetchedLastFragment = fragment
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true

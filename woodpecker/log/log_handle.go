@@ -225,18 +225,19 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	// 1. close segmentHandle,
 	//  it will send fence request to logStores
 	//  and error out all pendingAppendOps with segmentCloseError
-	err := oldSegmentHandle.Close(ctx)
-	if err != nil {
+	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
+	err := oldSegmentHandle.Fence(ctx)
+	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	err = oldSegmentHandle.Fence(ctx)
-	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
+	logger.Ctx(ctx).Debug("start to close segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
+	err = oldSegmentHandle.Close(ctx)
+	if err != nil {
 		return nil, err
 	}
 	lac, err := oldSegmentHandle.GetLastAddConfirmed(ctx)
 	if err == nil {
-		logger.Ctx(ctx).Debug("fence segment finish", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)), zap.Int64("lastAddConfirmed", lac))
+		logger.Ctx(ctx).Debug("close segment finish", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)), zap.Int64("lastAddConfirmed", lac))
 	}
 
 	logger.Ctx(ctx).Debug("request segment compaction", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
@@ -537,17 +538,17 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	// 1. close segmentHandle,
 	//  it will send fence request to logStores
 	//  and error out all pendingAppendOps with segmentCloseError
-	err := writeableSegmentHandle.Close(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("close segment failed",
+	err := writeableSegmentHandle.Fence(ctx) // fence first, which will wait for all writing request to be done
+	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
+		logger.Ctx(ctx).Warn("fence segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
 			zap.Error(err))
 		return err
 	}
-	err = writeableSegmentHandle.Fence(ctx)
-	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
-		logger.Ctx(ctx).Warn("fence segment failed",
+	err = writeableSegmentHandle.Close(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("close segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
 			zap.Error(err))

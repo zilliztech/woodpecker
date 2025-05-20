@@ -97,8 +97,8 @@ func TestSegmentProcessor_Compact(t *testing.T) {
 	mockMinio := mocks_minio.NewMinioHandler(t)
 	mockLogFile := mocks_storage.NewLogFile(t)
 	mockLogFile.EXPECT().Merge(mock.Anything).Return([]storage.Fragment{
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", int64(8*1024*1024), uint64(0), "woodpecker/1/1/0/m_0.frag", [][]byte{[]byte("data0"), []byte("data1"), []byte("data2")}, int64(10), true, false, true),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", int64(8*1024*1024), uint64(1), "woodpecker/1/1/0/m_1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(0), "woodpecker/1/1/0/m_0.frag", [][]byte{[]byte("data0"), []byte("data1"), []byte("data2")}, int64(10), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(1), "woodpecker/1/1/0/m_1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
 	}, []int32{10, 13}, []int32{1, 5}, nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -122,7 +122,7 @@ func TestSegmentProcessor_Recover(t *testing.T) {
 	mockLogFile := mocks_storage.NewLogFile(t)
 	mockLogFile.EXPECT().Load(mock.Anything).Return(
 		int64(0),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", int64(8*1024*1024), uint64(1), "woodpecker/1/1/0/1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(1), "woodpecker/1/1/0/1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
 		nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{

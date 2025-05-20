@@ -2,6 +2,24 @@ package pool
 
 import "sync"
 
+var bytePoolFor4KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 4*1024)
+	},
+}
+
+var bytePoolFor8KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 8*1024)
+	},
+}
+
+var bytePoolFor16KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 16*1024)
+	},
+}
+
 var bytePoolFor32KB = sync.Pool{
 	New: func() any {
 		return make([]byte, 0, 32*1024)
@@ -99,6 +117,9 @@ var bytePoolFor1024MB = sync.Pool{
 }
 
 var bytePools = []sync.Pool{
+	bytePoolFor4KB,
+	bytePoolFor8KB,
+	bytePoolFor16KB,
 	bytePoolFor32KB,
 	bytePoolFor64KB,
 	bytePoolFor128KB,
@@ -119,6 +140,9 @@ var bytePools = []sync.Pool{
 
 // List of pool capacities, corresponding to bytePools
 var poolCapacities = []int{
+	4 * 1024,           // 4KB
+	8 * 1024,           // 8KB
+	16 * 1024,          // 16KB
 	32 * 1024,          // 32KB
 	64 * 1024,          // 64KB
 	128 * 1024,         // 128KB

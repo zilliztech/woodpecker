@@ -89,7 +89,7 @@ func (_c *MinioHandler_GetObject_Call) RunAndReturn(run func(context.Context, st
 }
 
 // GetObjectDataAndInfo provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (commonminio.ObjectReader, int64, error) {
+func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error) {
 	ret := _m.Called(ctx, bucketName, objectName, opts)
 
 	if len(ret) == 0 {
@@ -98,8 +98,9 @@ func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName str
 
 	var r0 commonminio.ObjectReader
 	var r1 int64
-	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, error)); ok {
+	var r2 int64
+	var r3 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error)); ok {
 		return rf(ctx, bucketName, objectName, opts)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) commonminio.ObjectReader); ok {
@@ -116,13 +117,19 @@ func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName str
 		r1 = ret.Get(1).(int64)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
+	if rf, ok := ret.Get(2).(func(context.Context, string, string, minio.GetObjectOptions) int64); ok {
 		r2 = rf(ctx, bucketName, objectName, opts)
 	} else {
-		r2 = ret.Error(2)
+		r2 = ret.Get(2).(int64)
 	}
 
-	return r0, r1, r2
+	if rf, ok := ret.Get(3).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
+		r3 = rf(ctx, bucketName, objectName, opts)
+	} else {
+		r3 = ret.Error(3)
+	}
+
+	return r0, r1, r2, r3
 }
 
 // MinioHandler_GetObjectDataAndInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetObjectDataAndInfo'
@@ -146,12 +153,12 @@ func (_c *MinioHandler_GetObjectDataAndInfo_Call) Run(run func(ctx context.Conte
 	return _c
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) Return(_a0 commonminio.ObjectReader, _a1 int64, _a2 error) *MinioHandler_GetObjectDataAndInfo_Call {
-	_c.Call.Return(_a0, _a1, _a2)
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) Return(_a0 commonminio.ObjectReader, _a1 int64, _a2 int64, _a3 error) *MinioHandler_GetObjectDataAndInfo_Call {
+	_c.Call.Return(_a0, _a1, _a2, _a3)
 	return _c
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }

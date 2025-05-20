@@ -12,10 +12,47 @@ func TestGetByteBuffer(t *testing.T) {
 		expectedCap   int
 		expectedEmpty bool
 	}{
+		// Very small buffer tests
+		{
+			name:          "Get buffer for 2KB",
+			size:          2 * 1024,
+			expectedCap:   4 * 1024, // Should return 4KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 4KB exactly",
+			size:          4 * 1024,
+			expectedCap:   4 * 1024, // Should return 4KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 6KB",
+			size:          6 * 1024,
+			expectedCap:   8 * 1024, // Should return 8KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 8KB exactly",
+			size:          8 * 1024,
+			expectedCap:   8 * 1024, // Should return 8KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 12KB",
+			size:          12 * 1024,
+			expectedCap:   16 * 1024, // Should return 16KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 16KB exactly",
+			size:          16 * 1024,
+			expectedCap:   16 * 1024, // Should return 16KB buffer
+			expectedEmpty: true,
+		},
 		// Small buffer tests
 		{
-			name:          "Get buffer for 16KB",
-			size:          16 * 1024,
+			name:          "Get buffer for 24KB",
+			size:          24 * 1024,
 			expectedCap:   32 * 1024, // Should return 32KB buffer
 			expectedEmpty: true,
 		},
@@ -135,6 +172,22 @@ func TestPutByteBuffer(t *testing.T) {
 		bufferSize int
 		shouldPool bool
 	}{
+		// Very small buffer tests
+		{
+			name:       "Put buffer with standard size (4KB)",
+			bufferSize: 4 * 1024,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (8KB)",
+			bufferSize: 8 * 1024,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (16KB)",
+			bufferSize: 16 * 1024,
+			shouldPool: true,
+		},
 		// Small buffer tests
 		{
 			name:       "Put buffer with standard size (32KB)",
@@ -175,8 +228,13 @@ func TestPutByteBuffer(t *testing.T) {
 		},
 		// Non-standard size tests
 		{
-			name:       "Put buffer too small for pooling (16KB)",
-			bufferSize: 16 * 1024,
+			name:       "Put buffer too small for pooling (2KB)",
+			bufferSize: 2 * 1024,
+			shouldPool: false,
+		},
+		{
+			name:       "Put buffer with non-standard size (6KB)",
+			bufferSize: 6 * 1024,
 			shouldPool: false,
 		},
 		{
@@ -242,6 +300,8 @@ func TestPutByteBuffer(t *testing.T) {
 func TestReuseBufferContents(t *testing.T) {
 	// Test with different sizes
 	sizes := []int{
+		4 * 1024,         // 4KB
+		16 * 1024,        // 16KB
 		32 * 1024,        // 32KB
 		256 * 1024,       // 256KB
 		1 * 1024 * 1024,  // 1MB
@@ -299,6 +359,8 @@ func TestReuseBufferContents(t *testing.T) {
 
 func BenchmarkGetPutByteBuffer(b *testing.B) {
 	sizes := []int{
+		4 * 1024,          // 4KB
+		16 * 1024,         // 16KB
 		32 * 1024,         // 32KB
 		128 * 1024,        // 128KB
 		512 * 1024,        // 512KB
@@ -325,6 +387,8 @@ func BenchmarkGetPutByteBuffer(b *testing.B) {
 // BenchmarkWithoutPool provides a comparison point for allocation without pooling
 func BenchmarkWithoutPool(b *testing.B) {
 	sizes := []int{
+		4 * 1024,          // 4KB
+		16 * 1024,         // 16KB
 		32 * 1024,         // 32KB
 		128 * 1024,        // 128KB
 		512 * 1024,        // 512KB

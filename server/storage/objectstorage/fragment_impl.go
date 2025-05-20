@@ -32,8 +32,6 @@ var _ storage.Fragment = (*FragmentObject)(nil)
 type FragmentObject struct {
 	mu     sync.RWMutex
 	client minioHandler.MinioHandler
-	// cfg
-	maxFragmentSize int64 // Maximum size of a fragment, used for buff pre alloc
 
 	// info
 	bucket       string
@@ -55,27 +53,26 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, maxFragmentSize int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
-		client:          client,
-		bucket:          bucket,
-		maxFragmentSize: maxFragmentSize,
-		fragmentId:      fragmentId,
-		fragmentKey:     fragmentKey,
-		entriesData:     data,
-		indexes:         index,
-		size:            size,
-		firstEntryId:    firstEntryId,
-		lastEntryId:     lastEntryId,
-		lastModified:    time.Now().UnixMilli(),
-		dataLoaded:      dataLoaded,
-		dataUploaded:    dataUploaded,
-		infoFetched:     infoFetched,
+		client:       client,
+		bucket:       bucket,
+		fragmentId:   fragmentId,
+		fragmentKey:  fragmentKey,
+		entriesData:  data,
+		indexes:      index,
+		size:         size,
+		firstEntryId: firstEntryId,
+		lastEntryId:  lastEntryId,
+		lastModified: time.Now().UnixMilli(),
+		dataLoaded:   dataLoaded,
+		dataUploaded: dataUploaded,
+		infoFetched:  infoFetched,
 	}
 }
 
@@ -136,7 +133,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return werr.ErrFragmentNotUploaded
 	}
 
-	fragObjectReader, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
+	fragObjectReader, objDataSize, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
@@ -144,12 +141,12 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.lastModified = objLastModified
 
 	// Read the entire object into memory
-	data, err := minioHandler.ReadObjectFull(fragObjectReader, f.maxFragmentSize)
-	if err != nil {
+	data, err := minioHandler.ReadObjectFull(fragObjectReader, objDataSize)
+	if err != nil || len(data) != int(objDataSize) {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
 
-	tmpFrag, deserializeErr := deserializeFragment(data, f.maxFragmentSize)
+	tmpFrag, deserializeErr := deserializeFragment(data, objDataSize)
 	if deserializeErr != nil {
 		return deserializeErr
 	}
