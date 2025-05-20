@@ -301,7 +301,7 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 	}
 
 	// Maximum number of fragments to evict in one call
-	maxEvictionCount := 10
+	maxEvictionCount := 1000 // TODO should be configurable
 	evictCount := 0
 
 	for m.usedMemory > m.maxMemory && m.order.Len() > 0 && evictCount < maxEvictionCount {
@@ -336,6 +336,11 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 			zap.Int64("currentDataMemory", m.dataMemory))
 		evictCount++
 	}
+
+	logger.Ctx(req.ctx).Debug("one round of evict fragments complete",
+		zap.Int("totalEvict", evictCount),
+		zap.Int64("currentUsedMemory", m.usedMemory),
+		zap.Int64("currentDataMemory", m.dataMemory))
 
 	if req.responseChan != nil {
 		req.responseChan <- nil // Signal success with nil error
