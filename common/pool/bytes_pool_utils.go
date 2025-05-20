@@ -2,6 +2,48 @@ package pool
 
 import "sync"
 
+var bytePoolFor128B = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 128)
+	},
+}
+
+var bytePoolFor256B = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 256)
+	},
+}
+
+var bytePoolFor384B = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 384)
+	},
+}
+
+var bytePoolFor512B = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 512)
+	},
+}
+
+var bytePoolFor768B = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 768)
+	},
+}
+
+var bytePoolFor1KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 1024)
+	},
+}
+
+var bytePoolFor2KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 2*1024)
+	},
+}
+
 var bytePoolFor4KB = sync.Pool{
 	New: func() any {
 		return make([]byte, 0, 4*1024)
@@ -44,9 +86,21 @@ var bytePoolFor256KB = sync.Pool{
 	},
 }
 
+var bytePoolFor384KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 384*1024)
+	},
+}
+
 var bytePoolFor512KB = sync.Pool{
 	New: func() any {
 		return make([]byte, 0, 512*1024)
+	},
+}
+
+var bytePoolFor768KB = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, 768*1024)
 	},
 }
 
@@ -117,6 +171,13 @@ var bytePoolFor1024MB = sync.Pool{
 }
 
 var bytePools = []sync.Pool{
+	bytePoolFor128B,
+	bytePoolFor256B,
+	bytePoolFor384B,
+	bytePoolFor512B,
+	bytePoolFor768B,
+	bytePoolFor1KB,
+	bytePoolFor2KB,
 	bytePoolFor4KB,
 	bytePoolFor8KB,
 	bytePoolFor16KB,
@@ -124,7 +185,9 @@ var bytePools = []sync.Pool{
 	bytePoolFor64KB,
 	bytePoolFor128KB,
 	bytePoolFor256KB,
+	bytePoolFor384KB,
 	bytePoolFor512KB,
+	bytePoolFor768KB,
 	bytePoolFor1MB,
 	bytePoolFor2MB,
 	bytePoolFor4MB,
@@ -140,6 +203,13 @@ var bytePools = []sync.Pool{
 
 // List of pool capacities, corresponding to bytePools
 var poolCapacities = []int{
+	128,                // 128B
+	256,                // 256B
+	384,                // 384B
+	512,                // 512B
+	768,                // 768B
+	1024,               // 1KB
+	2 * 1024,           // 2KB
 	4 * 1024,           // 4KB
 	8 * 1024,           // 8KB
 	16 * 1024,          // 16KB
@@ -147,7 +217,9 @@ var poolCapacities = []int{
 	64 * 1024,          // 64KB
 	128 * 1024,         // 128KB
 	256 * 1024,         // 256KB
+	384 * 1024,         // 384KB
 	512 * 1024,         // 512KB
+	768 * 1024,         // 768KB
 	1024 * 1024,        // 1MB
 	2 * 1024 * 1024,    // 2MB
 	4 * 1024 * 1024,    // 4MB

@@ -96,13 +96,6 @@ func (f *LogFile) run() {
 			}
 			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 		case <-f.fileClose:
-			err := f.Sync(context.Background())
-			if err != nil {
-				logger.Ctx(context.TODO()).Warn("sync error",
-					zap.String("segmentPrefixKey", f.segmentPrefixKey),
-					zap.Int64("logFileId", f.id),
-					zap.Error(err))
-			}
 			logger.Ctx(context.TODO()).Debug("close LogFile", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.String("logFileInst", fmt.Sprintf("%p", f)))
 			return
 		}
@@ -375,6 +368,13 @@ func (f *LogFile) Sync(ctx context.Context) error {
 }
 
 func (f *LogFile) Close() error {
+	err := f.Sync(context.Background())
+	if err != nil {
+		logger.Ctx(context.TODO()).Warn("sync error before close",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logFileId", f.id),
+			zap.Error(err))
+	}
 	// Implement close logic, e.g., release resources
 	f.fileClose <- struct{}{}
 	close(f.fileClose)

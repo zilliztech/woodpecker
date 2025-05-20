@@ -22,6 +22,7 @@ func setupMockFragment(t *testing.T, id int64, key string, size int64, lastEntry
 	fragment.On("GetSize").Return(size).Maybe()
 	fragment.On("GetLastEntryIdDirectly").Return(lastEntryId).Maybe()
 	fragment.On("Release").Return(nil).Maybe()
+	fragment.On("GetRawBufSize").Return(size).Maybe()
 
 	return fragment
 }

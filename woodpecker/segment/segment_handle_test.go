@@ -36,7 +36,7 @@ func TestNewSegmentHandle(t *testing.T) {
 	segmentMeta := &proto.SegmentMetadata{
 		SegNo: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	assert.Equal(t, "testLog", segmentHandle.GetLogName())
 	assert.Equal(t, int64(1), segmentHandle.GetId(context.Background()))
 }
@@ -68,7 +68,7 @@ func TestAppendAsync_Success(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	callbackCalled := false
 	callback := func(segmentId int64, entryId int64, err error) {
 		callbackCalled = true
@@ -113,7 +113,7 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
@@ -175,7 +175,7 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
 	failedAttempts := 0
 	successAttempts := 0
@@ -254,7 +254,7 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
 	callbackCalled := 0
 	successCount := 0
@@ -331,7 +331,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
@@ -377,7 +377,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	fenceErr := segmentHandle.Fence(context.Background())
 	assert.NoError(t, fenceErr)
 	callbackCalled := false

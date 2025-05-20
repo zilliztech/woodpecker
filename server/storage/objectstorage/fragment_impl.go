@@ -45,6 +45,7 @@ type FragmentObject struct {
 	entriesData []byte // Bytes of entries
 	indexes     []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
 	size        int64  // Size of the fragment, including entries and indexes. it is lock free, used for metrics only
+	rawBufSize  int64  // Size of the raw pooling buffer allocated for this fragment, cap(entriesData) + cap(indexes)
 
 	// status
 	dataLoaded   bool // If this fragment has been loaded to memory
@@ -57,6 +58,7 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
+	rawBufSize := int64(cap(data) + cap(index))
 	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
@@ -67,6 +69,7 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 		entriesData:  data,
 		indexes:      index,
 		size:         size,
+		rawBufSize:   rawBufSize,
 		firstEntryId: firstEntryId,
 		lastEntryId:  lastEntryId,
 		lastModified: time.Now().UnixMilli(),
@@ -88,6 +91,10 @@ func (f *FragmentObject) GetFragmentKey() string {
 
 func (f *FragmentObject) GetSize() int64 {
 	return f.size
+}
+
+func (f *FragmentObject) GetRawBufSize() int64 {
+	return f.rawBufSize
 }
 
 // Flush uploads the data to MinIO.
@@ -148,13 +155,16 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 
 	tmpFrag, deserializeErr := deserializeFragment(data, objDataSize)
 	if deserializeErr != nil {
+		pool.PutByteBuffer(data)
 		return deserializeErr
 	}
+	pool.PutByteBuffer(data)
 
 	// Reset the buffer with the loaded data
 	f.entriesData = tmpFrag.entriesData
 	f.indexes = tmpFrag.indexes
 	f.size = int64(len(tmpFrag.entriesData) + len(tmpFrag.indexes))
+	f.rawBufSize = int64(cap(tmpFrag.entriesData) + cap(tmpFrag.indexes))
 	f.firstEntryId = tmpFrag.firstEntryId
 	f.lastEntryId = tmpFrag.lastEntryId
 	f.dataLoaded = true
@@ -420,14 +430,17 @@ func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, e
 
 	// Calculate the number of indexes
 	numIndexes := lastEntryId - firstEntryID + 1
-	indexes := make([]byte, numIndexes*8)
-
+	indexesTmp := make([]byte, numIndexes*8)
 	// Read indexes (each index is 8 bytes)
-	if err := binary.Read(buf, binary.BigEndian, &indexes); err != nil {
+	if err := binary.Read(buf, binary.BigEndian, &indexesTmp); err != nil {
 		return nil, fmt.Errorf("failed to read index %v", err)
 	}
+	indexes := pool.GetByteBuffer(int(numIndexes * 8))
+	indexes = append(indexes, indexesTmp...)
 	// Read entriesData (remaining data)
-	entriesData := buf.Bytes()
+	entriesDataTmp := buf.Bytes()
+	entriesData := pool.GetByteBuffer(len(entriesDataTmp))
+	entriesData = append(entriesData, entriesDataTmp...)
 
 	return &FragmentObject{
 		indexes:      indexes,

@@ -313,6 +313,10 @@ func (fw *FragmentFileWriter) GetSize() int64 {
 	return fw.fileSize
 }
 
+func (fw *FragmentFileWriter) GetRawBufSize() int64 {
+	return fw.fileSize
+}
+
 // Release releases the fragment file.
 func (fw *FragmentFileWriter) Release() error {
 	fw.mu.Lock()
@@ -1136,6 +1140,10 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 
 // GetSize returns the current size of the fragment.
 func (fr *FragmentFileReader) GetSize() int64 {
+	return fr.fileSize
+}
+
+func (fr *FragmentFileReader) GetRawBufSize() int64 {
 	return fr.fileSize
 }
 

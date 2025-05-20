@@ -129,24 +129,6 @@ func (dlf *DiskLogFile) run() {
 			}
 			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
 		case <-dlf.closeCh:
-			logger.Ctx(context.Background()).Info("run: received close signal, exiting goroutine")
-			// Try to sync remaining data
-			if err := dlf.Sync(context.Background()); err != nil {
-				logger.Ctx(context.Background()).Warn("sync failed during close",
-					zap.String("logFileDir", dlf.logFileDir),
-					zap.Error(err))
-			}
-			// Close current fragment
-			if dlf.currFragment != nil {
-				if err := dlf.currFragment.Release(); err != nil {
-					logger.Ctx(context.Background()).Warn("failed to close fragment",
-						zap.String("logFileDir", dlf.logFileDir),
-						zap.Error(err))
-					return
-				}
-				dlf.currFragment.Close()
-				dlf.currFragment = nil
-			}
 			logger.Ctx(context.Background()).Info("DiskLogFile successfully closed",
 				zap.String("logFileDir", dlf.logFileDir))
 			return
@@ -671,11 +653,26 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 
 // Close closes the log file and releases resources
 func (dlf *DiskLogFile) Close() error {
-	dlf.mu.Lock()
-	defer dlf.mu.Unlock()
-
 	if dlf.closed.Load() {
 		return nil
+	}
+
+	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close")
+	// Try to sync remaining data
+	if err := dlf.Sync(context.Background()); err != nil {
+		logger.Ctx(context.Background()).Warn("sync failed during close",
+			zap.String("logFileDir", dlf.logFileDir),
+			zap.Error(err))
+	}
+	// Close current fragment
+	if dlf.currFragment != nil {
+		if err := dlf.currFragment.Release(); err != nil {
+			logger.Ctx(context.Background()).Warn("failed to close fragment",
+				zap.String("logFileDir", dlf.logFileDir),
+				zap.Error(err))
+		}
+		dlf.currFragment.Close()
+		dlf.currFragment = nil
 	}
 
 	logger.Ctx(context.Background()).Info("Closing DiskLogFile",

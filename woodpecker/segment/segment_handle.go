@@ -60,7 +60,7 @@ type SegmentHandle interface {
 	RecoveryOrCompact(todo context.Context) error
 }
 
-func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) SegmentHandle {
+func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
 		logId:          logId,
@@ -86,7 +86,10 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
-	segmentHandle.executor.Start()
+	segmentHandle.fencedState.Store(false)
+	if canWrite {
+		segmentHandle.executor.Start()
+	}
 	return segmentHandle
 }
 
@@ -117,6 +120,7 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
 	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
+	segmentHandle.fencedState.Store(false)
 	return segmentHandle
 }
 
@@ -138,6 +142,8 @@ type segmentHandleImpl struct {
 	appendOpsQueue   *list.List
 	commitedSize     atomic.Int64
 	pendingSize      atomic.Int64
+
+	fencedState atomic.Bool
 
 	executor *SequentialExecutor
 
@@ -251,7 +257,9 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		}
 
 		// found the triggerEntryId
-		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries && (op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) {
+		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
+			(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
+			!werr.ErrSegmentClosed.Is(err) {
 			op.attempt++
 			elementsToRetry = append(elementsToRetry, element)
 		} else {
@@ -420,6 +428,9 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	// error out all pending append operations
 	s.SendAppendErrorCallbacks(-1, werr.ErrSegmentClosed)
 
+	// shutdown segment executor
+	s.executor.Stop()
+
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
 	if currentSegmentMeta.State != proto.SegmentState_Active {
@@ -471,6 +482,7 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) Fence(ctx context.Context) error {
+
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -491,6 +503,11 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
+	if s.fencedState.Load() {
+		// fast return if fenced state set locally
+		return true, nil
+	}
+
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {

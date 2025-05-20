@@ -189,7 +189,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		return nil, err
 	}
 	if segMeta != nil {
-		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg)
+		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -201,7 +201,7 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 	if err != nil {
 		return nil, err
 	}
-	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg)
+	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime

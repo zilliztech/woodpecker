@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestGetByteSlice(t *testing.T) {
+	fmt.Println()
+	fmt.Println()
+	c := GetByteBuffer(100)
+	c = append(c, 0)
+	c = append(c, 1)
+	c = append(c, 2)
+	d := c[1:]
+	fmt.Printf("c %p %v\n", c, c)
+	fmt.Printf("d %p %v\n", d, d)
+	PutByteBuffer(c)
+	fmt.Printf("c %p %v\n", c, c)
+	fmt.Printf("d %p %v\n", d, d)
+
+	fmt.Println()
+	fmt.Println()
+	e := GetByteBuffer(100)
+	e = append(e, 8)
+	e = append(e, 9)
+	fmt.Printf("c %p %v cap:%d\n", c, c, cap(c))
+	fmt.Printf("d %p %v cap:%d\n", d, d, cap(d))
+	fmt.Printf("e %p %v cap:%d\n", e, e, cap(e))
+	fmt.Printf("c %p %v cap:%d\n", c, c, cap(c))
+
+}
+
 func TestGetByteBuffer(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -12,10 +38,71 @@ func TestGetByteBuffer(t *testing.T) {
 		expectedCap   int
 		expectedEmpty bool
 	}{
+		// Tiny buffer tests for the new small sizes
+		{
+			name:          "Get buffer for 64B",
+			size:          64,
+			expectedCap:   128, // Should return 128B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 128B exactly",
+			size:          128,
+			expectedCap:   128, // Should return 128B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 200B",
+			size:          200,
+			expectedCap:   256, // Should return 256B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 300B",
+			size:          300,
+			expectedCap:   384, // Should return 384B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 400B",
+			size:          400,
+			expectedCap:   512, // Should return 512B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 600B",
+			size:          600,
+			expectedCap:   768, // Should return 768B buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 800B",
+			size:          800,
+			expectedCap:   1024, // Should return 1KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 1KB exactly",
+			size:          1024,
+			expectedCap:   1024, // Should return 1KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 1.5KB",
+			size:          1536,
+			expectedCap:   2 * 1024, // Should return 2KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 2KB exactly",
+			size:          2 * 1024,
+			expectedCap:   2 * 1024, // Should return 2KB buffer
+			expectedEmpty: true,
+		},
 		// Very small buffer tests
 		{
 			name:          "Get buffer for 2KB",
-			size:          2 * 1024,
+			size:          3 * 1024,
 			expectedCap:   4 * 1024, // Should return 4KB buffer
 			expectedEmpty: true,
 		},
@@ -90,7 +177,7 @@ func TestGetByteBuffer(t *testing.T) {
 		{
 			name:          "Get buffer for 600KB",
 			size:          600 * 1024,
-			expectedCap:   1024 * 1024, // Should return 1MB buffer
+			expectedCap:   768 * 1024, // Should return 1MB buffer
 			expectedEmpty: true,
 		},
 		{
@@ -128,6 +215,30 @@ func TestGetByteBuffer(t *testing.T) {
 			name:          "Get buffer for large size (2GB)",
 			size:          2 * 1024 * 1024 * 1024,
 			expectedCap:   2 * 1024 * 1024 * 1024, // Should create exact size buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 300KB",
+			size:          300 * 1024,
+			expectedCap:   384 * 1024, // Should return 384KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 384KB exactly",
+			size:          384 * 1024,
+			expectedCap:   384 * 1024, // Should return 384KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 600KB",
+			size:          600 * 1024,
+			expectedCap:   768 * 1024, // Should return 768KB buffer
+			expectedEmpty: true,
+		},
+		{
+			name:          "Get buffer for 768KB exactly",
+			size:          768 * 1024,
+			expectedCap:   768 * 1024, // Should return 768KB buffer
 			expectedEmpty: true,
 		},
 	}
@@ -172,6 +283,42 @@ func TestPutByteBuffer(t *testing.T) {
 		bufferSize int
 		shouldPool bool
 	}{
+		// Tiny buffer tests
+		{
+			name:       "Put buffer with standard size (128B)",
+			bufferSize: 128,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (256B)",
+			bufferSize: 256,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (384B)",
+			bufferSize: 384,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (512B)",
+			bufferSize: 512,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (768B)",
+			bufferSize: 768,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (1KB)",
+			bufferSize: 1024,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (2KB)",
+			bufferSize: 2 * 1024,
+			shouldPool: true,
+		},
 		// Very small buffer tests
 		{
 			name:       "Put buffer with standard size (4KB)",
@@ -228,8 +375,8 @@ func TestPutByteBuffer(t *testing.T) {
 		},
 		// Non-standard size tests
 		{
-			name:       "Put buffer too small for pooling (2KB)",
-			bufferSize: 2 * 1024,
+			name:       "Put buffer too small for pooling (96B)",
+			bufferSize: 96,
 			shouldPool: false,
 		},
 		{
@@ -251,6 +398,16 @@ func TestPutByteBuffer(t *testing.T) {
 			name:       "Put buffer with non-standard size (10MB)",
 			bufferSize: 10 * 1024 * 1024,
 			shouldPool: false,
+		},
+		{
+			name:       "Put buffer with standard size (384KB)",
+			bufferSize: 384 * 1024,
+			shouldPool: true,
+		},
+		{
+			name:       "Put buffer with standard size (768KB)",
+			bufferSize: 768 * 1024,
+			shouldPool: true,
 		},
 	}
 
@@ -359,11 +516,18 @@ func TestReuseBufferContents(t *testing.T) {
 
 func BenchmarkGetPutByteBuffer(b *testing.B) {
 	sizes := []int{
+		128,               // 128B
+		512,               // 512B
+		1024,              // 1KB
+		2 * 1024,          // 2KB
 		4 * 1024,          // 4KB
 		16 * 1024,         // 16KB
 		32 * 1024,         // 32KB
 		128 * 1024,        // 128KB
+		256 * 1024,        // 256KB
+		384 * 1024,        // 384KB
 		512 * 1024,        // 512KB
+		768 * 1024,        // 768KB
 		1 * 1024 * 1024,   // 1MB
 		4 * 1024 * 1024,   // 4MB
 		16 * 1024 * 1024,  // 16MB
@@ -387,11 +551,18 @@ func BenchmarkGetPutByteBuffer(b *testing.B) {
 // BenchmarkWithoutPool provides a comparison point for allocation without pooling
 func BenchmarkWithoutPool(b *testing.B) {
 	sizes := []int{
+		128,               // 128B
+		512,               // 512B
+		1024,              // 1KB
+		2 * 1024,          // 2KB
 		4 * 1024,          // 4KB
 		16 * 1024,         // 16KB
 		32 * 1024,         // 32KB
 		128 * 1024,        // 128KB
+		256 * 1024,        // 256KB
+		384 * 1024,        // 384KB
 		512 * 1024,        // 512KB
+		768 * 1024,        // 768KB
 		1 * 1024 * 1024,   // 1MB
 		4 * 1024 * 1024,   // 4MB
 		16 * 1024 * 1024,  // 16MB

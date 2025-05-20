@@ -17,6 +17,7 @@ type Fragment interface {
 	GetLastModified() int64
 	GetEntry(entryId int64) ([]byte, error)
 	GetSize() int64
+	GetRawBufSize() int64
 	Release() error
 }
 
