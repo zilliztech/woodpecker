@@ -13,6 +13,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
@@ -35,6 +36,7 @@ type LogWriter interface {
 
 func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
 	w := &logWriterImpl{
+		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
 		cfg:                cfg,
@@ -57,6 +59,7 @@ var _ LogWriter = (*logWriterImpl)(nil)
 
 type logWriterImpl struct {
 	sync.RWMutex
+	logIdStr           string // for metrics label only
 	logHandle          LogHandle
 	auditorMaxInterval int
 	cfg                *config.Configuration
@@ -90,10 +93,13 @@ func (l *logWriterImpl) monitorSession() {
 }
 
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+	start := time.Now()
+
 	// Check if session is valid
 	if !l.sessionValid.Load() {
 		logger.Ctx(ctx).Warn("Writer lock session has expired",
 			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -115,20 +121,38 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		callback(-1, -1, err)
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
 		return <-ch
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          err,
 		}
 	}
+
+	// Track bytes written
+	if len(bytes) > 0 {
+		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
+	}
+
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
-	return <-ch
+	result := <-ch
+
+	// Update metrics based on result
+	if result.Err == nil {
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_success").Observe(float64(time.Since(start).Milliseconds()))
+	} else {
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_error").Observe(float64(time.Since(start).Milliseconds()))
+	}
+
+	return result
 }
 
 func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+	start := time.Now()
 	l.Lock()
 	defer l.Unlock()
 
@@ -136,6 +160,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 
 	// Check if session is valid
 	if !l.sessionValid.Load() {
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -146,6 +171,11 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		if err == nil {
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_success").Observe(float64(time.Since(start).Milliseconds()))
+		} else {
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
+		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -158,15 +188,23 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
 		callback(-1, -1, err)
 		return ch
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
 		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
 		callback(-1, -1, err)
 		return ch
 	}
+
+	// Track bytes written
+	if len(bytes) > 0 {
+		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
+	}
+
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
 	return ch
 }
@@ -177,6 +215,7 @@ func (l *logWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
+			startAudit := time.Now()
 			// check and set segment truncate state if necessary
 			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(context.TODO()); err != nil {
 				logger.Ctx(context.TODO()).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
@@ -224,6 +263,9 @@ func (l *logWriterImpl) runAuditor() {
 				logger.Ctx(context.TODO()).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
 				l.cleanupTruncatedSegmentsIfNecessary(context.TODO())
 			}
+
+			// Track auditor latency
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "auditor_run").Observe(float64(time.Since(startAudit).Milliseconds()))
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			return
@@ -358,6 +400,8 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {
+	start := time.Now()
+
 	l.writerClose <- struct{}{}
 	close(l.writerClose)
 	closeErr := l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
@@ -371,6 +415,8 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	if releaseLockErr != nil {
 		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 	}
+
+	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close").Observe(float64(time.Since(start).Milliseconds()))
 	return werr.Combine(closeErr, releaseLockErr)
 }
 

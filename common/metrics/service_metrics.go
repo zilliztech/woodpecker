@@ -15,6 +15,9 @@ const (
 var (
 	WpRegisterOnce sync.Once
 
+	// === Client-side metrics ===
+
+	// Append operations metrics
 	WpAppendOpRequestsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
@@ -51,6 +54,8 @@ var (
 		},
 		[]string{"log_name"},
 	)
+
+	// Read operations metrics
 	WpReadRequestsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
@@ -87,6 +92,8 @@ var (
 		},
 		[]string{"log_name"},
 	)
+
+	// Compact operations metrics
 	WpCompactBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: wp_namespace,
@@ -105,6 +112,8 @@ var (
 		},
 		[]string{"log_name"},
 	)
+
+	// Fragment metrics
 	WpFragmentBufferBytes = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
@@ -150,6 +159,8 @@ var (
 		},
 		[]string{"log_name"},
 	)
+
+	// Write buffer metrics
 	WpWriteBufferSlots = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
@@ -159,6 +170,8 @@ var (
 		},
 		[]string{"log_name"},
 	)
+
+	// Segment rolling metrics
 	WpSegmentRollingLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: wp_namespace,
@@ -302,24 +315,289 @@ var (
 			Name:      "storage_operation_errors",
 			Help:      "Number of storage operation errors",
 		},
-		[]string{"log_name", "operation", "storage_type"},
+		[]string{"log_name", "storage_type", "operation"},
+	)
+
+	// === New metrics based on architecture ===
+
+	// Client layer metrics
+	WpClientOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "operations_total",
+			Help:      "Total number of client operations",
+		},
+		[]string{"log_name", "operation", "status"},
+	)
+	WpClientOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "operation_latency",
+			Help:      "Latency of client operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_name", "operation"},
+	)
+	WpClientActiveConnections = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "active_connections",
+			Help:      "Number of active client connections",
+		},
+		[]string{"log_name"},
+	)
+
+	// LogHandle metrics
+	WpLogHandleOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "log_handle_operations_total",
+			Help:      "Total number of log handle operations",
+		},
+		[]string{"log_id", "operation", "status"},
+	)
+	WpLogHandleOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "log_handle_operation_latency",
+			Help:      "Latency of log handle operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "operation"},
+	)
+
+	// LogReader/LogWriter metrics
+	WpLogReaderBytesRead = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "reader_bytes_read",
+			Help:      "Total bytes read by log readers",
+		},
+		[]string{"log_id", "reader_name"},
+	)
+	WpLogReaderOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "reader_operation_latency",
+			Help:      "Latency of log reader operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "operation"},
+	)
+	WpLogWriterBytesWritten = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "writer_bytes_written",
+			Help:      "Total bytes written by log writers",
+		},
+		[]string{"log_id"},
+	)
+	WpLogWriterOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "writer_operation_latency",
+			Help:      "Latency of log writer operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "operation"},
+	)
+
+	// SegmentHandle metrics
+	WpSegmentHandleOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "segment_handle_operations_total",
+			Help:      "Total number of segment handle operations",
+		},
+		[]string{"log_id", "segment_id", "operation", "status"},
+	)
+	WpSegmentHandleOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "segment_handle_operation_latency",
+			Help:      "Latency of segment handle operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "segment_id", "operation"},
+	)
+	WpSegmentHandlePendingAppendOps = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "segment_handle_pending_append_ops",
+			Help:      "Number of pending append operations in segment handles",
+		},
+		[]string{"log_id", "segment_id"},
+	)
+
+	// LogStore metrics
+	WpLogStoreOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "logstore_operations_total",
+			Help:      "Total number of log store operations",
+		},
+		[]string{"log_id", "segment_id", "operation", "status"},
+	)
+	WpLogStoreOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "logstore_operation_latency",
+			Help:      "Latency of log store operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "segment_id", "operation"},
+	)
+	WpLogStoreActiveSegmentProcessors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "logstore_active_segment_processors",
+			Help:      "Number of active segment processors in log store",
+		},
+		[]string{"log_id"},
+	)
+
+	// SegmentProcessor metrics
+	WpSegmentProcessorOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "segment_processor_operations_total",
+			Help:      "Total number of segment processor operations",
+		},
+		[]string{"log_id", "segment_id", "operation", "status"},
+	)
+	WpSegmentProcessorOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "segment_processor_operation_latency",
+			Help:      "Latency of segment processor operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "segment_id", "operation"},
+	)
+
+	// File metrics
+	WpFileOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "file_operations_total",
+			Help:      "Total number of file operations",
+		},
+		[]string{"log_id", "operation", "status"},
+	)
+	WpFileOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "file_operation_latency",
+			Help:      "Latency of file operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "operation"},
+	)
+	WpFileBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "file_bytes",
+			Help:      "Size of files in bytes",
+		},
+		[]string{"log_id", "file_type"},
+	)
+
+	// Fragment metrics
+	WpFragmentOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_operations_total",
+			Help:      "Total number of fragment operations",
+		},
+		[]string{"log_id", "operation", "status"},
+	)
+	WpFragmentOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_operation_latency",
+			Help:      "Latency of fragment operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"log_id", "operation"},
+	)
+	WpFragmentCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "fragment_count",
+			Help:      "Number of fragments",
+		},
+		[]string{"log_id", "segment_id"},
+	)
+
+	// Object storage metrics
+	WpObjectStorageOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "object_storage_operations_total",
+			Help:      "Total number of object storage operations",
+		},
+		[]string{"operation", "status", "storage_type"},
+	)
+	WpObjectStorageOperationLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "object_storage_operation_latency",
+			Help:      "Latency of object storage operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+		},
+		[]string{"operation", "storage_type"},
+	)
+	WpObjectStorageBytesTransferred = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "object_storage_bytes_transferred",
+			Help:      "Total bytes transferred to/from object storage",
+		},
+		[]string{"operation", "storage_type"},
 	)
 )
 
 func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 	WpRegisterOnce.Do(func() {
+		// --------- User related requests ---------
 		// for append
 		registerer.MustRegister(WpAppendOpRequestsGauge)
 		registerer.MustRegister(WpAppendOpEntriesGauge)
 		registerer.MustRegister(WpAppendBytes)
 		registerer.MustRegister(WpAppendReqLatency)
-
 		// for read
 		registerer.MustRegister(WpReadRequestsGauge)
 		registerer.MustRegister(WpReadEntriesGauge)
 		registerer.MustRegister(WpReadBytes)
 		registerer.MustRegister(WpReadReqLatency)
 
+		// --------- Server related intents ---------
 		// for fragment
 		registerer.MustRegister(WpFragmentBufferBytes)
 		registerer.MustRegister(WpFragmentLoadedGauge)
@@ -354,6 +632,51 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		// for system resources
 		registerer.MustRegister(WpDiskUsageBytes)
 		registerer.MustRegister(WpStorageOperationErrors)
+
+		// --------- New metrics ---------
+		// Client layer metrics
+		registerer.MustRegister(WpClientOperationsTotal)
+		registerer.MustRegister(WpClientOperationLatency)
+		registerer.MustRegister(WpClientActiveConnections)
+
+		// LogHandle metrics
+		registerer.MustRegister(WpLogHandleOperationsTotal)
+		registerer.MustRegister(WpLogHandleOperationLatency)
+
+		// LogReader/LogWriter metrics
+		registerer.MustRegister(WpLogReaderBytesRead)
+		registerer.MustRegister(WpLogReaderOperationLatency)
+		registerer.MustRegister(WpLogWriterBytesWritten)
+		registerer.MustRegister(WpLogWriterOperationLatency)
+
+		// SegmentHandle metrics
+		registerer.MustRegister(WpSegmentHandleOperationsTotal)
+		registerer.MustRegister(WpSegmentHandleOperationLatency)
+		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
+
+		// LogStore metrics
+		registerer.MustRegister(WpLogStoreOperationsTotal)
+		registerer.MustRegister(WpLogStoreOperationLatency)
+		registerer.MustRegister(WpLogStoreActiveSegmentProcessors)
+
+		// SegmentProcessor metrics
+		registerer.MustRegister(WpSegmentProcessorOperationsTotal)
+		registerer.MustRegister(WpSegmentProcessorOperationLatency)
+
+		// File metrics
+		registerer.MustRegister(WpFileOperationsTotal)
+		registerer.MustRegister(WpFileOperationLatency)
+		registerer.MustRegister(WpFileBytes)
+
+		// Fragment metrics
+		registerer.MustRegister(WpFragmentOperationsTotal)
+		registerer.MustRegister(WpFragmentOperationLatency)
+		registerer.MustRegister(WpFragmentCount)
+
+		// Object storage metrics
+		registerer.MustRegister(WpObjectStorageOperationsTotal)
+		registerer.MustRegister(WpObjectStorageOperationLatency)
+		registerer.MustRegister(WpObjectStorageBytesTransferred)
 	})
 }
 

@@ -3,10 +3,12 @@ package minio
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/pool"
 )
 
@@ -18,12 +20,14 @@ type ObjectReader interface {
 // ReadObjectFull reads all content from ObjectReader and returns a byte slice
 // It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
 func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+	start := time.Now()
 	// Initial buffer size - 1MB is a reasonable starting point
 	initialSize := initReadBufSize
 	buf := pool.GetByteBuffer(int(initialSize))
 
 	// Temporary read buffer
 	readBuf := make([]byte, 32*1024) // 32KB read block
+	bytesRead := int64(0)
 
 	for {
 		// Read a chunk of data
@@ -41,6 +45,7 @@ func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, e
 		// If data is read, append to result buffer
 		if n > 0 {
 			buf = append(buf, readBuf[:n]...)
+			bytesRead += int64(n)
 		}
 
 		// Handle EOF and errors
@@ -49,9 +54,17 @@ func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, e
 			break
 		} else if err != nil {
 			// Error occurred
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "error", "minio").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "minio").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, err
 		}
 	}
+
+	// Track metrics for successful read
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "success", "minio").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "minio").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues("read", "minio").Add(float64(bytesRead))
+
 	return buf, nil
 }
 
@@ -88,35 +101,80 @@ func NewMinioHandlerWithClient(ctx context.Context, minioCli *minio.Client) (Min
 }
 
 func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
-	return m.client.GetObject(ctx, bucketName, objectName, opts)
+	start := time.Now()
+	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object", "error", "minio").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object", "success", "minio").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+	return obj, nil
 }
 
 func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error) {
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "error", "minio").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "minio").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
 	info, err := obj.Stat()
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "error_stat", "minio").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "minio").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "success", "minio").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "minio").Observe(float64(time.Since(start).Milliseconds()))
 	return obj, info.Size, info.LastModified.UnixMilli(), err
 }
 
 func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
-	return m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
+	start := time.Now()
+	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_object", "error", "minio").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("put_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+		return info, err
+	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_object", "success", "minio").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues("write", "minio").Add(float64(info.Size))
+	return info, nil
 }
 
 func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error {
-	return m.client.RemoveObject(ctx, bucketName, objectName, opts)
+	start := time.Now()
+	err := m.client.RemoveObject(ctx, bucketName, objectName, opts)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("remove_object", "error", "minio").Inc()
+	} else {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("remove_object", "success", "minio").Inc()
+	}
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("remove_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+	return err
 }
 
 func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
-	return m.client.StatObject(ctx, bucketName, prefix, opts)
+	start := time.Now()
+	info, err := m.client.StatObject(ctx, bucketName, prefix, opts)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "error", "minio").Inc()
+	} else {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "success", "minio").Inc()
+	}
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "minio").Observe(float64(time.Since(start).Milliseconds()))
+	return info, err
 }
 
 func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	// We can't track completion metrics here as this returns a channel
+	// Instead, we'll increment the operation count for the method call
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("list_objects", "called", "minio").Inc()
+
 	opts.Recursive = recursive
 	opts.Prefix = prefix
 	return m.client.ListObjects(ctx, bucketName, opts)

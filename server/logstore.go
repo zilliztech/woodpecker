@@ -96,18 +96,30 @@ func (l *logStore) Register(ctx context.Context) error {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
+	segIdStr := fmt.Sprintf("%d", entry.SegmentId)
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, nil, err
 	}
 	if segmentProcessor.IsFenced() {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "segment_fenced").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced, reject add entry:%d", logId, entry.SegmentId, entry.EntryId))
 	}
 	entryId, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, nil, werr.ErrSegmentWriteException.WithCauseErr(err)
 	}
-	//log.Printf("LogStore addEntry call, log:%d, entry: %v", logId, entry)
+
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry").Observe(float64(time.Since(start).Milliseconds()))
 	return entryId, syncedCh, nil
 }
 
@@ -124,6 +136,10 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
 	segProcessors[segmentId] = s
 	l.segmentProcessors[logId] = segProcessors
+
+	// Update metrics for active segment processors
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
+
 	return s, nil
 }
 
@@ -140,67 +156,129 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segme
 
 func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
 	start := time.Now()
-	metrics.WpReadEntriesGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
-	metrics.WpReadRequestsGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
-	defer func() {
-		metrics.WpReadEntriesGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Dec()
-		metrics.WpReadRequestsGauge.WithLabelValues(fmt.Sprintf("%d", logId)).Dec()
-	}()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_entry", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_entry").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	entry, err := segmentProcessor.ReadEntry(ctx, entryId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_entry", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_entry").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	cost := time.Now().Sub(start)
-	// record success request latency
-	metrics.WpReadReqLatency.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(cost.Milliseconds()))
-	metrics.WpReadBytes.WithLabelValues(fmt.Sprintf("%d", logId)).Observe(float64(len(entry.Data)))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_entry", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_entry").Observe(float64(time.Since(start).Milliseconds()))
 	return entry, nil
 }
 
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
 		processor.SetFenced()
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "fence_segment", "success").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "fence_segment").Observe(float64(time.Since(start).Milliseconds()))
 		return nil
 	}
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "fence_segment", "segment_not_found").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "fence_segment").Observe(float64(time.Since(start).Milliseconds()))
 	return werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
 }
 
 func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-		return processor.IsFenced(), nil
+		isFenced := processor.IsFenced()
+		status := "not_fenced"
+		if isFenced {
+			status = "fenced"
+		}
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "is_segment_fenced", status).Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "is_segment_fenced").Observe(float64(time.Since(start).Milliseconds()))
+		return isFenced, nil
 	}
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "is_segment_fenced", "segment_not_found").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "is_segment_fenced").Observe(float64(time.Since(start).Milliseconds()))
 	return false, werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
 }
 
 func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_segment_lac", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_segment_lac").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, err
 	}
-	return segmentProcessor.GetSegmentLastAddConfirmed(ctx)
+	lac, err := segmentProcessor.GetSegmentLastAddConfirmed(ctx)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_segment_lac", "error").Inc()
+	} else {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_segment_lac", "success").Inc()
+	}
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_segment_lac").Observe(float64(time.Since(start).Milliseconds()))
+	return lac, err
 }
 
 // CompactSegment merge all files in a segment into bigger files
 func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact_segment", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact_segment").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	return segmentProcessor.Compact(ctx)
+	metadata, err := segmentProcessor.Compact(ctx)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact_segment", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact_segment").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact_segment", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact_segment").Observe(float64(time.Since(start).Milliseconds()))
+	return metadata, nil
 }
 
 // RecoverySegmentFromInProgress read logFiles to get meta info
 func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recovery_segment", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "recovery_segment").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	return segmentProcessor.Recover(ctx)
+	metadata, err := segmentProcessor.Recover(ctx)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recovery_segment", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "recovery_segment").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recovery_segment", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "recovery_segment").Observe(float64(time.Since(start).Milliseconds()))
+	return metadata, nil
 }
 
 // RecoverySegmentFromInRecovery read logFiles to get meta info
@@ -210,9 +288,22 @@ func (l *logStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int6
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segIdStr := fmt.Sprintf("%d", segmentId)
+
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
 	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean_segment", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean_segment").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
-	return segmentProcessor.Clean(ctx, flag)
+	err = segmentProcessor.Clean(ctx, flag)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean_segment", "error").Inc()
+	} else {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean_segment", "success").Inc()
+	}
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean_segment").Observe(float64(time.Since(start).Milliseconds()))
+	return err
 }
