@@ -33,7 +33,9 @@ type LogFile struct {
 	client            minioHandler.MinioHandler
 	segmentPrefixKey  string // The prefix key for the segment to which this LogFile belongs
 	bucket            string // The bucket name
-	id                int64  // LogFile Id in object storage
+	logId             int64
+	segmentId         int64
+	id                int64 // LogFile Id in object storage
 
 	// write buffer
 	buffer           atomic.Pointer[cache.SequentialBuffer] // Write buffer
@@ -50,11 +52,13 @@ type LogFile struct {
 }
 
 // NewLogFile is used to create a new LogFile, which is used to write data to object storage
-func NewLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.LogFile {
+func NewLogFile(logId, segId, logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.LogFile {
 	logger.Ctx(context.TODO()).Debug("new LogFile created", zap.Int64("logFileId", logFileId), zap.String("segmentPrefixKey", segmentPrefixKey))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
-	newBuffer := cache.NewSequentialBuffer(0, int64(syncPolicyConfig.MaxEntries))
+	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, int64(syncPolicyConfig.MaxEntries))
 	objFile := &LogFile{
+		logId:            logId,
+		segmentId:        segId,
 		id:               logFileId,
 		client:           objectCli,
 		segmentPrefixKey: segmentPrefixKey,
@@ -81,6 +85,9 @@ func (f *LogFile) run() {
 	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	f.lastSyncTimestamp.Store(time.Now().UnixMilli())
+	logIdStr := fmt.Sprintf("%d", f.logId)
+	segIdStr := fmt.Sprintf("%d", f.segmentId)
+	metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Inc()
 	for {
 		select {
 		case <-ticker.C:
@@ -97,6 +104,7 @@ func (f *LogFile) run() {
 			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 		case <-f.fileClose:
 			logger.Ctx(context.TODO()).Debug("close LogFile", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+			metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Dec()
 			return
 		}
 	}
@@ -108,6 +116,11 @@ func (f *LogFile) GetId() int64 {
 
 func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
+
 	ch := make(chan int64, 1)
 	// trigger sync by max buffer entries num
 	currentBuffer := f.buffer.Load()
@@ -124,6 +137,8 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 			// sync does not success
 			ch <- -1
 			close(ch)
+			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			return entryId, ch, err
 		}
 	}
@@ -137,6 +152,8 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 		ch <- -1
 		close(ch)
 		f.mu.Unlock()
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return id, ch, err
 	}
 	f.syncedChan[id] = ch
@@ -152,6 +169,10 @@ func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (
 			logger.Ctx(context.TODO()).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize), zap.Error(syncErr))
 		}
 	}
+
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	return id, ch, nil
 }
 
@@ -191,6 +212,10 @@ func (f *LogFile) Sync(ctx context.Context) error {
 		f.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	}()
 
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
+
 	currentBuffer := f.buffer.Load()
 
 	entryCount := len(currentBuffer.Values)
@@ -210,6 +235,8 @@ func (f *LogFile) Sync(ctx context.Context) error {
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
 	}
 	toFlushDataFirstEntryId := currentBuffer.FirstEntryId
@@ -228,7 +255,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 			part := partition
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
+			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
 			err = retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -301,7 +328,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			return err
 		}
 		restDataFirstEntryId := expectedNextEntryId
-		newBuffer := cache.NewSequentialBufferWithData(restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
+		newBuffer := cache.NewSequentialBufferWithData(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
 		f.buffer.Store(newBuffer)
 
 		// notify all waiting channels
@@ -338,7 +365,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			}
 		}
 		// new a empty buffer
-		newBuffer := cache.NewSequentialBuffer(restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries))
+		newBuffer := cache.NewSequentialBuffer(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries))
 		f.buffer.Store(newBuffer)
 		logger.Ctx(ctx).Debug("Sync to object storage partial success",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -364,6 +391,9 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			zap.Int("partitions", len(partitions)),
 			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	}
+
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -427,22 +457,24 @@ var _ storage.LogFile = (*ROLogFile)(nil)
 
 // ROLogFile is used to read data from object storage as a logical file
 type ROLogFile struct {
-	mu              sync.RWMutex
-	maxFragmentSize int64 // The maximum size of a fragment in object storage
+	mu sync.RWMutex
 
 	lastSync         atomic.Int64
 	client           minioHandler.MinioHandler
 	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
 	bucket           string // The bucket name
 
+	logId     int64
+	segmentId int64
 	id        int64             // LogFile Id in object storage
 	fragments []*FragmentObject // LogFile cached fragments in order
 }
 
 // NewROLogFile is used to read only LogFile
-func NewROLogFile(logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, fragmentMaxSize int64) storage.LogFile {
+func NewROLogFile(logId, segId, logFileId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.LogFile {
 	objFile := &ROLogFile{
-		maxFragmentSize:  fragmentMaxSize,
+		logId:            logId,
+		segmentId:        segId,
 		id:               logFileId,
 		client:           objectCli,
 		segmentPrefixKey: segmentPrefixKey,
@@ -634,6 +666,9 @@ func (f *ROLogFile) Close() error {
 func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
 	var fetchedLastFragment *FragmentObject = nil
 
 	fragId := uint64(1)
@@ -664,7 +699,7 @@ func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 		}
 
 		if exists {
-			fragment := NewFragmentObject(f.client, f.bucket, fragId, fragKey, nil, 0, false, true, false)
+			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, fragKey, nil, 0, false, true, false)
 			fetchedLastFragment = fragment
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true
@@ -676,13 +711,18 @@ func (f *ROLogFile) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 		}
 	}
 	logger.Ctx(context.Background()).Debug("prefetch fragment infos", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int("fragments", len(f.fragments)), zap.Uint64("lastFragId", fragId-1))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "prefetch_fragment_infos", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "prefetch_fragment_infos", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return existsNewFragment, fetchedLastFragment, nil
 }
 
 func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	start := time.Now()
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
+
 	// TODO should be config
 	// file max size, default 128MB
 	fileMaxSize := int64(128_000_000)
@@ -733,9 +773,9 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 		totalMergeSize += pendingMergeSize
 		pendingMergeSize = 0
 	}
-	cost := time.Now().Sub(start)
-	metrics.WpCompactReqLatency.WithLabelValues(fmt.Sprintf("%d", f.id)).Observe(float64(cost.Milliseconds()))
-	metrics.WpCompactBytes.WithLabelValues(fmt.Sprintf("%d", f.id)).Observe(float64(totalMergeSize))
+
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "merge", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "merge", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
@@ -743,6 +783,9 @@ func (f *ROLogFile) Merge(ctx context.Context) ([]storage.Fragment, []int32, []i
 func (f *ROLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
 	if len(f.fragments) == 0 {
 		return 0, nil, nil
 	}
@@ -781,12 +824,18 @@ func (f *ROLogFile) Load(ctx context.Context) (int64, storage.Fragment, error) {
 		zap.Int64("lastFragId", fragId),
 		zap.Int64("lastEntryId", lastEntryId),
 	)
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "load", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "load", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return int64(totalSize), lastFragment, nil
 }
 
 func (f *ROLogFile) DeleteFragments(ctx context.Context, flag int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
 
 	logger.Ctx(ctx).Info("Starting to delete fragments",
 		zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -853,6 +902,15 @@ func (f *ROLogFile) DeleteFragments(ctx context.Context, flag int) error {
 	// Clean up internal state
 	f.fragments = make([]*FragmentObject, 0)
 
+	// Update metrics
+	if len(deleteErrors) > 0 {
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "delete_fragments", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+	} else {
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "delete_fragments", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "delete_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	}
+
 	logger.Ctx(ctx).Info("Completed fragment deletion",
 		zap.String("segmentPrefixKey", f.segmentPrefixKey),
 		zap.Int64("logFileId", f.id),
@@ -892,6 +950,9 @@ func (o *logFileReader) Close() error {
 }
 
 func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", o.logfile.logId)
+	segmentId := fmt.Sprintf("%d", o.logfile.segmentId)
 	if o.currentFragment == nil {
 		return nil, errors.New("no readable Fragment")
 	}
@@ -904,10 +965,15 @@ func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
 		Values:  entryValue,
 	}
 	o.pendingReadEntryId++
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "read_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return entry, nil
 }
 
 func (o *logFileReader) HasNext() (bool, error) {
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", o.logfile.logId)
+	segmentId := fmt.Sprintf("%d", o.logfile.segmentId)
 	if o.pendingReadEntryId >= int64(o.opt.EndSequenceNum) && o.opt.EndSequenceNum > 0 {
 		// reach the end of range
 		return false, nil
@@ -927,6 +993,8 @@ func (o *logFileReader) HasNext() (bool, error) {
 	}
 	//
 	o.currentFragment = f
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "has_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "has_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return true, nil
 }
 

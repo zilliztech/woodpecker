@@ -8,6 +8,8 @@ import (
 //
 //go:generate mockery --dir=./server/storage --name=Fragment --structname=Fragment --output=mocks/mocks_server/mocks_storage --filename=mock_fragment.go --with-expecter=true  --outpkg=mocks_storage
 type Fragment interface {
+	GetLogId() int64
+	GetSegmentId() int64
 	GetFragmentId() int64
 	GetFragmentKey() string
 	Flush(ctx context.Context) error

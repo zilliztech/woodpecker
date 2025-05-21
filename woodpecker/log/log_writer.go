@@ -99,7 +99,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	if !l.sessionValid.Load() {
 		logger.Ctx(ctx).Warn("Writer lock session has expired",
 			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -121,21 +121,16 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		callback(-1, -1, err)
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return <-ch
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
 			Err:          err,
 		}
-	}
-
-	// Track bytes written
-	if len(bytes) > 0 {
-		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
 	}
 
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
@@ -143,9 +138,10 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 
 	// Update metrics based on result
 	if result.Err == nil {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 
 	return result
@@ -160,7 +156,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 
 	// Check if session is valid
 	if !l.sessionValid.Load() {
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
@@ -169,12 +165,25 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 		return ch
 	}
 
+	bytes, err := MarshalMessage(msg)
+	if err != nil {
+		logger.Ctx(ctx).Warn("encode msg failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
+		ch <- &WriteResult{
+			LogMessageId: nil,
+			Err:          err,
+		}
+		close(ch)
+		return ch
+	}
+
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback exec", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		if err == nil {
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_success").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "success").Observe(float64(time.Since(start).Milliseconds()))
 		} else {
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
@@ -188,21 +197,8 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
 		callback(-1, -1, err)
 		return ch
-	}
-	bytes, err := MarshalMessage(msg)
-	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
-		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async_error").Observe(float64(time.Since(start).Milliseconds()))
-		callback(-1, -1, err)
-		return ch
-	}
-
-	// Track bytes written
-	if len(bytes) > 0 {
-		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
 	}
 
 	writableSegmentHandle.AppendAsync(ctx, bytes, callback)
@@ -265,7 +261,7 @@ func (l *logWriterImpl) runAuditor() {
 			}
 
 			// Track auditor latency
-			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "auditor_run").Observe(float64(time.Since(startAudit).Milliseconds()))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "auditor_run", "success").Observe(float64(time.Since(startAudit).Milliseconds()))
 		case <-l.writerClose:
 			logger.Ctx(context.TODO()).Debug("log writer stop", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			return
@@ -383,6 +379,7 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 			zap.String("logName", logName),
 			zap.Int64("logId", logId),
 			zap.Int64("segmentId", segmentId))
+		start := time.Now()
 		err := l.cleanupManager.CleanupSegment(ctx, logName, logId, segmentId)
 		if err != nil {
 			logger.Ctx(ctx).Error("Failed to start segment cleanup",
@@ -390,11 +387,13 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId),
 				zap.Error(err))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "cleanup_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		} else {
 			logger.Ctx(ctx).Info("Finish segment cleanup",
 				zap.String("logName", logName),
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId))
+			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "cleanup_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		}
 	}
 }
@@ -404,19 +403,23 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 
 	l.writerClose <- struct{}{}
 	close(l.writerClose)
+	status := "success"
 	closeErr := l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
 	if closeErr != nil {
 		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
+		status = "error"
 		if werr.ErrSegmentNotFound.Is(closeErr) {
 			closeErr = nil
+			status = "success"
 		}
 	}
 	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
 	if releaseLockErr != nil {
 		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+		status = "error"
 	}
 
-	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
 	return werr.Combine(closeErr, releaseLockErr)
 }
 

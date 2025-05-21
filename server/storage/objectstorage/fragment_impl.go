@@ -35,6 +35,8 @@ type FragmentObject struct {
 
 	// info
 	bucket       string
+	logId        int64
+	segmentId    int64
 	fragmentId   uint64
 	fragmentKey  string
 	firstEntryId int64 // First entryId in the fragment
@@ -54,16 +56,18 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	rawBufSize := int64(cap(data) + cap(index))
-	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
+	//metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
+	//metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
 		client:       client,
 		bucket:       bucket,
+		logId:        logId,
+		segmentId:    segmentId,
 		fragmentId:   fragmentId,
 		fragmentKey:  fragmentKey,
 		entriesData:  data,
@@ -77,6 +81,14 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 		dataUploaded: dataUploaded,
 		infoFetched:  infoFetched,
 	}
+}
+
+func (f *FragmentObject) GetLogId() int64 {
+	return f.logId
+}
+
+func (f *FragmentObject) GetSegmentId() int64 {
+	return f.segmentId
 }
 
 func (f *FragmentObject) GetFragmentId() int64 {
@@ -101,6 +113,9 @@ func (f *FragmentObject) GetRawBufSize() int64 {
 func (f *FragmentObject) Flush(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
 	if !f.dataLoaded {
 		return werr.ErrFragmentEmpty
 	}
@@ -109,7 +124,6 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return werr.ErrFragmentEmpty
 	}
 
-	start := time.Now()
 	fullData, err := serializeFragment(f)
 	if err != nil {
 		return err
@@ -119,8 +133,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
 	cost := time.Now().Sub(start)
-	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
-	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
+	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
+	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
+	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(len(fullData)))
 	f.dataUploaded = true
 
 	// Put back to pool
@@ -132,6 +147,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 func (f *FragmentObject) Load(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
 	if f.dataLoaded {
 		// already loaded, no need to load again
 		return nil
@@ -172,8 +190,9 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.infoFetched = true
 
 	// update metrics
-	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(f.entriesData) + len(f.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Inc()
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Add(float64(f.GetSize()))
 
 	// update cache
 	return cache.AddCacheFragment(ctx, f)
@@ -285,8 +304,6 @@ func (f *FragmentObject) Release() error {
 		// empty, no need to release again
 		return nil
 	}
-	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Sub(float64(len(f.entriesData) + len(f.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Dec()
 
 	// Return buffers to the pool
 	if f.entriesData != nil {

@@ -34,6 +34,8 @@ const (
 // FragmentFileWriter manages fragment data write
 type FragmentFileWriter struct {
 	mu         sync.RWMutex
+	logId      int64
+	segmentId  int64
 	fragmentId int64 // Unique identifier for the fragment
 	filePath   string
 	fileSize   int64
@@ -53,8 +55,10 @@ type FragmentFileWriter struct {
 }
 
 // NewFragmentFileWriter creates a new FragmentFile, which can write only
-func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, firstEntryID int64) (*FragmentFileWriter, error) {
+func NewFragmentFileWriter(filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64, firstEntryID int64) (*FragmentFileWriter, error) {
 	fw := &FragmentFileWriter{
+		logId:      logId,
+		segmentId:  segmentId,
 		fragmentId: fragmentId,
 		filePath:   filePath,
 		fileSize:   fileSize,
@@ -69,6 +73,10 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 		infoFetched: true,
 		closed:      false,
 	}
+
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segmentIdStr := fmt.Sprintf("%d", segmentId)
 
 	// 创建或打开文件
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
@@ -89,8 +97,6 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
 	}
-	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(fileSize))
-	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
 	// 写入footer
 	if err := fw.writeFooter(); err != nil {
@@ -104,6 +110,11 @@ func NewFragmentFileWriter(filePath string, fileSize int64, fragmentId int64, fi
 	}
 
 	logger.Ctx(context.Background()).Debug("FragmentFile created", zap.String("filePath", filePath), zap.Int64("fragmentId", fragmentId), zap.String("fragmentInst", fmt.Sprintf("%p", fw)))
+
+	// update metrics
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Add(float64(fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logIdStr, segmentIdStr).Observe(float64(time.Since(start).Milliseconds()))
 	return fw, nil
 }
 
@@ -116,6 +127,14 @@ func (fw *FragmentFileWriter) writeHeader() error {
 	binary.LittleEndian.PutUint32(fw.mappedFile[8:12], 1)
 
 	return nil
+}
+
+func (fw *FragmentFileWriter) GetLogId() int64 {
+	return fw.logId
+}
+
+func (fw *FragmentFileWriter) GetSegmentId() int64 {
+	return fw.segmentId
 }
 
 // GetFragmentId returns the fragment ID.
@@ -132,6 +151,9 @@ func (fw *FragmentFileWriter) GetFragmentKey() string {
 func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", fw.logId)
+	segmentId := fmt.Sprintf("%d", fw.segmentId)
 
 	if fw.closed {
 		return errors.New("fragment file is closed")
@@ -152,6 +174,8 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 		return errors.Wrap(err, "failed to sync fragment file")
 	}
 
+	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segmentId).Inc()
+	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -332,8 +356,6 @@ func (fw *FragmentFileWriter) Release() error {
 			return errors.Wrap(err, "failed to unmap fragment file")
 		}
 		fw.mappedFile = nil
-		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(fw.GetSize()))
-		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
 	}
 
 	// close the file
@@ -471,6 +493,8 @@ var _ storage.Fragment = (*FragmentFileReader)(nil)
 // FragmentFileReader manages fragment data read
 type FragmentFileReader struct {
 	mu         sync.RWMutex
+	logId      int64
+	segmentId  int64
 	fragmentId int64 // Unique identifier for the fragment
 	filePath   string
 	fileSize   int64
@@ -488,10 +512,12 @@ type FragmentFileReader struct {
 }
 
 // NewFragmentFileReader creates a new FragmentFile, which can read only
-func NewFragmentFileReader(filePath string, fileSize int64, fragmentId int64) (*FragmentFileReader, error) {
+func NewFragmentFileReader(filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64) (*FragmentFileReader, error) {
 	ff := &FragmentFileReader{
 		filePath:   filePath,
 		fileSize:   fileSize,
+		logId:      logId,
+		segmentId:  segmentId,
 		fragmentId: fragmentId,
 
 		// Variables below would be lazy loaded if needed
@@ -505,6 +531,14 @@ func NewFragmentFileReader(filePath string, fileSize int64, fragmentId int64) (*
 		closed:      false,
 	}
 	return ff, nil
+}
+
+func (fr *FragmentFileReader) GetLogId() int64 {
+	return fr.logId
+}
+
+func (fr *FragmentFileReader) GetSegmentId() int64 {
+	return fr.segmentId
 }
 
 // GetFragmentId returns the fragment ID.
@@ -526,6 +560,9 @@ func (fr *FragmentFileReader) Flush(ctx context.Context) error {
 func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", fr.logId)
+	segmentId := fmt.Sprintf("%d", fr.segmentId)
 
 	if fr.closed {
 		return errors.New("fragment file is closed")
@@ -543,10 +580,6 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 		file.Close()
 		return errors.Wrapf(err, "failed to map fragment file %s", fr.filePath)
 	}
-
-	// update metrics
-	metrics.WpFragmentBufferBytes.WithLabelValues("0").Add(float64(fr.fileSize))
-	metrics.WpFragmentLoadedGauge.WithLabelValues("0").Inc()
 
 	// Read file header
 	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
@@ -577,6 +610,11 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	if err != nil {
 		logger.Ctx(ctx).Warn("add fragment to cache failed ", zap.String("fragmentPath", fr.filePath), zap.Int64("fragmentId", fr.fragmentId), zap.Error(err))
 	}
+
+	// update metrics
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segmentId).Add(float64(fr.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segmentId).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -1167,8 +1205,6 @@ func (fr *FragmentFileReader) Release() error {
 			return errors.Wrap(err, "failed to unmap fragment file")
 		}
 		fr.mappedFile = nil
-		metrics.WpFragmentBufferBytes.WithLabelValues("0").Sub(float64(fr.GetSize()))
-		metrics.WpFragmentLoadedGauge.WithLabelValues("0").Dec()
 	}
 
 	// close the file

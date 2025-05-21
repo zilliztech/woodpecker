@@ -114,8 +114,8 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 					op.completed.Store(true)
 					op.handle.SendAppendSuccessCallbacks(op.entryId)
 					cost := time.Now().Sub(startRequestTime)
-					metrics.WpAppendReqLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
-					metrics.WpAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
+					metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
+					metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
 				}
 				return
 			}

@@ -17,6 +17,8 @@ func setupMockFragment(t *testing.T, id int64, key string, size int64, lastEntry
 	fragment := mocks_storage.NewFragment(t)
 
 	// Setup mock methods - using On() instead of EXPECT() to match mockery's pattern
+	fragment.On("GetLogId").Return(int64(1)).Maybe()
+	fragment.On("GetSegmentId").Return(int64(0)).Maybe()
 	fragment.On("GetFragmentId").Return(id).Maybe()
 	fragment.On("GetFragmentKey").Return(key).Maybe()
 	fragment.On("GetSize").Return(size).Maybe()

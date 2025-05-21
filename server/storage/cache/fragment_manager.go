@@ -178,10 +178,17 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 	// Release all fragments to prevent memory leaks
 	for key, item := range m.cache {
 		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
+
+		// Reset metrics for this fragment before releasing
+		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+
 		m.usedMemory -= fragmentSize
 		m.dataMemory -= rawFragmentBufSize
 		item.fragment.Release()
-		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
 			zap.String("key", key),
 			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -226,7 +233,14 @@ func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
 	fragmentSize, rawFragmentBufSize := calculateSize(fragment)
 	m.usedMemory += fragmentSize
 	m.dataMemory += rawFragmentBufSize
-	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Add(float64(fragmentSize))
+
+	// Update metrics for this fragment
+	logId := fmt.Sprintf("%d", fragment.GetLogId())
+	segmentId := fmt.Sprintf("%d", fragment.GetSegmentId())
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Inc()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Add(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Add(float64(rawFragmentBufSize))
+
 	logger.Ctx(req.ctx).Debug("add fragment finish", zap.String("key", key),
 		zap.String("fragInst", fmt.Sprintf("%p", fragment)),
 		zap.Int64("fragmentSize", fragmentSize),
@@ -257,13 +271,19 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 	// Record information we need to save
 	fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
 
+	// Update metrics before removing
+	logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+	segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+
 	// Perform deletion
 	delete(m.cache, key)
 	m.order.Remove(item.element)
 	m.usedMemory -= fragmentSize
 	m.dataMemory -= rawFragmentBufSize
 	item.fragment.Release()
-	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 	logger.Ctx(req.ctx).Debug("remove fragment finish",
 		zap.String("key", key),
 		zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -319,13 +339,19 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 			continue
 		}
 
+		// Update metrics before evicting
+		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
+		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+
 		// Perform eviction
 		delete(m.cache, keyToEvict)
-		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
 		m.usedMemory -= fragmentSize
 		m.dataMemory -= rawFragmentBufSize
 		item.fragment.Release()
-		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 		m.order.Remove(evictElement)
 		logger.Ctx(req.ctx).Debug("evict fragment automatically",
 			zap.String("key", keyToEvict),

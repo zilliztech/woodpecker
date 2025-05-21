@@ -370,6 +370,51 @@ func (_c *Fragment_GetLastModified_Call) RunAndReturn(run func() int64) *Fragmen
 	return _c
 }
 
+// GetLogId provides a mock function with no fields
+func (_m *Fragment) GetLogId() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetLogId")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// Fragment_GetLogId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLogId'
+type Fragment_GetLogId_Call struct {
+	*mock.Call
+}
+
+// GetLogId is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetLogId() *Fragment_GetLogId_Call {
+	return &Fragment_GetLogId_Call{Call: _e.mock.On("GetLogId")}
+}
+
+func (_c *Fragment_GetLogId_Call) Run(run func()) *Fragment_GetLogId_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Fragment_GetLogId_Call) Return(_a0 int64) *Fragment_GetLogId_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Fragment_GetLogId_Call) RunAndReturn(run func() int64) *Fragment_GetLogId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetRawBufSize provides a mock function with no fields
 func (_m *Fragment) GetRawBufSize() int64 {
 	ret := _m.Called()
@@ -411,6 +456,51 @@ func (_c *Fragment_GetRawBufSize_Call) Return(_a0 int64) *Fragment_GetRawBufSize
 }
 
 func (_c *Fragment_GetRawBufSize_Call) RunAndReturn(run func() int64) *Fragment_GetRawBufSize_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetSegmentId provides a mock function with no fields
+func (_m *Fragment) GetSegmentId() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetSegmentId")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// Fragment_GetSegmentId_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetSegmentId'
+type Fragment_GetSegmentId_Call struct {
+	*mock.Call
+}
+
+// GetSegmentId is a helper method to define mock.On call
+func (_e *Fragment_Expecter) GetSegmentId() *Fragment_GetSegmentId_Call {
+	return &Fragment_GetSegmentId_Call{Call: _e.mock.On("GetSegmentId")}
+}
+
+func (_c *Fragment_GetSegmentId_Call) Run(run func()) *Fragment_GetSegmentId_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Fragment_GetSegmentId_Call) Return(_a0 int64) *Fragment_GetSegmentId_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Fragment_GetSegmentId_Call) RunAndReturn(run func() int64) *Fragment_GetSegmentId_Call {
 	_c.Call.Return(run)
 	return _c
 }

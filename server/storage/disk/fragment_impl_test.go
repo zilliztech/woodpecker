@@ -23,7 +23,7 @@ func TestNewFragmentFileWriter(t *testing.T) {
 	filePath := filepath.Join(tmpDir, "test.frag")
 
 	// Create new FragmentFile
-	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
+	fw, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, fw)
 	assert.Equal(t, int64(1), fw.GetFragmentId())
@@ -38,7 +38,7 @@ func TestNewFragmentFileWriter(t *testing.T) {
 	assert.Equal(t, int64(1024*1024), info.Size())
 
 	// Cannot create a writer for an existing fragmentFile
-	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
+	fw2, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, 100) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.Error(t, err)
 	assert.Nil(t, fw2)
 }
@@ -50,7 +50,7 @@ func TestFragmentFile_WriteAndRead(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -76,7 +76,7 @@ func TestFragmentFile_MultipleEntries(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -140,7 +140,7 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -159,7 +159,7 @@ func TestFragmentFile_LoadAndReload(t *testing.T) {
 	ff.Close()
 
 	// Reopen file
-	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1) // firstEntryID will be ignored, loaded from file
+	fr, err := NewFragmentFileReader(filePath, 1024*1024, 1, 0, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
 	assert.NotNil(t, fr)
 
@@ -189,7 +189,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, startEntryID) // 128MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 128*1024*1024, 1, 0, 1, startEntryID) // 128MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -211,7 +211,7 @@ func TestFragmentFileLargeWriteAndRead(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Reopen file
-	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1) // firstEntryID will be ignored, loaded from file
+	ff2, err := NewFragmentFileReader(filePath, 128*1024*1024, 1, 0, 1) // firstEntryID will be ignored, loaded from file
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -244,7 +244,7 @@ func TestFragmentFile_CRCValidation(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -277,7 +277,7 @@ func TestFragmentFile_OutOfSpace(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -300,7 +300,7 @@ func TestFragmentFile_InvalidEntryId(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -323,7 +323,7 @@ func TestFragmentFile_Release(t *testing.T) {
 
 	// Create new FragmentFile
 	startEntryID := int64(100)
-	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
+	ff, err := NewFragmentFileWriter(filePath, 1024*1024, 1, 0, 1, startEntryID) // 1MB file, fragmentId=1, firstEntryID=100
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -349,7 +349,7 @@ func TestFragmentFile_ConcurrentReadWrite(t *testing.T) {
 	// Create new FragmentFile
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
-	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -481,12 +481,12 @@ func TestFragmentFile_ConcurrentReadWriteDifferentInstances(t *testing.T) {
 	// Create FragmentFile for writing
 	startEntryID := int64(100)
 	fileSize := int64(10 * 1024 * 1024) // 10MB
-	writerFF, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	writerFF, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, writerFF)
 
 	// Create FragmentFile for reading (different instance of the same file)
-	readerFF, err := NewFragmentFileReader(filePath, fileSize, 1)
+	readerFF, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, readerFF)
 
@@ -609,7 +609,7 @@ func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
 	// Create new FragmentFile
 	startEntryID := int64(1000)
 	fileSize := int64(1 * 1024 * 1024) // 1MB
-	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
@@ -670,7 +670,7 @@ func TestFragmentFile_WriteAndReadMultipleEntries(t *testing.T) {
 	assert.NoError(t, err, "Failed to release resources")
 
 	// Reopen file
-	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -707,12 +707,12 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	// Create new FragmentFile
 	startEntryID := int64(500)
 	fileSize := int64(1 * 1024 * 1024) // 1MB
-	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+	ff, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff)
 
 	// Open read file
-	ff2, err := NewFragmentFileReader(filePath, fileSize, 1)
+	ff2, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 	assert.NoError(t, err)
 	assert.NotNil(t, ff2)
 
@@ -776,7 +776,7 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 	assert.NoError(t, err, "Failed to release resources")
 
 	// Open file in read-only mode
-	roFF, err := NewFragmentFileReader(filePath, fileSize, 1)
+	roFF, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 	assert.NoError(t, err, "Failed to create read-only file")
 	assert.NotNil(t, roFF)
 
@@ -820,7 +820,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 	// Test case 1: File does not exist yet
 	t.Run("NonExistentFile", func(t *testing.T) {
 		nonExistentPath := filepath.Join(tmpDir, "non_existent.frag")
-		fr, err := NewFragmentFileReader(nonExistentPath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(nonExistentPath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for non-existent file should succeed")
 
 		// Try to load the file - should fail with file not found error
@@ -836,7 +836,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 		assert.NoError(t, err, "Failed to create empty file")
 		emptyFile.Close()
 
-		fr, err := NewFragmentFileReader(emptyFilePath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(emptyFilePath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for empty file should succeed")
 
 		// Try to load the file - should fail during validation
@@ -863,7 +863,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 		assert.NoError(t, err, "Failed to truncate file")
 		file.Close()
 
-		fr, err := NewFragmentFileReader(invalidMagicPath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(invalidMagicPath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader should succeed")
 
 		// Try to load the file - should fail during magic string validation
@@ -895,7 +895,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 		assert.NoError(t, err, "Failed to truncate file")
 		file.Close()
 
-		fr, err := NewFragmentFileReader(partialFilePath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(partialFilePath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader should succeed")
 
 		// Try to load - should fail during footer reading
@@ -909,7 +909,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 		smallFilePath := filepath.Join(tmpDir, "small_file.frag")
 
 		// Write a properly initialized fragment file
-		fw, err := NewFragmentFileWriter(smallFilePath, 1024*1024, 1, 100)
+		fw, err := NewFragmentFileWriter(smallFilePath, 1024*1024, 1, 0, 1, 100)
 		assert.NoError(t, err, "Failed to create fragment writer")
 
 		// Write some data and flush
@@ -930,7 +930,7 @@ func TestFragmentFileReader_InvalidFile(t *testing.T) {
 		file.Close()
 
 		// Try to read with a reader expecting the original size
-		fr, err := NewFragmentFileReader(smallFilePath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(smallFilePath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader should succeed")
 
 		// Load should fail
@@ -952,7 +952,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		nonExistentPath := filepath.Join(tmpDir, "non_existent.frag")
 
 		// Create reader for non-existent file
-		fr, err := NewFragmentFileReader(nonExistentPath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(nonExistentPath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for non-existent file should succeed")
 
 		// Check if file is readable - should return false
@@ -968,7 +968,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		emptyFile.Close()
 
 		// Create reader for empty file
-		fr, err := NewFragmentFileReader(emptyFilePath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(emptyFilePath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for empty file should succeed")
 
 		// Check if file is readable - should return false
@@ -1000,7 +1000,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		file.Close()
 
 		// Create reader for header-only file
-		fr, err := NewFragmentFileReader(headerOnlyPath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(headerOnlyPath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for header-only file should succeed")
 
 		// Check if file is readable - should return false because no footer
@@ -1013,7 +1013,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		completePath := filepath.Join(tmpDir, "complete.frag")
 
 		// Create a complete fragment file
-		fw, err := NewFragmentFileWriter(completePath, 1024*1024, 1, 100)
+		fw, err := NewFragmentFileWriter(completePath, 1024*1024, 1, 0, 1, 100)
 		assert.NoError(t, err, "Failed to create fragment writer")
 
 		// Write some data
@@ -1029,7 +1029,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Failed to release writer resources")
 
 		// Create reader for complete file
-		fr, err := NewFragmentFileReader(completePath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(completePath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for complete file should succeed")
 
 		// Check if file is readable - should return true
@@ -1042,7 +1042,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		mismatchPath := filepath.Join(tmpDir, "size_mismatch.frag")
 
 		// Create a complete fragment file with 1MB size
-		fw, err := NewFragmentFileWriter(mismatchPath, 1024*1024, 1, 100)
+		fw, err := NewFragmentFileWriter(mismatchPath, 1024*1024, 1, 0, 1, 100)
 		assert.NoError(t, err, "Failed to create fragment writer")
 
 		// Write some data
@@ -1058,7 +1058,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Failed to release writer resources")
 
 		// Create reader with incorrect size expectation (2MB instead of 1MB)
-		fr, err := NewFragmentFileReader(mismatchPath, 2*1024*1024, 1)
+		fr, err := NewFragmentFileReader(mismatchPath, 2*1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader with size mismatch should succeed")
 
 		// Check if file is readable - should return false due to size mismatch
@@ -1081,7 +1081,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		file.Close()
 
 		// Create reader for corrupted file
-		fr, err := NewFragmentFileReader(corruptPath, 1024*1024, 1)
+		fr, err := NewFragmentFileReader(corruptPath, 1024*1024, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader for corrupted file should succeed")
 
 		// Check if file is readable - should return false due to invalid content
@@ -1113,7 +1113,7 @@ func TestFragmentFileReader_IsMMapReadable_ConcurrentAccess(t *testing.T) {
 			defer close(writeFinished)
 
 			// Create fragment file
-			fw, err := NewFragmentFileWriter(filePath, fileSize, 1, 100)
+			fw, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, 100)
 			if err != nil {
 				t.Logf("Writer creation failed: %v", err)
 				return
@@ -1159,7 +1159,7 @@ func TestFragmentFileReader_IsMMapReadable_ConcurrentAccess(t *testing.T) {
 		for i := 0; i < numCheckers; i++ {
 			go func(checkerID int) {
 				// Create reader for the file
-				fr, err := NewFragmentFileReader(filePath, fileSize, 1)
+				fr, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 				if err != nil {
 					t.Logf("Checker %d: Reader creation failed: %v", checkerID, err)
 					checkResults <- false
@@ -1202,7 +1202,7 @@ func TestFragmentFileReader_IsMMapReadable_ConcurrentAccess(t *testing.T) {
 
 		// Final verification
 		// The file should be readable after writing is complete
-		fr, err := NewFragmentFileReader(filePath, fileSize, 1)
+		fr, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader after write should succeed")
 		isReadable := fr.isMMapReadable(context.Background())
 		assert.True(t, isReadable, "File should be readable after complete writing")
@@ -1239,7 +1239,7 @@ func TestFragmentFileReader_ReadersWaitingForWriter(t *testing.T) {
 	// Start reader first, which will wait for file to become available
 	go func() {
 		// Create reader instance
-		fr, err := NewFragmentFileReader(filePath, fileSize, 1)
+		fr, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 		if err != nil {
 			t.Logf("Reader creation failed: %v", err)
 			close(readerReady)
@@ -1341,7 +1341,7 @@ func TestFragmentFileReader_ReadersWaitingForWriter(t *testing.T) {
 		defer close(writerFinished)
 
 		// Create fragment file for writing
-		fw, err := NewFragmentFileWriter(filePath, fileSize, 1, startEntryID)
+		fw, err := NewFragmentFileWriter(filePath, fileSize, 1, 0, 1, startEntryID)
 		if err != nil {
 			t.Logf("Writer: Creation failed: %v", err)
 			return

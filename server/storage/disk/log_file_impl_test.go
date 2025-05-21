@@ -36,7 +36,7 @@ func getTempDir(t *testing.T) string {
 // TestNewDiskLogFile tests the NewDiskLogFile function.
 func TestNewDiskLogFile(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, filepath.Join(dir, "1"), logFile.logFileDir)
@@ -51,7 +51,7 @@ func TestNewDiskLogFile(t *testing.T) {
 // TestDiskLogFileWithOptions tests creating a DiskLogFile with custom options.
 func TestDiskLogFileWithOptions(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir,
+	logFile, err := NewDiskLogFile(1, 0, 1, dir,
 		WithWriteFragmentSize(1024*1024), // 1MB
 		WithWriteMaxEntryPerFile(1000),   // 1000 entries
 	)
@@ -69,7 +69,7 @@ func TestDiskLogFileWithOptions(t *testing.T) {
 // TestAppend tests the Append function.
 func TestAppend(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append data
@@ -92,7 +92,7 @@ func TestAppend(t *testing.T) {
 // TestAppendAsync tests the AppendAsync function.
 func TestAppendAsync(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Test with auto-assigned ID (0 means auto-assign, will use internal incrementing ID)
@@ -121,7 +121,7 @@ func TestAppendAsync(t *testing.T) {
 // TestMultipleEntriesAppend tests appending multiple entries.
 func TestMultipleEntriesAppend(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append multiple entries
@@ -144,7 +144,7 @@ func TestMultipleEntriesAppend(t *testing.T) {
 // TestAppendAsyncMultipleEntries tests appending multiple entries asynchronously.
 func TestAppendAsyncMultipleEntries(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append entries with specific IDs
@@ -183,7 +183,7 @@ func TestAppendAsyncMultipleEntries(t *testing.T) {
 // TestOutOfOrderAppend tests appending entries out of order.
 func TestOutOfOrderAppend(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Use a larger starting ID to avoid conflicts with auto-assigned IDs
@@ -221,7 +221,7 @@ func TestOutOfOrderAppend(t *testing.T) {
 	}
 
 	// Create reader to verify data
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -269,7 +269,7 @@ func TestOutOfOrderAppend(t *testing.T) {
 // TestDelayedAppend tests handling of delayed append requests.
 func TestDelayedAppend(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Starting ID to use
@@ -330,7 +330,7 @@ func TestDelayedAppend(t *testing.T) {
 	assert.Equal(t, startID+2, lastEntryID, "Last entry ID should match the highest ID")
 
 	// Create reader to verify data
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -378,7 +378,7 @@ func TestDelayedAppend(t *testing.T) {
 // TestOutOfBoundsAppend tests handling of out-of-bounds append requests.
 func TestOutOfBoundsAppend(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	{
 		// First write 100 entries
@@ -472,7 +472,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	assert.NoError(t, syncErr)
 
 	// Create reader to verify data
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -520,7 +520,7 @@ func TestOutOfBoundsAppend(t *testing.T) {
 // TestMixedAppendScenarios tests various mixed scenarios for append requests.
 func TestMixedAppendScenarios(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	{
@@ -606,7 +606,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create reader to verify data
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -654,7 +654,7 @@ func TestMixedAppendScenarios(t *testing.T) {
 // TestSync tests the Sync function.
 func TestSync(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append multiple entries
@@ -703,7 +703,7 @@ func TestFragmentRotation(t *testing.T) {
 	logger.InitLogger(cfg)
 
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir, WithWriteMaxEntryPerFile(10))
+	logFile, err := NewDiskLogFile(1, 0, 1, dir, WithWriteMaxEntryPerFile(10))
 	assert.NoError(t, err)
 	assert.NotNil(t, logFile)
 
@@ -736,7 +736,7 @@ func TestFragmentRotation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Confirm that 10 fragments were created through rotation
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	_, _, err = roLogFile.fetchROFragments()
@@ -796,7 +796,7 @@ func TestFragmentRotation(t *testing.T) {
 // TestNewReader tests creating and using a reader to read ranges
 func TestNewReader(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append entries with known data
@@ -826,7 +826,7 @@ func TestNewReader(t *testing.T) {
 
 	// Reader for middle 80 entries
 	{
-		roLogFile, err := NewRODiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -867,7 +867,7 @@ func TestNewReader(t *testing.T) {
 
 	// Read first 10 entries
 	{
-		roLogFile, err := NewRODiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -908,7 +908,7 @@ func TestNewReader(t *testing.T) {
 
 	// Read last 10 entries
 	{
-		roLogFile, err := NewRODiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -965,7 +965,7 @@ func TestLoad(t *testing.T) {
 
 	// Create log file and write data
 	{
-		logFile, err := NewDiskLogFile(1, dir)
+		logFile, err := NewDiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		// First write 20 entries
 		resultChannels := make([]<-chan int64, 0, initialEntries)
@@ -989,7 +989,7 @@ func TestLoad(t *testing.T) {
 
 	// Reload log file
 	{
-		roLogFile, err := NewRODiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 
@@ -1006,7 +1006,7 @@ func TestLoad(t *testing.T) {
 
 	{
 		// open exists log file for write
-		logFile, err := NewDiskLogFile(1, dir)
+		logFile, err := NewDiskLogFile(1, 0, 1, dir)
 		assert.Error(t, err)
 		assert.Nil(t, logFile)
 	}
@@ -1015,7 +1015,7 @@ func TestLoad(t *testing.T) {
 // TestGetId tests the GetId function.
 func TestGetId(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(42, dir)
+	logFile, err := NewDiskLogFile(1, 0, 42, dir)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(42), logFile.GetId())
 
@@ -1027,7 +1027,7 @@ func TestGetId(t *testing.T) {
 // TestInvalidReaderRange tests creating a reader with invalid range.
 func TestInvalidReaderRange(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Track entry IDs and data
@@ -1064,7 +1064,7 @@ func TestInvalidReaderRange(t *testing.T) {
 	beyondLastID := lastID + 5 // An ID beyond the range
 
 	// Try to create a reader with start beyond available entries
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	beyondReader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -1118,7 +1118,7 @@ func TestInvalidReaderRange(t *testing.T) {
 // TestReadAfterClose tests reading from a closed log file.
 func TestReadAfterClose(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Write a small amount of data
@@ -1144,7 +1144,7 @@ func TestReadAfterClose(t *testing.T) {
 	err = logFile.Close()
 	assert.NoError(t, err)
 
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 
@@ -1184,7 +1184,7 @@ func TestBasicReader(t *testing.T) {
 	logger.InitLogger(cfg)
 
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Append entries with specific IDs to ensure we know the exact IDs to read later
@@ -1205,7 +1205,7 @@ func TestBasicReader(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create reader for all entries
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -1241,7 +1241,7 @@ func TestBasicReader(t *testing.T) {
 // TestOnlyFirstAndLast skips read testing, only tests getting first and last entry IDs
 func TestOnlyFirstAndLast(t *testing.T) {
 	dir := getTempDir(t)
-	logFile, err := NewDiskLogFile(1, dir)
+	logFile, err := NewDiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 
 	// Use simple Append method to add data, letting the system assign IDs
@@ -1277,7 +1277,7 @@ func TestSequentialBufferAppend(t *testing.T) {
 	tempDir := getTempDir(t)
 	defer os.RemoveAll(tempDir)
 
-	dlf, err := NewDiskLogFile(1, tempDir)
+	dlf, err := NewDiskLogFile(1, 0, 1, tempDir)
 	assert.NoError(t, err)
 	defer dlf.Close()
 
@@ -1300,7 +1300,7 @@ func TestSequentialBufferAppend(t *testing.T) {
 	assert.Equal(t, int64(4), lastID)
 
 	// Verify can read written data
-	roLogFile, err := NewRODiskLogFile(1, tempDir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, tempDir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -1331,7 +1331,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	testEntryCount := 10000
 	dir := getTempDir(t)
 	// Create a larger fragment size to accommodate all data
-	logFile, err := NewDiskLogFile(1, dir, WithWriteFragmentSize(10*1024*1024))
+	logFile, err := NewDiskLogFile(1, 0, 1, dir, WithWriteFragmentSize(10*1024*1024))
 	assert.NoError(t, err)
 
 	// Record write start time
@@ -1398,7 +1398,7 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 	readStartTime := time.Now()
 
 	// Create reader to verify data, ensure read from ID 0 to all data
-	roLogFile, err := NewRODiskLogFile(1, dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
@@ -1478,7 +1478,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	t.Logf("Creating log file with small fragment size: %d bytes, max %d entries per fragment",
 		smallFragmentSize, maxEntriesPerFragment)
 
-	logFile, err := NewDiskLogFile(1, dir,
+	logFile, err := NewDiskLogFile(1, 0, 1, dir,
 		WithWriteFragmentSize(smallFragmentSize),
 		WithWriteMaxEntryPerFile(maxEntriesPerFragment))
 	assert.NoError(t, err)
@@ -1512,7 +1512,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 			assert.NoError(t, err, "Failed to sync at entry %d", id+1)
 
 			// Get current fragment information
-			roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
+			roLogFile, err := NewRODiskLogFile(1, 0, logFile.GetId(), dir)
 			assert.NoError(t, err)
 			assert.NotNil(t, roLogFile)
 			_, _, err = roLogFile.fetchROFragments()
@@ -1563,7 +1563,7 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Get final fragment information
-	roLogFile, err := NewRODiskLogFile(logFile.GetId(), dir)
+	roLogFile, err := NewRODiskLogFile(1, 0, logFile.GetId(), dir)
 	assert.NoError(t, err)
 	assert.NotNil(t, roLogFile)
 	_, _, err = roLogFile.fetchROFragments()
@@ -1673,7 +1673,7 @@ func TestFragmentDataValueCheck(t *testing.T) {
 
 	for i := 0; i <= 14; i++ {
 		filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/14/0/log_0/fragment_%d", i)
-		ff, err := NewFragmentFileReader(filePath, 128*1024*1024, int64(i))
+		ff, err := NewFragmentFileReader(filePath, 128*1024*1024, 14, 0, int64(i))
 		assert.NoError(t, err)
 		err = ff.IteratorPrint()
 		assert.NoError(t, err)
@@ -1697,7 +1697,7 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Create read-only log file
-		roLogFile, err := NewRODiskLogFile(logId, testDir)
+		roLogFile, err := NewRODiskLogFile(logId, 0, logId, testDir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 
@@ -1718,7 +1718,7 @@ func TestDeleteFragments(t *testing.T) {
 		nonExistDir := getTempDir(t)
 		os.RemoveAll(nonExistDir) // Ensure directory does not exist
 
-		logFile2, err := NewRODiskLogFile(2, nonExistDir)
+		logFile2, err := NewRODiskLogFile(1, 0, 2, nonExistDir)
 		assert.NoError(t, err)
 
 		err = logFile2.DeleteFragments(context.Background(), 0)
@@ -1740,7 +1740,7 @@ func TestDeleteFragments(t *testing.T) {
 			cfg.Log.Level = "debug"
 			logger.InitLogger(cfg)
 
-			logFile, err := NewDiskLogFile(1, dir, WithWriteMaxEntryPerFile(10))
+			logFile, err := NewDiskLogFile(1, 0, 1, dir, WithWriteMaxEntryPerFile(10))
 			assert.NoError(t, err)
 			assert.NotNil(t, logFile)
 
@@ -1773,7 +1773,7 @@ func TestDeleteFragments(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Confirm that 10 fragments were created through rotation
-			roLogFile, err := NewRODiskLogFile(1, dir)
+			roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 			assert.NoError(t, err)
 			assert.NotNil(t, roLogFile)
 			_, _, err = roLogFile.fetchROFragments()
@@ -1788,7 +1788,7 @@ func TestDeleteFragments(t *testing.T) {
 		}
 
 		// Create read-only log file
-		roLogFile, err := NewRODiskLogFile(1, dir)
+		roLogFile, err := NewRODiskLogFile(1, 0, 1, dir)
 		assert.NoError(t, err)
 		assert.NotNil(t, roLogFile)
 
