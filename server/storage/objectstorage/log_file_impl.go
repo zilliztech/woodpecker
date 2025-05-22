@@ -44,6 +44,7 @@ type LogFile struct {
 	syncPolicyConfig *config.LogFileSyncPolicyConfig
 	syncedChan       map[int64]chan int64 // Synced entryId chan map
 	fileClose        chan struct{}        // Close signal
+	closeOnce        sync.Once
 
 	// written info
 	firstEntryId   int64  // The first entryId of this LogFile which already written to object storage
@@ -398,6 +399,7 @@ func (f *LogFile) Sync(ctx context.Context) error {
 }
 
 func (f *LogFile) Close() error {
+	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close ", zap.String("logFileInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(context.Background())
 	if err != nil {
 		logger.Ctx(context.TODO()).Warn("sync error before close",
@@ -405,9 +407,11 @@ func (f *LogFile) Close() error {
 			zap.Int64("logFileId", f.id),
 			zap.Error(err))
 	}
-	// Implement close logic, e.g., release resources
-	f.fileClose <- struct{}{}
-	close(f.fileClose)
+	// close file
+	f.closeOnce.Do(func() {
+		f.fileClose <- struct{}{}
+		close(f.fileClose)
+	})
 	return nil
 }
 

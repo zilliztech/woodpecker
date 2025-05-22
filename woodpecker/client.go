@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -46,6 +47,9 @@ type woodpeckerClient struct {
 	Metadata   meta.MetadataProvider
 	clientPool client.LogStoreClientPool
 	logHandles map[string]log.LogHandle
+
+	// close state
+	closeState atomic.Bool
 }
 
 func NewClient(ctx context.Context, etcdClient *clientv3.Client, cfg *config.Configuration) (Client, error) {
@@ -84,6 +88,9 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 
 // CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
+	if c.closeState.Load() {
+		return werr.ErrClientClosed
+	}
 	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -138,6 +145,9 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	start := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -170,6 +180,9 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 
 // LogExists checks if a log with the specified name exists.
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
+	if c.closeState.Load() {
+		return false, werr.ErrClientClosed
+	}
 	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -197,6 +210,9 @@ func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool,
 
 // GetAllLogs retrieves all log names.
 func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	start := time.Now()
 	// Retrieve all logs with detailed comments
 	logs, err := c.Metadata.ListLogs(ctx)
@@ -212,6 +228,9 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 
 // GetLogsWithPrefix retrieves log names that start with the specified prefix.
 func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
 	logs, err := c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
@@ -228,6 +247,15 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 func (c *woodpeckerClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closeState.Load() {
+		return werr.ErrClientClosed
+	}
+	c.closeState.Store(true)
+
+	// close all logHandle
+	for _, logHandle := range c.logHandles {
+		logHandle.Close(context.Background())
+	}
 	// Decrement active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()

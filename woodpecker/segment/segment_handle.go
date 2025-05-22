@@ -144,6 +144,7 @@ type segmentHandleImpl struct {
 	pendingSize      atomic.Int64
 
 	fencedState atomic.Bool
+	closedState atomic.Bool
 
 	executor *SequentialExecutor
 
@@ -434,6 +435,10 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 // Close marks the segment as read-only. Only writable segments can be closed.
 // TODO: Rename method to better reflect that segments remain readable after closing
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
+	if s.closedState.Load() {
+		return nil
+	}
+	s.closedState.Store(true)
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
@@ -502,6 +507,9 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) Fence(ctx context.Context) error {
+	if s.fencedState.Load() {
+		return nil
+	}
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
@@ -523,6 +531,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
+	s.fencedState.Store(true)
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil

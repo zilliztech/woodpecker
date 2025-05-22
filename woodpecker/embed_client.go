@@ -3,6 +3,7 @@ package woodpecker
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -80,6 +81,9 @@ type woodpeckerEmbedClient struct {
 	managedCli bool
 	etcdCli    *clientv3.Client
 	minioCli   minio.MinioHandler
+
+	// close state
+	closeState atomic.Bool
 }
 
 func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (Client, error) {
@@ -117,6 +121,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		etcdCli:    etcdCli,
 		minioCli:   minioCli,
 	}
+	c.closeState.Store(false)
 	initErr := c.initClient(ctx)
 	if initErr != nil {
 		return nil, werr.ErrInitClient.WithCauseErr(initErr)
@@ -149,6 +154,9 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return werr.ErrClientClosed
+	}
 	// early return if cache exists
 	if _, exists := c.logHandles[logName]; exists {
 		metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
@@ -204,6 +212,9 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	start := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	// early return if cache exists
 	if logHandle, exists := c.logHandles[logName]; exists {
 		metrics.WpClientOperationsTotal.WithLabelValues("open_log", "cache_hit").Inc()
@@ -237,6 +248,9 @@ func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (
 	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.closeState.Load() {
+		return false, werr.ErrClientClosed
+	}
 	// early return if cache exists
 	if _, exists := c.logHandles[logName]; exists {
 		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", "cache_hit").Inc()
@@ -262,6 +276,9 @@ func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (
 // GetAllLogs retrieves all log names.
 // It returns a slice containing all log names.
 func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	start := time.Now()
 	// Retrieve all logs with detailed comments
 	logs, err := c.Metadata.ListLogs(ctx)
@@ -278,6 +295,9 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 // GetLogsWithPrefix retrieves log names that start with the specified prefix.
 // It returns a slice containing log names that match the prefix.
 func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrClientClosed
+	}
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
 	logs, err := c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
@@ -294,6 +314,16 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 func (c *woodpeckerEmbedClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closeState.Load() {
+		return werr.ErrClientClosed
+	}
+	c.closeState.Store(true)
+
+	// close all logHandle
+	for _, logHandle := range c.logHandles {
+		logHandle.Close(context.Background())
+	}
+
 	// Decrement active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()

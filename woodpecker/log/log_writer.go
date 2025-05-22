@@ -85,6 +85,7 @@ func (l *logWriterImpl) monitorSession() {
 				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
 			return
 		case <-l.writerClose:
+			l.sessionValid.Store(false)
 			logger.Ctx(context.Background()).Debug("Monitor session end due to writer close",
 				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
 			return

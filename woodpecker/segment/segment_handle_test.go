@@ -360,7 +360,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	ch <- int64(0)
 	close(ch)
 	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), mock.Anything).Return(nil)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(true, nil)
+	//mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(true, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{

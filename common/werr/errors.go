@@ -20,6 +20,8 @@ const (
 	ConnectError
 	// ClientInitError means failed to initialize client
 	ClientInitError
+	// ClientClosedError means client is closed
+	ClientClosedError
 	// ReadError means failed to read from socket
 	ReadError
 	// MetadataInitError failed to initialize service metadata
@@ -141,6 +143,7 @@ var (
 	// Client related
 	ErrCreateConnection = newWoodpeckerError("failed to create connection", ConnectError, true)
 	ErrInitClient       = newWoodpeckerError("failed to init client", ClientInitError, true)
+	ErrClientClosed     = newWoodpeckerError("Client is closed", ClientClosedError, false)
 
 	// log&segment related
 	ErrLogAlreadyExists      = newWoodpeckerError("Log already exists", LogAlreadyExists, false)

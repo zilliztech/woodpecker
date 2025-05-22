@@ -51,6 +51,8 @@ type LogHandle interface {
 	GetRecoverableSegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
 	// CloseAndCompleteCurrentWritableSegment closes and completes the current writable segment handle.
 	CloseAndCompleteCurrentWritableSegment(context.Context) error
+	// Close closes the log handle.
+	Close(context.Context) error
 }
 
 var _ LogHandle = (*logHandleImpl)(nil)
@@ -690,4 +692,26 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 func (l *logHandleImpl) getCurrentMinMaxSegmentId(ctx context.Context) (int64, int64, error) {
 	// TODO
 	return 0, -1, nil
+}
+
+func (l *logHandleImpl) Close(ctx context.Context) error {
+	// close all segment handles
+	for _, segmentHandle := range l.SegmentHandles {
+		err := segmentHandle.Fence(ctx)
+		logger.Ctx(ctx).Info("fence segment failed when closing logHandle",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int64("segId", segmentHandle.GetId(ctx)),
+			zap.Error(err))
+		err = segmentHandle.Close(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Info("close segment failed when closing logHandle",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id),
+				zap.Int64("segId", segmentHandle.GetId(ctx)),
+				zap.Error(err))
+			return err
+		}
+	}
+	return nil
 }

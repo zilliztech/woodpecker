@@ -8,6 +8,7 @@ import (
 type SequentialExecutor struct {
 	appendOpsQueue chan *AppendOp
 	wg             sync.WaitGroup
+	closeOnce      sync.Once
 }
 
 // NewSequentialExecutor initializes a SequentialExecutor
@@ -38,6 +39,8 @@ func (se *SequentialExecutor) Submit(op *AppendOp) {
 
 // Stop stops the sequential append executor
 func (se *SequentialExecutor) Stop() {
-	close(se.appendOpsQueue)
+	se.closeOnce.Do(func() {
+		close(se.appendOpsQueue)
+	})
 	se.wg.Wait()
 }
