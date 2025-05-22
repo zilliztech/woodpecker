@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
-	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_logstore_client"
+	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
 )
 

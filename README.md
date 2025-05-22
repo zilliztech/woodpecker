@@ -127,7 +127,7 @@ logWriter, _ := logHandle.OpenLogWriter(context.Background())
 sync write 
 ```
 // Sync Write
-writeResult := logWriter.WriteAsync(context.Background(),
+writeResult := logWriter.Write(context.Background(),
     &log.WriterMessage{
         Payload: []byte("hello world"),
         Properties: map[string]string{
