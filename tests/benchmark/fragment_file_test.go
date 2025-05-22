@@ -380,7 +380,8 @@ func TestFragmentMixedPerformance(t *testing.T) {
 			ctx := context.Background()
 
 			// Create FragmentFile instance
-			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 0, 1, 1)
+			firstId := int64(1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 0, 1, firstId)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
@@ -426,11 +427,12 @@ func TestFragmentMixedPerformance(t *testing.T) {
 			start := time.Now()
 
 			// Execute mixed operations
+
 			for i, op := range operations {
 				if op == 0 && writeCount < writeOps {
 					// Write operation
 					writeStart := time.Now()
-					err := fragmentWriter.Write(ctx, dataSet[writeCount], int64(i))
+					err := fragmentWriter.Write(ctx, dataSet[writeCount], firstId+int64(writeCount))
 					writeTime += time.Since(writeStart)
 
 					if err != nil {
