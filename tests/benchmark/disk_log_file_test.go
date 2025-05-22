@@ -297,7 +297,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 				data := make([]byte, tc.dataSize)
 				rand.Read(data)
 				testData[i] = data
-				entryIds[i] = int64(i + 1) // Consecutive IDs starting from 1
+				entryIds[i] = int64(i) // Consecutive IDs starting from 0
 			}
 
 			// Submit async write requests in batches
@@ -523,7 +523,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 			writeTime := time.Duration(0)
 			readTime := time.Duration(0)
 			syncTime := time.Duration(0)
-			maxEntryId := int64(0)
+			maxEntryId := int64(-1)
 
 			// Pre-generate write data
 			writeData := make([][]byte, writeOps)
@@ -624,7 +624,8 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 
 						// Create Reader to read specific entry
 						readStart := time.Now()
-						reader, err := logFile.NewReader(ctx, storage.ReaderOpt{
+						roLogFile, err := disk.NewRODiskLogFile(1, 0, 1, tempDir)
+						reader, err := roLogFile.NewReader(ctx, storage.ReaderOpt{
 							StartSequenceNum: entryId,
 							EndSequenceNum:   entryId + 1,
 						})

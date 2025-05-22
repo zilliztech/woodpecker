@@ -135,7 +135,8 @@ func TestNewReader(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
+	roLogFile := objectstorage.NewROLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
@@ -186,7 +187,8 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	reader, err := logFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
+	roLogFile := objectstorage.NewROLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client)
+	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
