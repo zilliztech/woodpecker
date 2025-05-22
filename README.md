@@ -1,3 +1,4 @@
+![woodpecker logo](./docs/images/logo.png)
 # Woodpecker
 *A Cloud-Native WAL Storage Implementation*
 

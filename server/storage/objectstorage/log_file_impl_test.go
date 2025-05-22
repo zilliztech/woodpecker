@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package objectstorage
 
 import (
@@ -36,7 +53,7 @@ func TestNewLogFile(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "test-segment", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "test-segment", "test-bucket", client, cfg).(*LogFile)
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
 	assert.Equal(t, "test-bucket", logFile.bucket)
@@ -49,7 +66,7 @@ func TestNewLogFile(t *testing.T) {
 func TestNewROLogFile(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+	logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 	assert.Equal(t, int64(1), logFile.id)
 	assert.Equal(t, "test-segment", logFile.segmentPrefixKey)
@@ -78,7 +95,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncReachBufferSize", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferSize", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
@@ -125,7 +142,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncSomeAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncSomeAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6}
@@ -172,7 +189,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncOnceAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncOnceAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{0}
@@ -218,7 +235,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncNoneAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncNoneAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// wait for flush interval
 	<-time.After(2 * time.Second)
@@ -250,7 +267,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncWithHolesAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncWithHolesAndWaitForFlush", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -299,7 +316,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncWithHolesButFillFinally", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncWithHolesButFillFinally", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -373,7 +390,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncDisorderWithinBounds", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncDisorderWithinBounds", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 8, 9, 7, 2, 3, 4, 5}
@@ -420,7 +437,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestAppendAsyncDisorderAndPartialOutOfBounds", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestAppendAsyncDisorderAndPartialOutOfBounds", "test-bucket", client, cfg).(*LogFile)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 11, 12, 10, 7, 2, 3, 4, 5} // 0-7,10-12
@@ -488,7 +505,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 800 + 200 = buffer max data size, sync immediately
 	{
-		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize1", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferDataSize1", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -510,7 +527,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 200 + 300, wait for flush
 	{
-		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize2", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferDataSize2", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -531,7 +548,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 200 + 300, wait for flush
 	{
-		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize3", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferDataSize3", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -554,7 +571,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// the first append 1k should be immediately flush,
 	// the second append 200 should be wait for flush.
 	{
-		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize4", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferDataSize4", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data1k)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -584,7 +601,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test append 1(800),3(300), trigger flush 1(800). then append 2(200), wait for flush  2(200) + 3(300)
 	{
-		logFile := NewLogFile(1, "TestAppendAsyncReachBufferDataSize5", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestAppendAsyncReachBufferDataSize5", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -639,7 +656,7 @@ func TestSync(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestSync", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestSync", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -693,7 +710,7 @@ func TestClose(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestClose", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestClose", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -746,7 +763,7 @@ func TestGetId(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestGetId", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestGetId", "test-bucket", client, cfg).(*LogFile)
 	assert.Equal(t, int64(1), logFile.GetId())
 }
 
@@ -772,7 +789,7 @@ func TestMerge(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestMerge", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestMerge", "test-bucket", client, cfg).(*LogFile)
 
 	// write data and flush fragment 1
 	for i := 0; i < 100; i++ {
@@ -791,7 +808,7 @@ func TestMerge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Merge fragments
-	roLogFile := NewROLogFile(1, "TestMerge", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, 0, 1, "TestMerge", "test-bucket", client).(*ROLogFile)
 	mergedFrags, entryOffset, fragmentIdOffset, err := roLogFile.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
@@ -826,7 +843,7 @@ func TestLoad(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestLoad", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestLoad", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer and sync
 	for i := 0; i < 100; i++ {
@@ -838,7 +855,7 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Load data
-	roLogFile := NewROLogFile(1, "TestLoad", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, 0, 1, "TestLoad", "test-bucket", client).(*ROLogFile)
 	totalSize, lastFragment, err := roLogFile.Load(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, int64(100*len("test_data")) < totalSize)
@@ -873,7 +890,7 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestNewReaderInWriterLogFile", "test-bucket", client, cfg).(*LogFile)
 
 	// Write some data to buffer and sync
 	for i := 0; i < 100; i++ {
@@ -884,7 +901,7 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "TestNewReaderInWriterLogFile", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, 0, 1, "TestNewReaderInWriterLogFile", "test-bucket", client).(*ROLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -894,7 +911,8 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 100; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
 		entry, err := reader.ReadNext()
@@ -903,7 +921,8 @@ func TestNewReaderInWriterLogFile(t *testing.T) {
 		assert.Equal(t, []byte("test_data"), entry.Values)
 	}
 
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
 
@@ -926,7 +945,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 		},
 	}
 
-	logFile := NewLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client, cfg).(*LogFile)
+	logFile := NewLogFile(1, 0, 1, "TestNewReaderInROLogFile", "test-bucket", client, cfg).(*LogFile)
 	for i := 0; i < 100; i++ {
 		_, _, err := logFile.AppendAsync(context.Background(), int64(i), []byte("test_data"))
 		assert.NoError(t, err)
@@ -944,7 +963,7 @@ func TestNewReaderInROLogFile(t *testing.T) {
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	// Create a reader for [0, 100)
-	roLogFile := NewROLogFile(1, "TestNewReaderInROLogFile", "test-bucket", client).(*ROLogFile)
+	roLogFile := NewROLogFile(1, 0, 1, "TestNewReaderInROLogFile", "test-bucket", client).(*ROLogFile)
 	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -954,7 +973,8 @@ func TestNewReaderInROLogFile(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 100; i++ {
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
 		entry, err := reader.ReadNext()
@@ -963,7 +983,8 @@ func TestNewReaderInROLogFile(t *testing.T) {
 		assert.Equal(t, []byte("test_data"), entry.Values)
 	}
 
-	hasNext := reader.HasNext()
+	hasNext, err := reader.HasNext()
+	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
 
@@ -976,12 +997,13 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
 	// 3.frag put success
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
 	//mock 1.frag exists
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
 	// mock 2.frag not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/2.frag", mock.Anything).Return(minio.ObjectInfo{}, minio.ErrorResponse{
+		Code: "NoSuchKey",
+	})
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1002,7 +1024,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	data1000 := make([]byte, 1000)
 	// test write data with holes to minio, (fragment 1,x,3)
 	{ // write 3 frag
-		logFile := NewLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client, cfg).(*LogFile)
+		logFile := NewLogFile(1, 0, 1, "TestROLogFileReadDataWithHoles", "test-bucket", client, cfg).(*LogFile)
 		assignId0, ch0, err := logFile.AppendAsync(context.Background(), 0, data1000)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -1050,7 +1072,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	// test read data with holes (fragment 1,x,3) in minio
 	// we should only read data in fragment 1
 	{
-		roLogFile := NewROLogFile(1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*ROLogFile)
+		roLogFile := NewROLogFile(1, 0, 1, "TestROLogFileReadDataWithHoles", "test-bucket", client).(*ROLogFile)
 		reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   3,
@@ -1058,14 +1080,16 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		// read data from frag 1 success
-		hasNext := reader.HasNext()
+		hasNext, err := reader.HasNext()
+		assert.NoError(t, err)
 		assert.True(t, hasNext)
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), entry.EntryId)
 		assert.Equal(t, data1000, entry.Values)
 		// read data from frag 2 fail, no more data
-		hasNext = reader.HasNext()
+		hasNext, err = reader.HasNext()
+		assert.NoError(t, err)
 		assert.False(t, hasNext)
 	}
 }
@@ -1188,7 +1212,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Add some fragments to the LogFile to verify they're cleared
 		logFile.fragments = []*FragmentObject{
@@ -1233,7 +1257,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1272,7 +1296,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1308,7 +1332,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)
@@ -1352,7 +1376,7 @@ func TestDeleteFragments(t *testing.T) {
 		// 不再需要 StatObject 调用
 
 		// Create the LogFile
-		logFile := NewROLogFile(1, "test-segment", "test-bucket", client).(*ROLogFile)
+		logFile := NewROLogFile(1, 0, 1, "test-segment", "test-bucket", client).(*ROLogFile)
 
 		// Call DeleteFragments
 		err := logFile.DeleteFragments(context.Background(), 0)

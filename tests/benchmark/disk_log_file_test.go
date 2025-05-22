@@ -1,8 +1,25 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package benchmark
 
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -69,16 +86,11 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 		{"LargeFile_LargeBuffer_UltraHighFreqFlush", 1 * 1024 * 1024 * 1024, 16 * 1024 * 1024, 1 * 1024, 5000, 0},
 	}
 
-	// Create temporary directory
-	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("disklogfile_test_%d", time.Now().UnixNano()))
-	err := os.MkdirAll(tempDir, 0755)
-	if err != nil {
-		t.Fatalf("Failed to create temporary directory: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tempDir := filepath.Join(tmpDir, fmt.Sprintf("disklogfile_test_%d", time.Now().UnixNano()))
+
 			var options []disk.Option
 			options = append(options, disk.WithWriteFragmentSize(tc.fragmentSize))
 			options = append(options, disk.WithWriteMaxBufferSize(tc.bufferSize))
@@ -89,7 +101,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 			}
 
 			// Create DiskLogFile instance
-			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)
+			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DiskLogFile: %v", err)
 			}
@@ -270,7 +282,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			options := []disk.Option{
 				disk.WithWriteFragmentSize(128 * 1024 * 1024), // 128MB
 			}
-			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)
+			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DiskLogFile: %v", err)
 			}
@@ -328,12 +340,13 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			t.Logf("Preparation complete, starting read test...")
 
 			// Step 2: Create Reader and test read performance
-			reader, err := logFile.NewReader(ctx, storage.ReaderOpt{
+			roLogFile, err := disk.NewRODiskLogFile(1, 0, 1, tempDir)
+			reader, err := roLogFile.NewReader(ctx, storage.ReaderOpt{
 				StartSequenceNum: 1, // Start from the first entry
 				EndSequenceNum:   0, // 0 means read to the end
 			})
 			if err != nil {
-				logFile.Close()
+				roLogFile.Close()
 				t.Fatalf("Failed to create Reader: %v", err)
 			}
 
@@ -359,7 +372,12 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 
 			if tc.sequential {
 				// Sequential read
-				for reader.HasNext() {
+				for {
+					hasNext, err := reader.HasNext()
+					assert.NoError(t, err)
+					if !hasNext {
+						break
+					}
 					entry, err := reader.ReadNext()
 					if err != nil {
 						readErrors++
@@ -387,7 +405,9 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 						continue
 					}
 
-					if singleReader.HasNext() {
+					hasNext, err := singleReader.HasNext()
+					assert.NoError(t, err)
+					if hasNext {
 						entry, err := singleReader.ReadNext()
 						if err != nil {
 							readErrors++
@@ -472,7 +492,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 				disk.WithWriteMaxBufferSize(tc.bufferSize),
 			}
 
-			logFile, err := disk.NewDiskLogFile(1, tempDir, options...)
+			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DiskLogFile: %v", err)
 			}
@@ -613,7 +633,9 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 							t.Fatalf("Failed to create Reader: %v", err)
 						}
 
-						if reader.HasNext() {
+						hasNext, err := reader.HasNext()
+						assert.NoError(t, err)
+						if hasNext {
 							entry, err := reader.ReadNext()
 							if err == nil {
 								totalBytesRead += len(entry.Values)

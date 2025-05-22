@@ -1,3 +1,19 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package werr
 
 import (
@@ -20,6 +36,8 @@ const (
 	ConnectError
 	// ClientInitError means failed to initialize client
 	ClientInitError
+	// ClientClosedError means client is closed
+	ClientClosedError
 	// ReadError means failed to read from socket
 	ReadError
 	// MetadataInitError failed to initialize service metadata
@@ -34,6 +52,8 @@ const (
 	MetadataWriteError
 	// MetadataCreateLogError failed in create log metadata
 	MetadataCreateLogError
+	// MetadataCreateLogTxnError failed execute create log metadata txn
+	MetadataCreateLogTxnError
 	// MetadataCreateSegmentError failed in create segment metadata
 	MetadataCreateSegmentError
 	// MetadataUpdateSegmentError failed in update segment metadata
@@ -131,6 +151,7 @@ var (
 	ErrMetadataEncode           = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
 	ErrMetadataDecode           = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
 	ErrCreateLogMetadata        = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrCreateLogMetadataTxn     = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
 	ErrCreateSegmentMetadata    = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
 	ErrUpdateSegmentMetadata    = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
 	ErrUpdateQuorumInfoMetadata = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
@@ -138,6 +159,7 @@ var (
 	// Client related
 	ErrCreateConnection = newWoodpeckerError("failed to create connection", ConnectError, true)
 	ErrInitClient       = newWoodpeckerError("failed to init client", ClientInitError, true)
+	ErrClientClosed     = newWoodpeckerError("Client is closed", ClientClosedError, false)
 
 	// log&segment related
 	ErrLogAlreadyExists      = newWoodpeckerError("Log already exists", LogAlreadyExists, false)

@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package cache
 
 import (
@@ -124,8 +141,9 @@ func newFragmentManager(maxMemory int64) FragmentManager {
 var _ FragmentManager = (*fragmentManagerImpl)(nil)
 
 type fragmentManagerImpl struct {
-	maxMemory      int64
-	usedMemory     int64
+	maxMemory      int64                 // Memory usage limitation
+	usedMemory     int64                 // Pooling byte buff instances occupies memory
+	dataMemory     int64                 // The actual fragment data occupies memory
 	cache          map[string]*CacheItem // key: fileId-fragmentId, value: fragment
 	order          *list.List            // LRU order, front is the least recently used fragment key element
 	requestChan    chan fragmentRequest  // Channel for all operations
@@ -176,12 +194,25 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 
 	// Release all fragments to prevent memory leaks
 	for key, item := range m.cache {
-		fragmentSize := calculateSize(item.fragment)
+		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
+
+		// Reset metrics for this fragment before releasing
+		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+
+		m.usedMemory -= fragmentSize
+		m.dataMemory -= rawFragmentBufSize
 		item.fragment.Release()
-		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
 			zap.String("key", key),
-			zap.Int64("size", fragmentSize))
+			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
+			zap.Int64("fragmentSize", fragmentSize),
+			zap.Int64("rawFragmentBufSize", rawFragmentBufSize),
+			zap.Int64("currentUsedMemory", m.usedMemory),
+			zap.Int64("currentDataMemory", m.dataMemory))
 	}
 
 	// Clear the cache and order list
@@ -216,10 +247,23 @@ func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
 	}
 
 	// Update memory usage statistics
-	fragmentSize := calculateSize(fragment)
+	fragmentSize, rawFragmentBufSize := calculateSize(fragment)
 	m.usedMemory += fragmentSize
-	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Add(float64(fragmentSize))
-	logger.Ctx(req.ctx).Debug("add fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+	m.dataMemory += rawFragmentBufSize
+
+	// Update metrics for this fragment
+	logId := fmt.Sprintf("%d", fragment.GetLogId())
+	segmentId := fmt.Sprintf("%d", fragment.GetSegmentId())
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Inc()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Add(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Add(float64(rawFragmentBufSize))
+
+	logger.Ctx(req.ctx).Debug("add fragment finish", zap.String("key", key),
+		zap.String("fragInst", fmt.Sprintf("%p", fragment)),
+		zap.Int64("fragmentSize", fragmentSize),
+		zap.Int64("rawFragmentBufSize", rawFragmentBufSize),
+		zap.Int64("currentUsedMemory", m.usedMemory),
+		zap.Int64("currentDataMemory", m.dataMemory))
 
 	if req.responseChan != nil {
 		req.responseChan <- nil // Signal success with nil error
@@ -242,15 +286,28 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 	}
 
 	// Record information we need to save
-	fragmentSize := calculateSize(item.fragment)
+	fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
+
+	// Update metrics before removing
+	logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+	segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
 
 	// Perform deletion
 	delete(m.cache, key)
 	m.order.Remove(item.element)
 	m.usedMemory -= fragmentSize
+	m.dataMemory -= rawFragmentBufSize
 	item.fragment.Release()
-	metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
-	logger.Ctx(req.ctx).Debug("remove fragment finish", zap.String("key", key), zap.Int64("fragmentSize", fragmentSize), zap.Int64("currentUsedMemory", m.usedMemory))
+	logger.Ctx(req.ctx).Debug("remove fragment finish",
+		zap.String("key", key),
+		zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
+		zap.Int64("fragmentSize", fragmentSize),
+		zap.Int64("rawFragmentBufSize", rawFragmentBufSize),
+		zap.Int64("currentUsedMemory", m.usedMemory),
+		zap.Int64("currentDataMemory", m.dataMemory))
 
 	if req.responseChan != nil {
 		req.responseChan <- nil // Signal success with nil error
@@ -281,7 +338,7 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 	}
 
 	// Maximum number of fragments to evict in one call
-	maxEvictionCount := 10
+	maxEvictionCount := 1000 // TODO should be configurable
 	evictCount := 0
 
 	for m.usedMemory > m.maxMemory && m.order.Len() > 0 && evictCount < maxEvictionCount {
@@ -299,20 +356,34 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 			continue
 		}
 
+		// Update metrics before evicting
+		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
+		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
+		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+
 		// Perform eviction
 		delete(m.cache, keyToEvict)
-		fragmentSize := calculateSize(item.fragment)
 		m.usedMemory -= fragmentSize
+		m.dataMemory -= rawFragmentBufSize
 		item.fragment.Release()
-		metrics.WpFragmentCacheBytesGauge.WithLabelValues("default").Sub(float64(fragmentSize))
 		m.order.Remove(evictElement)
 		logger.Ctx(req.ctx).Debug("evict fragment automatically",
 			zap.String("key", keyToEvict),
 			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
 			zap.Int64("fragmentSize", fragmentSize),
-			zap.Int64("currentUsedMemory", m.usedMemory))
+			zap.Int64("rawFragmentBufSize", rawFragmentBufSize),
+			zap.Int64("currentUsedMemory", m.usedMemory),
+			zap.Int64("currentDataMemory", m.dataMemory))
 		evictCount++
 	}
+
+	logger.Ctx(req.ctx).Debug("one round of evict fragments complete",
+		zap.Int("totalEvict", evictCount),
+		zap.Int64("currentUsedMemory", m.usedMemory),
+		zap.Int64("currentDataMemory", m.dataMemory))
 
 	if req.responseChan != nil {
 		req.responseChan <- nil // Signal success with nil error
@@ -487,6 +558,6 @@ func (m *fragmentManagerImpl) StopEvictionLoop() error {
 	return nil
 }
 
-func calculateSize(f storage.Fragment) int64 {
-	return f.GetSize()
+func calculateSize(f storage.Fragment) (int64, int64) {
+	return f.GetSize(), f.GetRawBufSize()
 }

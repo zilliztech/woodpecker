@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package objectstorage
 
 import (
@@ -6,7 +23,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -17,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/pool"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -35,6 +52,8 @@ type FragmentObject struct {
 
 	// info
 	bucket       string
+	logId        int64
+	segmentId    int64
 	fragmentId   uint64
 	fragmentKey  string
 	firstEntryId int64 // First entryId in the fragment
@@ -45,6 +64,7 @@ type FragmentObject struct {
 	entriesData []byte // Bytes of entries
 	indexes     []byte // Every 8 bytes represent one index, where each index consists of an offset and a length. The high 32 bits represent the offset, and the low 32 bits represent the length.
 	size        int64  // Size of the fragment, including entries and indexes. it is lock free, used for metrics only
+	rawBufSize  int64  // Size of the raw pooling buffer allocated for this fragment, cap(entriesData) + cap(indexes)
 
 	// status
 	dataLoaded   bool // If this fragment has been loaded to memory
@@ -53,20 +73,24 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
-	index, data := genFragmentDataFromRaw(entries, firstEntryId)
+func NewFragmentObject(client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+	index, data := genFragmentDataFromRaw(entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
-	metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
+	rawBufSize := int64(cap(data) + cap(index))
+	//metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
+	//metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
 	return &FragmentObject{
 		client:       client,
 		bucket:       bucket,
+		logId:        logId,
+		segmentId:    segmentId,
 		fragmentId:   fragmentId,
 		fragmentKey:  fragmentKey,
 		entriesData:  data,
 		indexes:      index,
 		size:         size,
+		rawBufSize:   rawBufSize,
 		firstEntryId: firstEntryId,
 		lastEntryId:  lastEntryId,
 		lastModified: time.Now().UnixMilli(),
@@ -74,6 +98,14 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, fragment
 		dataUploaded: dataUploaded,
 		infoFetched:  infoFetched,
 	}
+}
+
+func (f *FragmentObject) GetLogId() int64 {
+	return f.logId
+}
+
+func (f *FragmentObject) GetSegmentId() int64 {
+	return f.segmentId
 }
 
 func (f *FragmentObject) GetFragmentId() int64 {
@@ -90,10 +122,17 @@ func (f *FragmentObject) GetSize() int64 {
 	return f.size
 }
 
+func (f *FragmentObject) GetRawBufSize() int64 {
+	return f.rawBufSize
+}
+
 // Flush uploads the data to MinIO.
 func (f *FragmentObject) Flush(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
 	if !f.dataLoaded {
 		return werr.ErrFragmentEmpty
 	}
@@ -102,7 +141,6 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return werr.ErrFragmentEmpty
 	}
 
-	start := time.Now()
 	fullData, err := serializeFragment(f)
 	if err != nil {
 		return err
@@ -112,9 +150,13 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
 	cost := time.Now().Sub(start)
-	metrics.WpFragmentFlushBytes.WithLabelValues(f.bucket).Observe(float64(len(fullData)))
-	metrics.WpFragmentFlushLatency.WithLabelValues(f.bucket).Observe(float64(cost.Milliseconds()))
+	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
+	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
+	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(len(fullData)))
 	f.dataUploaded = true
+
+	// Put back to pool
+	pool.PutByteBuffer(fullData)
 	return nil
 }
 
@@ -122,6 +164,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 func (f *FragmentObject) Load(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
 	if f.dataLoaded {
 		// already loaded, no need to load again
 		return nil
@@ -130,25 +175,31 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return werr.ErrFragmentNotUploaded
 	}
 
-	fragObjectReader, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
+	fragObjectReader, objDataSize, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
 	}
+	defer fragObjectReader.Close()
 	f.lastModified = objLastModified
+
 	// Read the entire object into memory
-	data, err := io.ReadAll(fragObjectReader)
-	if err != nil {
+	data, err := minioHandler.ReadObjectFull(fragObjectReader, objDataSize)
+	if err != nil || len(data) != int(objDataSize) {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
-	tmpFrag, deserializeErr := deserializeFragment(data)
+
+	tmpFrag, deserializeErr := deserializeFragment(data, objDataSize)
 	if deserializeErr != nil {
+		pool.PutByteBuffer(data)
 		return deserializeErr
 	}
+	pool.PutByteBuffer(data)
 
 	// Reset the buffer with the loaded data
 	f.entriesData = tmpFrag.entriesData
 	f.indexes = tmpFrag.indexes
 	f.size = int64(len(tmpFrag.entriesData) + len(tmpFrag.indexes))
+	f.rawBufSize = int64(cap(tmpFrag.entriesData) + cap(tmpFrag.indexes))
 	f.firstEntryId = tmpFrag.firstEntryId
 	f.lastEntryId = tmpFrag.lastEntryId
 	f.dataLoaded = true
@@ -156,8 +207,9 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.infoFetched = true
 
 	// update metrics
-	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Add(float64(len(f.entriesData) + len(f.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Inc()
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Add(float64(f.GetSize()))
 
 	// update cache
 	return cache.AddCacheFragment(ctx, f)
@@ -269,8 +321,15 @@ func (f *FragmentObject) Release() error {
 		// empty, no need to release again
 		return nil
 	}
-	metrics.WpFragmentBufferBytes.WithLabelValues(f.bucket).Sub(float64(len(f.entriesData) + len(f.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(f.bucket).Dec()
+
+	// Return buffers to the pool
+	if f.entriesData != nil {
+		pool.PutByteBuffer(f.entriesData)
+	}
+	if f.indexes != nil {
+		pool.PutByteBuffer(f.indexes)
+	}
+
 	f.indexes = nil
 	f.entriesData = nil
 	f.dataLoaded = false
@@ -278,7 +337,7 @@ func (f *FragmentObject) Release() error {
 }
 
 // mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
-func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject) (storage.Fragment, error) {
+func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
 	// check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -331,7 +390,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
 		fragIds = append(fragIds, fragment.fragmentId)
 	}
-	// mark dataLoaded
+
+	// set data cache ready
 	mergedFrag.dataLoaded = true
 
 	// upload the mergedFragment
@@ -339,17 +399,16 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 	if flushErr != nil {
 		return nil, flushErr
 	}
-	// mark dataUploaded
+	// set flag
 	mergedFrag.dataUploaded = true
+	mergedFrag.infoFetched = true
 
-	// update metrics
-	metrics.WpFragmentBufferBytes.WithLabelValues(mergedFrag.bucket).Add(float64(len(mergedFrag.entriesData) + len(mergedFrag.indexes)))
-	metrics.WpFragmentLoadedGauge.WithLabelValues(mergedFrag.bucket).Inc()
-
-	// update cache
-	err := cache.AddCacheFragment(ctx, mergedFrag)
-	if err != nil {
-		logger.Ctx(ctx).Warn("add merged fragment to cache failed ", zap.String("fragmentKey", mergedFrag.fragmentKey), zap.Uint64("fragmentId", mergedFrag.fragmentId), zap.Error(err))
+	// release immediately
+	if releaseImmediately {
+		// release immediately
+		mergedFrag.entriesData = nil
+		mergedFrag.indexes = nil
+		mergedFrag.dataLoaded = false
 	}
 
 	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds))
@@ -358,17 +417,27 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 
 // serializeFragment to object data bytes
 func serializeFragment(f *FragmentObject) ([]byte, error) {
-	fullData := make([]byte, 0)
+	// Calculate required space
+	headerSize := 24 // 3 int64 fields (version+firstEntryId+lastEntryId)
+	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
+
+	// Get buffer from pool
+	fullData := pool.GetByteBuffer(totalSize)
+
+	// Write header information
 	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
 	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
+
+	// Write indexes and data
 	fullData = append(fullData, f.indexes...)
 	fullData = append(fullData, f.entriesData...)
+
 	return fullData, nil
 }
 
 // deserializeFragment from object data bytes
-func deserializeFragment(data []byte) (*FragmentObject, error) {
+func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, error) {
 	// Create a buffer to read from the data
 	buf := bytes.NewBuffer(data)
 
@@ -395,14 +464,17 @@ func deserializeFragment(data []byte) (*FragmentObject, error) {
 
 	// Calculate the number of indexes
 	numIndexes := lastEntryId - firstEntryID + 1
-	indexes := make([]byte, numIndexes*8)
-
+	indexesTmp := make([]byte, numIndexes*8)
 	// Read indexes (each index is 8 bytes)
-	if err := binary.Read(buf, binary.BigEndian, &indexes); err != nil {
+	if err := binary.Read(buf, binary.BigEndian, &indexesTmp); err != nil {
 		return nil, fmt.Errorf("failed to read index %v", err)
 	}
+	indexes := pool.GetByteBuffer(int(numIndexes * 8))
+	indexes = append(indexes, indexesTmp...)
 	// Read entriesData (remaining data)
-	entriesData := buf.Bytes()
+	entriesDataTmp := buf.Bytes()
+	entriesData := pool.GetByteBuffer(len(entriesDataTmp))
+	entriesData = append(entriesData, entriesDataTmp...)
 
 	return &FragmentObject{
 		indexes:      indexes,
@@ -412,21 +484,48 @@ func deserializeFragment(data []byte) (*FragmentObject, error) {
 	}, nil
 }
 
-func genFragmentDataFromRaw(rawEntries [][]byte, firstEntryId int64) ([]byte, []byte) {
-	data := make([]byte, 0)
-	index := make([]byte, 0)
+func genFragmentDataFromRaw(rawEntries [][]byte) ([]byte, []byte) {
+	// Calculate total data size
+	entriesCount := len(rawEntries)
+	if entriesCount == 0 {
+		return make([]byte, 0), make([]byte, 0)
+	}
+
+	// Calculate total data and index size
+	totalDataSize := 0
+	for _, entry := range rawEntries {
+		totalDataSize += len(entry)
+	}
+	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
+
+	// Get buffers from byte pool
+	data := pool.GetByteBuffer(totalDataSize)
+	index := pool.GetByteBuffer(indexSize)
+
+	// Temporary index buffer, reuse to reduce memory allocation
+	entryIndex := make([]byte, 8)
+
+	// Fill data and indexes
 	offset := 0
-	for i := 0; i < len(rawEntries); i++ {
-		entryLength := uint32(len(rawEntries[i]))
-		entryOffset := offset
-		entryIndex := make([]byte, 8)
-		binary.BigEndian.PutUint32(entryIndex[:4], uint32(entryOffset))
+	for i := 0; i < entriesCount; i++ {
+		entry := rawEntries[i]
+		entryLength := uint32(len(entry))
+		entryOffset := uint32(offset)
+
+		// Fill index data
+		binary.BigEndian.PutUint32(entryIndex[:4], entryOffset)
 		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
 
-		data = append(data, rawEntries[i]...)
+		// Add to index buffer
 		index = append(index, entryIndex...)
 
-		offset = offset + len(rawEntries[i])
+		// Add to data buffer
+		data = append(data, entry...)
+
+		offset += len(entry)
 	}
+
+	// No need to return buffers before returning, as they will be held by FragmentObject
+	// They will be returned to the pool when FragmentObject is released
 	return index, data
 }

@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package cache
 
 import (
@@ -17,11 +34,14 @@ func setupMockFragment(t *testing.T, id int64, key string, size int64, lastEntry
 	fragment := mocks_storage.NewFragment(t)
 
 	// Setup mock methods - using On() instead of EXPECT() to match mockery's pattern
+	fragment.On("GetLogId").Return(int64(1)).Maybe()
+	fragment.On("GetSegmentId").Return(int64(0)).Maybe()
 	fragment.On("GetFragmentId").Return(id).Maybe()
 	fragment.On("GetFragmentKey").Return(key).Maybe()
 	fragment.On("GetSize").Return(size).Maybe()
 	fragment.On("GetLastEntryIdDirectly").Return(lastEntryId).Maybe()
 	fragment.On("Release").Return(nil).Maybe()
+	fragment.On("GetRawBufSize").Return(size).Maybe()
 
 	return fragment
 }

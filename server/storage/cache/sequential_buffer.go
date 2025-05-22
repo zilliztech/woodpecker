@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package cache
 
 import (
@@ -12,7 +29,10 @@ import (
 
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
 type SequentialBuffer struct {
-	Mu       sync.Mutex
+	Mu        sync.Mutex
+	logId     int64
+	segmentId int64
+
 	Values   [][]byte     // values of entries
 	MaxSize  int64        // max amount of entries
 	DataSize atomic.Int64 // data bytes size of entries
@@ -21,18 +41,18 @@ type SequentialBuffer struct {
 	ExpectedNextEntryId atomic.Int64
 }
 
-func NewSequentialBuffer(startEntryId int64, maxSize int64) *SequentialBuffer {
+func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxSize int64) *SequentialBuffer {
 	b := &SequentialBuffer{
 		Values:       make([][]byte, maxSize),
 		MaxSize:      maxSize,
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlots.WithLabelValues("default").Set(float64(maxSize))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxSize))
 	return b
 }
 
-func NewSequentialBufferWithData(startEntryId int64, maxSize int64, restData [][]byte) *SequentialBuffer {
+func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int64, maxSize int64, restData [][]byte) *SequentialBuffer {
 	v := make([][]byte, maxSize)
 	copy(v, restData)
 	b := &SequentialBuffer{
@@ -41,7 +61,7 @@ func NewSequentialBufferWithData(startEntryId int64, maxSize int64, restData [][
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlots.WithLabelValues("default").Set(float64(maxSize))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxSize))
 	return b
 }
 
@@ -66,7 +86,7 @@ func (b *SequentialBuffer) WriteEntry(entryId int64, value []byte) (int64, error
 	for addedId := entryId; addedId < b.FirstEntryId+b.MaxSize; addedId++ {
 		if b.Values[addedId-b.FirstEntryId] != nil && addedId == b.ExpectedNextEntryId.Load() {
 			b.ExpectedNextEntryId.Add(1)
-			metrics.WpWriteBufferSlots.WithLabelValues("default").Dec()
+			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId), fmt.Sprintf("%d", b.segmentId)).Dec()
 		} else {
 			break
 		}

@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package cache
 
 import (
@@ -8,7 +25,7 @@ import (
 
 // TestNewSequentialBuffer tests the creation of a new SequentialBuffer.
 func TestNewSequentialBuffer(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 	assert.NotNil(t, buffer)
 	assert.Equal(t, int64(1), buffer.FirstEntryId)
 	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
@@ -18,7 +35,7 @@ func TestNewSequentialBuffer(t *testing.T) {
 // TestNewSequentialBufferWithData tests the creation of a new SequentialBuffer with initial data.
 func TestNewSequentialBufferWithData(t *testing.T) {
 	data := [][]byte{[]byte("data1"), []byte("data2"), []byte("data3"), []byte("data4"), []byte("data5")}
-	buffer := NewSequentialBufferWithData(1, 5, data)
+	buffer := NewSequentialBufferWithData(1, 0, 1, 5, data)
 	assert.NotNil(t, buffer)
 	assert.Equal(t, int64(1), buffer.FirstEntryId)
 	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
@@ -26,7 +43,7 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 	assert.Equal(t, data, buffer.Values)
 
 	data2 := [][]byte{nil, []byte("data3"), nil, []byte("data5")}
-	buffer2 := NewSequentialBufferWithData(2, 5, data2)
+	buffer2 := NewSequentialBufferWithData(1, 0, 2, 5, data2)
 	assert.NotNil(t, buffer2)
 	assert.Equal(t, int64(2), buffer2.FirstEntryId)
 	assert.Equal(t, int64(2), buffer2.ExpectedNextEntryId.Load())
@@ -36,7 +53,7 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 
 // TestWriteEntry tests the WriteEntry method.
 func TestWriteEntry(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Test writing a valid entry
 	id, err := buffer.WriteEntry(1, []byte("data1"))
@@ -72,7 +89,7 @@ func TestWriteEntry(t *testing.T) {
 
 // TestReadEntry tests the ReadEntry method.
 func TestReadEntry(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 	buffer.WriteEntry(1, []byte("data1"))
 	buffer.WriteEntry(2, []byte("data2"))
 	buffer.WriteEntry(4, []byte("data4"))
@@ -105,7 +122,7 @@ func TestReadEntry(t *testing.T) {
 
 // TestReadEntriesToLast tests the ReadBytesToLast method.
 func TestReadEntriesToLast(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 	buffer.WriteEntry(1, []byte("data1"))
 	buffer.WriteEntry(2, []byte("data2"))
 	buffer.WriteEntry(3, []byte("data3"))
@@ -143,7 +160,7 @@ func TestReadEntriesToLast(t *testing.T) {
 
 // TestReadEntriesRange tests the ReadBytesRange method.
 func TestReadEntriesRange(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 	buffer.WriteEntry(1, []byte("data1"))
 	buffer.WriteEntry(2, []byte("data2"))
 	buffer.WriteEntry(3, []byte("data3"))
@@ -185,7 +202,7 @@ func TestReadEntriesRange(t *testing.T) {
 
 // TestReset tests the Reset method.
 func TestReset(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
 	buffer.WriteEntry(1, []byte("data1"))
 	buffer.WriteEntry(2, []byte("data2"))
 	buffer.Reset()

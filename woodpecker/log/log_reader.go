@@ -1,3 +1,19 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package log
 
 import (
@@ -9,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
@@ -30,6 +47,7 @@ func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segmen
 	return &logReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
+		logIdStr:             fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,
@@ -44,6 +62,7 @@ var _ LogReader = (*logReaderImpl)(nil)
 type logReaderImpl struct {
 	logName              string
 	logId                int64
+	logIdStr             string // for metrics label only
 	logHandle            LogHandle
 	from                 *LogMessageId
 	readerName           string
@@ -53,7 +72,10 @@ type logReaderImpl struct {
 }
 
 func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
+	start := time.Now()
+
 	if l.logHandle == nil {
+		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, werr.ErrInternalError.WithCauseErrMsg("log handle is not initialized")
 	}
 
@@ -61,6 +83,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		// Check if context is done
 		select {
 		case <-ctx.Done():
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
 		default:
 			// Continue with read operation
@@ -76,6 +99,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			zap.Int64("actualReadEntryId", entryId),
 			zap.Error(err))
 		if err != nil {
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		if segId > l.pendingReadSegmentId {
@@ -108,21 +132,25 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				continue
 			case <-ctx.Done():
 				ticker.Stop()
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
 			}
 		}
 		readTimestamp := time.Now().UnixMilli()
+		stateBeforeRead := segHandle.GetMetadata(ctx).State
 		entries, err := segHandle.Read(ctx, entryId, entryId)
 		if err != nil && werr.ErrEntryNotFound.Is(err) {
 			// 1) if the segmentHandle is completed, move to next segment's first entry
 			refreshMetaErr := segHandle.RefreshAndGetMetadata(ctx)
 			if refreshMetaErr != nil && errors.IsAny(refreshMetaErr, context.Canceled, context.DeadlineExceeded) {
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, refreshMetaErr
 			}
 			segMeta := segHandle.GetMetadata(ctx)
-			if segMeta.State != proto.SegmentState_Active {
+			stateAfterRead := segMeta.State
+			if stateAfterRead != proto.SegmentState_Active {
 				// if it is too close, it would be read empty, so check completion time with a little margin
-				if segMeta.CompletionTime+200 < readTimestamp {
+				if segMeta.CompletionTime+200 < readTimestamp && stateBeforeRead == stateAfterRead {
 					// safely move to next segment
 					logger.Ctx(ctx).Debug("segment is completed, move to next segment's first entry.",
 						zap.String("logName", l.logName),
@@ -132,7 +160,9 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 						zap.Int64("pendingReadEntryId", entryId),
 						zap.Int64("moveToReadSegmentId", segId+1),
 						zap.Int64("completionTimestamp", segMeta.CompletionTime),
-						zap.Int64("readTimestamp", readTimestamp))
+						zap.Int64("readTimestamp", readTimestamp),
+						zap.String("stateBefore", stateBeforeRead.String()),
+						zap.String("stateAfter", stateAfterRead.String()))
 					l.pendingReadSegmentId = segId + 1
 					l.pendingReadEntryId = 0
 					continue
@@ -153,6 +183,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			// 2.1) if next segment exists, indicate that current segment is completed in fact
 			nextSegExists, checkErr := l.logHandle.GetMetadataProvider().CheckSegmentExists(ctx, l.logHandle.GetName(), segId+1)
 			if checkErr != nil && errors.IsAny(checkErr, context.Canceled, context.DeadlineExceeded) {
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, checkErr
 			}
 			if checkErr == nil && nextSegExists {
@@ -184,13 +215,16 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				continue
 			case <-ctx.Done():
 				ticker.Stop()
+				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
 			}
 		}
 		if err != nil {
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		if len(entries) != 1 {
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrSegmentReadException.WithCauseErrMsg(fmt.Sprintf("should read one entry, but got %d", len(entries)))
 		}
 
@@ -199,6 +233,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		l.currentSegmentHandle = segHandle
 		logMsg, err := UnmarshalMessage(entries[0].Data)
 		if err != nil {
+			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		logger.Ctx(ctx).Debug("read one message complete",
@@ -211,19 +246,33 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			SegmentId: segId,
 			EntryId:   entryId,
 		}
+
+		// Track read bytes
+		if len(entries[0].Data) > 0 {
+			metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(entries[0].Data)))
+		}
+
+		// Track read latency
+		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
 	}
 }
 
 func (l *logReaderImpl) Close(ctx context.Context) error {
+	start := time.Now()
+
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)
+	status := "success"
 	if err != nil {
 		logger.Ctx(ctx).Warn("delete reader info failed",
 			zap.String("logName", l.logName),
 			zap.Int64("logId", l.logId),
 			zap.String("readerName", l.readerName),
 			zap.Error(err))
+		status = "error"
 	}
+
+	metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 

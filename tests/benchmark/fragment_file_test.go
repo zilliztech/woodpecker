@@ -1,3 +1,19 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package benchmark
 
 import (
@@ -62,7 +78,7 @@ func TestFragmentWritePerformance(t *testing.T) {
 			filePath := filepath.Join(tempDir, fmt.Sprintf("fragment_%s.data", tc.name))
 
 			// Create FragmentFile instance
-			fragment, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 1)
+			fragment, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 0, 1, 1)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
@@ -232,7 +248,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 			// Step 1: First create and populate FragmentFile
 			t.Logf("Preparing test file, writing %d entries...", tc.entryCount)
-			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 0, 1, 1)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
@@ -261,7 +277,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 			fragmentWriter.Release()
 
 			// Step 2: Reopen FragmentFile and test read performance
-			fragmentReader, err := disk.NewFragmentFileReader(filePath, tc.fileSize, 1)
+			fragmentReader, err := disk.NewFragmentFileReader(filePath, tc.fileSize, 1, 0, 1)
 			if err != nil {
 				t.Fatalf("Failed to open FragmentFile: %v", err)
 			}
@@ -364,7 +380,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 			ctx := context.Background()
 
 			// Create FragmentFile instance
-			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 0, 1, 1)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}

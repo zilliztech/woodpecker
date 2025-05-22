@@ -1,3 +1,20 @@
+// Copyright (C) 2025 Zilliz. All rights reserved.
+//
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under these licenses is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
+
 package segment
 
 import (
@@ -62,8 +79,8 @@ func TestSegmentProcessor_ReadEntry(t *testing.T) {
 	mockLogFile.EXPECT().NewReader(mock.Anything, mock.Anything).Return(mockReader, nil)
 
 	// mock reader HasNext/ReadNext
-	mockReader.On("HasNext").Return(true).Once()
-	mockReader.On("HasNext").Return(false)
+	mockReader.On("HasNext").Return(true, nil).Once()
+	mockReader.On("HasNext").Return(false, nil)
 	mockReader.On("ReadNext").Return(&proto.LogEntry{
 		SegId:   1,
 		EntryId: 0,
@@ -97,8 +114,8 @@ func TestSegmentProcessor_Compact(t *testing.T) {
 	mockMinio := mocks_minio.NewMinioHandler(t)
 	mockLogFile := mocks_storage.NewLogFile(t)
 	mockLogFile.EXPECT().Merge(mock.Anything).Return([]storage.Fragment{
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(0), "woodpecker/1/1/0/m_0.frag", [][]byte{[]byte("data0"), []byte("data1"), []byte("data2")}, int64(10), true, false, true),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(1), "woodpecker/1/1/0/m_1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(0), "woodpecker/1/1/0/m_0.frag", [][]byte{[]byte("data0"), []byte("data1"), []byte("data2")}, int64(10), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/0/m_1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
 	}, []int32{10, 13}, []int32{1, 5}, nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -122,7 +139,7 @@ func TestSegmentProcessor_Recover(t *testing.T) {
 	mockLogFile := mocks_storage.NewLogFile(t)
 	mockLogFile.EXPECT().Load(mock.Anything).Return(
 		int64(0),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", uint64(1), "woodpecker/1/1/0/1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/0/1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
 		nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -154,7 +171,7 @@ func (m *mockLogFileReader) ReadNext() (*proto.LogEntry, error) {
 	return args.Get(0).(*proto.LogEntry), args.Error(1)
 }
 
-func (m *mockLogFileReader) HasNext() bool {
+func (m *mockLogFileReader) HasNext() (bool, error) {
 	args := m.Called()
-	return args.Bool(0)
+	return args.Bool(0), nil
 }

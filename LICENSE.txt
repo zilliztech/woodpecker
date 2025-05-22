@@ -1,0 +1,16 @@
+Source code in this repository is covered by different licenses depending on the directory:
+
+1. Code in the "server" directory is dual-licensed under:
+   - GNU Affero General Public License v3.0 only (AGPLv3)
+   - Server Side Public License, v1 (SSPLv1)
+   
+   Users may choose either of these licenses for code in the server directory.
+
+2. Code in all directories except "server" is under Apache License 2.0
+
+Each file should contain a header specifying which license applies. If no header is present,
+the default license based on the directory location applies as specified above.
+
+Full license texts can be found in:
+- server/LICENSE (for AGPLv3 and SSPLv1)
+- APACHE-LICENSE-2.0.txt (for Apache License 2.0)
