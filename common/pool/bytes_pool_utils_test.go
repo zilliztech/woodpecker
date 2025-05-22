@@ -1,35 +1,25 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package pool
 
 import (
 	"fmt"
 	"testing"
 )
-
-func TestGetByteSlice(t *testing.T) {
-	fmt.Println()
-	fmt.Println()
-	c := GetByteBuffer(100)
-	c = append(c, 0)
-	c = append(c, 1)
-	c = append(c, 2)
-	d := c[1:]
-	fmt.Printf("c %p %v\n", c, c)
-	fmt.Printf("d %p %v\n", d, d)
-	PutByteBuffer(c)
-	fmt.Printf("c %p %v\n", c, c)
-	fmt.Printf("d %p %v\n", d, d)
-
-	fmt.Println()
-	fmt.Println()
-	e := GetByteBuffer(100)
-	e = append(e, 8)
-	e = append(e, 9)
-	fmt.Printf("c %p %v cap:%d\n", c, c, cap(c))
-	fmt.Printf("d %p %v cap:%d\n", d, d, cap(d))
-	fmt.Printf("e %p %v cap:%d\n", e, e, cap(e))
-	fmt.Printf("c %p %v cap:%d\n", c, c, cap(c))
-
-}
 
 func TestGetByteBuffer(t *testing.T) {
 	tests := []struct {
