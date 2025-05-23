@@ -112,6 +112,9 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 		return
 	}
 	// async call error, wait until syncedCh closed
+	ticker := time.NewTicker(30 * time.Second) // Log slow append warning every 30s, TODO should be configurable
+	defer ticker.Stop()
+
 	for {
 		select {
 		case syncedId, ok := <-syncedCh:
@@ -133,9 +136,13 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 					metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
 					metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
 				}
+				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedId, op.logId, op.segmentId, op.entryId))
 				return
 			}
-			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced recieved:%d for log:%d seg:%d entry:%d ,kepp async waiting", syncedId, op.logId, op.segmentId, op.entryId))
+			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedId, op.logId, op.segmentId, op.entryId))
+		case <-ticker.C:
+			elapsed := time.Now().Sub(startRequestTime)
+			logger.Ctx(context.TODO()).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, still waiting...", op.logId, op.segmentId, op.entryId, elapsed))
 		}
 	}
 }
