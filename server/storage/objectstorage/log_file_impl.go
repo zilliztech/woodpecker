@@ -62,6 +62,7 @@ type LogFile struct {
 	syncedChan       map[int64]chan int64 // Synced entryId chan map
 	fileClose        chan struct{}        // Close signal
 	closeOnce        sync.Once
+	closed           atomic.Bool
 
 	// written info
 	firstEntryId   int64  // The first entryId of this LogFile which already written to object storage
@@ -93,6 +94,7 @@ func NewLogFile(logId, segId, logFileId int64, segmentPrefixKey string, bucket s
 		lastFragmentId: 0,
 	}
 	objFile.buffer.Store(newBuffer)
+	objFile.closed.Store(false)
 	go objFile.run()
 	return objFile
 }
@@ -111,6 +113,10 @@ func (f *LogFile) run() {
 		case <-ticker.C:
 			if time.Now().UnixMilli()-f.lastSyncTimestamp.Load() < int64(f.maxIntervalMs) {
 				continue
+			}
+			// Check if closed
+			if f.closed.Load() {
+				return
 			}
 			err := f.Sync(context.Background())
 			if err != nil {
@@ -133,6 +139,10 @@ func (f *LogFile) GetId() int64 {
 }
 
 func (f *LogFile) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
+	if f.closed.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+		return -1, nil, werr.ErrLogFileClosed
+	}
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("logFileInst", fmt.Sprintf("%p", f)))
 
 	startTime := time.Now()
@@ -416,6 +426,10 @@ func (f *LogFile) Sync(ctx context.Context) error {
 }
 
 func (f *LogFile) Close() error {
+	if !f.closed.CompareAndSwap(false, true) {
+		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("logFileInst", fmt.Sprintf("%p", f)))
+		return nil
+	}
 	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close ", zap.String("logFileInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(context.Background())
 	if err != nil {

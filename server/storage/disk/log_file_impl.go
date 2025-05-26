@@ -69,8 +69,9 @@ type DiskLogFile struct {
 	autoSync bool // Whether to automatically sync data
 
 	// For async writes and control
-	closed  atomic.Bool
-	closeCh chan struct{}
+	closed    atomic.Bool
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 // NewDiskLogFile creates a new DiskLogFile instance
@@ -207,7 +208,7 @@ func (dlf *DiskLogFile) AppendAsync(ctx context.Context, entryId int64, value []
 
 	// Handle closed file
 	if dlf.closed.Load() {
-		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed")
+		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed", zap.String("logFileDir", dlf.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", dlf)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return -1, nil, errors.New("diskLogFile closed")
@@ -432,11 +433,11 @@ func (dlf *DiskLogFile) flushData(ctx context.Context, toFlushData [][]byte, toF
 	// Ensure fragment is created
 	if dlf.currFragment == nil {
 		logger.Ctx(ctx).Debug("Sync needs to create a new fragment")
-		if err := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); err != nil {
-			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(err))
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "flush", "error").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "flush", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			return err
+		if rotateErr := dlf.rotateFragment(dlf.lastEntryID.Load() + 1); rotateErr != nil {
+			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(rotateErr))
+			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "flush", "rotate_error").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "flush", "rotate_error").Observe(float64(time.Since(startTime).Milliseconds()))
+			return rotateErr
 		}
 	}
 
@@ -703,7 +704,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 
 // Close closes the log file and releases resources
 func (dlf *DiskLogFile) Close() error {
-	if dlf.closed.Load() {
+	if !dlf.closed.CompareAndSwap(false, true) {
+		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("logFileInst", fmt.Sprintf("%p", dlf)))
 		return nil
 	}
 
@@ -728,11 +730,11 @@ func (dlf *DiskLogFile) Close() error {
 	logger.Ctx(context.Background()).Info("Closing DiskLogFile",
 		zap.String("logFileDir", dlf.logFileDir))
 
-	// Mark as closed to prevent new operations
-	dlf.closed.Store(true)
-
 	// Send close signal
-	close(dlf.closeCh)
+	dlf.closeOnce.Do(func() {
+		dlf.closeCh <- struct{}{}
+		close(dlf.closeCh)
+	})
 
 	return nil
 }
