@@ -182,5 +182,14 @@ logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
 
 
 ## 📜 **License**
-Woodpecker is licensed under the [Server Side Public License (SSPL) v1](https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt).
+
+Woodpecker is licensed under different open source licenses depending on the component:
+
+- **Server components** (`server/` directory): Dual-licensed under your choice of either:
+  - [GNU Affero General Public License v3.0 (AGPLv3)](server/LICENSE)
+  - [Server Side Public License v1 (SSPLv1)](server/LICENSE)
+
+- **All other components**: Licensed under [Apache License 2.0](APACHE-LICENSE-2.0.txt)
+
+See [LICENSE.txt](LICENSE.txt) for detailed license information and [NOTICE](NOTICE) for copyright and contribution details.
 
