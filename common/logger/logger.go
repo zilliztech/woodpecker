@@ -34,14 +34,22 @@ var (
 	_globalLevelLogger sync.Map
 	_globalLogger      atomic.Value
 	initLogOnce        sync.Once
+	customEncoder      = "_WpCustomTextEncoder_"
 )
 
 func init() {
+	encodeFormat := "text"
+	registerErr := zap.RegisterEncoder(customEncoder, func(encoderConfig zapcore.EncoderConfig) (zapcore.Encoder, error) {
+		return NewTextEncoderByConfig(encodeFormat), nil
+	})
+	if registerErr != nil {
+		panic(registerErr)
+	}
 	levels := []string{
 		"debug", "info", "warn", "error",
 	}
 	for _, level := range levels {
-		levelLogger, err := newLogger(level)
+		levelLogger, err := newLogger(encodeFormat, level)
 		if err != nil {
 			continue
 		}
@@ -102,7 +110,7 @@ func Ctx(ctx context.Context) *zap.Logger {
 }
 
 // NewLogger creates a new logger with the specified log level
-func newLogger(level string) (*zap.Logger, error) {
+func newLogger(format string, level string) (*zap.Logger, error) {
 	// Use development config for all levels to get console-friendly output
 	config := zap.NewDevelopmentConfig()
 
@@ -119,8 +127,15 @@ func newLogger(level string) (*zap.Logger, error) {
 		return nil, werr.ErrConfigError.WithCauseErrMsg(fmt.Sprintf("invalid log level: %s", level))
 	}
 
-	// Ensure console encoding for text output
-	config.Encoding = "console"
+	if format == "json" {
+		config.Encoding = "json"
+	} else if format == "text" {
+		// use custom text encoder
+		config.Encoding = customEncoder
+	} else {
+		// fallback to default console text encoder
+		config.Encoding = "console"
+	}
 
 	// Configure encoder for better readability
 	config.EncoderConfig.EncodeTime = customTimeEncoder
