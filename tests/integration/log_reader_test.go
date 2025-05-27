@@ -31,7 +31,7 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_log_handle"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
@@ -62,7 +62,7 @@ func TestActiveSegmentRead(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*segment.SegmentEntry{
+	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 0,
 			EntryId:   0, // segment#0 has entries 0
@@ -74,7 +74,7 @@ func TestActiveSegmentRead(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*segment.SegmentEntry{
+	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 0,
 			EntryId:   1, // segment#0 has entries 0
@@ -147,7 +147,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 	}
 	mockSegmentHandle1.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*segment.SegmentEntry{
+	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 1,
 			EntryId:   0, // segment#0 has entries 0
@@ -159,7 +159,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*segment.SegmentEntry{
+	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 1,
 			EntryId:   1, // segment#0 has entries 0
@@ -229,7 +229,7 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*segment.SegmentEntry{
+	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   0, // segment#0 has entries 0
@@ -241,7 +241,7 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*segment.SegmentEntry{
+	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   1, // segment#0 has entries 0
@@ -303,7 +303,7 @@ func TestReadFromSeekPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*segment.SegmentEntry{
+	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   1, // segment#0 has entries 0

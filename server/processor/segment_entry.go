@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package segment
+package processor
 
 type SegmentEntry struct {
 	SegmentId int64

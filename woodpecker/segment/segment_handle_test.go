@@ -32,7 +32,7 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 func TestNewSegmentHandle(t *testing.T) {
@@ -107,7 +107,7 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		ch := make(chan int64, 1)
 		ch <- int64(i)
 		close(ch)
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 			SegmentId: 1,
 			EntryId:   int64(i),
 			Data:      []byte(fmt.Sprintf("test_%d", i)),
@@ -160,14 +160,14 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		close(ch)
 		if i != 2 {
 			// 0,1,3,4 success
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, nil)
 		} else {
 			// 2 fail, and retry 3 times
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
@@ -233,20 +233,20 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		close(ch)
 		if i != 2 {
 			// 0,1,3,4 success
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, nil)
 		} else {
 			// two failed attempts to append entry 2
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, werr.ErrSegmentWriteException).Times(2)
 			// append entry 2 success at the 3rd retry
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
@@ -306,26 +306,26 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		close(ch)
 		if i%2 == 0 {
 			// 0,2,4,6,8,10,12,14,16,18,20  fail first time,
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, nil).Times(1)
 			// 0,2,4,6,8,10,12,14,16,18,20  success at the second time,
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, nil)
 		} else {
 			// 1,3,5,7,9,11,13,15,17,19  success first time
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
 			}).Return(int64(i), ch, nil)
 		}
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 			SegmentId: 1,
 			EntryId:   int64(i),
 			Data:      []byte(fmt.Sprintf("test_%d", i)),

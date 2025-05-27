@@ -172,9 +172,9 @@ logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start)
 		msg, err := logReader.ReadNext(context.Background())
 		if err == nil {
 			// read success, do biz logic...
-		}else{
+		} else {
 			// read fail, do biz logic...
-        }       
+                } 
 	}
 	
 // Other biz logic...

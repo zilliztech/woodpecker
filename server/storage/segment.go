@@ -42,11 +42,11 @@ type Reader interface {
 	HasNext() (bool, error)
 }
 
-// LogFile represents a log file interface with read and write operations.
+// Segment represents a segment interface with read and write operations.
 //
-//go:generate mockery --dir=./server/storage --name=LogFile --structname=LogFile --output=mocks/mocks_server/mocks_storage --filename=mock_logfile.go --with-expecter=true  --outpkg=mocks_storage
-type LogFile interface {
-	// GetId returns the unique log file id.
+//go:generate mockery --dir=./server/storage --name=Segment --structname=Segment --output=mocks/mocks_server/mocks_storage --filename=mock_Segment.go --with-expecter=true  --outpkg=mocks_storage
+type Segment interface {
+	// GetId returns the unique segment id.
 	GetId() int64
 	// Append adds an entry to the log file synchronously.
 	// Returns a future that will receive the result of the append operation.

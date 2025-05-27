@@ -29,7 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 func TestAppendOp_Execute_Success(t *testing.T) {
@@ -48,7 +48,7 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	ch <- int64(0)
 	close(ch)
 	// mock append success
-	mockLogStoreClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+	mockLogStoreClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 		SegmentId: int64(1),
 		EntryId:   int64(0),
 		Data:      []byte("test"),
@@ -91,7 +91,7 @@ func TestAppendOp_Execute_Error(t *testing.T) {
 	ch <- int64(-1)
 	close(ch)
 	// mock append error
-	mockLogStoreClient.EXPECT().AppendEntry(mock.Anything, int64(1), &segment.SegmentEntry{
+	mockLogStoreClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 		SegmentId: int64(1),
 		EntryId:   int64(0),
 		Data:      []byte("test"),

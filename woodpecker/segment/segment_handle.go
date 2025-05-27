@@ -33,7 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -46,7 +46,7 @@ type SegmentHandle interface {
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
 	// Read range entries from the segment
-	Read(context.Context, int64, int64) ([]*segment.SegmentEntry, error)
+	Read(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
@@ -280,7 +280,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		} else {
 			// retry max times, or encounter non-retryable error
 			elementsToRemove = append(elementsToRemove, element)
-			if minRemoveId == -1 || op.entryId < minRemoveId {
+			if minRemoveId == math.MaxInt64 || op.entryId < minRemoveId {
 				minRemoveId = op.entryId
 			}
 		}
@@ -323,7 +323,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 	}
 }
 
-func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*segment.SegmentEntry, error) {
+func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*processor.SegmentEntry, error) {
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -348,7 +348,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 		if err != nil {
 			return nil, err
 		}
-		return []*segment.SegmentEntry{segmentEntry}, nil
+		return []*processor.SegmentEntry{segmentEntry}, nil
 	}
 
 	segmentEntryList, err := cli.ReadBatchEntries(ctx, s.logId, s.segmentId, from, to)

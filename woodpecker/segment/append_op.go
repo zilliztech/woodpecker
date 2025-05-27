@@ -27,7 +27,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -147,8 +147,8 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 	}
 }
 
-func (op *AppendOp) toSegmentEntry() *segment.SegmentEntry {
-	return &segment.SegmentEntry{
+func (op *AppendOp) toSegmentEntry() *processor.SegmentEntry {
+	return &processor.SegmentEntry{
 		SegmentId: op.segmentId,
 		EntryId:   op.entryId,
 		Data:      op.value,

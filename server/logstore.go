@@ -32,7 +32,7 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
@@ -44,8 +44,8 @@ type LogStore interface {
 	GetAddress() string
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
-	AddEntry(context.Context, int64, *segment.SegmentEntry) (int64, <-chan int64, error)
-	GetEntry(context.Context, int64, int64, int64) (*segment.SegmentEntry, error)
+	AddEntry(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)
+	GetEntry(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)
 	FenceSegment(context.Context, int64, int64) error
 	IsSegmentFenced(context.Context, int64, int64) (bool, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
@@ -67,7 +67,7 @@ type logStore struct {
 	fragmentManager cache.FragmentManager
 
 	spMu              sync.RWMutex
-	segmentProcessors map[int64]map[int64]segment.SegmentProcessor
+	segmentProcessors map[int64]map[int64]processor.SegmentProcessor
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
@@ -80,7 +80,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *client
 		etcdCli:           etcdCli,
 		minioCli:          minioCli,
 		fragmentManager:   fragmentMgr,
-		segmentProcessors: make(map[int64]map[int64]segment.SegmentProcessor),
+		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
 	}
 }
 
@@ -116,7 +116,7 @@ func (l *logStore) Register(ctx context.Context) error {
 	return nil
 }
 
-func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry) (int64, <-chan int64, error) {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
 	segIdStr := fmt.Sprintf("%d", entry.SegmentId)
@@ -147,17 +147,17 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *segment.Seg
 	return entryId, syncedCh, nil
 }
 
-func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (segment.SegmentProcessor, error) {
+func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (processor.SegmentProcessor, error) {
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
-	segProcessors := make(map[int64]segment.SegmentProcessor)
+	segProcessors := make(map[int64]processor.SegmentProcessor)
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		segProcessors = processors
 	}
 	if processor, segExists := segProcessors[segmentId]; segExists {
 		return processor, nil
 	}
-	s := segment.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
+	s := processor.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
 	segProcessors[segmentId] = s
 	l.segmentProcessors[logId] = segProcessors
 
@@ -167,7 +167,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 	return s, nil
 }
 
-func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segment.SegmentProcessor {
+func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) processor.SegmentProcessor {
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
@@ -178,7 +178,7 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) segme
 	return nil
 }
 
-func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error) {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)

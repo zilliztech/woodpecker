@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package segment
+package processor
 
 import (
 	"context"
@@ -41,7 +41,7 @@ import (
 
 // SegmentProcessor for segment processing in server side
 //
-//go:generate mockery --dir=./server/segment --name=SegmentProcessor --structname=SegmentProcessor --output=mocks/mocks_server/mocks_segment --filename=mock_segment_processor.go --with-expecter=true  --outpkg=mocks_segment
+//go:generate mockery --dir=./server/processor --name=SegmentProcessor --structname=SegmentProcessor --output=mocks/mocks_server/mocks_segment --filename=mock_segment_processor.go --with-expecter=true  --outpkg=mocks_segment
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
@@ -70,15 +70,15 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId i
 }
 
 // NewSegmentProcessorWithLogFile TODO Test Only
-func NewSegmentProcessorWithLogFile(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler, currentLogFile storage.LogFile) SegmentProcessor {
+func NewSegmentProcessorWithLogFile(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler, currentLogFile storage.Segment) SegmentProcessor {
 	s := &segmentProcessor{
 		cfg:                  cfg,
 		logId:                logId,
 		segId:                segId,
 		minioClient:          minioCli,
 		createTime:           time.Now().UnixMilli(),
-		currentLogFileWriter: currentLogFile,
-		currentLogFileReader: currentLogFile,
+		currentSegmentWriter: currentLogFile,
+		currentSegmentReader: currentLogFile,
 	}
 	s.fenced.Store(false)
 	return s
@@ -95,13 +95,12 @@ type segmentProcessor struct {
 
 	createTime int64
 
-	// for logFile writer
-	currentLogFileId     int64
-	currentLogFileWriter storage.LogFile
+	// for segment writer
+	currentSegmentWriter storage.Segment
 	fenced               atomic.Bool
 
-	// for logFile reader
-	currentLogFileReader storage.LogFile
+	// for segment reader
+	currentSegmentReader storage.Segment
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -122,10 +121,10 @@ func (s *segmentProcessor) SetFenced() {
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
 	s.fenced.Store(true)
-	if s.currentLogFileWriter != nil {
-		closeLogFileWriterErr := s.currentLogFileWriter.Close()
-		if closeLogFileWriterErr != nil {
-			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("logFileId", s.currentLogFileId), zap.Error(closeLogFileWriterErr))
+	if s.currentSegmentWriter != nil {
+		closeSegmentWriterErr := s.currentSegmentWriter.Close()
+		if closeSegmentWriterErr != nil {
+			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(closeSegmentWriterErr))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Observe(float64(time.Since(start).Milliseconds()))
 		} else {
@@ -150,14 +149,14 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
 	}
 
-	logFileWriter, err := s.getOrCreateLogFileWriter(ctx)
+	segmentWriter, err := s.getOrCreateSegmentWriter(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "writer_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "writer_error").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, nil, err
 	}
 
-	bufferedSeqNo, syncedCh, err := logFileWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
+	bufferedSeqNo, syncedCh, err := segmentWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
 	if bufferedSeqNo == -1 {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -179,14 +178,14 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
 	logger.Ctx(ctx).Debug("segment processor read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId))
-	logFileReader, err := s.getOrCreateLogFileReader(ctx, entryId)
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, entryId)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_entry", "reader_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_entry", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	// TODO should cache reader for each open reader
-	r, err := logFileReader.NewReader(ctx, storage.ReaderOpt{
+	r, err := segmentReader.NewReader(ctx, storage.ReaderOpt{
 		StartSequenceNum: entryId,
 		EndSequenceNum:   entryId + 1,
 	})
@@ -232,14 +231,14 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
-	logFileReader, err := s.getOrCreateLogFileReader(ctx, -1)
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, -1)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "reader_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, err
 	}
 
-	lastEntryId, err := logFileReader.GetLastEntryId()
+	lastEntryId, err := segmentReader.GetLastEntryId()
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -251,11 +250,11 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 	return lastEntryId, nil
 }
 
-func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storage.LogFile, error) {
+func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context) (storage.Segment, error) {
 	// First check with read lock to avoid data race
 	s.RLock()
-	if s.currentLogFileWriter != nil {
-		writer := s.currentLogFileWriter
+	if s.currentSegmentWriter != nil {
+		writer := s.currentSegmentWriter
 		s.RUnlock()
 		return writer, nil
 	}
@@ -266,49 +265,43 @@ func (s *segmentProcessor) getOrCreateLogFileWriter(ctx context.Context) (storag
 	defer s.Unlock()
 
 	// Double-check after acquiring lock
-	if s.currentLogFileWriter != nil {
-		return s.currentLogFileWriter, nil
+	if s.currentSegmentWriter != nil {
+		return s.currentSegmentWriter, nil
 	}
 
 	// Initialize writer
-	// get logfile id from meta/storage
-	// Currently, simplified support for one logical LogFile per Segment
-	s.currentLogFileId = 0
-
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, err := disk.NewDiskLogFile(
+		writerFile, err := disk.NewDiskSegmentImpl(
 			s.logId,
 			s.segId,
-			s.currentLogFileId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
 			disk.WithWriteFragmentSize(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxBytes),
 			disk.WithWriteMaxBufferSize(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize),
 			disk.WithWriteMaxEntryPerFile(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxEntries),
 			disk.WithWriteMaxIntervalMs(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval))
-		s.currentLogFileWriter = writerFile
-		logger.Ctx(ctx).Info("create DiskLogFile for write", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", writerFile)))
-		return s.currentLogFileWriter, err
+		s.currentSegmentWriter = writerFile
+		logger.Ctx(ctx).Info("create DiskSegmentImpl for write", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", writerFile)))
+		return s.currentSegmentWriter, err
 	} else {
 		// use MinIO-compatible storage
-		s.currentLogFileWriter = objectstorage.NewLogFile(
+		s.currentSegmentWriter = objectstorage.NewSegmentImpl(
 			s.logId,
 			s.segId,
-			s.currentLogFileId,
 			s.getSegmentKeyPrefix(),
 			s.getInstanceBucket(),
 			s.minioClient,
 			s.cfg)
-		logger.Ctx(ctx).Info("create LogFile for write", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentLogFileWriter)))
+		logger.Ctx(ctx).Info("create SegmentImpl for write", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentSegmentWriter)))
 	}
-	return s.currentLogFileWriter, nil
+	return s.currentSegmentWriter, nil
 }
 
-func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId int64) (storage.LogFile, error) {
+func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId int64) (storage.Segment, error) {
 	// First check with read lock to avoid data race
 	s.RLock()
-	if s.currentLogFileReader != nil {
-		reader := s.currentLogFileReader
+	if s.currentSegmentReader != nil {
+		reader := s.currentSegmentReader
 		s.RUnlock()
 		return reader, nil
 	}
@@ -319,36 +312,30 @@ func (s *segmentProcessor) getOrCreateLogFileReader(ctx context.Context, entryId
 	defer s.Unlock()
 
 	// Double-check after acquiring lock
-	if s.currentLogFileReader != nil {
-		return s.currentLogFileReader, nil
+	if s.currentSegmentReader != nil {
+		return s.currentSegmentReader, nil
 	}
 
 	// Initialize reader
-	// get logfile id from meta/storage
-	// Currently, simplified support for one LogFile per Segment
-	s.currentLogFileId = 0
-
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		readerFile, err := disk.NewRODiskLogFile(
+		readerFile, err := disk.NewRODiskSegmentImpl(
 			s.logId,
 			s.segId,
-			s.currentLogFileId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
-		s.currentLogFileReader = readerFile
-		logger.Ctx(ctx).Info("create DiskLogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
-		return s.currentLogFileReader, err
+		s.currentSegmentReader = readerFile
+		logger.Ctx(ctx).Info("create RODiskSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
+		return s.currentSegmentReader, err
 	} else {
-		s.currentLogFileReader = objectstorage.NewROLogFile(
+		s.currentSegmentReader = objectstorage.NewROSegmentImpl(
 			s.logId,
 			s.segId,
-			s.currentLogFileId,
 			s.getSegmentKeyPrefix(),
 			s.getInstanceBucket(),
 			s.minioClient)
-		logger.Ctx(ctx).Info("create LogFile for read", zap.Int64("logFileId", s.currentLogFileId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentLogFileReader)))
+		logger.Ctx(ctx).Info("create ROSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentSegmentReader)))
 	}
-	return s.currentLogFileReader, nil
+	return s.currentSegmentReader, nil
 }
 
 func (s *segmentProcessor) getInstanceBucket() string {
@@ -364,14 +351,14 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
-	logFile, err := s.getOrCreateLogFileReader(ctx, 0)
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, 0)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact", "reader_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 
-	mergedFrags, entryOffset, fragsOffset, mergedErr := logFile.Merge(ctx)
+	mergedFrags, entryOffset, fragsOffset, mergedErr := segmentReader.Merge(ctx)
 	if mergedErr != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact", "merge_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact", "merge_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -422,14 +409,14 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
-	logFile, err := s.getOrCreateLogFileReader(ctx, 0)
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, 0)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recover", "reader_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "recover", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
 
-	size, lastFragment, err := logFile.Load(ctx)
+	size, lastFragment, err := segmentReader.Load(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recover", "load_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "recover", "load_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -475,14 +462,14 @@ func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
-	logFile, err := s.getOrCreateLogFileReader(ctx, 0) // TODO use a writer or special instance for maintain
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, 0) // TODO use a writer or special instance for maintain
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean", "reader_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
-	err = logFile.DeleteFragments(ctx, flag)
+	err = segmentReader.DeleteFragments(ctx, flag)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean", "delete_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean", "delete_error").Observe(float64(time.Since(start).Milliseconds()))
