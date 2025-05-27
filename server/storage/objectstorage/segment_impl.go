@@ -265,21 +265,21 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 	}
 	toFlushDataFirstEntryId := currentBuffer.FirstEntryId
 
-	partitions, partitionFirstEntryIds := f.repackIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	fragmentDataList, fragmentFirstEntryIdList := f.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 	concurrentCh := make(chan int, f.syncPolicyConfig.MaxFlushThreads)
-	flushResultCh := make(chan *flushResult, len(partitions))
+	flushResultCh := make(chan *flushResult, len(fragmentDataList))
 	var concurrentWg sync.WaitGroup
-	logger.Ctx(ctx).Debug("get flush partitions finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("partitions", len(partitions)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+	logger.Ctx(ctx).Debug("get flush partitions finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("fragments", len(fragmentDataList)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	lastFragmentId := f.LastFragmentId()
-	for i, partition := range partitions {
+	for i, fragmentData := range fragmentDataList {
 		concurrentWg.Add(1)
 		go func() {
 			concurrentCh <- i                        // take one flush goroutine to start
 			fragId := lastFragmentId + 1 + uint64(i) // fragment id
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, fragId)
-			part := partition
-			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
+			part := fragmentData
+			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryIdList[i], true, false, true)
 			flushErr := retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -365,7 +365,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 		}
 		logger.Ctx(ctx).Debug("Sync to object storage success",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("partitions", len(partitions)),
+			zap.Int("fragments", len(fragmentDataList)),
 			zap.Int64("successFirstEntryId", toFlushDataFirstEntryId),
 			zap.Int64("restDataFirstEntryId", restDataFirstEntryId),
 			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)),
@@ -392,7 +392,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 		f.buffer.Store(newBuffer)
 		logger.Ctx(ctx).Debug("Sync to object storage partial success",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("partitions", len(partitions)),
+			zap.Int("fragments", len(fragmentDataList)),
 			zap.Int64("successFirstEntryId", toFlushDataFirstEntryId),
 			zap.Int64("restDataFirstEntryId", restDataFirstEntryId),
 			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)),
@@ -409,7 +409,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 		currentBuffer.Reset()
 		logger.Ctx(ctx).Debug("Sync to object storage all failed,reset buffer",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("partitions", len(partitions)),
+			zap.Int("fragments", len(fragmentDataList)),
 			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	}
 
@@ -438,31 +438,52 @@ func (f *SegmentImpl) Close() error {
 	return nil
 }
 
-func (f *SegmentImpl) repackIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
-	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
-	var partitions = make([][][]byte, 0)
-	var partition = make([][]byte, 0)
-	var currentSize = 0
+func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
+	if len(toFlushData) == 0 {
+		return nil, nil
+	}
 
-	for _, entry := range toFlushData {
-		entrySize := len(entry)
-		if int64(currentSize+entrySize) > maxPartitionSize && currentSize > 0 {
-			partitions = append(partitions, partition)
-			partition = make([][]byte, 0)
+	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
+
+	// First pass: calculate partition boundaries without copying data
+	type partitionRange struct {
+		start int
+		end   int
+	}
+
+	var ranges []partitionRange
+	currentStart := 0
+	currentSize := int64(0)
+
+	for i, entry := range toFlushData {
+		entrySize := int64(len(entry))
+
+		// Check if adding this entry would exceed the max partition size
+		if currentSize+entrySize > maxPartitionSize && currentSize > 0 {
+			// Close current partition
+			ranges = append(ranges, partitionRange{start: currentStart, end: i})
+			currentStart = i
 			currentSize = 0
 		}
-		partition = append(partition, entry)
+
 		currentSize += entrySize
 	}
-	if len(partition) > 0 {
-		partitions = append(partitions, partition)
+
+	// Add the last partition
+	if currentStart < len(toFlushData) {
+		ranges = append(ranges, partitionRange{start: currentStart, end: len(toFlushData)})
 	}
 
-	var partitionFirstEntryIds = make([]int64, 0)
+	// Second pass: create partitions using slice references (no copying)
+	partitions := make([][][]byte, len(ranges))
+	partitionFirstEntryIds := make([]int64, len(ranges))
+
 	offset := toFlushDataFirstEntryId
-	for _, part := range partitions {
-		partitionFirstEntryIds = append(partitionFirstEntryIds, offset)
-		offset += int64(len(part))
+	for i, r := range ranges {
+		// Use slice reference instead of copying
+		partitions[i] = toFlushData[r.start:r.end]
+		partitionFirstEntryIds[i] = offset
+		offset += int64(r.end - r.start)
 	}
 
 	return partitions, partitionFirstEntryIds
@@ -677,7 +698,7 @@ func (f *ROSegmentImpl) GetLastEntryId() (int64, error) {
 }
 
 func (f *ROSegmentImpl) Sync(ctx context.Context) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support sync")
+	return werr.ErrNotSupport.WithCauseErrMsg("ROSegmentImpl not support sync")
 }
 
 func (f *ROSegmentImpl) Close() error {

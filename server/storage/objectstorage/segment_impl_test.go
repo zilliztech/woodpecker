@@ -1388,3 +1388,606 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestPrepareMultiFragmentDataIfNecessary_EmptyData(t *testing.T) {
+	// Create a SegmentImpl with test configuration
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 1024, // 1KB max flush size
+		},
+	}
+
+	// Test with empty data
+	toFlushData := [][]byte{}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return empty partitions
+	assert.Equal(t, 0, len(partitions))
+	assert.Equal(t, 0, len(partitionFirstEntryIds))
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_SingleSmallEntry(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 1024, // 1KB max flush size
+		},
+	}
+
+	// Test with single small entry
+	toFlushData := [][]byte{
+		[]byte("small data"), // 10 bytes
+	}
+	toFlushDataFirstEntryId := int64(5)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return single partition with one entry
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, []byte("small data"), partitions[0][0])
+	assert.Equal(t, int64(5), partitionFirstEntryIds[0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_MultipleSmallEntries(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 1024, // 1KB max flush size
+		},
+	}
+
+	// Test with multiple small entries that fit in one partition
+	toFlushData := [][]byte{
+		[]byte("data1"), // 5 bytes
+		[]byte("data2"), // 5 bytes
+		[]byte("data3"), // 5 bytes
+	}
+	toFlushDataFirstEntryId := int64(10)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return single partition with all entries
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 3, len(partitions[0]))
+	assert.Equal(t, []byte("data1"), partitions[0][0])
+	assert.Equal(t, []byte("data2"), partitions[0][1])
+	assert.Equal(t, []byte("data3"), partitions[0][2])
+	assert.Equal(t, int64(10), partitionFirstEntryIds[0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 20, // 20 bytes max flush size
+		},
+	}
+
+	// Test with entries that exceed max flush size
+	toFlushData := [][]byte{
+		[]byte("data1234567890"), // 14 bytes
+		[]byte("data2345"),       // 8 bytes (14+8=22 > 20, should split)
+		[]byte("data3"),          // 5 bytes
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return two partitions
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
+
+	// First partition should contain first entry only
+	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, []byte("data1234567890"), partitions[0][0])
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	// Second partition should contain second and third entries
+	assert.Equal(t, 2, len(partitions[1]))
+	assert.Equal(t, []byte("data2345"), partitions[1][0])
+	assert.Equal(t, []byte("data3"), partitions[1][1])
+	assert.Equal(t, int64(1), partitionFirstEntryIds[1])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 10, // 10 bytes max flush size
+		},
+	}
+
+	// Test with single entry larger than max flush size
+	largeData := make([]byte, 50) // 50 bytes, larger than max flush size
+	for i := range largeData {
+		largeData[i] = byte('A')
+	}
+
+	toFlushData := [][]byte{largeData}
+	toFlushDataFirstEntryId := int64(100)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should still return single partition (large entries are not split)
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, largeData, partitions[0][0])
+	assert.Equal(t, int64(100), partitionFirstEntryIds[0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 15, // 15 bytes max flush size
+		},
+	}
+
+	// Test with entries that create multiple partitions
+	toFlushData := [][]byte{
+		[]byte("data1"), // 5 bytes
+		[]byte("data2"), // 5 bytes (total: 10 bytes, fits)
+		[]byte("data3"), // 5 bytes (total: 15 bytes, fits)
+		[]byte("data4"), // 5 bytes (total: 20 bytes, exceeds, new partition)
+		[]byte("data5"), // 5 bytes (total: 10 bytes in second partition)
+		[]byte("data6"), // 5 bytes (total: 15 bytes in second partition)
+		[]byte("data7"), // 5 bytes (total: 20 bytes, exceeds, new partition)
+	}
+	toFlushDataFirstEntryId := int64(50)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return three partitions
+	assert.Equal(t, 3, len(partitions))
+	assert.Equal(t, 3, len(partitionFirstEntryIds))
+
+	// First partition: data1, data2, data3
+	assert.Equal(t, 3, len(partitions[0]))
+	assert.Equal(t, []byte("data1"), partitions[0][0])
+	assert.Equal(t, []byte("data2"), partitions[0][1])
+	assert.Equal(t, []byte("data3"), partitions[0][2])
+	assert.Equal(t, int64(50), partitionFirstEntryIds[0])
+
+	// Second partition: data4, data5, data6
+	assert.Equal(t, 3, len(partitions[1]))
+	assert.Equal(t, []byte("data4"), partitions[1][0])
+	assert.Equal(t, []byte("data5"), partitions[1][1])
+	assert.Equal(t, []byte("data6"), partitions[1][2])
+	assert.Equal(t, int64(53), partitionFirstEntryIds[1])
+
+	// Third partition: data7
+	assert.Equal(t, 1, len(partitions[2]))
+	assert.Equal(t, []byte("data7"), partitions[2][0])
+	assert.Equal(t, int64(56), partitionFirstEntryIds[2])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 0, // 0 bytes max flush size (edge case)
+		},
+	}
+
+	// Test with zero max flush size
+	toFlushData := [][]byte{
+		[]byte("a"), // 1 byte
+		[]byte("b"), // 1 byte
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Each entry should be in its own partition
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
+
+	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, []byte("a"), partitions[0][0])
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	assert.Equal(t, 1, len(partitions[1]))
+	assert.Equal(t, []byte("b"), partitions[1][0])
+	assert.Equal(t, int64(1), partitionFirstEntryIds[1])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 100, // 100 bytes max flush size
+		},
+	}
+
+	// Test with varying entry sizes
+	toFlushData := [][]byte{
+		make([]byte, 30), // 30 bytes
+		make([]byte, 40), // 40 bytes (total: 70 bytes, fits)
+		make([]byte, 50), // 50 bytes (total: 120 bytes, exceeds, new partition)
+		make([]byte, 20), // 20 bytes (total: 70 bytes in second partition)
+		make([]byte, 25), // 25 bytes (total: 95 bytes in second partition)
+		make([]byte, 10), // 10 bytes (total: 105 bytes, exceeds, new partition)
+	}
+	toFlushDataFirstEntryId := int64(1000)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return three partitions
+	assert.Equal(t, 3, len(partitions))
+	assert.Equal(t, 3, len(partitionFirstEntryIds))
+
+	// First partition: 30 + 40 = 70 bytes
+	assert.Equal(t, 2, len(partitions[0]))
+	assert.Equal(t, 30, len(partitions[0][0]))
+	assert.Equal(t, 40, len(partitions[0][1]))
+	assert.Equal(t, int64(1000), partitionFirstEntryIds[0])
+
+	// Second partition: 50 + 20 + 25 = 95 bytes
+	assert.Equal(t, 3, len(partitions[1]))
+	assert.Equal(t, 50, len(partitions[1][0]))
+	assert.Equal(t, 20, len(partitions[1][1]))
+	assert.Equal(t, 25, len(partitions[1][2]))
+	assert.Equal(t, int64(1002), partitionFirstEntryIds[1])
+
+	// Third partition: 10 bytes
+	assert.Equal(t, 1, len(partitions[2]))
+	assert.Equal(t, 10, len(partitions[2][0]))
+	assert.Equal(t, int64(1005), partitionFirstEntryIds[2])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 2, // Very small size to force multiple partitions
+		},
+	}
+
+	// Test entry ID calculation with different starting entry ID
+	toFlushData := [][]byte{
+		[]byte("ab"), // 2 bytes (fits in first partition)
+		[]byte("cd"), // 2 bytes (fits in second partition)
+		[]byte("ef"), // 2 bytes (fits in third partition)
+	}
+	toFlushDataFirstEntryId := int64(42) // Start from entry ID 42
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should create multiple partitions due to small max flush size
+	assert.Equal(t, 3, len(partitions))
+	assert.Equal(t, 3, len(partitionFirstEntryIds))
+
+	// Verify entry ID progression
+	assert.Equal(t, int64(42), partitionFirstEntryIds[0]) // First partition starts at 42
+	assert.Equal(t, int64(43), partitionFirstEntryIds[1]) // Second partition starts at 43
+	assert.Equal(t, int64(44), partitionFirstEntryIds[2]) // Third partition starts at 44
+
+	// Verify partition contents
+	assert.Equal(t, []byte("ab"), partitions[0][0])
+	assert.Equal(t, []byte("cd"), partitions[1][0])
+	assert.Equal(t, []byte("ef"), partitions[2][0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_LargeMaxFlushSize(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 1024 * 1024, // 1MB max flush size (very large)
+		},
+	}
+
+	// Test with many small entries that should all fit in one partition
+	toFlushData := make([][]byte, 100)
+	for i := 0; i < 100; i++ {
+		toFlushData[i] = []byte("small_data_entry") // 16 bytes each
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return single partition with all entries
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 100, len(partitions[0]))
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	// Verify all entries are present
+	for i := 0; i < 100; i++ {
+		assert.Equal(t, []byte("small_data_entry"), partitions[0][i])
+	}
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_ExactSizeMatch(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 10, // Exactly 10 bytes max flush size
+		},
+	}
+
+	// Test with entries that exactly match the max flush size
+	toFlushData := [][]byte{
+		[]byte("1234567890"), // Exactly 10 bytes
+		[]byte("abcdefghij"), // Exactly 10 bytes
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return two partitions, each with one entry
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
+
+	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, []byte("1234567890"), partitions[0][0])
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	assert.Equal(t, 1, len(partitions[1]))
+	assert.Equal(t, []byte("abcdefghij"), partitions[1][0])
+	assert.Equal(t, int64(1), partitionFirstEntryIds[1])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_NegativeEntryId(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 20,
+		},
+	}
+
+	// Test with negative starting entry ID
+	toFlushData := [][]byte{
+		[]byte("data1"), // 5 bytes
+		[]byte("data2"), // 5 bytes
+	}
+	toFlushDataFirstEntryId := int64(-10) // Negative starting entry ID
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should work correctly with negative entry IDs
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 2, len(partitions[0]))
+	assert.Equal(t, int64(-10), partitionFirstEntryIds[0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_SingleByteEntries(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 3, // 3 bytes max flush size
+		},
+	}
+
+	// Test with single byte entries
+	toFlushData := [][]byte{
+		[]byte("a"), // 1 byte
+		[]byte("b"), // 1 byte
+		[]byte("c"), // 1 byte (total: 3 bytes, fits)
+		[]byte("d"), // 1 byte (total: 4 bytes, exceeds, new partition)
+		[]byte("e"), // 1 byte
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return two partitions
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
+
+	// First partition: a, b, c (3 bytes)
+	assert.Equal(t, 3, len(partitions[0]))
+	assert.Equal(t, []byte("a"), partitions[0][0])
+	assert.Equal(t, []byte("b"), partitions[0][1])
+	assert.Equal(t, []byte("c"), partitions[0][2])
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	// Second partition: d, e (2 bytes)
+	assert.Equal(t, 2, len(partitions[1]))
+	assert.Equal(t, []byte("d"), partitions[1][0])
+	assert.Equal(t, []byte("e"), partitions[1][1])
+	assert.Equal(t, int64(3), partitionFirstEntryIds[1])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_MaxInt64EntryId(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 100,
+		},
+	}
+
+	// Test with very large entry ID
+	toFlushData := [][]byte{
+		[]byte("data1"),
+		[]byte("data2"),
+	}
+	toFlushDataFirstEntryId := int64(9223372036854775800) // Near max int64
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should work correctly with large entry IDs
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, int64(9223372036854775800), partitionFirstEntryIds[0])
+}
+
+func TestPrepareMultiFragmentDataIfNecessary_EmptyEntries(t *testing.T) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 10,
+		},
+	}
+
+	// Test with empty byte slices
+	toFlushData := [][]byte{
+		[]byte{},       // 0 bytes
+		[]byte("data"), // 4 bytes
+		[]byte{},       // 0 bytes
+		[]byte("more"), // 4 bytes
+		[]byte{},       // 0 bytes
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+
+	// Should return single partition with all entries (total 8 bytes)
+	assert.Equal(t, 1, len(partitions))
+	assert.Equal(t, 1, len(partitionFirstEntryIds))
+	assert.Equal(t, 5, len(partitions[0]))
+	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
+
+	// Verify all entries including empty ones
+	assert.Equal(t, []byte{}, partitions[0][0])
+	assert.Equal(t, []byte("data"), partitions[0][1])
+	assert.Equal(t, []byte{}, partitions[0][2])
+	assert.Equal(t, []byte("more"), partitions[0][3])
+	assert.Equal(t, []byte{}, partitions[0][4])
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_SmallEntries benchmarks the repackIfNecessary function with small entries
+func BenchmarkPrepareMultiFragmentDataIfNecessary_SmallEntries(b *testing.B) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 1024, // 1KB max flush size
+		},
+	}
+
+	// Create test data with small entries
+	toFlushData := make([][]byte, 100)
+	for i := 0; i < 100; i++ {
+		toFlushData[i] = []byte("small_data_entry") // 16 bytes each
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	}
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_LargeEntries benchmarks the repackIfNecessary function with large entries
+func BenchmarkPrepareMultiFragmentDataIfNecessary_LargeEntries(b *testing.B) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 8192, // 8KB max flush size
+		},
+	}
+
+	// Create test data with large entries
+	toFlushData := make([][]byte, 50)
+	for i := 0; i < 50; i++ {
+		data := make([]byte, 1024) // 1KB each
+		for j := range data {
+			data[j] = byte(i % 256)
+		}
+		toFlushData[i] = data
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	}
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_ManyPartitions benchmarks the repackIfNecessary function with many small partitions
+func BenchmarkPrepareMultiFragmentDataIfNecessary_ManyPartitions(b *testing.B) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 100, // Small size to force many partitions
+		},
+	}
+
+	// Create test data that will create many partitions
+	toFlushData := make([][]byte, 1000)
+	for i := 0; i < 1000; i++ {
+		toFlushData[i] = []byte("data") // 4 bytes each
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	}
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_VaryingSizes benchmarks the repackIfNecessary function with varying entry sizes
+func BenchmarkPrepareMultiFragmentDataIfNecessary_VaryingSizes(b *testing.B) {
+	segment := &SegmentImpl{
+		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+			MaxFlushSize: 2048, // 2KB max flush size
+		},
+	}
+
+	// Create test data with varying sizes
+	toFlushData := make([][]byte, 200)
+	for i := 0; i < 200; i++ {
+		size := (i%10 + 1) * 10 // Sizes from 10 to 100 bytes
+		data := make([]byte, size)
+		for j := range data {
+			data[j] = byte(i % 256)
+		}
+		toFlushData[i] = data
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	}
+}
+
+// repackIfNecessaryOld is the old implementation for comparison
+func repackIfNecessaryOld(maxFlushSize int64, toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
+	maxPartitionSize := maxFlushSize
+	var partitions = make([][][]byte, 0)
+	var partition = make([][]byte, 0)
+	var currentSize = 0
+
+	for _, entry := range toFlushData {
+		entrySize := len(entry)
+		if int64(currentSize+entrySize) > maxPartitionSize && currentSize > 0 {
+			partitions = append(partitions, partition)
+			partition = make([][]byte, 0)
+			currentSize = 0
+		}
+		partition = append(partition, entry)
+		currentSize += entrySize
+	}
+	if len(partition) > 0 {
+		partitions = append(partitions, partition)
+	}
+
+	var partitionFirstEntryIds = make([]int64, 0)
+	offset := toFlushDataFirstEntryId
+	for _, part := range partitions {
+		partitionFirstEntryIds = append(partitionFirstEntryIds, offset)
+		offset += int64(len(part))
+	}
+
+	return partitions, partitionFirstEntryIds
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_Old_SmallEntries benchmarks the old implementation with small entries
+func BenchmarkPrepareMultiFragmentDataIfNecessary_Old_SmallEntries(b *testing.B) {
+	// Create test data with small entries
+	toFlushData := make([][]byte, 100)
+	for i := 0; i < 100; i++ {
+		toFlushData[i] = []byte("small_data_entry") // 16 bytes each
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = repackIfNecessaryOld(1024, toFlushData, toFlushDataFirstEntryId)
+	}
+}
+
+// BenchmarkPrepareMultiFragmentDataIfNecessary_Old_ManyPartitions benchmarks the old implementation with many partitions
+func BenchmarkPrepareMultiFragmentDataIfNecessary_Old_ManyPartitions(b *testing.B) {
+	// Create test data that will create many partitions
+	toFlushData := make([][]byte, 1000)
+	for i := 0; i < 1000; i++ {
+		toFlushData[i] = []byte("data") // 4 bytes each
+	}
+	toFlushDataFirstEntryId := int64(0)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = repackIfNecessaryOld(100, toFlushData, toFlushDataFirstEntryId)
+	}
+}
