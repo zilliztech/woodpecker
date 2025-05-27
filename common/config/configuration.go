@@ -303,7 +303,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 func getDefaultLoggerConfig() LogConfig {
 	return LogConfig{
 		Level:  "info",
-		Format: "json",
+		Format: "text",
 		Stdout: true,
 		File: LogFileConfig{
 			RootPath:   "./logs",

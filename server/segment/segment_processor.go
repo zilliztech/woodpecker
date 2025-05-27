@@ -385,7 +385,6 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	}
 
 	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
-	totalSize := lastMergedFrag.GetSize()
 	lastEntryIdOfAllMergedFrags, err := lastMergedFrag.GetLastEntryId()
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact", "get_last_entry_error").Inc()
@@ -393,10 +392,17 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		return nil, err
 	}
 
+	totalSize := int64(0)
+	for _, frag := range mergedFrags {
+		totalSize += frag.GetSize()
+	}
+
 	logger.Ctx(ctx).Debug("Compact segment merge completed",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
-		zap.Int("mergedFrags", len(mergedFrags)))
+		zap.Int("mergedFrags", len(mergedFrags)),
+		zap.Int64("lastEntryId", lastEntryIdOfAllMergedFrags),
+		zap.Int64("totalSize", totalSize))
 
 	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact", "success").Inc()
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact", "success").Observe(float64(time.Since(start).Milliseconds()))

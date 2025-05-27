@@ -611,7 +611,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	// only one recovery operation at the same time
-	if s.doingRecoveryOrCompact.Load() {
+	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return nil
 	}
@@ -663,7 +663,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
-	if s.doingRecoveryOrCompact.Load() {
+	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
 		return nil
 	}
 	defer s.doingRecoveryOrCompact.Store(false)
@@ -714,7 +714,7 @@ func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
 	if currentSegmentMeta.State != proto.SegmentState_InRecovery {
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InRecovery, skip this compaction. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
-	if s.doingRecoveryOrCompact.Load() {
+	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
 		return nil
 	}
 	defer s.doingRecoveryOrCompact.Store(false)

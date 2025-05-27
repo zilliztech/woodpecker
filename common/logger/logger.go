@@ -103,26 +103,31 @@ func Ctx(ctx context.Context) *zap.Logger {
 
 // NewLogger creates a new logger with the specified log level
 func newLogger(level string) (*zap.Logger, error) {
-	var config zap.Config
+	// Use development config for all levels to get console-friendly output
+	config := zap.NewDevelopmentConfig()
+
 	switch level {
 	case "debug":
-		config = zap.NewDevelopmentConfig()
 		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
 	case "info":
-		config = zap.NewProductionConfig()
 		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
 	case "warn":
-		config = zap.NewProductionConfig()
 		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
 	case "error":
-		config = zap.NewProductionConfig()
 		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 	default:
 		return nil, werr.ErrConfigError.WithCauseErrMsg(fmt.Sprintf("invalid log level: %s", level))
 	}
-	// default text encoder
+
+	// Ensure console encoding for text output
 	config.Encoding = "console"
+
+	// Configure encoder for better readability
 	config.EncoderConfig.EncodeTime = customTimeEncoder
+	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	config.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+	config.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+
 	logger, err := config.Build()
 	if err != nil {
 		return nil, err
@@ -132,5 +137,5 @@ func newLogger(level string) (*zap.Logger, error) {
 }
 
 func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-	enc.AppendString(t.Format("2006-01-02 15:04:05.000")) // custom time format
+	enc.AppendString(t.Format("2006/01/02 15:04:05.000 -07:00")) // custom time format
 }

@@ -393,6 +393,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 
 	// set data cache ready
 	mergedFrag.dataLoaded = true
+	mergedFrag.size = int64(len(mergedFrag.entriesData) + len(mergedFrag.indexes))
+	mergedFrag.rawBufSize = int64(cap(mergedFrag.entriesData) + cap(mergedFrag.indexes))
 
 	// upload the mergedFragment
 	flushErr := mergedFrag.Flush(ctx)

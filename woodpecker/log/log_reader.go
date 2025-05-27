@@ -221,11 +221,14 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		}
 		if err != nil {
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			logger.Ctx(ctx).Warn("read one entry error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(err))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		if len(entries) != 1 {
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-			return nil, werr.ErrSegmentReadException.WithCauseErrMsg(fmt.Sprintf("should read one entry, but got %d", len(entries)))
+			readErr := werr.ErrSegmentReadException.WithCauseErrMsg(fmt.Sprintf("should read one entry, but got %d", len(entries)))
+			logger.Ctx(ctx).Warn("read one entry error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(readErr))
+			return nil, readErr
 		}
 
 		l.pendingReadSegmentId = entries[0].SegmentId
@@ -234,6 +237,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		logMsg, err := UnmarshalMessage(entries[0].Data)
 		if err != nil {
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
+			logger.Ctx(ctx).Warn("read one entry error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(err))
 			return nil, werr.ErrSegmentReadException.WithCauseErr(err)
 		}
 		logger.Ctx(ctx).Debug("read one message complete",

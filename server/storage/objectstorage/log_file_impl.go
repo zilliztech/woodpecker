@@ -284,19 +284,19 @@ func (f *LogFile) Sync(ctx context.Context) error {
 			key := getFragmentObjectKey(f.segmentPrefixKey, f.id, fragId)
 			part := partition
 			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, partitionFirstEntryIds[i], true, false, true)
-			err = retry.Do(ctx,
+			flushErr := retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
 				retry.Sleep(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
 			)
-			if err != nil {
-				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(err))
+			if flushErr != nil {
+				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("logFileId", f.id), zap.Uint64("fragId", fragId), zap.Error(flushErr))
 			}
 			flushResultCh <- &flushResult{
 				target: fragment,
-				err:    err,
+				err:    flushErr,
 			}
 			concurrentWg.Done() // finish a flush goroutine
 			<-concurrentCh      // release a flush goroutine

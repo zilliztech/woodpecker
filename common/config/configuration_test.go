@@ -118,7 +118,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
-	assert.Equal(t, "json", defaultConfig.Log.Format)
+	assert.Equal(t, "text", defaultConfig.Log.Format)
 	assert.True(t, defaultConfig.Log.Stdout)
 	assert.Equal(t, "./logs", defaultConfig.Log.File.RootPath)
 	assert.Equal(t, 100, defaultConfig.Log.File.MaxSize)
