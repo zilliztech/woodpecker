@@ -73,7 +73,7 @@ type DiskSegmentImpl struct {
 	closeOnce sync.Once
 }
 
-// NewDiskSegmentImpl creates a new DiskLogFile instance
+// NewDiskSegmentImpl creates a new DiskSegmentImpl instance
 func NewDiskSegmentImpl(logId int64, segId int64, parentDir string, options ...Option) (*DiskSegmentImpl, error) {
 	// Set default configuration
 	s := &DiskSegmentImpl{
@@ -118,7 +118,7 @@ func NewDiskSegmentImpl(logId int64, segId int64, parentDir string, options ...O
 		go s.run()
 	}
 
-	logger.Ctx(context.Background()).Info("NewDiskLogFile", zap.String("logFileDir", s.logFileDir))
+	logger.Ctx(context.Background()).Info("NewDiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
 	return s, nil
 }
 
@@ -151,7 +151,7 @@ func (s *DiskSegmentImpl) run() {
 			}
 			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
 		case <-s.closeCh:
-			logger.Ctx(context.Background()).Info("DiskLogFile successfully closed",
+			logger.Ctx(context.Background()).Info("DiskSegmentImpl successfully closed",
 				zap.String("logFileDir", s.logFileDir))
 			metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Dec()
 			return
@@ -209,7 +209,7 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return -1, nil, errors.New("diskLogFile closed")
+		return -1, nil, errors.New("DiskSegmentImpl closed")
 	}
 
 	// Create result channel
@@ -285,7 +285,7 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 		zap.Int("bufferSize", len(currentBuffer.Values)),
 		zap.Int64("firstEntryId", currentBuffer.FirstEntryId),
 		zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()),
-		zap.String("logFileInst", fmt.Sprintf("%p", s)))
+		zap.String("SegmentImplInst", fmt.Sprintf("%p", s)))
 
 	toFlushData, toFlushDataFirstEntryId := s.getToFlushData(ctx, currentBuffer)
 	if len(toFlushData) == 0 {
@@ -641,17 +641,17 @@ func (s *DiskSegmentImpl) rotateFragment(fragmentFirstEntryId int64) error {
 
 // NewReader creates a new Reader instance
 func (s *DiskSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	return nil, werr.ErrNotSupport.WithCauseErrMsg("DiskLogFile writer support write only, cannot create reader")
+	return nil, werr.ErrNotSupport.WithCauseErrMsg("DiskSegmentImpl writer support write only, cannot create reader")
 }
 
 // Load loads data from disk
 func (s *DiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, error) {
-	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to load currently")
+	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskSegmentImpl writer to load currently")
 }
 
 // Merge merges log file fragments
 func (s *DiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
-	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to merge currently")
+	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support DiskSegmentImpl writer to merge currently")
 }
 
 func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath string, logId int64, segmentId int64, mergeFragId int64, mergeFragSize int, fragments []*FragmentFileReader) (storage.Fragment, error) {
@@ -703,7 +703,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 // Close closes the log file and releases resources
 func (s *DiskSegmentImpl) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
-		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("logFileInst", fmt.Sprintf("%p", s)))
+		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", s)))
 		return nil
 	}
 
@@ -725,8 +725,7 @@ func (s *DiskSegmentImpl) Close() error {
 		s.currFragment = nil
 	}
 
-	logger.Ctx(context.Background()).Info("Closing DiskLogFile",
-		zap.String("logFileDir", s.logFileDir))
+	logger.Ctx(context.Background()).Info("Closing DiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
 
 	// Send close signal
 	s.closeOnce.Do(func() {
@@ -747,7 +746,7 @@ func (s *DiskSegmentImpl) checkDirIsEmpty() error {
 		return err
 	}
 	if len(entries) > 0 {
-		return werr.ErrNotSupport.WithCauseErrMsg("DiskLogFile writer to should open en empty dir")
+		return werr.ErrNotSupport.WithCauseErrMsg("DiskSegmentImpl writer to should open en empty dir")
 	}
 	return nil
 }
@@ -763,7 +762,7 @@ func (s *DiskSegmentImpl) GetLastEntryId() (int64, error) {
 }
 
 func (s *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("not support DiskLogFile writer to delete fragments currently")
+	return werr.ErrNotSupport.WithCauseErrMsg("not support DiskSegmentImpl writer to delete fragments currently")
 }
 
 var _ storage.Segment = (*RODiskSegmentImpl)(nil)
@@ -807,7 +806,7 @@ func NewRODiskSegmentImpl(logId int64, segId int64, basePath string, options ...
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(context.Background()).Info("NewRODiskLogFile", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)))
+	logger.Ctx(context.Background()).Info("NewRODiskSegmentImpl", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)))
 	return rs, nil
 }
 
@@ -817,17 +816,17 @@ func (rs *RODiskSegmentImpl) GetId() int64 {
 }
 
 func (rs *RODiskSegmentImpl) Append(ctx context.Context, data []byte) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support append")
+	return werr.ErrNotSupport.WithCauseErrMsg("RODiskSegmentImpl not support append")
 }
 
 // AppendAsync appends data to the log file asynchronously.
 func (rs *RODiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
-	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support append")
+	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("RODiskSegmentImpl not support append")
 }
 
 // Sync syncs the log file to disk.
 func (rs *RODiskSegmentImpl) Sync(ctx context.Context) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("RODiskLogFile not support sync")
+	return werr.ErrNotSupport.WithCauseErrMsg("RODiskSegmentImpl not support sync")
 }
 
 // NewReader creates a new Reader instance

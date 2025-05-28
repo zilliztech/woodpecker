@@ -78,7 +78,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			}
 
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestReadTheWrittenDataSequentially_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// OpenLog
@@ -256,7 +256,7 @@ func TestReadWriteLoop(t *testing.T) {
 				fmt.Println(err)
 			}
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestReadWriteLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// write/read loop test
@@ -398,7 +398,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 				fmt.Println(err)
 			}
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestMultiAppendSyncLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// sync write loop test
@@ -542,7 +542,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			logName := "TestTailReadBlockingBehavior_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -692,7 +692,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			logName := "TestTailReadBlockingAfterWriting_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -778,7 +778,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration()
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -794,7 +794,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_concurrent_write_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithClose_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -984,7 +984,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Create initial configuration
 			cfg, err := config.NewConfiguration()
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
 			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 30s
@@ -1001,7 +1001,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create a unique log name for this test run
-			logName := "test_client_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithClientClose_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -1177,7 +1177,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 
 func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
+	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1217,7 +1217,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create a unique log name for this test run
-			logName := "test_client_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 

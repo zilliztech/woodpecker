@@ -286,46 +286,59 @@ func (l *logReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.Seg
 		m := l.currentSegmentHandle.GetMetadata(context.Background())
 		// current completed segmentHandle
 		if m.LastEntryId > l.pendingReadEntryId {
+			logger.Ctx(ctx).Debug("current segment contains the pending read entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", l.currentSegmentHandle.GetId(ctx)), zap.Int64("lastEntryId", m.LastEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 			return l.currentSegmentHandle, l.pendingReadSegmentId, l.pendingReadEntryId, nil
 		}
 		// current in-progress segmentHandle
 		if m.LastEntryId == -1 {
 			// Read from the segment directly because the segmentHandle is not yet completed.
 			// The writing entryId could be any value greater than pendingReadEntryId.
+			logger.Ctx(ctx).Debug("current segment is in-progress, maybe contains the pending read entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", l.currentSegmentHandle.GetId(ctx)), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 			return l.currentSegmentHandle, l.pendingReadSegmentId, l.pendingReadEntryId, nil
 		}
 	}
 	// if pendingSegId is future segmentId, just return
 	latestSegmentId, err := l.logHandle.GetNextSegmentId()
 	if err != nil {
+		logger.Ctx(ctx).Warn("get next segment id error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Error(err))
 		return nil, -1, -1, err
 	}
 	// if pendingSegId is latest segmentId, return the latest active segmentHandle
 	if l.pendingReadSegmentId == LatestLogMessageID().SegmentId {
 		segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), latestSegmentId-1)
 		if err != nil && werr.ErrSegmentNotFound.Is(err) {
+			logger.Ctx(ctx).Debug("get exists readonly segment handle empty", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", latestSegmentId-1), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 			return nil, latestSegmentId, 0, nil
 		}
 		// if the latest segmentHandle is active, return it
 		if segHandle.GetMetadata(context.Background()).State == proto.SegmentState_Active {
 			latestEntryId, err := segHandle.GetLastAddConfirmed(context.Background())
 			if err != nil {
+				logger.Ctx(ctx).Warn("get segment LAC failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Error(err))
 				return nil, -1, -1, err
 			}
+			logger.Ctx(ctx).Debug("move to read latest in-progress segment next entry after LAC", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.Int64("latestEntryId", latestEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 			return segHandle, segHandle.GetId(context.Background()), latestEntryId + 1, nil
 		}
 		// otherwise return the next segment id, that segment will be the active segment in the future
+		logger.Ctx(ctx).Debug("move to read latest segment first entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", latestSegmentId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 		return nil, latestSegmentId, 0, nil
 	} else if l.pendingReadSegmentId >= latestSegmentId {
+		logger.Ctx(ctx).Debug("move to read future segment first entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", latestSegmentId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 		return nil, latestSegmentId, 0, nil
 	}
 	// otherwise, move to next exits segment
 	nextSegmentId := l.pendingReadSegmentId
 	nextEntryId := l.pendingReadEntryId
 	for {
+		logger.Ctx(ctx).Debug("start to find next entry to read", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("nextSegmentId", nextSegmentId), zap.Int64("nextEntryId", nextEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 		segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), nextSegmentId)
 		if err != nil && !werr.ErrSegmentNotFound.Is(err) {
+			logger.Ctx(ctx).Warn("get exists readonly segment handle error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", nextSegmentId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Error(err))
 			return nil, -1, -1, err
+		}
+		if err != nil && werr.ErrSegmentNotFound.Is(err) {
+			logger.Ctx(ctx).Debug("get exists readonly segment handle not found", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", nextSegmentId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Error(err))
 		}
 		if segHandle != nil {
 			// Skip truncated segments
@@ -333,21 +346,26 @@ func (l *logReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.Seg
 			if m.State == proto.SegmentState_Truncated {
 				nextSegmentId++
 				nextEntryId = 0
+				logger.Ctx(ctx).Debug("skip reading the truncated segment,continue to find next entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 				continue
 			}
 
 			// current completed segmentHandle
 			if m.LastEntryId >= nextEntryId {
+				logger.Ctx(ctx).Debug("find a segment contains pending read entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.Int64("lastEntryId", m.LastEntryId), zap.Int64("nextSegmentId", nextSegmentId), zap.Int64("nextEntryId", nextEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 				return segHandle, nextSegmentId, nextEntryId, nil
 			}
 			// current in-progress segmentHandle
 			if m.LastEntryId == -1 {
 				// Read from the segment directly because the segmentHandle is not yet completed.
 				// The writing entryId could be any value greater than pendingReadEntryId.
+				logger.Ctx(ctx).Debug("find a segment in-progress may contains pending read entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.Int64("lastEntryId", m.LastEntryId), zap.Int64("nextSegmentId", nextSegmentId), zap.Int64("nextEntryId", nextEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 				return segHandle, nextSegmentId, nextEntryId, nil
 			}
+			logger.Ctx(ctx).Debug("skip segment due to this segment not contains expected entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segHandle.GetId(ctx)), zap.Int64("lastEntryId", m.LastEntryId), zap.String("segState", m.State.String()), zap.Int64("nextSegmentId", nextSegmentId), zap.Int64("nextEntryId", nextEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 		} else if nextSegmentId >= latestSegmentId {
 			// no more exists segment
+			logger.Ctx(ctx).Debug("no more segment to read", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("latestSegmentId", latestSegmentId), zap.Int64("nextSegmentId", nextSegmentId), zap.Int64("nextEntryId", nextEntryId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 			break
 		}
 
@@ -359,8 +377,10 @@ func (l *logReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.Seg
 	// move to next future segment, if no exists segment to read
 	nextSegmentId, err = l.logHandle.GetNextSegmentId()
 	if err != nil {
+		logger.Ctx(ctx).Warn("get next segment id failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Error(err))
 		return nil, -1, -1, err
 	}
+	logger.Ctx(ctx).Debug("move to read future segment entry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("nextSegmentId", nextSegmentId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId))
 	return nil, nextSegmentId, 0, nil
 }
 

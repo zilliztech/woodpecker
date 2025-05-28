@@ -221,7 +221,7 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 
 // SendAppendSuccessCallbacks will do ack sequentially
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
-	logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d \n", triggerEntryId))
+	logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
@@ -451,10 +451,9 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 // Close marks the segment as read-only. Only writable segments can be closed.
 // TODO: Rename method to better reflect that segments remain readable after closing
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
-	if s.closedState.Load() {
+	if !s.closedState.CompareAndSwap(false, true) {
 		return nil
 	}
-	s.closedState.Store(true)
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
@@ -470,22 +469,25 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 		// not active writable segmentHandle, just return
 		return nil
 	}
-	newSegmentMeta := currentSegmentMeta.CloneVT()
-	newSegmentMeta.State = proto.SegmentState_Completed
-	newSegmentMeta.Size = s.commitedSize.Load()
-	newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
-	newSegmentMeta.CompletionTime = time.Now().UnixMilli()
-	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	if err != nil {
-		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
-	} else {
-		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
-	}
-	return err
+	// TODO should wait all appendOp end before using lac to update metadata, otherwise, let it be completed by auditor later
+	//newSegmentMeta := currentSegmentMeta.CloneVT()
+	//newSegmentMeta.State = proto.SegmentState_Completed
+	//newSegmentMeta.Size = s.commitedSize.Load()
+	//newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
+	//newSegmentMeta.CompletionTime = time.Now().UnixMilli()
+	//err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	//if err != nil {
+	//	logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime), zap.Error(err))
+	//	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Inc()
+	//	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+	//} else {
+	//logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime))
+	logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+	//}
+	//return err
+	return nil
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {

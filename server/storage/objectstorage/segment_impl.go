@@ -48,7 +48,7 @@ type SegmentImpl struct {
 	mu                sync.Mutex
 	lastSyncTimestamp atomic.Int64
 	client            minioHandler.MinioHandler
-	segmentPrefixKey  string // The prefix key for the segment to which this LogFile belongs
+	segmentPrefixKey  string // The prefix key for the segment to which this Segment belongs
 	bucket            string // The bucket name
 	logId             int64
 	segmentId         int64
@@ -64,14 +64,14 @@ type SegmentImpl struct {
 	closed           atomic.Bool
 
 	// written info
-	firstEntryId   int64  // The first entryId of this LogFile which already written to object storage
-	lastEntryId    int64  // The last entryId of this LogFile which already written to object storage
-	lastFragmentId uint64 // The last fragmentId of this LogFile which already written to object storage
+	firstEntryId   int64  // The first entryId of this Segment which already written to object storage
+	lastEntryId    int64  // The last entryId of this Segment which already written to object storage
+	lastFragmentId uint64 // The last fragmentId of this Segment which already written to object storage
 }
 
-// NewSegmentImpl is used to create a new LogFile, which is used to write data to object storage
+// NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
 func NewSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
-	logger.Ctx(context.TODO()).Debug("new LogFile created", zap.String("segmentPrefixKey", segmentPrefixKey))
+	logger.Ctx(context.TODO()).Debug("new SegmentImpl created", zap.String("segmentPrefixKey", segmentPrefixKey))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
 	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, int64(syncPolicyConfig.MaxEntries))
 	objFile := &SegmentImpl{
@@ -124,7 +124,7 @@ func (f *SegmentImpl) run() {
 			}
 			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 		case <-f.fileClose:
-			logger.Ctx(context.TODO()).Debug("close LogFile", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+			logger.Ctx(context.TODO()).Debug("close SegmentImpl", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 			metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Dec()
 			return
 		}
@@ -137,10 +137,10 @@ func (f *SegmentImpl) GetId() int64 {
 
 func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
 	if f.closed.Load() {
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, nil, werr.ErrLogFileClosed
 	}
-	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("logFileInst", fmt.Sprintf("%p", f)))
+	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", f.logId)
@@ -181,7 +181,7 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 		return id, ch, err
 	}
 	f.syncedChan[id] = ch
-	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()), zap.String("logFileInst", fmt.Sprintf("%p", f)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	f.mu.Unlock()
 
 	// trigger sync by max buffer entries bytes size
@@ -206,7 +206,7 @@ func (f *SegmentImpl) Append(ctx context.Context, data []byte) error {
 }
 
 func (f *SegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
-	return nil, werr.ErrNotSupport.WithCauseErrMsg("LogFile writer support write only, cannot create reader")
+	return nil, werr.ErrNotSupport.WithCauseErrMsg("SegmentImpl writer support write only, cannot create reader")
 }
 
 // LastFragmentId returns the last fragmentId of the log file.
@@ -420,10 +420,10 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 func (f *SegmentImpl) Close() error {
 	if !f.closed.CompareAndSwap(false, true) {
-		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("logFileInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
-	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close ", zap.String("logFileInst", fmt.Sprintf("%p", f)))
+	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close ", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(context.Background())
 	if err != nil {
 		logger.Ctx(context.TODO()).Warn("sync error before close",
@@ -490,15 +490,15 @@ func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData [][]byte, 
 }
 
 func (f *SegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
-	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to merge currently")
+	return nil, nil, nil, werr.ErrNotSupport.WithCauseErrMsg("not support SegmentImpl writer to merge currently")
 }
 
 func (f *SegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, error) {
-	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to load currently")
+	return -1, nil, werr.ErrNotSupport.WithCauseErrMsg("not support SegmentImpl writer to load currently")
 }
 
 func (f *SegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("not support LogFile writer to delete fragments currently")
+	return werr.ErrNotSupport.WithCauseErrMsg("not support SegmentImpl writer to delete fragments currently")
 }
 
 var _ storage.Segment = (*ROSegmentImpl)(nil)
@@ -509,12 +509,12 @@ type ROSegmentImpl struct {
 
 	lastSync         atomic.Int64
 	client           minioHandler.MinioHandler
-	segmentPrefixKey string // The prefix key for the segment to which this LogFile belongs
+	segmentPrefixKey string // The prefix key for the segment to which this Segment belongs
 	bucket           string // The bucket name
 
 	logId     int64
 	segmentId int64
-	fragments []*FragmentObject // LogFile cached fragments in order
+	fragments []*FragmentObject // Segment cached fragments in order
 }
 
 // NewROSegmentImpl is used to read only segment
@@ -529,7 +529,7 @@ func NewROSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket 
 	}
 	existsNewFragment, _, err := objFile.prefetchFragmentInfos()
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("prefetch fragment infos failed when create Read-only LogFile",
+		logger.Ctx(context.TODO()).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
 			zap.String("segmentPrefixKey", segmentPrefixKey),
 			zap.Bool("existsNewFragment", existsNewFragment),
 			zap.Error(err))
@@ -542,12 +542,12 @@ func (f *ROSegmentImpl) GetId() int64 {
 }
 
 func (f *ROSegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
-	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("read only LogFile reader cannot support append")
+	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("read only SegmentImpl reader cannot support append")
 }
 
 // Deprecated: use AppendAsync instead
 func (f *ROSegmentImpl) Append(ctx context.Context, data []byte) error {
-	return werr.ErrNotSupport.WithCauseErrMsg("read only LogFile reader cannot support append")
+	return werr.ErrNotSupport.WithCauseErrMsg("read only SegmentImpl reader cannot support append")
 }
 
 // get the fragment for the entryId
