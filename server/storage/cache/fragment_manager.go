@@ -124,6 +124,7 @@ func newFragmentManager(maxMemory int64) FragmentManager {
 	fm := &fragmentManagerImpl{
 		maxMemory:      maxMemory,
 		usedMemory:     0,
+		dataMemory:     0,
 		cache:          make(map[string]*CacheItem),
 		order:          list.New(),
 		requestChan:    make(chan fragmentRequest, 100), // Buffer to prevent blocking
@@ -203,8 +204,8 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
 		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
 
-		m.usedMemory -= fragmentSize
-		m.dataMemory -= rawFragmentBufSize
+		m.dataMemory -= fragmentSize
+		m.usedMemory -= rawFragmentBufSize
 		item.fragment.Release()
 		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
 			zap.String("key", key),
@@ -248,8 +249,8 @@ func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
 
 	// Update memory usage statistics
 	fragmentSize, rawFragmentBufSize := calculateSize(fragment)
-	m.usedMemory += fragmentSize
-	m.dataMemory += rawFragmentBufSize
+	m.dataMemory += fragmentSize
+	m.usedMemory += rawFragmentBufSize
 
 	// Update metrics for this fragment
 	logId := fmt.Sprintf("%d", fragment.GetLogId())
@@ -298,8 +299,8 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 	// Perform deletion
 	delete(m.cache, key)
 	m.order.Remove(item.element)
-	m.usedMemory -= fragmentSize
-	m.dataMemory -= rawFragmentBufSize
+	m.dataMemory -= fragmentSize
+	m.usedMemory -= rawFragmentBufSize
 	item.fragment.Release()
 	logger.Ctx(req.ctx).Debug("remove fragment finish",
 		zap.String("key", key),
@@ -366,8 +367,8 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 
 		// Perform eviction
 		delete(m.cache, keyToEvict)
-		m.usedMemory -= fragmentSize
-		m.dataMemory -= rawFragmentBufSize
+		m.dataMemory -= fragmentSize
+		m.usedMemory -= rawFragmentBufSize
 		item.fragment.Release()
 		m.order.Remove(evictElement)
 		logger.Ctx(req.ctx).Debug("evict fragment automatically",

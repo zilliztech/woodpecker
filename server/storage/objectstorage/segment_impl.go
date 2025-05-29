@@ -507,10 +507,10 @@ var _ storage.Segment = (*ROSegmentImpl)(nil)
 type ROSegmentImpl struct {
 	mu sync.RWMutex
 
-	lastSync         atomic.Int64
-	client           minioHandler.MinioHandler
-	segmentPrefixKey string // The prefix key for the segment to which this Segment belongs
-	bucket           string // The bucket name
+	compactPolicyConfig *config.LogFileCompactionPolicy
+	client              minioHandler.MinioHandler
+	segmentPrefixKey    string // The prefix key for the segment to which this Segment belongs
+	bucket              string // The bucket name
 
 	logId     int64
 	segmentId int64
@@ -518,14 +518,15 @@ type ROSegmentImpl struct {
 }
 
 // NewROSegmentImpl is used to read only segment
-func NewROSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler) storage.Segment {
+func NewROSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
 	objFile := &ROSegmentImpl{
-		logId:            logId,
-		segmentId:        segId,
-		client:           objectCli,
-		segmentPrefixKey: segmentPrefixKey,
-		bucket:           bucket,
-		fragments:        make([]*FragmentObject, 0),
+		logId:               logId,
+		segmentId:           segId,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.LogFileCompactionPolicy,
+		client:              objectCli,
+		segmentPrefixKey:    segmentPrefixKey,
+		bucket:              bucket,
+		fragments:           make([]*FragmentObject, 0),
 	}
 	existsNewFragment, _, err := objFile.prefetchFragmentInfos()
 	if err != nil {
@@ -705,6 +706,7 @@ func (f *ROSegmentImpl) Close() error {
 	return nil
 }
 
+// TODO list first for the first time, later loop to fetch one by one if it is in-progress segment
 func (f *ROSegmentImpl) prefetchFragmentInfos() (bool, *FragmentObject, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -765,9 +767,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	logId := fmt.Sprintf("%d", f.logId)
 	segmentId := fmt.Sprintf("%d", f.segmentId)
 
-	// TODO should be config
-	// file max size, default 128MB
-	fileMaxSize := int64(128_000_000)
+	fileMaxSize := f.compactPolicyConfig.MaxBytes
 	mergedFrags := make([]storage.Fragment, 0)
 	mergedFragId := uint64(0)
 	entryOffset := make([]int32, 0)
@@ -778,6 +778,8 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	pendingMergeFrags := make([]*FragmentObject, 0)
 	// load all fragment in memory
 	for _, frag := range f.fragments {
+		// TODO 不需要逐个流式 load&upload&load&upload成一个 merged segment，不需要先load完了再上传
+		// TODO 如果是单个fragment大小已经达到 合并最大阈值的80%以上，就直接minio api copy，使其服务端快速复制即可.目标是合并碎小文件
 		loadFragErr := frag.Load(ctx)
 		if loadFragErr != nil {
 			return nil, nil, nil, loadFragErr

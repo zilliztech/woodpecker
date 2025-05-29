@@ -66,9 +66,11 @@ func TestNewSegmentImpl(t *testing.T) {
 
 // TestNewROSegmentImpl tests the NewROSegmentImpl function.
 func TestNewROSegmentImpl(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	segmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+	segmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
@@ -791,6 +793,9 @@ func TestMerge(t *testing.T) {
 					MaxFlushRetries: 3,
 					RetryInterval:   100,
 				},
+				LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+					MaxBytes: 4 * 1024 * 1024,
+				},
 			},
 		},
 	}
@@ -814,7 +819,7 @@ func TestMerge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Merge fragments
-	rosegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client).(*ROSegmentImpl)
+	rosegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	mergedFrags, entryOffset, fragmentIdOffset, err := rosegmentImpl.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
@@ -861,7 +866,7 @@ func TestLoad(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Load data
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestLoad/1/0", "test-bucket", client).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	totalSize, lastFragment, err := roSegmentImpl.Load(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, int64(100*len("test_data")) < totalSize)
@@ -907,7 +912,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a reader for [0, 100)
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -969,7 +974,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/0/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	// Create a reader for [0, 100)
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -1078,7 +1083,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	// test read data with holes (fragment 1,x,3) in minio
 	// we should only read data in fragment 1
 	{
-		roSegmentImpl := NewROSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 		reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 			StartSequenceNum: 0,
 			EndSequenceNum:   3,
@@ -1186,21 +1191,21 @@ func TestFindFragment(t *testing.T) {
 func TestDeleteFragments(t *testing.T) {
 	t.Run("SuccessfulDeletion", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1218,7 +1223,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Add some fragments to the LogFile to verify they're cleared
 		roSegmentImpl.fragments = []*FragmentObject{
@@ -1236,21 +1241,24 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("ListObjectsError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+						MaxBytes: 4 * 1024 * 1024,
+					},
+				},
+			},
+		}
 
 		// Create an object channel with an error
 		errorObjectCh := make(chan minio.ObjectInfo, 1)
@@ -1263,7 +1271,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1273,21 +1281,24 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("RemoveObjectError", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+						MaxBytes: 4 * 1024 * 1024,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 2)
@@ -1302,7 +1313,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1313,21 +1324,24 @@ func TestDeleteFragments(t *testing.T) {
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
 		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+						MaxBytes: 4 * 1024 * 1024,
+					},
+				},
+			},
+		}
 
 		// Empty object channel
 		objectCh := make(chan minio.ObjectInfo)
@@ -1338,7 +1352,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1350,21 +1364,24 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("SkipNonFragmentFiles", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		//cfg := &config.Configuration{
-		//	Woodpecker: config.WoodpeckerConfig{
-		//		Logstore: config.LogstoreConfig{
-		//			LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
-		//				MaxEntries:      10,
-		//				MaxBytes:        1024 * 1024,
-		//				MaxInterval:     1000,
-		//				MaxFlushThreads: 5,
-		//				MaxFlushSize:    1024 * 1024,
-		//				MaxFlushRetries: 3,
-		//				RetryInterval:   100,
-		//			},
-		//		},
-		//	},
-		//}
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+						MaxBytes: 4 * 1024 * 1024,
+					},
+				},
+			},
+		}
 
 		// Create a list of mock objects including non-fragment files
 		objectCh := make(chan minio.ObjectInfo, 3)
@@ -1381,7 +1398,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No call for metadata.json as it should be skipped
 
 		// Create the readonly segment impl
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)

@@ -27,7 +27,7 @@ woodpecker:
       queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
       maxRetries: 3 # Maximum number of retries for segment append operations
     segmentRollingPolicy:
-      maxSize: 2000000000 # Maximum entries count of a segment, default is 2GB
+      maxSize: 128000000 # Maximum entries count of a segment, default is 128M
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
@@ -36,13 +36,15 @@ woodpecker:
     logFileSyncPolicy:
       maxInterval: 1000 # Maximum interval between two sync operations in milliseconds
       maxEntries: 100000 # Maximum entries number of write buffer
-      maxBytes: 64000000 # Maximum size of write buffer in bytes
+      maxBytes: 32000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 8000000 # Maximum size of a fragment in bytes to flush, default is 8M
       maxFlushThreads: 4 # Maximum number of threads to flush data
+    logFileCompactionPolicy:
+      maxBytes: 8000000 # Maximum size of a log file in bytes after compact, default is 8M
     fragmentManager:
-      maxBytes: 1000000000 # Maximum size of a fragment cache in bytes, default is 1GB
+      maxBytes: 256000000 # Maximum size of a fragment cache in bytes, default is 256MB
       maxInterval: 1000 # Maximum interval between two cache evict operations in milliseconds
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

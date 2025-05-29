@@ -135,7 +135,7 @@ func TestNewReader(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client)
+	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
@@ -187,7 +187,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client)
+	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)

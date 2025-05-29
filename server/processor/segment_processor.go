@@ -332,7 +332,8 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 			s.segId,
 			s.getSegmentKeyPrefix(),
 			s.getInstanceBucket(),
-			s.minioClient)
+			s.minioClient,
+			s.cfg)
 		logger.Ctx(ctx).Info("create ROSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentSegmentReader)))
 	}
 	return s.currentSegmentReader, nil
