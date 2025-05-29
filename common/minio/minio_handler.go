@@ -90,7 +90,7 @@ type MinioHandler interface {
 	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
-	StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
 	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
@@ -176,9 +176,9 @@ func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectN
 	return err
 }
 
-func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
 	start := time.Now()
-	info, err := m.client.StatObject(ctx, bucketName, prefix, opts)
+	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "error").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))

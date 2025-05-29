@@ -286,7 +286,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		Logstore: LogstoreConfig{
 			LogFileSyncPolicy: LogFileSyncPolicyConfig{
 				MaxInterval:     1000,
-				MaxEntries:      10000,
+				MaxEntries:      2000,
 				MaxBytes:        100000000,
 				MaxFlushRetries: 3,
 				RetryInterval:   2000,

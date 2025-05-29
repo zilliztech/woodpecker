@@ -566,7 +566,7 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 	}
 
 	// try to fetch new fragments if exists
-	existsNewFragment, fetchedlastFragment, err := f.prefetchFragmentInfos()
+	existsNewFragment, fetchedLastFragment, err := f.prefetchFragmentInfos()
 	if err != nil {
 		logger.Ctx(context.TODO()).Warn("prefetch fragment info failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
@@ -576,9 +576,9 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 		return nil, nil
 	}
 
-	fetchedLastEntryId, err := fetchedlastFragment.GetLastEntryId()
+	fetchedLastEntryId, err := fetchedLastFragment.GetLastEntryId()
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedlastFragment.fragmentKey), zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.fragmentKey), zap.Error(err))
 		return nil, err
 	}
 	if entryId > fetchedLastEntryId {
@@ -587,7 +587,7 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 	}
 	if entryId == fetchedLastEntryId {
 		// fast return this fragment
-		return fetchedlastFragment, nil
+		return fetchedLastFragment, nil
 	}
 
 	// find again
@@ -823,7 +823,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
-// TODO improve， here we just need to load the last fragment
+// Load here only need to load the last fragment data, only used in recover to load fragments info
 func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -844,11 +844,11 @@ func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, erro
 			continue
 		}
 		// otherwise, load from object storage
-		loadFragErr := frag.Load(ctx)
-		if loadFragErr != nil {
-			return 0, nil, loadFragErr
+		objSize, loadFragSizeErr := frag.LoadSizeStateOnly(ctx)
+		if loadFragSizeErr != nil {
+			return 0, nil, loadFragSizeErr
 		}
-		totalSize += frag.GetSize()
+		totalSize += objSize
 	}
 	// replace with cached fragment
 	for fid, frag := range cachedList {

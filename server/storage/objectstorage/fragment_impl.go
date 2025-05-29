@@ -215,6 +215,19 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	return cache.AddCacheFragment(ctx, f)
 }
 
+func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.size > 0 {
+		return f.size, nil
+	}
+	objInfo, err := f.client.StatObject(ctx, f.bucket, f.fragmentKey, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get object: %w", err)
+	}
+	return objInfo.Size, nil
+}
+
 func (f *FragmentObject) GetLastEntryId() (int64, error) {
 	// First check with read lock
 	f.mu.RLock()
