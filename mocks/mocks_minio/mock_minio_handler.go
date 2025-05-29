@@ -27,6 +27,64 @@ func (_m *MinioHandler) EXPECT() *MinioHandler_Expecter {
 	return &MinioHandler_Expecter{mock: &_m.Mock}
 }
 
+// CopyObject provides a mock function with given fields: ctx, dst, src
+func (_m *MinioHandler) CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+	ret := _m.Called(ctx, dst, src)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CopyObject")
+	}
+
+	var r0 minio.UploadInfo
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) (minio.UploadInfo, error)); ok {
+		return rf(ctx, dst, src)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) minio.UploadInfo); ok {
+		r0 = rf(ctx, dst, src)
+	} else {
+		r0 = ret.Get(0).(minio.UploadInfo)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) error); ok {
+		r1 = rf(ctx, dst, src)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MinioHandler_CopyObject_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CopyObject'
+type MinioHandler_CopyObject_Call struct {
+	*mock.Call
+}
+
+// CopyObject is a helper method to define mock.On call
+//   - ctx context.Context
+//   - dst minio.CopyDestOptions
+//   - src minio.CopySrcOptions
+func (_e *MinioHandler_Expecter) CopyObject(ctx interface{}, dst interface{}, src interface{}) *MinioHandler_CopyObject_Call {
+	return &MinioHandler_CopyObject_Call{Call: _e.mock.On("CopyObject", ctx, dst, src)}
+}
+
+func (_c *MinioHandler_CopyObject_Call) Run(run func(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions)) *MinioHandler_CopyObject_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(minio.CopyDestOptions), args[2].(minio.CopySrcOptions))
+	})
+	return _c
+}
+
+func (_c *MinioHandler_CopyObject_Call) Return(_a0 minio.UploadInfo, _a1 error) *MinioHandler_CopyObject_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MinioHandler_CopyObject_Call) RunAndReturn(run func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) (minio.UploadInfo, error)) *MinioHandler_CopyObject_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetObject provides a mock function with given fields: ctx, bucketName, objectName, opts
 func (_m *MinioHandler) GetObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
 	ret := _m.Called(ctx, bucketName, objectName, opts)
@@ -325,9 +383,9 @@ func (_c *MinioHandler_RemoveObject_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
-// StatObject provides a mock function with given fields: ctx, bucketName, prefix, opts
-func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
-	ret := _m.Called(ctx, bucketName, prefix, opts)
+// StatObject provides a mock function with given fields: ctx, bucketName, objectName, opts
+func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+	ret := _m.Called(ctx, bucketName, objectName, opts)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StatObject")
@@ -336,16 +394,16 @@ func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, prefi
 	var r0 minio.ObjectInfo
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (minio.ObjectInfo, error)); ok {
-		return rf(ctx, bucketName, prefix, opts)
+		return rf(ctx, bucketName, objectName, opts)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) minio.ObjectInfo); ok {
-		r0 = rf(ctx, bucketName, prefix, opts)
+		r0 = rf(ctx, bucketName, objectName, opts)
 	} else {
 		r0 = ret.Get(0).(minio.ObjectInfo)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
-		r1 = rf(ctx, bucketName, prefix, opts)
+		r1 = rf(ctx, bucketName, objectName, opts)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -361,13 +419,13 @@ type MinioHandler_StatObject_Call struct {
 // StatObject is a helper method to define mock.On call
 //   - ctx context.Context
 //   - bucketName string
-//   - prefix string
+//   - objectName string
 //   - opts minio.GetObjectOptions
-func (_e *MinioHandler_Expecter) StatObject(ctx interface{}, bucketName interface{}, prefix interface{}, opts interface{}) *MinioHandler_StatObject_Call {
-	return &MinioHandler_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, prefix, opts)}
+func (_e *MinioHandler_Expecter) StatObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}) *MinioHandler_StatObject_Call {
+	return &MinioHandler_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, objectName, opts)}
 }
 
-func (_c *MinioHandler_StatObject_Call) Run(run func(ctx context.Context, bucketName string, prefix string, opts minio.GetObjectOptions)) *MinioHandler_StatObject_Call {
+func (_c *MinioHandler_StatObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions)) *MinioHandler_StatObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions))
 	})

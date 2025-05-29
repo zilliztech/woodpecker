@@ -23,6 +23,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -141,22 +142,26 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return werr.ErrFragmentEmpty
 	}
 
-	fullData, err := serializeFragment(f)
-	if err != nil {
-		return err
-	}
-	_, err = f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
+	//fullData, err := serializeFragment(f)
+	//if err != nil {
+	//	return err
+	//}
+	////Put back to pool
+	//defer pool.PutByteBuffer(fullData)
+	fullDataReader, fullDataSize := serializeFragmentToReader(f)
+
+	// Upload
+	//_, err = f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
+	_, err := f.client.PutObject(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize), minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to put object: %w", err)
 	}
 	cost := time.Now().Sub(start)
 	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
 	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
-	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(len(fullData)))
+	//metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(len(fullData)))
+	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(fullDataSize))
 	f.dataUploaded = true
-
-	// Put back to pool
-	pool.PutByteBuffer(fullData)
 	return nil
 }
 
@@ -349,6 +354,137 @@ func (f *FragmentObject) Release() error {
 	return nil
 }
 
+func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, pendingMergeSize int64) (storage.Fragment, error) {
+	// Check args
+	if len(fragments) == 0 {
+		return nil, errors.New("no fragments to merge")
+	}
+
+	// Fast merge by rename
+	if len(fragments) == 1 {
+		// no need to merge here, just rename
+		return fastMergeSingleFragment(ctx, mergedFragKey, mergeFragId, fragments[0])
+	}
+
+	// Merge them one by one to reduce memory usage
+	startTime := time.Now()
+	// TODO merge is not frequent, use temp slice maybe better gc soon
+	//dataBuff := pool.GetByteBuffer(int(pendingMergeSize))
+	//defer pool.PutByteBuffer(dataBuff)
+	dataBuff := make([]byte, 0, pendingMergeSize)
+	indexBuff := make([]byte, 0, 1024)
+
+	mergedFrag := &FragmentObject{
+		client:       fragments[0].client,
+		bucket:       fragments[0].bucket,
+		fragmentId:   mergeFragId,
+		fragmentKey:  mergedFragKey,
+		entriesData:  dataBuff,
+		indexes:      indexBuff,
+		firstEntryId: fragments[0].firstEntryId,
+		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
+		dataUploaded: false,
+		dataLoaded:   false,
+		infoFetched:  true,
+	}
+	expectedEntryId := int64(-1)
+	fragIds := make([]uint64, 0)
+	for _, fragment := range fragments {
+		err := fragment.Load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// check the order of entries
+		if expectedEntryId == -1 {
+			// the first segment
+			expectedEntryId = fragment.lastEntryId + 1
+		} else {
+			if expectedEntryId != fragment.firstEntryId {
+				return nil, errors.New("fragments are not in order")
+			}
+			expectedEntryId = fragment.lastEntryId + 1
+		}
+		// merge index
+		baseOffset := len(mergedFrag.entriesData)
+		for index := 0; index < len(fragment.indexes); index = index + 8 {
+			newEntryOffset := binary.BigEndian.Uint32(fragment.indexes[index:index+4]) + uint32(baseOffset)
+			entryLength := binary.BigEndian.Uint32(fragment.indexes[index+4 : index+8])
+
+			newIndex := make([]byte, 8)
+			binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
+			binary.BigEndian.PutUint32(newIndex[4:], entryLength)
+
+			mergedFrag.indexes = append(mergedFrag.indexes, newIndex...)
+		}
+		// merge data
+		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
+		fragIds = append(fragIds, fragment.fragmentId)
+	}
+
+	// set data cache ready
+	mergedFrag.dataLoaded = true
+	mergedFrag.size = int64(len(mergedFrag.entriesData) + len(mergedFrag.indexes))
+	mergedFrag.rawBufSize = int64(cap(mergedFrag.entriesData) + cap(mergedFrag.indexes))
+
+	// upload the mergedFragment
+	flushErr := mergedFrag.Flush(ctx)
+	if flushErr != nil {
+		return nil, flushErr
+	}
+	// set flag
+	mergedFrag.dataUploaded = true
+	mergedFrag.infoFetched = true
+
+	// release immediately
+	mergedFrag.entriesData = nil
+	mergedFrag.indexes = nil
+	mergedFrag.dataLoaded = false
+
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	return mergedFrag, nil
+}
+
+func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragment *FragmentObject) (storage.Fragment, error) {
+	startTime := time.Now()
+	// merge
+	mergedFrag := &FragmentObject{
+		client:       fragment.client,
+		bucket:       fragment.bucket,
+		fragmentId:   mergeFragId,
+		fragmentKey:  mergedFragKey,
+		entriesData:  make([]byte, 0),
+		indexes:      make([]byte, 0),
+		firstEntryId: -1,
+		lastEntryId:  -1,
+		dataUploaded: false,
+		dataLoaded:   false,
+		infoFetched:  false,
+	}
+
+	// fast rename
+	uploadInfo, uploadErr := fragment.client.CopyObject(ctx,
+		minio.CopyDestOptions{
+			Bucket: mergedFrag.bucket,
+			Object: mergedFrag.fragmentKey,
+		}, minio.CopySrcOptions{
+			Bucket: fragment.bucket,
+			Object: fragment.fragmentKey,
+		})
+	if uploadErr != nil {
+		return nil, uploadErr
+	}
+
+	// set data cache ready
+	mergedFrag.size = uploadInfo.Size
+	mergedFrag.rawBufSize = uploadInfo.Size
+	mergedFrag.dataLoaded = false
+	mergedFrag.dataUploaded = true
+	mergedFrag.infoFetched = false
+
+	logger.Ctx(ctx).Info("fast merge single fragment completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64("fragmentId", fragment.fragmentId), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	return mergedFrag, nil
+}
+
 // mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
 func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
 	// check args
@@ -356,6 +492,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		return nil, errors.New("no fragments to merge")
 	}
 
+	startTime := time.Now()
 	// merge
 	mergedFrag := &FragmentObject{
 		client:       fragments[0].client,
@@ -426,10 +563,11 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		mergedFrag.dataLoaded = false
 	}
 
-	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds))
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	return mergedFrag, nil
 }
 
+// Deprecated
 // serializeFragment to object data bytes
 func serializeFragment(f *FragmentObject) ([]byte, error) {
 	// Calculate required space
@@ -449,6 +587,24 @@ func serializeFragment(f *FragmentObject) ([]byte, error) {
 	fullData = append(fullData, f.entriesData...)
 
 	return fullData, nil
+}
+
+func serializeFragmentToReader(f *FragmentObject) (io.Reader, int) {
+	// Calculate required space
+	headerSize := 24 // 3 int64 fields (version+firstEntryId+lastEntryId)
+	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
+	header := make([]byte, headerSize)
+
+	// Write header information
+	copy(header[0:], codec.Int64ToBytes(FragmentVersion))
+	copy(header[8:], codec.Int64ToBytes(f.firstEntryId))
+	copy(header[16:], codec.Int64ToBytes(f.lastEntryId))
+
+	return io.MultiReader(
+		bytes.NewReader(header),
+		bytes.NewReader(f.indexes),
+		bytes.NewReader(f.entriesData),
+	), totalSize
 }
 
 // deserializeFragment from object data bytes

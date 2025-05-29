@@ -91,6 +91,7 @@ type MinioHandler interface {
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
 	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
@@ -187,6 +188,19 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectNam
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return info, err
+}
+
+func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+	start := time.Now()
+	uploadInfo, err := m.client.CopyObject(ctx, dest, src)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+	} else {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	}
+	return uploadInfo, err
 }
 
 func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {

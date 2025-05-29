@@ -768,6 +768,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	segmentId := fmt.Sprintf("%d", f.segmentId)
 
 	fileMaxSize := f.compactPolicyConfig.MaxBytes
+	singleFragmentMaxSize := int64(float64(fileMaxSize) * 0.6) // Merging large files is not very beneficial, TODO should be configurable
 	mergedFrags := make([]storage.Fragment, 0)
 	mergedFragId := uint64(0)
 	entryOffset := make([]int32, 0)
@@ -778,17 +779,15 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	pendingMergeFrags := make([]*FragmentObject, 0)
 	// load all fragment in memory
 	for _, frag := range f.fragments {
-		// TODO 不需要逐个流式 load&upload&load&upload成一个 merged segment，不需要先load完了再上传
-		// TODO 如果是单个fragment大小已经达到 合并最大阈值的80%以上，就直接minio api copy，使其服务端快速复制即可.目标是合并碎小文件
-		loadFragErr := frag.Load(ctx)
-		if loadFragErr != nil {
-			return nil, nil, nil, loadFragErr
+		fragSize, loadFragSizeErr := frag.LoadSizeStateOnly(ctx)
+		if loadFragSizeErr != nil {
+			return nil, nil, nil, loadFragSizeErr
 		}
 		pendingMergeFrags = append(pendingMergeFrags, frag)
-		pendingMergeSize += frag.GetSize()
-		if pendingMergeSize >= fileMaxSize {
+		pendingMergeSize += fragSize
+		if pendingMergeSize >= fileMaxSize || fragSize >= singleFragmentMaxSize {
 			// merge immediately
-			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, true)
+			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompletedPro(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize)
 			if mergeErr != nil {
 				return nil, nil, nil, mergeErr
 			}
@@ -804,7 +803,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	}
 	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
 		// merge immediately
-		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompleted(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, true)
+		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompletedPro(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize)
 		if mergeErr != nil {
 			return nil, nil, nil, mergeErr
 		}
@@ -820,6 +819,9 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 
 	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "merge", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "merge", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileCompactLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileCompactBytesWritten.WithLabelValues(logId, segmentId).Add(float64(totalMergeSize))
+	logger.Ctx(ctx).Info("merge fragments finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("mergedFrags", len(mergedFrags)), zap.Int("fragments", len(f.fragments)), zap.Int64("totalMergeSize", totalMergeSize), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 

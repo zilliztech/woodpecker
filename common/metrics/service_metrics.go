@@ -304,6 +304,26 @@ var (
 		[]string{"log_id", "segment_id"},
 	)
 
+	WpFileCompactLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "file_compaction_latency",
+			Help:      "Latency of compaction operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
+		},
+		[]string{"log_id", "segment_id"},
+	)
+	WpFileCompactBytesWritten = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "compact_bytes_written",
+			Help:      "Total bytes written by compaction",
+		},
+		[]string{"log_id", "segment_id"},
+	)
+
 	// Fragment metrics
 	WpFragmentLoadTotal = prometheus.NewCounterVec( // fragment read
 		prometheus.CounterOpts{
@@ -474,6 +494,8 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpFileOperationsTotal)
 		registerer.MustRegister(WpFileOperationLatency)
 		registerer.MustRegister(WpFileWriters)
+		registerer.MustRegister(WpFileCompactLatency)
+		registerer.MustRegister(WpFileCompactBytesWritten)
 		// Fragment metrics
 		registerer.MustRegister(WpFragmentLoadTotal)
 		registerer.MustRegister(WpFragmentLoadLatency)
