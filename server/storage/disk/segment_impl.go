@@ -1245,8 +1245,85 @@ func (dr *DiskReader) HasNext() (bool, error) {
 	return true, nil
 }
 
-func (o *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
-	panic("implement me")
+func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
+	if size != -1 {
+		// TODO add batch size limit.
+		return nil, werr.ErrNotSupport.WithCauseErrMsg("custom batch size not supported currently")
+	}
+
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", dr.logFile.logId)
+	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
+	if dr.closed {
+		return nil, errors.New("reader is closed")
+	}
+	if dr.currFragment == nil {
+		return nil, errors.New("no readable Fragment")
+	}
+
+	// Get current fragment lastEntryId
+	lastID, err := dr.currFragment.GetLastEntryId()
+	if err != nil {
+		return nil, err
+	}
+
+	// read a fragment as a batch
+	entries := make([]*proto.LogEntry, 0, 32)
+	for {
+		// Read data from current fragment
+		data, err := dr.currFragment.GetEntry(dr.currEntryID)
+		if err != nil {
+			// If current entryID not in fragment, may need to move to next fragment
+			logger.Ctx(context.Background()).Warn("Failed to read entry",
+				zap.Int64("entryId", dr.currEntryID),
+				zap.String("fragmentFile", dr.currFragment.filePath),
+				zap.Error(err))
+			return nil, err
+		}
+
+		// Ensure data length is reasonable
+		if len(data) < 8 {
+			logger.Ctx(context.Background()).Warn("Invalid data format: data too short",
+				zap.Int64("entryId", dr.currEntryID),
+				zap.Int("dataLength", len(data)))
+			return nil, fmt.Errorf("invalid data format for entry %d: data too short", dr.currEntryID)
+		}
+
+		logger.Ctx(context.Background()).Debug("Data read complete",
+			zap.Int64("entryId", dr.currEntryID),
+			zap.Int64("fragmentId", dr.currFragment.fragmentId),
+			zap.String("fragmentPath", dr.currFragment.filePath))
+
+		// Extract entryID and actual data
+		actualID := int64(binary.LittleEndian.Uint64(data[:8]))
+		actualData := data[8:]
+
+		// Ensure read ID matches expected ID
+		if actualID != dr.currEntryID {
+			logger.Ctx(context.Background()).Warn("EntryID mismatch",
+				zap.Int64("expectedId", dr.currEntryID),
+				zap.Int64("actualId", actualID))
+		}
+
+		// Create LogEntry
+		entry := &proto.LogEntry{
+			EntryId: actualID,
+			Values:  actualData,
+		}
+		entries = append(entries, entry)
+
+		// Move to next ID
+		dr.currEntryID++
+
+		// If beyond current fragment range, prepare to move to next fragment
+		if dr.currEntryID > lastID {
+			break
+		}
+	}
+
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "read_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return entries, nil
 }
 
 // ReadNext reads the next entry

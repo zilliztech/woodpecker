@@ -61,6 +61,7 @@ func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segmen
 
 var _ LogReader = (*logReaderImpl)(nil)
 
+// Deprecated
 type logReaderImpl struct {
 	logName              string
 	logId                int64
@@ -393,9 +394,6 @@ func (l *logReaderImpl) GetName() string {
 var _ LogReader = (*logBatchReaderImpl)(nil)
 
 // An efficient reader that loads fragments and yields elements one by one during traversal.
-// Note: Only supported for ObjectStorage now; local file systems do not support it because a fragment file may be large or still in progress.
-// In addition, the local file system does not need to retrieve data to the client at one time now.
-// Now one batch is one fragment. In the future, a part of the fragment can be defined as batch result to support local file system.
 type logBatchReaderImpl struct {
 	logName    string
 	logId      int64
@@ -412,9 +410,6 @@ type logBatchReaderImpl struct {
 }
 
 func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, cfg *config.Configuration) (LogReader, error) {
-	if !cfg.Woodpecker.Storage.IsStorageMinio() {
-		return nil, werr.ErrNotSupport.WithCauseErrMsg("batch reader only support object storage")
-	}
 	return &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),

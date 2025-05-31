@@ -276,7 +276,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		// found the triggerEntryId
 		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
 			(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
-			!werr.ErrSegmentClosed.Is(err) {
+			!werr.ErrSegmentClosed.Is(err) && !werr.ErrSegmentFenced.Is(err) {
 			op.attempt++
 			elementsToRetry = append(elementsToRetry, element)
 		} else {
