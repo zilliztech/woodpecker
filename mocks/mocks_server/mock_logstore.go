@@ -296,6 +296,68 @@ func (_c *LogStore_GetAddress_Call) RunAndReturn(run func() string) *LogStore_Ge
 	return _c
 }
 
+// GetBatchEntries provides a mock function with given fields: _a0, _a1, _a2, _a3, _a4
+func (_m *LogStore) GetBatchEntries(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64) ([]*processor.SegmentEntry, error) {
+	ret := _m.Called(_a0, _a1, _a2, _a3, _a4)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBatchEntries")
+	}
+
+	var r0 []*processor.SegmentEntry
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)); ok {
+		return rf(_a0, _a1, _a2, _a3, _a4)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) []*processor.SegmentEntry); ok {
+		r0 = rf(_a0, _a1, _a2, _a3, _a4)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*processor.SegmentEntry)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64) error); ok {
+		r1 = rf(_a0, _a1, _a2, _a3, _a4)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStore_GetBatchEntries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBatchEntries'
+type LogStore_GetBatchEntries_Call struct {
+	*mock.Call
+}
+
+// GetBatchEntries is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+//   - _a3 int64
+//   - _a4 int64
+func (_e *LogStore_Expecter) GetBatchEntries(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}, _a4 interface{}) *LogStore_GetBatchEntries_Call {
+	return &LogStore_GetBatchEntries_Call{Call: _e.mock.On("GetBatchEntries", _a0, _a1, _a2, _a3, _a4)}
+}
+
+func (_c *LogStore_GetBatchEntries_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64)) *LogStore_GetBatchEntries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStore_GetBatchEntries_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *LogStore_GetBatchEntries_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStore_GetBatchEntries_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)) *LogStore_GetBatchEntries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetEntry provides a mock function with given fields: _a0, _a1, _a2, _a3
 func (_m *LogStore) GetEntry(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64) (*processor.SegmentEntry, error) {
 	ret := _m.Called(_a0, _a1, _a2, _a3)

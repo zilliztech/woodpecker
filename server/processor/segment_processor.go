@@ -47,6 +47,7 @@ type SegmentProcessor interface {
 	GetSegmentId() int64
 	AddEntry(context.Context, *SegmentEntry) (int64, <-chan int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
+	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	IsFenced() bool
 	SetFenced()
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
@@ -226,6 +227,67 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 	}, nil
 }
 
+func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, size int64) ([]*SegmentEntry, error) {
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", s.logId)
+	segIdStr := fmt.Sprintf("%d", s.segId)
+
+	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("size", size))
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, fromEntryId)
+	if err != nil {
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "reader_error").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "reader_error").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+
+	r, err := segmentReader.NewReader(ctx, storage.ReaderOpt{
+		StartSequenceNum: fromEntryId,
+		EndSequenceNum:   0, // means no stop point
+	})
+	if err != nil {
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "new_reader_error").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "new_reader_error").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+
+	hasNext, err := r.HasNext()
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to check has next", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "has_next_error").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "has_next_error").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+	if !hasNext {
+		logger.Ctx(ctx).Debug("no batch entries found", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId))
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "not_found").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "not_found").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, werr.ErrEntryNotFound
+	}
+
+	// read batch entries
+	batchEntries, err := r.ReadNextBatch(size)
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "read_error").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "read_error").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
+	}
+	// batch result
+	result := make([]*SegmentEntry, 0, len(batchEntries))
+	for _, entry := range batchEntries {
+		segmentEntry := &SegmentEntry{
+			SegmentId: s.segId,
+			EntryId:   entry.EntryId,
+			Data:      entry.Values,
+		}
+		result = append(result, segmentEntry)
+	}
+	// update metrics
+	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "success").Inc()
+	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return result, nil
+}
+
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
@@ -324,7 +386,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 			s.segId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
 		s.currentSegmentReader = readerFile
-		logger.Ctx(ctx).Info("create RODiskSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
+		logger.Ctx(ctx).Info("create RODiskSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
 		return s.currentSegmentReader, err
 	} else {
 		s.currentSegmentReader = objectstorage.NewROSegmentImpl(
@@ -334,7 +396,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 			s.getInstanceBucket(),
 			s.minioClient,
 			s.cfg)
-		logger.Ctx(ctx).Info("create ROSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentSegmentReader)))
+		logger.Ctx(ctx).Info("create ROSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", s.currentSegmentReader)))
 	}
 	return s.currentSegmentReader, nil
 }

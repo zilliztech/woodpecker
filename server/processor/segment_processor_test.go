@@ -171,6 +171,11 @@ func (m *mockLogFileReader) ReadNext() (*proto.LogEntry, error) {
 	return args.Get(0).(*proto.LogEntry), args.Error(1)
 }
 
+func (m *mockLogFileReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
+	args := m.Called()
+	return args.Get(0).([]*proto.LogEntry), args.Error(1)
+}
+
 func (m *mockLogFileReader) HasNext() (bool, error) {
 	args := m.Called()
 	return args.Bool(0), nil

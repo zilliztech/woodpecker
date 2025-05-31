@@ -779,15 +779,15 @@ func TestGetId(t *testing.T) {
 func TestMerge(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
 				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
 					MaxEntries:      1000,
-					MaxBytes:        1024 * 1024,
-					MaxInterval:     1000,
+					MaxBytes:        2 * 1024 * 1024 * 1024,
+					MaxInterval:     100000, // 100s, means turn off auto sync during the test
 					MaxFlushThreads: 5,
 					MaxFlushSize:    1024 * 1024,
 					MaxFlushRetries: 3,
@@ -818,9 +818,22 @@ func TestMerge(t *testing.T) {
 	err = segmentImpl.Sync(context.Background())
 	assert.NoError(t, err)
 
+	// mock list objects
+	listChan := make(chan minio.ObjectInfo, 2)
+	listChan <- minio.ObjectInfo{
+		Key:  "TestMerge/1/0/1.frag",
+		Size: int64(100 * len([]byte("test_data"))),
+	}
+	listChan <- minio.ObjectInfo{
+		Key:  "TestMerge/1/0/2.frag",
+		Size: int64(100 * len([]byte("test_data"))),
+	}
+	close(listChan)
+	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
+
 	// Merge fragments
-	rosegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-	mergedFrags, entryOffset, fragmentIdOffset, err := rosegmentImpl.Merge(context.Background())
+	roSegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	mergedFrags, entryOffset, fragmentIdOffset, err := roSegmentImpl.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
 	assert.Equal(t, []int32{0}, entryOffset)

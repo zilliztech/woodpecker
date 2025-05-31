@@ -354,6 +354,42 @@ func (f *FragmentObject) Release() error {
 	return nil
 }
 
+// appendToMergeTarget append the fragment data to a mergeTarget fragment
+func (f *FragmentObject) appendToMergeTarget(ctx context.Context, mergeTarget *FragmentObject, baseOffset int64) error {
+	f.mu.RLock()
+	if !f.dataLoaded {
+		f.mu.RUnlock()
+		err := f.Load(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to load fragment data", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
+			return err
+		}
+		f.mu.RLock()
+	}
+	defer f.mu.RUnlock()
+	if !f.dataLoaded {
+		logger.Ctx(ctx).Warn("fragment data not loaded", zap.String("fragmentKey", f.fragmentKey))
+		return werr.ErrFragmentNotLoaded
+	}
+
+	// write index to pendingMergedFragment
+	for index := 0; index < len(f.indexes); index = index + 8 {
+		newEntryOffset := binary.BigEndian.Uint32(f.indexes[index:index+4]) + uint32(baseOffset)
+		entryLength := binary.BigEndian.Uint32(f.indexes[index+4 : index+8])
+
+		newIndex := make([]byte, 8)
+		binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
+		binary.BigEndian.PutUint32(newIndex[4:], entryLength)
+
+		mergeTarget.indexes = append(mergeTarget.indexes, newIndex...)
+	}
+	// write data to pendingMergedFragment
+	mergeTarget.entriesData = append(mergeTarget.entriesData, f.entriesData...)
+
+	//
+	return nil
+}
+
 func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, pendingMergeSize int64) (storage.Fragment, error) {
 	// Check args
 	if len(fragments) == 0 {
@@ -374,74 +410,77 @@ func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKe
 	dataBuff := make([]byte, 0, pendingMergeSize)
 	indexBuff := make([]byte, 0, 1024)
 
-	mergedFrag := &FragmentObject{
+	mergeTarget := &FragmentObject{
 		client:       fragments[0].client,
 		bucket:       fragments[0].bucket,
 		fragmentId:   mergeFragId,
 		fragmentKey:  mergedFragKey,
 		entriesData:  dataBuff,
 		indexes:      indexBuff,
-		firstEntryId: fragments[0].firstEntryId,
-		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
+		firstEntryId: -1,
+		lastEntryId:  -1,
 		dataUploaded: false,
 		dataLoaded:   false,
 		infoFetched:  true,
 	}
 	expectedEntryId := int64(-1)
 	fragIds := make([]uint64, 0)
-	for _, fragment := range fragments {
-		err := fragment.Load(ctx)
+	for _, candidateFrag := range fragments {
+		fragFirstEntryId, err := candidateFrag.GetFirstEntryId()
+		if err != nil {
+			return nil, err
+		}
+		fragLastEntryId, err := candidateFrag.GetLastEntryId()
 		if err != nil {
 			return nil, err
 		}
 		// check the order of entries
 		if expectedEntryId == -1 {
 			// the first segment
-			expectedEntryId = fragment.lastEntryId + 1
+			mergeTarget.firstEntryId = fragFirstEntryId
+			expectedEntryId = fragLastEntryId + 1
 		} else {
-			if expectedEntryId != fragment.firstEntryId {
+			if expectedEntryId != fragFirstEntryId {
+				logger.Ctx(ctx).Warn("fragments are not in order", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Int64("expectedEntryId", expectedEntryId), zap.Int64("fragFirstEntryId", fragFirstEntryId))
 				return nil, errors.New("fragments are not in order")
 			}
-			expectedEntryId = fragment.lastEntryId + 1
+			expectedEntryId = fragLastEntryId + 1
+			mergeTarget.lastEntryId = fragLastEntryId
 		}
 		// merge index
-		baseOffset := len(mergedFrag.entriesData)
-		for index := 0; index < len(fragment.indexes); index = index + 8 {
-			newEntryOffset := binary.BigEndian.Uint32(fragment.indexes[index:index+4]) + uint32(baseOffset)
-			entryLength := binary.BigEndian.Uint32(fragment.indexes[index+4 : index+8])
-
-			newIndex := make([]byte, 8)
-			binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
-			binary.BigEndian.PutUint32(newIndex[4:], entryLength)
-
-			mergedFrag.indexes = append(mergedFrag.indexes, newIndex...)
+		baseOffset := len(mergeTarget.entriesData)
+		mergeOneFragmentErr := candidateFrag.appendToMergeTarget(ctx, mergeTarget, int64(baseOffset))
+		if mergeOneFragmentErr != nil {
+			logger.Ctx(ctx).Warn("failed to merge fragment", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Error(mergeOneFragmentErr))
+			return nil, mergeOneFragmentErr
 		}
-		// merge data
-		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
-		fragIds = append(fragIds, fragment.fragmentId)
+		fragIds = append(fragIds, uint64(candidateFrag.GetFragmentId()))
 	}
 
 	// set data cache ready
-	mergedFrag.dataLoaded = true
-	mergedFrag.size = int64(len(mergedFrag.entriesData) + len(mergedFrag.indexes))
-	mergedFrag.rawBufSize = int64(cap(mergedFrag.entriesData) + cap(mergedFrag.indexes))
+	mergeTarget.dataLoaded = true
+	mergeTarget.size = int64(len(mergeTarget.entriesData) + len(mergeTarget.indexes))
+	mergeTarget.rawBufSize = int64(cap(mergeTarget.entriesData) + cap(mergeTarget.indexes))
 
+	if mergeTarget.firstEntryId == -1 {
+		logger.Ctx(ctx).Warn("fragment not loaded", zap.String("fragKey", mergeTarget.fragmentKey))
+	}
 	// upload the mergedFragment
-	flushErr := mergedFrag.Flush(ctx)
+	flushErr := mergeTarget.Flush(ctx)
 	if flushErr != nil {
 		return nil, flushErr
 	}
 	// set flag
-	mergedFrag.dataUploaded = true
-	mergedFrag.infoFetched = true
+	mergeTarget.dataUploaded = true
+	mergeTarget.infoFetched = true
 
 	// release immediately
-	mergedFrag.entriesData = nil
-	mergedFrag.indexes = nil
-	mergedFrag.dataLoaded = false
+	mergeTarget.entriesData = nil
+	mergeTarget.indexes = nil
+	mergeTarget.dataLoaded = false
 
-	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergedFrag, nil
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergeTarget.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergeTarget.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	return mergeTarget, nil
 }
 
 func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragment *FragmentObject) (storage.Fragment, error) {
@@ -485,6 +524,7 @@ func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFra
 	return mergedFrag, nil
 }
 
+// Deprecated
 // mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
 func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
 	// check args
@@ -501,8 +541,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 		fragmentKey:  mergedFragKey,
 		entriesData:  make([]byte, 0),
 		indexes:      make([]byte, 0),
-		firstEntryId: fragments[0].firstEntryId,
-		lastEntryId:  fragments[len(fragments)-1].lastEntryId,
+		firstEntryId: fragments[0].firstEntryId,               // TODO may not loaded
+		lastEntryId:  fragments[len(fragments)-1].lastEntryId, // TODO may not loaded
 		dataUploaded: false,
 		dataLoaded:   false,
 		infoFetched:  true,

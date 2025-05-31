@@ -386,6 +386,66 @@ func (_c *SegmentProcessor_IsFenced_Call) RunAndReturn(run func() bool) *Segment
 	return _c
 }
 
+// ReadBatchEntries provides a mock function with given fields: _a0, _a1, _a2
+func (_m *SegmentProcessor) ReadBatchEntries(_a0 context.Context, _a1 int64, _a2 int64) ([]*processor.SegmentEntry, error) {
+	ret := _m.Called(_a0, _a1, _a2)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadBatchEntries")
+	}
+
+	var r0 []*processor.SegmentEntry
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)); ok {
+		return rf(_a0, _a1, _a2)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) []*processor.SegmentEntry); ok {
+		r0 = rf(_a0, _a1, _a2)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*processor.SegmentEntry)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(_a0, _a1, _a2)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentProcessor_ReadBatchEntries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadBatchEntries'
+type SegmentProcessor_ReadBatchEntries_Call struct {
+	*mock.Call
+}
+
+// ReadBatchEntries is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+func (_e *SegmentProcessor_Expecter) ReadBatchEntries(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentProcessor_ReadBatchEntries_Call {
+	return &SegmentProcessor_ReadBatchEntries_Call{Call: _e.mock.On("ReadBatchEntries", _a0, _a1, _a2)}
+}
+
+func (_c *SegmentProcessor_ReadBatchEntries_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64)) *SegmentProcessor_ReadBatchEntries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_ReadBatchEntries_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *SegmentProcessor_ReadBatchEntries_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentProcessor_ReadBatchEntries_Call) RunAndReturn(run func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)) *SegmentProcessor_ReadBatchEntries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ReadEntry provides a mock function with given fields: _a0, _a1
 func (_m *SegmentProcessor) ReadEntry(_a0 context.Context, _a1 int64) (*processor.SegmentEntry, error) {
 	ret := _m.Called(_a0, _a1)

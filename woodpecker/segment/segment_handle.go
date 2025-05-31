@@ -45,8 +45,10 @@ type SegmentHandle interface {
 	GetId(context.Context) int64
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
-	// Read range entries from the segment
+	// Read range entries within [from,to] of the segment
 	Read(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
+	// ReadBatch num of entries from the segment
+	ReadBatch(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
@@ -351,7 +353,35 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 		return []*processor.SegmentEntry{segmentEntry}, nil
 	}
 
-	segmentEntryList, err := cli.ReadBatchEntries(ctx, s.logId, s.segmentId, from, to)
+	segmentEntryList, err := cli.ReadEntriesInRange(ctx, s.logId, s.segmentId, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return segmentEntryList, nil
+}
+
+// ReadBatch reads batch entries from segment.
+func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int64) ([]*processor.SegmentEntry, error) {
+	// write data to quorum
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return nil, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
+	}
+
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	if size != -1 {
+		return nil, werr.ErrNotSupport.WithCauseErrMsg("support size=-1 as auto batch size currently")
+	}
+
+	segmentEntryList, err := cli.ReadEntriesBatch(ctx, s.logId, s.segmentId, from, size)
 	if err != nil {
 		return nil, err
 	}

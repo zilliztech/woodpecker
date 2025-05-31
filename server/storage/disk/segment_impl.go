@@ -1245,6 +1245,10 @@ func (dr *DiskReader) HasNext() (bool, error) {
 	return true, nil
 }
 
+func (o *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
+	panic("implement me")
+}
+
 // ReadNext reads the next entry
 func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	startTime := time.Now()

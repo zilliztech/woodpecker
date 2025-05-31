@@ -142,7 +142,9 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedId, op.logId, op.segmentId, op.entryId))
 		case <-ticker.C:
 			elapsed := time.Now().Sub(startRequestTime)
-			logger.Ctx(context.TODO()).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, still waiting...", op.logId, op.segmentId, op.entryId, elapsed))
+			logger.Ctx(context.TODO()).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, failed and retry", op.logId, op.segmentId, op.entryId, elapsed))
+			op.handle.SendAppendErrorCallbacks(op.entryId, werr.ErrSegmentWriteException)
+			return
 		}
 	}
 }

@@ -109,7 +109,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 
 			// 4. Try to read from earliest and verify we start at the truncation point+1
 			earliest := log.EarliestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-basic-reader")
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-basic-reader", false)
 			assert.NoError(t, err)
 
 			// The first message we read should be message 5 (the one after truncation point)
@@ -257,7 +257,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 
 				// Read from earliest
 				earliest := log.EarliestLogMessageID()
-				logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-concurrent-reader")
+				logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-concurrent-reader", false)
 				assert.NoError(t, err)
 
 				readCount := 0
@@ -477,7 +477,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 
 			// 5. Read from earliest and verify we start after truncation point
 			earliest := log.EarliestLogMessageID()
-			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-multi-segment-reader")
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "truncate-multi-segment-reader", false)
 			assert.NoError(t, err)
 
 			// Read the first message
@@ -572,7 +572,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 			earliest := log.EarliestLogMessageID()
 
 			// Create a reader starting at earliest position
-			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "read-before-truncation-reader")
+			logReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "read-before-truncation-reader", false)
 			assert.NoError(t, err)
 
 			// Read 5 messages to simulate an active reader at position 5
@@ -631,7 +631,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 
 			// Now create a new reader from earliest position
 			// It should start reading from position 11
-			newReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "new-reader-after-truncation")
+			newReader, err := logHandle.OpenLogReader(context.Background(), &earliest, "new-reader-after-truncation", false)
 			assert.NoError(t, err)
 
 			// Read first message
@@ -770,7 +770,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			// 2. Scenario 1: Create readers at different positions
 			// Reader 1: Starts at beginning
 			earliest := log.EarliestLogMessageID()
-			reader1, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader1-from-beginning")
+			reader1, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader1-from-beginning", false)
 			assert.NoError(t, err)
 
 			// Read a few messages to simulate active usage
@@ -785,7 +785,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			// Reader 2: Starts at middle segment
 			middleIndex := totalMsgs / 2
 			middlePoint := writtenIds[middleIndex]
-			reader2, err := logHandle.OpenLogReader(context.Background(), middlePoint, "reader2-from-middle")
+			reader2, err := logHandle.OpenLogReader(context.Background(), middlePoint, "reader2-from-middle", false)
 			assert.NoError(t, err)
 
 			// Read a few messages
@@ -827,7 +827,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			t.Log("Closed reader1, early segments should now be eligible for cleanup")
 
 			// 7. Create reader 3 from earliest (which should now be after truncation point)
-			reader3, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader3-after-truncation")
+			reader3, err := logHandle.OpenLogReader(context.Background(), &earliest, "reader3-after-truncation", false)
 			assert.NoError(t, err)
 
 			// Read first message to verify it starts after truncation point

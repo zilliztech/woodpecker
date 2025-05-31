@@ -255,12 +255,74 @@ func (_c *LogStoreClient_IsSegmentFenced_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// ReadBatchEntries provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, toEntryId
-func (_m *LogStoreClient) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
+// ReadEntriesBatch provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, size
+func (_m *LogStoreClient) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+	ret := _m.Called(ctx, logId, segmentId, fromEntryId, size)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadEntriesBatch")
+	}
+
+	var r0 []*processor.SegmentEntry
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)); ok {
+		return rf(ctx, logId, segmentId, fromEntryId, size)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) []*processor.SegmentEntry); ok {
+		r0 = rf(ctx, logId, segmentId, fromEntryId, size)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*processor.SegmentEntry)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64) error); ok {
+		r1 = rf(ctx, logId, segmentId, fromEntryId, size)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_ReadEntriesBatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadEntriesBatch'
+type LogStoreClient_ReadEntriesBatch_Call struct {
+	*mock.Call
+}
+
+// ReadEntriesBatch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+//   - fromEntryId int64
+//   - size int64
+func (_e *LogStoreClient_Expecter) ReadEntriesBatch(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, size interface{}) *LogStoreClient_ReadEntriesBatch_Call {
+	return &LogStoreClient_ReadEntriesBatch_Call{Call: _e.mock.On("ReadEntriesBatch", ctx, logId, segmentId, fromEntryId, size)}
+}
+
+func (_c *LogStoreClient_ReadEntriesBatch_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64)) *LogStoreClient_ReadEntriesBatch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_ReadEntriesBatch_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *LogStoreClient_ReadEntriesBatch_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_ReadEntriesBatch_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)) *LogStoreClient_ReadEntriesBatch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReadEntriesInRange provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, toEntryId
+func (_m *LogStoreClient) ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
 	ret := _m.Called(ctx, logId, segmentId, fromEntryId, toEntryId)
 
 	if len(ret) == 0 {
-		panic("no return value specified for ReadBatchEntries")
+		panic("no return value specified for ReadEntriesInRange")
 	}
 
 	var r0 []*processor.SegmentEntry
@@ -285,34 +347,34 @@ func (_m *LogStoreClient) ReadBatchEntries(ctx context.Context, logId int64, seg
 	return r0, r1
 }
 
-// LogStoreClient_ReadBatchEntries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadBatchEntries'
-type LogStoreClient_ReadBatchEntries_Call struct {
+// LogStoreClient_ReadEntriesInRange_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadEntriesInRange'
+type LogStoreClient_ReadEntriesInRange_Call struct {
 	*mock.Call
 }
 
-// ReadBatchEntries is a helper method to define mock.On call
+// ReadEntriesInRange is a helper method to define mock.On call
 //   - ctx context.Context
 //   - logId int64
 //   - segmentId int64
 //   - fromEntryId int64
 //   - toEntryId int64
-func (_e *LogStoreClient_Expecter) ReadBatchEntries(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, toEntryId interface{}) *LogStoreClient_ReadBatchEntries_Call {
-	return &LogStoreClient_ReadBatchEntries_Call{Call: _e.mock.On("ReadBatchEntries", ctx, logId, segmentId, fromEntryId, toEntryId)}
+func (_e *LogStoreClient_Expecter) ReadEntriesInRange(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, toEntryId interface{}) *LogStoreClient_ReadEntriesInRange_Call {
+	return &LogStoreClient_ReadEntriesInRange_Call{Call: _e.mock.On("ReadEntriesInRange", ctx, logId, segmentId, fromEntryId, toEntryId)}
 }
 
-func (_c *LogStoreClient_ReadBatchEntries_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64)) *LogStoreClient_ReadBatchEntries_Call {
+func (_c *LogStoreClient_ReadEntriesInRange_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64)) *LogStoreClient_ReadEntriesInRange_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
 
-func (_c *LogStoreClient_ReadBatchEntries_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *LogStoreClient_ReadBatchEntries_Call {
+func (_c *LogStoreClient_ReadEntriesInRange_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *LogStoreClient_ReadEntriesInRange_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStoreClient_ReadBatchEntries_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)) *LogStoreClient_ReadBatchEntries_Call {
+func (_c *LogStoreClient_ReadEntriesInRange_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)) *LogStoreClient_ReadEntriesInRange_Call {
 	_c.Call.Return(run)
 	return _c
 }

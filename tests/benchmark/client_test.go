@@ -311,7 +311,9 @@ func TestReadThroughput(t *testing.T) {
 
 			//	### OpenReader
 			earliest := log.EarliestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "TestReadThroughput")
+			useBatchReader := cfg.Woodpecker.Storage.IsStorageMinio()
+			fmt.Printf("use batch Reader: %v\n", useBatchReader)
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "TestReadThroughput", true)
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -399,7 +401,7 @@ func TestReadFromEarliest(t *testing.T) {
 
 			//	### OpenReader
 			start := log.EarliestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &start, "TestReadFromEarliest")
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &start, "TestReadFromEarliest", false)
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -473,7 +475,7 @@ func TestReadFromLatest(t *testing.T) {
 
 			//	### OpenReader
 			latest := log.LatestLogMessageID()
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "TestReadFromLatest")
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "TestReadFromLatest", false)
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)
@@ -550,7 +552,7 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 				SegmentId: 5,
 				EntryId:   0,
 			}
-			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "TestReadFromSpecifiedPosition")
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "TestReadFromSpecifiedPosition", false)
 			if openReaderErr != nil {
 				fmt.Printf("Open reader failed, err:%v\n", openReaderErr)
 				panic(openReaderErr)

@@ -30,8 +30,10 @@ type LogStoreClient interface {
 	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry) (int64, <-chan int64, error)
 	// ReadEntry reads an entry from the specified log segment by entry ID and returns the entry and an error if any.
 	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error)
-	// ReadBatchEntries reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
-	ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error)
+	// ReadEntriesInRange reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
+	ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error)
+	// ReadEntriesBatch reads a batch of entries from the specified log segment and returns the entries and an error if any.
+	ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
 	// IsSegmentFenced checks if the specified log segment is fenced and returns a boolean value and an error if any.
@@ -64,8 +66,11 @@ func (l *logStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmen
 	return l.store.GetEntry(ctx, logId, segmentId, entryId)
 }
 
-func (l *logStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
+func (l *logStoreClientLocal) ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
+}
+func (l *logStoreClientLocal) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+	return l.store.GetBatchEntries(ctx, logId, segmentId, fromEntryId, size)
 }
 
 func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
@@ -114,7 +119,11 @@ func (l *logStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segme
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
+func (l *logStoreClientRemote) ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
+	panic("implement me")
+}
+
+func (l *logStoreClientRemote) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
 }
 

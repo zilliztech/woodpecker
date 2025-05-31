@@ -678,6 +678,66 @@ func (_c *SegmentHandle_Read_Call) RunAndReturn(run func(context.Context, int64,
 	return _c
 }
 
+// ReadBatch provides a mock function with given fields: _a0, _a1, _a2
+func (_m *SegmentHandle) ReadBatch(_a0 context.Context, _a1 int64, _a2 int64) ([]*processor.SegmentEntry, error) {
+	ret := _m.Called(_a0, _a1, _a2)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadBatch")
+	}
+
+	var r0 []*processor.SegmentEntry
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)); ok {
+		return rf(_a0, _a1, _a2)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) []*processor.SegmentEntry); ok {
+		r0 = rf(_a0, _a1, _a2)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*processor.SegmentEntry)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(_a0, _a1, _a2)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentHandle_ReadBatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadBatch'
+type SegmentHandle_ReadBatch_Call struct {
+	*mock.Call
+}
+
+// ReadBatch is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+func (_e *SegmentHandle_Expecter) ReadBatch(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentHandle_ReadBatch_Call {
+	return &SegmentHandle_ReadBatch_Call{Call: _e.mock.On("ReadBatch", _a0, _a1, _a2)}
+}
+
+func (_c *SegmentHandle_ReadBatch_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64)) *SegmentHandle_ReadBatch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_ReadBatch_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *SegmentHandle_ReadBatch_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentHandle_ReadBatch_Call) RunAndReturn(run func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)) *SegmentHandle_ReadBatch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RecoveryOrCompact provides a mock function with given fields: todo
 func (_m *SegmentHandle) RecoveryOrCompact(todo context.Context) error {
 	ret := _m.Called(todo)

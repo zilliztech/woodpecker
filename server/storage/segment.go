@@ -38,6 +38,8 @@ type Reader interface {
 	io.Closer
 	// ReadNext returns the next entry in the log according to the Reader's direction.
 	ReadNext() (*proto.LogEntry, error)
+	// ReadNextBatch returns the next batch of entries in the log according to the Reader's direction.
+	ReadNextBatch(int64) ([]*proto.LogEntry, error)
 	// HasNext returns true if there is an entry to read.
 	HasNext() (bool, error)
 }
