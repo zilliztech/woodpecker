@@ -25,7 +25,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/pool"
 )
 
 type ObjectReader interface {
@@ -38,8 +37,7 @@ type ObjectReader interface {
 func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
 	start := time.Now()
 	// Initial buffer size - 1MB is a reasonable starting point
-	initialSize := initReadBufSize
-	buf := pool.GetByteBuffer(int(initialSize))
+	buf := make([]byte, 0, initReadBufSize)
 
 	// Temporary read buffer
 	readBuf := make([]byte, 32*1024) // 32KB read block
@@ -48,15 +46,6 @@ func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, e
 	for {
 		// Read a chunk of data
 		n, err := objectReader.Read(readBuf)
-
-		if len(buf)+32*1024 >= cap(buf) {
-			// Increase buffer size if necessary
-			initialSize = int64(cap(buf) * 2)
-			newBuf := pool.GetByteBuffer(int(initialSize))
-			newBuf = append(newBuf, buf...)
-			pool.PutByteBuffer(buf)
-			buf = newBuf
-		}
 
 		// If data is read, append to result buffer
 		if n > 0 {

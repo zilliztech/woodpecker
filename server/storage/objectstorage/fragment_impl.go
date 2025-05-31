@@ -34,7 +34,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
-	"github.com/zilliztech/woodpecker/common/pool"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -195,10 +194,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 
 	tmpFrag, deserializeErr := deserializeFragment(data, objDataSize)
 	if deserializeErr != nil {
-		pool.PutByteBuffer(data)
 		return deserializeErr
 	}
-	pool.PutByteBuffer(data)
 
 	// Reset the buffer with the loaded data
 	f.entriesData = tmpFrag.entriesData
@@ -340,14 +337,6 @@ func (f *FragmentObject) Release() error {
 		return nil
 	}
 
-	// Return buffers to the pool
-	if f.entriesData != nil {
-		pool.PutByteBuffer(f.entriesData)
-	}
-	if f.indexes != nil {
-		pool.PutByteBuffer(f.indexes)
-	}
-
 	f.indexes = nil
 	f.entriesData = nil
 	f.dataLoaded = false
@@ -404,9 +393,6 @@ func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKe
 
 	// Merge them one by one to reduce memory usage
 	startTime := time.Now()
-	// TODO merge is not frequent, use temp slice maybe better gc soon
-	//dataBuff := pool.GetByteBuffer(int(pendingMergeSize))
-	//defer pool.PutByteBuffer(dataBuff)
 	dataBuff := make([]byte, 0, pendingMergeSize)
 	indexBuff := make([]byte, 0, 1024)
 
@@ -615,7 +601,7 @@ func serializeFragment(f *FragmentObject) ([]byte, error) {
 	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
 
 	// Get buffer from pool
-	fullData := pool.GetByteBuffer(totalSize)
+	fullData := make([]byte, 0, totalSize)
 
 	// Write header information
 	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
@@ -680,16 +666,12 @@ func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, e
 	if err := binary.Read(buf, binary.BigEndian, &indexesTmp); err != nil {
 		return nil, fmt.Errorf("failed to read index %v", err)
 	}
-	indexes := pool.GetByteBuffer(int(numIndexes * 8))
-	indexes = append(indexes, indexesTmp...)
 	// Read entriesData (remaining data)
 	entriesDataTmp := buf.Bytes()
-	entriesData := pool.GetByteBuffer(len(entriesDataTmp))
-	entriesData = append(entriesData, entriesDataTmp...)
 
 	return &FragmentObject{
-		indexes:      indexes,
-		entriesData:  entriesData,
+		indexes:      indexesTmp,
+		entriesData:  entriesDataTmp,
 		firstEntryId: int64(firstEntryID),
 		lastEntryId:  int64(lastEntryId),
 	}, nil
@@ -710,8 +692,8 @@ func genFragmentDataFromRaw(rawEntries [][]byte) ([]byte, []byte) {
 	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
 
 	// Get buffers from byte pool
-	data := pool.GetByteBuffer(totalDataSize)
-	index := pool.GetByteBuffer(indexSize)
+	data := make([]byte, 0, totalDataSize)
+	index := make([]byte, 0, indexSize)
 
 	// Temporary index buffer, reuse to reduce memory allocation
 	entryIndex := make([]byte, 8)
