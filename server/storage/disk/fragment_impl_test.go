@@ -973,7 +973,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader for non-existent file should succeed")
 
 		// Check if file is readable - should return false
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.False(t, isReadable, "Non-existent file should not be readable")
 	})
 
@@ -989,7 +989,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader for empty file should succeed")
 
 		// Check if file is readable - should return false
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.False(t, isReadable, "Empty file should not be readable")
 	})
 
@@ -1021,7 +1021,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader for header-only file should succeed")
 
 		// Check if file is readable - should return false because no footer
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.False(t, isReadable, "File with only header should not be readable")
 	})
 
@@ -1050,7 +1050,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader for complete file should succeed")
 
 		// Check if file is readable - should return true
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.True(t, isReadable, "Complete file should be readable")
 	})
 
@@ -1079,7 +1079,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader with size mismatch should succeed")
 
 		// Check if file is readable - should return false due to size mismatch
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.False(t, isReadable, "File with size mismatch should not be readable")
 	})
 
@@ -1102,7 +1102,7 @@ func TestFragmentFileReader_IsMMapReadable(t *testing.T) {
 		assert.NoError(t, err, "Creating reader for corrupted file should succeed")
 
 		// Check if file is readable - should return false due to invalid content
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.False(t, isReadable, "Corrupted file should not be readable")
 	})
 }
@@ -1191,7 +1191,7 @@ func TestFragmentFileReader_IsMMapReadable_ConcurrentAccess(t *testing.T) {
 				for j := 0; j < 10; j++ {
 					attempts++
 					// Check if the file is readable
-					if fr.isMMapReadable(context.Background()) {
+					if fr.IsMMapReadable(context.Background()) {
 						readable = true
 						t.Logf("Checker %d: File became readable after %d attempts", checkerID, attempts)
 						break
@@ -1221,7 +1221,7 @@ func TestFragmentFileReader_IsMMapReadable_ConcurrentAccess(t *testing.T) {
 		// The file should be readable after writing is complete
 		fr, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 		assert.NoError(t, err, "Creating reader after write should succeed")
-		isReadable := fr.isMMapReadable(context.Background())
+		isReadable := fr.IsMMapReadable(context.Background())
 		assert.True(t, isReadable, "File should be readable after complete writing")
 	})
 }
@@ -1273,7 +1273,7 @@ func TestFragmentFileReader_ReadersWaitingForWriter(t *testing.T) {
 		var successfulLoad bool
 		for attempts := 1; attempts <= 20; attempts++ {
 			// Check if file is readable
-			isReadable = fr.isMMapReadable(context.Background())
+			isReadable = fr.IsMMapReadable(context.Background())
 			if isReadable {
 				t.Logf("Reader: File is now readable after %d attempts", attempts)
 

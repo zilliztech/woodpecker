@@ -876,6 +876,7 @@ func (rs *RODiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment,
 	return totalSize, lastFragment, nil
 }
 
+// Deprecated
 // Merge merges log file fragments
 func (rs *RODiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
 	rs.mu.RLock()
@@ -965,17 +966,6 @@ func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, erro
 	}
 	existsNewFragment := false
 	for {
-		fragKey := getFragmentFileKey(rs.logFileDir, fragId)
-		// check if the fragment is already cached
-		if frag, cached := cache.GetCachedFragment(context.TODO(), fragKey); cached {
-			cachedFrag := frag.(*FragmentFileReader)
-			fetchedLastFragment = cachedFrag
-			rs.fragments = append(rs.fragments, cachedFrag)
-			fragId++
-			existsNewFragment = true
-			continue
-		}
-
 		// check if the fragment exists
 		fragmentPath := getFragmentFileKey(rs.logFileDir, fragId)
 		fileInfo, err := os.Stat(fragmentPath)
@@ -992,7 +982,7 @@ func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, erro
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			break
 		}
-		if !fragment.isMMapReadable(context.TODO()) {
+		if !fragment.IsMMapReadable(context.TODO()) {
 			logger.Ctx(context.TODO()).Warn("found a new fragment unreadable", zap.String("logFileDir", rs.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1044,7 +1034,7 @@ func (rs *RODiskSegmentImpl) GetLastEntryId() (int64, error) {
 	if lastFragment == nil {
 		return -1, nil
 	}
-	return lastFragment.GetLastEntryId()
+	return getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), lastFragment)
 }
 
 // findFragmentFrom returns the fragment index and fragment object
@@ -1055,7 +1045,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 	for i := fromIdx; i < len(rs.fragments); i++ {
 		lastIdx = i
 		fragment := rs.fragments[i]
-		firstID, err := fragment.GetFirstEntryId()
+		firstID, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
 		if err != nil {
 			rs.mu.RUnlock()
 			logger.Ctx(context.TODO()).Warn("get fragment firstEntryId failed",
@@ -1064,7 +1054,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 				zap.Error(err))
 			return -1, nil, -1, err
 		}
-		lastID, err := fragment.GetLastEntryId()
+		lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
 		if err != nil {
 			rs.mu.RUnlock()
 			logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed",
@@ -1140,12 +1130,6 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".frag") {
 			fragmentPath := filepath.Join(rs.logFileDir, entry.Name())
 
-			// Remove from cache using the correct method name
-			// Based on search results, we should use GetCachedFragment and RemoveFragment
-			if cachedFrag, found := cache.GetCachedFragment(ctx, fragmentPath); found {
-				_ = cache.RemoveCachedFragment(ctx, cachedFrag)
-			}
-
 			// Delete file
 			if err := os.Remove(fragmentPath); err != nil {
 				logger.Ctx(ctx).Warn("Failed to delete fragment file",
@@ -1213,12 +1197,12 @@ func (dr *DiskReader) HasNext() (bool, error) {
 
 	// current fragment contains this entry, fast return
 	if dr.currFragment != nil {
-		first, err := dr.currFragment.GetFirstEntryId()
+		first, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 		if err != nil {
 			logger.Ctx(context.Background()).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
-		last, err := dr.currFragment.GetLastEntryId()
+		last, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 		if err != nil {
 			logger.Ctx(context.Background()).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
@@ -1262,12 +1246,20 @@ func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 	}
 
 	// Get current fragment lastEntryId
-	lastID, err := dr.currFragment.GetLastEntryId()
+	lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 	if err != nil {
 		return nil, err
 	}
 
 	// read a fragment as a batch
+	if dr.currFragment == nil {
+		return nil, errors.New("no readable Fragment")
+	}
+	loadErr := dr.currFragment.Load(context.TODO())
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	defer dr.currFragment.Release()
 	entries := make([]*proto.LogEntry, 0, 32)
 	for {
 		// Read data from current fragment
@@ -1336,12 +1328,20 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	}
 
 	// Get current fragment
-	lastID, err := dr.currFragment.GetLastEntryId()
+	lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 	if err != nil {
 		return nil, err
 	}
 
 	// Read data from current fragment
+	if dr.currFragment == nil {
+		return nil, errors.New("no readable Fragment")
+	}
+	loadErr := dr.currFragment.Load(context.TODO())
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	defer dr.currFragment.Release()
 	data, err := dr.currFragment.GetEntry(dr.currEntryID)
 	if err != nil {
 		// If current entryID not in fragment, may need to move to next fragment
@@ -1465,4 +1465,36 @@ func getFragmentFileKey(logFileDir string, fragmentId int64) string {
 // utils to get merged fragment file key
 func getMergedFragmentFileKey(logFileDir string, mergedFragmentId int64) string {
 	return fmt.Sprintf("%s/m_%d.frag", logFileDir, mergedFragmentId)
+}
+
+func getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentFileReader) (int64, error) {
+	firstEntryId, err := fragment.GetFirstEntryId()
+	if werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		defer fragment.Release()
+		firstEntryId, err = fragment.GetFirstEntryId()
+		if err != nil {
+			return -1, err
+		}
+	}
+	return firstEntryId, nil
+}
+
+func getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentFileReader) (int64, error) {
+	lastEntryId, err := fragment.GetLastEntryId()
+	if werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		defer fragment.Release()
+		lastEntryId, err = fragment.GetLastEntryId()
+		if err != nil {
+			return -1, err
+		}
+	}
+	return lastEntryId, nil
 }

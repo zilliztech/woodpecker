@@ -33,7 +33,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
-	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 //go:generate mockery --dir=./server --name=LogStore --structname=LogStore --output=mocks/mocks_server --filename=mock_logstore.go --with-expecter=true  --outpkg=mocks_server
@@ -59,13 +58,12 @@ type LogStore interface {
 var _ LogStore = (*logStore)(nil)
 
 type logStore struct {
-	cfg             *config.Configuration
-	ctx             context.Context
-	cancel          context.CancelFunc
-	etcdCli         *clientv3.Client
-	minioCli        minioHandler.MinioHandler
-	address         string
-	fragmentManager cache.FragmentManager
+	cfg      *config.Configuration
+	ctx      context.Context
+	cancel   context.CancelFunc
+	etcdCli  *clientv3.Client
+	minioCli minioHandler.MinioHandler
+	address  string
 
 	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]processor.SegmentProcessor
@@ -73,14 +71,12 @@ type logStore struct {
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
-	fragmentMgr := cache.GetInstance(cfg.Woodpecker.Logstore.FragmentManager.MaxBytes, cfg.Woodpecker.Logstore.FragmentManager.MaxInterval)
 	return &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
 		minioCli:          minioCli,
-		fragmentManager:   fragmentMgr,
 		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
 	}
 }

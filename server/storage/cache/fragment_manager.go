@@ -32,6 +32,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
+// Deprecated
 // FragmentManager is responsible for managing memory usage of fragments.
 type FragmentManager interface {
 	// GetMaxMemory returns the maximum memory limit.
@@ -59,6 +60,7 @@ var (
 	interval  int   = 1_000
 )
 
+// Deprecated
 func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 	once.Do(func() {
 		maxMemory = maxMemoryBytes
@@ -74,15 +76,18 @@ func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 	return instance
 }
 
+// Deprecated
 func GetCachedFragment(ctx context.Context, key string) (storage.Fragment, bool) {
 	return GetInstance(maxMemory, interval).GetFragment(ctx, key)
 }
 
+// Deprecated
 func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
 	logger.Ctx(ctx).Debug("add cache fragment", zap.String("key", fragment.GetFragmentKey()), zap.Any("fragInst", fmt.Sprintf("%p", fragment)))
 	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
+// Deprecated
 func RemoveCachedFragment(ctx context.Context, frag storage.Fragment) error {
 	return GetInstance(maxMemory, interval).RemoveFragment(ctx, frag)
 }

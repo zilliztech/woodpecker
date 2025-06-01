@@ -127,6 +127,8 @@ const (
 	FragmentEmpty
 	// FragmentNotFound indicates that the fragment is not found.
 	FragmentNotFound
+	// FragmentInfoNotFetched indicates that the fragment info is not fetched.
+	FragmentInfoNotFetched
 	// FragmentNotLoaded indicates that the fragment is not loaded.
 	FragmentNotLoaded
 	// FragmentNotUploaded indicates that the fragment is not uploaded.
@@ -175,11 +177,12 @@ var (
 	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
 
 	// LogFile & Fragment related
-	ErrLogFileClosed       = newWoodpeckerError("LogFile is closed", LogFileClosed, true)
-	ErrFragmentEmpty       = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
-	ErrFragmentNotFound    = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
-	ErrFragmentNotLoaded   = newWoodpeckerError("Fragment is not loaded", FragmentNotLoaded, false)
-	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
+	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, true)
+	ErrFragmentEmpty          = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
+	ErrFragmentNotFound       = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
+	ErrFragmentInfoNotFetched = newWoodpeckerError("Fragment info is not fetched", FragmentInfoNotFetched, false)
+	ErrFragmentNotLoaded      = newWoodpeckerError("Fragment is not loaded", FragmentNotLoaded, false)
+	ErrFragmentNotUploaded    = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
 	// Reader&Writer related
 	ErrInvalidEntryId      = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)

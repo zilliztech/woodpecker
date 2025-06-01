@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -36,7 +35,6 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 const (
@@ -70,6 +68,9 @@ type FragmentObject struct {
 	dataLoaded   bool // If this fragment has been loaded to memory
 	dataUploaded bool // If this fragment has been uploaded to MinIO
 	infoFetched  bool // if info of this fragment has been fetched from MinIO
+
+	// data refCnt
+	dataRefCnt int // The number of references to the fragment data used
 }
 
 // NewFragmentObject initializes a new FragmentObject.
@@ -80,7 +81,7 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, logId in
 	rawBufSize := int64(cap(data) + cap(index))
 	//metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	//metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
-	return &FragmentObject{
+	f := &FragmentObject{
 		client:       client,
 		bucket:       bucket,
 		logId:        logId,
@@ -98,6 +99,11 @@ func NewFragmentObject(client minioHandler.MinioHandler, bucket string, logId in
 		dataUploaded: dataUploaded,
 		infoFetched:  infoFetched,
 	}
+	if len(data) > 0 {
+		// someone create a fragment with data, init the reference count
+		f.dataRefCnt = 1
+	}
+	return f
 }
 
 func (f *FragmentObject) GetLogId() int64 {
@@ -168,17 +174,19 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 func (f *FragmentObject) Load(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	start := time.Now()
-	logId := fmt.Sprintf("%d", f.logId)
-	segId := fmt.Sprintf("%d", f.segmentId)
+	// already loaded, no need to load again
 	if f.dataLoaded {
-		// already loaded, no need to load again
+		// Increase the reference count
+		f.dataRefCnt += 1
 		return nil
 	}
 	if !f.dataUploaded {
 		return werr.ErrFragmentNotUploaded
 	}
 
+	start := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
 	fragObjectReader, objDataSize, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object: %w", err)
@@ -207,14 +215,14 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.dataLoaded = true
 	f.dataUploaded = true
 	f.infoFetched = true
+	f.dataRefCnt += 1 // Increase the reference count
 
 	// update metrics
 	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Inc()
 	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Add(float64(f.GetSize()))
 
-	// update cache
-	return cache.AddCacheFragment(ctx, f)
+	return nil
 }
 
 func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
@@ -233,26 +241,9 @@ func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
 func (f *FragmentObject) GetLastEntryId() (int64, error) {
 	// First check with read lock
 	f.mu.RLock()
-	if f.infoFetched {
-		lastId := f.lastEntryId
-		f.mu.RUnlock()
-		return lastId, nil
-	}
-
-	// If we need to load data, we'll need to acquire the lock again
-	if !f.dataLoaded && f.dataUploaded {
-		f.mu.RUnlock()
-		err := f.Load(context.Background())
-		if err != nil {
-			return -1, err
-		}
-		f.mu.RLock()
-	}
-
-	// Check again with read lock
 	defer f.mu.RUnlock()
 	if !f.infoFetched {
-		return -1, errors.New("fragment no data&info to load")
+		return -1, werr.ErrFragmentInfoNotFetched.WithCauseErrMsg(fmt.Sprintf("%s info not fetched", f.fragmentKey))
 	}
 	return f.lastEntryId, nil
 }
@@ -260,26 +251,9 @@ func (f *FragmentObject) GetLastEntryId() (int64, error) {
 func (f *FragmentObject) GetFirstEntryId() (int64, error) {
 	// First check with read lock
 	f.mu.RLock()
-	if f.infoFetched {
-		firstId := f.firstEntryId
-		f.mu.RUnlock()
-		return firstId, nil
-	}
-
-	// If we need to load data, we'll need to acquire the lock again
-	if !f.dataLoaded && f.dataUploaded {
-		f.mu.RUnlock()
-		err := f.Load(context.Background())
-		if err != nil {
-			return -1, err
-		}
-		f.mu.RLock()
-	}
-
-	// Check again with read lock
 	defer f.mu.RUnlock()
 	if !f.infoFetched {
-		return -1, errors.New("fragment no data&info to load")
+		return -1, werr.ErrFragmentInfoNotFetched.WithCauseErrMsg(fmt.Sprintf("%s info not fetched", f.fragmentKey))
 	}
 	return f.firstEntryId, nil
 }
@@ -293,38 +267,28 @@ func (f *FragmentObject) GetLastModified() int64 {
 func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 	// First check if we need to load data
 	f.mu.RLock()
-	dataLoaded := f.dataLoaded
-	dataUploaded := f.dataUploaded
-	f.mu.RUnlock()
-
-	if !dataLoaded && dataUploaded {
-		err := f.Load(context.Background())
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Now read with lock held
-	f.mu.RLock()
 	defer f.mu.RUnlock()
-	dataLoaded = f.dataLoaded
-
 	if !f.dataLoaded {
-		return nil, errors.New("fragment no data to load")
+		return nil, werr.ErrFragmentNotLoaded.WithCauseErrMsg(fmt.Sprintf("%s not loaded", f.fragmentKey))
 	}
-
 	relatedIdx := (entryId - f.firstEntryId) * 8
 	if relatedIdx+8 > int64(len(f.indexes)) {
 		return nil, werr.ErrEntryNotFound
 	}
-
+	// get entry offset and length
 	entryOffset := binary.BigEndian.Uint32(f.indexes[relatedIdx : relatedIdx+4])
 	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
-
-	// Create a copy of the data to avoid potential race conditions after lock release
+	// copy entry data
+	if entryOffset+entryLength > uint32(len(f.entriesData)) {
+		logger.Ctx(context.TODO()).Debug("Entry offset out of bounds, maybe file corrupted",
+			zap.Uint32("entryOffset", entryOffset),
+			zap.Uint32("entryLength", entryLength),
+			zap.Int64("fragmentSize", int64(len(f.entriesData))))
+		return nil, werr.ErrSegmentReadException
+	}
 	result := make([]byte, entryLength)
 	copy(result, f.entriesData[entryOffset:entryOffset+entryLength])
-
+	// return entry data
 	return result, nil
 }
 
@@ -336,29 +300,28 @@ func (f *FragmentObject) Release() error {
 		// empty, no need to release again
 		return nil
 	}
+	// decrement reference count
+	f.dataRefCnt -= 1
 
+	if f.dataRefCnt > 0 {
+		// still in use, no need to release
+		return nil
+	}
+
+	// release memory
 	f.indexes = nil
 	f.entriesData = nil
 	f.dataLoaded = false
 	return nil
 }
 
-// appendToMergeTarget append the fragment data to a mergeTarget fragment
-func (f *FragmentObject) appendToMergeTarget(ctx context.Context, mergeTarget *FragmentObject, baseOffset int64) error {
+// AppendToMergeTarget append the fragment data to a mergeTarget fragment
+func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *FragmentObject, baseOffset int64) error {
 	f.mu.RLock()
-	if !f.dataLoaded {
-		f.mu.RUnlock()
-		err := f.Load(ctx)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to load fragment data", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
-			return err
-		}
-		f.mu.RLock()
-	}
 	defer f.mu.RUnlock()
 	if !f.dataLoaded {
-		logger.Ctx(ctx).Warn("fragment data not loaded", zap.String("fragmentKey", f.fragmentKey))
-		return werr.ErrFragmentNotLoaded
+		logger.Ctx(ctx).Warn("fragment not loaded", zap.String("fragmentKey", f.fragmentKey))
+		return werr.ErrFragmentNotLoaded.WithCauseErrMsg(fmt.Sprintf("%s not loaded", f.fragmentKey))
 	}
 
 	// write index to pendingMergedFragment
@@ -374,223 +337,7 @@ func (f *FragmentObject) appendToMergeTarget(ctx context.Context, mergeTarget *F
 	}
 	// write data to pendingMergedFragment
 	mergeTarget.entriesData = append(mergeTarget.entriesData, f.entriesData...)
-
-	//
 	return nil
-}
-
-func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, pendingMergeSize int64) (storage.Fragment, error) {
-	// Check args
-	if len(fragments) == 0 {
-		return nil, errors.New("no fragments to merge")
-	}
-
-	// Fast merge by rename
-	if len(fragments) == 1 {
-		// no need to merge here, just rename
-		return fastMergeSingleFragment(ctx, mergedFragKey, mergeFragId, fragments[0])
-	}
-
-	// Merge them one by one to reduce memory usage
-	startTime := time.Now()
-	dataBuff := make([]byte, 0, pendingMergeSize)
-	indexBuff := make([]byte, 0, 1024)
-
-	mergeTarget := &FragmentObject{
-		client:       fragments[0].client,
-		bucket:       fragments[0].bucket,
-		fragmentId:   mergeFragId,
-		fragmentKey:  mergedFragKey,
-		entriesData:  dataBuff,
-		indexes:      indexBuff,
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		dataUploaded: false,
-		dataLoaded:   false,
-		infoFetched:  true,
-	}
-	expectedEntryId := int64(-1)
-	fragIds := make([]uint64, 0)
-	for _, candidateFrag := range fragments {
-		fragFirstEntryId, err := candidateFrag.GetFirstEntryId()
-		if err != nil {
-			return nil, err
-		}
-		fragLastEntryId, err := candidateFrag.GetLastEntryId()
-		if err != nil {
-			return nil, err
-		}
-		// check the order of entries
-		if expectedEntryId == -1 {
-			// the first segment
-			mergeTarget.firstEntryId = fragFirstEntryId
-			expectedEntryId = fragLastEntryId + 1
-		} else {
-			if expectedEntryId != fragFirstEntryId {
-				logger.Ctx(ctx).Warn("fragments are not in order", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Int64("expectedEntryId", expectedEntryId), zap.Int64("fragFirstEntryId", fragFirstEntryId))
-				return nil, errors.New("fragments are not in order")
-			}
-			expectedEntryId = fragLastEntryId + 1
-			mergeTarget.lastEntryId = fragLastEntryId
-		}
-		// merge index
-		baseOffset := len(mergeTarget.entriesData)
-		mergeOneFragmentErr := candidateFrag.appendToMergeTarget(ctx, mergeTarget, int64(baseOffset))
-		if mergeOneFragmentErr != nil {
-			logger.Ctx(ctx).Warn("failed to merge fragment", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Error(mergeOneFragmentErr))
-			return nil, mergeOneFragmentErr
-		}
-		fragIds = append(fragIds, uint64(candidateFrag.GetFragmentId()))
-	}
-
-	// set data cache ready
-	mergeTarget.dataLoaded = true
-	mergeTarget.size = int64(len(mergeTarget.entriesData) + len(mergeTarget.indexes))
-	mergeTarget.rawBufSize = int64(cap(mergeTarget.entriesData) + cap(mergeTarget.indexes))
-
-	if mergeTarget.firstEntryId == -1 {
-		logger.Ctx(ctx).Warn("fragment not loaded", zap.String("fragKey", mergeTarget.fragmentKey))
-	}
-	// upload the mergedFragment
-	flushErr := mergeTarget.Flush(ctx)
-	if flushErr != nil {
-		return nil, flushErr
-	}
-	// set flag
-	mergeTarget.dataUploaded = true
-	mergeTarget.infoFetched = true
-
-	// release immediately
-	mergeTarget.entriesData = nil
-	mergeTarget.indexes = nil
-	mergeTarget.dataLoaded = false
-
-	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergeTarget.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergeTarget.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergeTarget, nil
-}
-
-func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragment *FragmentObject) (storage.Fragment, error) {
-	startTime := time.Now()
-	// merge
-	mergedFrag := &FragmentObject{
-		client:       fragment.client,
-		bucket:       fragment.bucket,
-		fragmentId:   mergeFragId,
-		fragmentKey:  mergedFragKey,
-		entriesData:  make([]byte, 0),
-		indexes:      make([]byte, 0),
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		dataUploaded: false,
-		dataLoaded:   false,
-		infoFetched:  false,
-	}
-
-	// fast rename
-	uploadInfo, uploadErr := fragment.client.CopyObject(ctx,
-		minio.CopyDestOptions{
-			Bucket: mergedFrag.bucket,
-			Object: mergedFrag.fragmentKey,
-		}, minio.CopySrcOptions{
-			Bucket: fragment.bucket,
-			Object: fragment.fragmentKey,
-		})
-	if uploadErr != nil {
-		return nil, uploadErr
-	}
-
-	// set data cache ready
-	mergedFrag.size = uploadInfo.Size
-	mergedFrag.rawBufSize = uploadInfo.Size
-	mergedFrag.dataLoaded = false
-	mergedFrag.dataUploaded = true
-	mergedFrag.infoFetched = false
-
-	logger.Ctx(ctx).Info("fast merge single fragment completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64("fragmentId", fragment.fragmentId), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergedFrag, nil
-}
-
-// Deprecated
-// mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
-func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
-	// check args
-	if len(fragments) == 0 {
-		return nil, errors.New("no fragments to merge")
-	}
-
-	startTime := time.Now()
-	// merge
-	mergedFrag := &FragmentObject{
-		client:       fragments[0].client,
-		bucket:       fragments[0].bucket,
-		fragmentId:   mergeFragId,
-		fragmentKey:  mergedFragKey,
-		entriesData:  make([]byte, 0),
-		indexes:      make([]byte, 0),
-		firstEntryId: fragments[0].firstEntryId,               // TODO may not loaded
-		lastEntryId:  fragments[len(fragments)-1].lastEntryId, // TODO may not loaded
-		dataUploaded: false,
-		dataLoaded:   false,
-		infoFetched:  true,
-	}
-	expectedEntryId := int64(-1)
-	fragIds := make([]uint64, 0)
-	for _, fragment := range fragments {
-		err := fragment.Load(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// check the order of entries
-		if expectedEntryId == -1 {
-			// the first segment
-			expectedEntryId = fragment.lastEntryId + 1
-		} else {
-			if expectedEntryId != fragment.firstEntryId {
-				return nil, errors.New("fragments are not in order")
-			}
-			expectedEntryId = fragment.lastEntryId + 1
-		}
-		// merge index
-		baseOffset := len(mergedFrag.entriesData)
-		for index := 0; index < len(fragment.indexes); index = index + 8 {
-			newEntryOffset := binary.BigEndian.Uint32(fragment.indexes[index:index+4]) + uint32(baseOffset)
-			entryLength := binary.BigEndian.Uint32(fragment.indexes[index+4 : index+8])
-
-			newIndex := make([]byte, 8)
-			binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
-			binary.BigEndian.PutUint32(newIndex[4:], entryLength)
-
-			mergedFrag.indexes = append(mergedFrag.indexes, newIndex...)
-		}
-		// merge data
-		mergedFrag.entriesData = append(mergedFrag.entriesData, fragment.entriesData...)
-		fragIds = append(fragIds, fragment.fragmentId)
-	}
-
-	// set data cache ready
-	mergedFrag.dataLoaded = true
-	mergedFrag.size = int64(len(mergedFrag.entriesData) + len(mergedFrag.indexes))
-	mergedFrag.rawBufSize = int64(cap(mergedFrag.entriesData) + cap(mergedFrag.indexes))
-
-	// upload the mergedFragment
-	flushErr := mergedFrag.Flush(ctx)
-	if flushErr != nil {
-		return nil, flushErr
-	}
-	// set flag
-	mergedFrag.dataUploaded = true
-	mergedFrag.infoFetched = true
-
-	// release immediately
-	if releaseImmediately {
-		// release immediately
-		mergedFrag.entriesData = nil
-		mergedFrag.indexes = nil
-		mergedFrag.dataLoaded = false
-	}
-
-	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Uint64("mergeFragId", mergeFragId), zap.Uint64s("fragmentIds", fragIds), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergedFrag, nil
 }
 
 // Deprecated
