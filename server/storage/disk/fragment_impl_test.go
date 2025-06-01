@@ -761,6 +761,8 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 
 		// 3. Read and verify the data just written
 		t.Logf("Step %d.3: Reading entry %d", i+1, entryID)
+		loadErr := ff2.Load(context.TODO()) // keep ff2 open
+		assert.NoError(t, loadErr)
 		readData, err := ff2.GetEntry(entryID)
 		assert.NoError(t, err, "Failed to read entry %d", entryID)
 		assert.Equal(t, testData, readData, "Data mismatch for entry %d", entryID)
@@ -776,9 +778,13 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	releaseErr := ff2.Release()
+	assert.NoError(t, releaseErr) // release Alternating write/read
 	t.Log("Alternating write/read test completed")
 
 	// Final verification of all entries
+	loadErr := ff2.Load(context.TODO())
+	assert.NoError(t, loadErr)
 	t.Log("Performing final verification of all entries...")
 	for i := 0; i < entryCount; i++ {
 		entryID := startEntryID + int64(i)
@@ -787,12 +793,12 @@ func TestFragmentFile_AlternatingWriteFlushRead(t *testing.T) {
 		assert.Equal(t, allWrittenData[i], data, "Final verification: Data mismatch for entry %d", entryID)
 	}
 
-	// Reload test
+	// release ff2
 	t.Log("Releasing and reloading file for verification...")
 	err = ff2.Release()
 	assert.NoError(t, err, "Failed to release resources")
 
-	// Open file in read-only mode
+	// Open another file in read-only mode
 	roFF, err := NewFragmentFileReader(filePath, fileSize, 1, 0, 1)
 	assert.NoError(t, err, "Failed to create read-only file")
 	assert.NotNil(t, roFF)

@@ -69,7 +69,10 @@ func TestNewROSegmentImpl(t *testing.T) {
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	listEmptyChan := make(chan minio.ObjectInfo)
+	close(listEmptyChan)
+	client.EXPECT().ListObjects(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(listEmptyChan)
 	segmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 	assert.Equal(t, int64(1), segmentImpl.logId)
@@ -778,9 +781,6 @@ func TestGetId(t *testing.T) {
 // TestMerge tests the Merge function.
 func TestMerge(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -800,57 +800,36 @@ func TestMerge(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	// mock fragments
+	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
+	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
 
-	// write data and flush fragment 1
-	for i := 0; i < 100; i++ {
-		_, _, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
-		assert.NoError(t, err)
-	}
-	err := segmentImpl.Sync(context.Background())
-	assert.NoError(t, err)
-
-	// write data and flush fragment 2
-	for i := 100; i < 200; i++ {
-		_, _, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
-		assert.NoError(t, err)
-	}
-	err = segmentImpl.Sync(context.Background())
-	assert.NoError(t, err)
-
-	// mock list objects
-	listChan := make(chan minio.ObjectInfo, 2)
-	listChan <- minio.ObjectInfo{
-		Key:  "TestMerge/1/0/1.frag",
-		Size: int64(100 * len([]byte("test_data"))),
-	}
-	listChan <- minio.ObjectInfo{
-		Key:  "TestMerge/1/0/2.frag",
-		Size: int64(100 * len([]byte("test_data"))),
-	}
+	// mock object storage interfaces
+	listChan := make(chan minio.ObjectInfo)
 	close(listChan)
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
+	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
-	// Merge fragments
 	roSegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test fragments
 	mergedFrags, entryOffset, fragmentIdOffset, err := roSegmentImpl.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
-	assert.Equal(t, []int32{0}, entryOffset)
+	assert.Equal(t, []int32{100}, entryOffset) // 100 is the first entry id of merged fragment
 	assert.Equal(t, []int32{1}, fragmentIdOffset)
 	firstEntryId, err := mergedFrags[0].GetFirstEntryId()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), firstEntryId)
+	assert.Equal(t, int64(100), firstEntryId)
 	lastEntryId, err := mergedFrags[0].GetLastEntryId()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(199), lastEntryId)
+	assert.Equal(t, int64(103), lastEntryId)
 }
 
 // TestLoad tests the Load function.
 func TestLoad(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -867,37 +846,38 @@ func TestLoad(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	// mock fragments
+	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
+	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
 
-	// Write some data to buffer and sync
-	for i := 0; i < 100; i++ {
-		_, _, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
-		assert.NoError(t, err)
-	}
-
-	err := segmentImpl.Sync(context.Background())
-	assert.NoError(t, err)
-
+	// mock object storage interfaces
+	listChan := make(chan minio.ObjectInfo)
+	close(listChan)
+	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 	// Load data
 	roSegmentImpl := NewROSegmentImpl(1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
 	totalSize, lastFragment, err := roSegmentImpl.Load(context.Background())
 	assert.NoError(t, err)
-	assert.True(t, int64(100*len("test_data")) < totalSize)
+	assert.Equal(t, mockFragment1.size+mockFragment2.size, totalSize)
 	assert.NotNil(t, lastFragment)
 	firstEntryId, err := lastFragment.GetFirstEntryId()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), firstEntryId)
+	assert.Equal(t, int64(102), firstEntryId)
 	lastEntryId, err := lastFragment.GetLastEntryId()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(99), lastEntryId)
+	assert.Equal(t, int64(103), lastEntryId)
 }
 
 // TestNewReader tests the NewReader function.
 func TestNewReaderInSegmentImpl(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	// when read frag 2, return it is not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInWriterLogFile/1/0/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	// when read frag 3, return it is not exists
+	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInWriterLogFile/1/0/3.frag", mock.Anything).Return(minio.ObjectInfo{}, minio.ErrorResponse{
+		Code: "NoSuchKey",
+	})
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -914,18 +894,21 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-
 	// Write some data to buffer and sync
-	for i := 0; i < 100; i++ {
-		_, _, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
-		assert.NoError(t, err)
-	}
-	err := segmentImpl.Sync(context.Background())
-	assert.NoError(t, err)
+	// mock fragments
+	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestNewReaderInWriterLogFile/1/0/1.frag",
+		[][]byte{[]byte("entry1"), []byte("entry2")}, 0, true, false, true)
+	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestNewReaderInWriterLogFile/1/0/2.frag",
+		[][]byte{[]byte("entry3"), []byte("entry4")}, 2, true, false, true)
+
+	// mock object storage interfaces
+	listChan := make(chan minio.ObjectInfo)
+	close(listChan)
+	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 
 	// Create a reader for [0, 100)
 	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -934,7 +917,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 	assert.NotNil(t, reader)
 
 	// Read data
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 4; i++ {
 		hasNext, err := reader.HasNext()
 		assert.NoError(t, err)
 		assert.True(t, hasNext)
@@ -942,7 +925,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), entry.EntryId)
-		assert.Equal(t, []byte("test_data"), entry.Values)
+		assert.Equal(t, []byte(fmt.Sprintf("entry%d", i+1)), entry.Values)
 	}
 
 	hasNext, err := reader.HasNext()
@@ -952,7 +935,6 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 
 func TestNewReaderInROSegmentImpl(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -969,25 +951,25 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	// mock fragments
+	data := make([][]byte, 0, 100)
 	for i := 0; i < 100; i++ {
-		_, _, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
-		assert.NoError(t, err)
+		data = append(data, []byte(fmt.Sprintf("test_data%d", i)))
 	}
-	err := segmentImpl.Sync(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 1, int(segmentImpl.lastFragmentId))
+	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestNewReaderInROSegmentImpl/1/0/1.frag",
+		data, 0, true, false, true)
 
-	// Get 1.frag from cache, show no need to mock 1.frag
-	// mock read 1.frag data
-	//client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/0/1.frag", mock.Anything).Return(bytes.NewReader(mockData), int64(len(mockData)), nil)
-	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/0/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
-
-	// mock 2.fra does not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROLogFile/1/0/2.frag", mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
+	// mock object storage interfaces
+	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestNewReaderInROSegmentImpl/1/0/2.frag", mock.Anything).Return(minio.ObjectInfo{}, minio.ErrorResponse{
+	//	Code: "NoSuchKey",
+	//})
+	listChan := make(chan minio.ObjectInfo)
+	close(listChan)
+	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 
 	// Create a reader for [0, 100)
 	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl.fragments = []*FragmentObject{mockFragment1} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -1004,7 +986,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 		entry, err := reader.ReadNext()
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), entry.EntryId)
-		assert.Equal(t, []byte("test_data"), entry.Values)
+		assert.Equal(t, []byte(fmt.Sprintf("test_data%d", i)), entry.Values)
 	}
 
 	hasNext, err := reader.HasNext()
@@ -1014,21 +996,6 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 
 func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	// buffer split to 3 partitions, concurrently flush 1,2,3 frags
-	// 1.frag put success
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/1.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	// 2.frag put failed
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/2.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, errors.New("put failed"))
-	// 3.frag put success
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/3.frag", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
-	//mock 1.frag exists
-	//client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/1.frag", mock.Anything).Return(minio.ObjectInfo{}, nil)
-	// mock 2.frag not exists
-	client.EXPECT().StatObject(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/2.frag", mock.Anything).Return(minio.ObjectInfo{}, minio.ErrorResponse{
-		Code: "NoSuchKey",
-	})
-
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -1045,77 +1012,63 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 		},
 	}
 
-	data1000 := make([]byte, 1000)
-	// test write data with holes to minio, (fragment 1,x,3)
-	{ // write 3 frag
-		segmentImpl := NewSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data1000)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(0), assignId0)
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data1000)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), assignId1)
-		assignId2, ch2, err := segmentImpl.AppendAsync(context.Background(), 2, data1000)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(2), assignId2)
-
-		// entry 0 success
-		assert.Equal(t, int64(0), <-ch0)
-
-		// entry 1 fail
-		select {
-		case syncedId := <-ch1:
-			assert.Equal(t, int64(-1), syncedId)
-		case <-time.After(2 * time.Second):
-			te := errors.New("time out")
-			assert.Error(t, te)
-		}
-		// entry 2 fail
-		select {
-		case syncedId := <-ch2:
-			assert.Equal(t, int64(-1), syncedId)
-		case <-time.After(2 * time.Second):
-			te := errors.New("time out")
-			assert.Error(t, te)
-		}
-
-		// assert there 1 fragment created
-		assert.Equal(t, 1, int(segmentImpl.lastFragmentId))
-		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
-		assert.NoError(t, err)
-		assert.Equal(t, int64(0), flushedLastId)
-
-		// because read 1.frag from cache, no need to mock 1.frag Load related method calls, like GetObjectDataAndInfo/StateObject
-		//frag1Data, err := serializeFragment(logFile.fragments[0])
-		//assert.NoError(t, err)
-		// fragment 1 data
-		//client.EXPECT().GetObjectDataAndInfo(mock.Anything, "test-bucket", "TestROLogFileReadDataWithHoles/1/0/1.frag", mock.Anything).Return(bytes.NewReader(frag1Data), int64(len(frag1Data)), nil)
-	}
-
+	// mock fragments
 	// test read data with holes (fragment 1,x,3) in minio
-	// we should only read data in fragment 1
-	{
-		roSegmentImpl := NewROSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-		reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
-			StartSequenceNum: 0,
-			EndSequenceNum:   3,
-		})
-		assert.NoError(t, err)
-		assert.NotNil(t, reader)
-		// read data from frag 1 success
-		hasNext, err := reader.HasNext()
-		assert.NoError(t, err)
-		assert.True(t, hasNext)
-		entry, err := reader.ReadNext()
-		assert.NoError(t, err)
-		assert.Equal(t, int64(0), entry.EntryId)
-		assert.Equal(t, data1000, entry.Values)
-		// read data from frag 2 fail, no more data
-		hasNext, err = reader.HasNext()
-		assert.NoError(t, err)
-		assert.False(t, hasNext)
+	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/1.frag",
+		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
+	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/2.frag",
+		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
+	//mockFragment3 := NewFragmentObject(client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/3.frag",
+	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
+	mockFragment4 := NewFragmentObject(client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/4.frag",
+		[][]byte{[]byte("entry6"), []byte("entry7")}, 106, true, false, true)
+
+	mockMergedFragment0 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/m_0.frag",
+		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
+	mockMergedFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/m_1.frag",
+		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
+	//mockMergedFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/m_2.frag",
+	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
+	mockMergedFragment3 := NewFragmentObject(client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/m_3.frag",
+		[][]byte{[]byte("entry6"), []byte("entry7")}, 106, true, false, true)
+
+	listChan := make(chan minio.ObjectInfo, 6) // list return disorder and hole list
+	listChan <- minio.ObjectInfo{
+		Key:  mockFragment2.fragmentKey,
+		Size: mockFragment2.size,
 	}
+	listChan <- minio.ObjectInfo{
+		Key:  mockMergedFragment0.fragmentKey,
+		Size: mockMergedFragment0.size,
+	}
+	listChan <- minio.ObjectInfo{
+		Key:  mockFragment4.fragmentKey,
+		Size: mockFragment4.size,
+	}
+	listChan <- minio.ObjectInfo{
+		Key:  mockMergedFragment3.fragmentKey,
+		Size: mockMergedFragment3.size,
+	}
+	listChan <- minio.ObjectInfo{
+		Key:  mockMergedFragment1.fragmentKey,
+		Size: mockMergedFragment1.size,
+	}
+	listChan <- minio.ObjectInfo{
+		Key:  mockFragment1.fragmentKey,
+		Size: mockFragment1.size,
+	}
+	close(listChan)
+	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
+
+	// we should only read data in fragment 1
+	roSegmentImpl := NewROSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	assert.NotNil(t, roSegmentImpl.fragments)
+	assert.Equal(t, 2, len(roSegmentImpl.fragments))
+	assert.Equal(t, mockFragment1.fragmentKey, roSegmentImpl.fragments[0].fragmentKey)
+	assert.Equal(t, mockFragment2.fragmentKey, roSegmentImpl.fragments[1].fragmentKey)
+	assert.Equal(t, 2, len(roSegmentImpl.mergedFragments))
+	assert.Equal(t, mockMergedFragment0.fragmentKey, roSegmentImpl.mergedFragments[0].fragmentKey)
+	assert.Equal(t, mockMergedFragment1.fragmentKey, roSegmentImpl.mergedFragments[1].fragmentKey)
 }
 
 func TestFindFragment(t *testing.T) {
@@ -1222,34 +1175,35 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/fragment_1.frag", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/fragment_2.frag", Size: 2048}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_1.frag", Size: 4096}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
 		close(objectCh)
 
 		// Set up expectations
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/fragment_1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/fragment_2.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_1.frag", mock.Anything).Return(nil)
-		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-		// No need for StatObject call anymore
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh).Once()
 
 		// Create the LogFile
 		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		assert.Equal(t, 2, len(roSegmentImpl.fragments))
+		assert.Equal(t, 1, len(roSegmentImpl.mergedFragments))
 
-		// Add some fragments to the LogFile to verify they're cleared
-		roSegmentImpl.fragments = []*FragmentObject{
-			{fragmentId: 1, firstEntryId: 0, lastEntryId: 9},
-			{fragmentId: 2, firstEntryId: 10, lastEntryId: 19},
-		}
-
+		objectCh2 := make(chan minio.ObjectInfo, 3)
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
+		close(objectCh2)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/2.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.frag", mock.Anything).Return(nil)
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
 		assert.NoError(t, err)
 
 		// Verify internal state is reset
-		assert.Empty(t, roSegmentImpl.fragments, "Fragments slice should be empty")
+		assert.Equal(t, 0, len(roSegmentImpl.fragments), "Fragments slice should be empty")
+		assert.Equal(t, 0, len(roSegmentImpl.mergedFragments), "MergedFragments slice should be empty")
 	})
 
 	t.Run("ListObjectsError", func(t *testing.T) {
@@ -1274,17 +1228,17 @@ func TestDeleteFragments(t *testing.T) {
 		}
 
 		// Create an object channel with an error
-		errorObjectCh := make(chan minio.ObjectInfo, 1)
-		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
-		close(errorObjectCh)
-
-		// Set up expectations
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(errorObjectCh)
-		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-		// No need for StatObject call anymore
+		emptyObjectCh := make(chan minio.ObjectInfo, 0)
+		close(emptyObjectCh)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(emptyObjectCh).Once()
 
 		// Create the LogFile
 		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+
+		errorObjectCh := make(chan minio.ObjectInfo, 1)
+		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
+		close(errorObjectCh)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(errorObjectCh).Once()
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1315,18 +1269,22 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 2)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/fragment_1.frag", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/fragment_2.frag", Size: 2048}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
 		close(objectCh)
 
 		// Set up expectations
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/fragment_1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/fragment_2.frag", mock.Anything).Return(errors.New("remove error"))
-		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh).Once()
 		// Create the LogFile
 		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+
+		objectCh2 := make(chan minio.ObjectInfo, 2)
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		close(objectCh2)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/2.frag", mock.Anything).Return(errors.New("remove error"))
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1336,7 +1294,7 @@ func TestDeleteFragments(t *testing.T) {
 
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
-		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -1398,21 +1356,27 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects including non-fragment files
 		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/fragment_1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_1.frag", Size: 4096}
 		close(objectCh)
 
 		// Set up expectations
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/fragment_1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_1.frag", mock.Anything).Return(nil)
-		client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh).Once()
 		// No call for metadata.json as it should be skipped
 
 		// Create the readonly segment impl
 		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
+		objectCh2 := make(chan minio.ObjectInfo, 3)
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_1.frag", Size: 4096}
+		close(objectCh2)
+		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_1.frag", mock.Anything).Return(nil)
+		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
 		assert.NoError(t, err)

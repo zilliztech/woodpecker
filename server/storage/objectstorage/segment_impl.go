@@ -755,6 +755,7 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 		logger.Ctx(ctx).Debug("Found fragment object",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.String("objectKey", objInfo.Key),
+			zap.Int64("objectSize", objInfo.Size),
 			zap.Int64("fragmentId", fragmentId),
 			zap.Bool("isMerged", isMerged))
 
@@ -765,12 +766,40 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 			existsFragments = append(existsFragments, frag)
 		}
 	}
+	// ensure no hole in list
 	sort.Slice(existsFragments, func(i, j int) bool {
 		return existsFragments[i].fragmentId < existsFragments[j].fragmentId
 	})
+	existsFragmentExpectedFragId := uint64(1) // TODO should be start at 0
+	for i := 0; i < len(existsFragments); i++ {
+		if existsFragments[i].fragmentId != existsFragmentExpectedFragId {
+			logger.Ctx(ctx).Debug("Found fragment hole",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Uint64("fragmentId", existsFragments[i].fragmentId),
+				zap.Uint64("expectedFragmentId", existsFragmentExpectedFragId))
+			existsFragments = existsFragments[:i]
+			break
+		}
+		existsFragmentExpectedFragId += 1
+	}
+
+	// ensure no hole in list
 	sort.Slice(existsMergedFragments, func(i, j int) bool {
 		return existsMergedFragments[i].fragmentId < existsMergedFragments[j].fragmentId
 	})
+	existsMergedFragmentExpectedFragId := uint64(0)
+	for i := 0; i < len(existsMergedFragments); i++ {
+		if existsMergedFragments[i].fragmentId != existsMergedFragmentExpectedFragId {
+			logger.Ctx(ctx).Debug("Found fragment hole",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.Uint64("fragmentId", existsMergedFragments[i].fragmentId),
+				zap.Uint64("expectedFragmentId", existsMergedFragmentExpectedFragId))
+			existsMergedFragments = existsMergedFragments[:i]
+			break
+		}
+		existsMergedFragmentExpectedFragId += 1
+	}
+
 	f.fragments = existsFragments
 	f.mergedFragments = existsMergedFragments
 	return len(existsFragments), len(existsMergedFragments), nil
@@ -1206,6 +1235,7 @@ func (f *ROSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
 
 	// Clean up internal state
 	f.fragments = make([]*FragmentObject, 0)
+	f.mergedFragments = make([]*FragmentObject, 0)
 
 	// Update metrics
 	if len(deleteErrors) > 0 {
