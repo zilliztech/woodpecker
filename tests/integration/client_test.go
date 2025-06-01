@@ -269,7 +269,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 				EntryId:   0,
 			}
 
-			reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader", false)
+			reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader")
 			assert.NoError(t, err)
 			assert.NotNil(t, reader)
 
@@ -458,7 +458,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 				EntryId:   0,
 			}
 
-			reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader", false)
+			reader, err := logHandle.OpenLogReader(ctx, startPoint, "verification-reader")
 			assert.NoError(t, err)
 			assert.NotNil(t, reader)
 
@@ -671,7 +671,7 @@ func TestClientRecreation(t *testing.T) {
 					EntryId:   0,
 				}
 
-				reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader", false)
+				reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader")
 				assert.NoError(t, err)
 
 				// Read first message
@@ -847,7 +847,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 					EntryId:   0,
 				}
 
-				reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader", false)
+				reader, err := logHandle.OpenLogReader(ctx, startPoint, "recreation-test-reader")
 				assert.NoError(t, err)
 
 				// Read first message
@@ -1040,7 +1040,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				EntryId:   0,
 			}
 
-			reader, err := readerLogHandle.OpenLogReader(ctx, startPoint, "verification-reader", false)
+			reader, err := readerLogHandle.OpenLogReader(ctx, startPoint, "verification-reader")
 			assert.NoError(t, err)
 			assert.NotNil(t, reader)
 
@@ -1246,7 +1246,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 						EntryId:   0,
 					}
 
-					reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName, false)
+					reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName)
 					assert.NoError(t, err)
 					defer reader.Close(ctx)
 
@@ -1599,7 +1599,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 						EntryId:   0,
 					}
 
-					reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName, false)
+					reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName)
 					assert.NoError(t, err)
 					defer reader.Close(ctx)
 

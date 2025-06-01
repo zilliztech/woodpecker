@@ -587,8 +587,16 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	defer fr.mu.Unlock()
 	// already loaded, no need to load again
 	if fr.dataLoaded {
+		// refresh info
+		if fr.isGrowing {
+			readFootErr := fr.readFooter()
+			if readFootErr != nil {
+				return readFootErr
+			}
+		}
 		// Increase the reference count
 		fr.dataRefCnt += 1
+		logger.Ctx(context.TODO()).Debug("fragment file loaded, inc ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 		return nil
 	}
 
@@ -637,7 +645,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	// Increase the reference count
 	fr.dataRefCnt += 1
 
-	logger.Ctx(ctx).Debug("fragment file loaded", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+	logger.Ctx(ctx).Debug("fragment file load finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 	// update metrics
 	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segmentId).Add(float64(fr.fileSize))
 	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segmentId).Inc()
@@ -813,9 +821,15 @@ func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 func (fr *FragmentFileReader) refreshFooter() error {
 	// Read file header
 	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+		logger.Ctx(context.TODO()).Debug("refreshFooter: validate header failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(validateHeaderErr))
 		return validateHeaderErr
 	}
-	return fr.readFooter()
+	if readFooterErr := fr.readFooter(); readFooterErr != nil {
+		logger.Ctx(context.TODO()).Debug("refreshFooter: read footer failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(readFooterErr))
+		return readFooterErr
+	}
+	logger.Ctx(context.TODO()).Debug("refreshFooter: refresh footer finish", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)))
+	return nil
 }
 
 // GetLastEntryId returns the last entry ID.
@@ -825,24 +839,26 @@ func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
 	if fr.closed {
 		return 0, errors.New("fragment file is closed")
 	}
-	// if infoFetched and not growing, return
+	// if infoFetched and is now growing ,return
 	if fr.infoFetched && !fr.isGrowing {
-		// already fetch and not growing, return
 		lastEntryID := fr.lastEntryID
 		return lastEntryID, nil
 	}
+	return -1, werr.ErrFragmentInfoNotFetched.WithCauseErrMsg(fmt.Sprintf("%s info not fetched", fr.filePath))
+}
 
-	// otherwise it is growing or info not fetched, all these cases need to load data first
-	if fr.dataLoaded {
-		err := fr.refreshFooter()
-		if err != nil {
-			return -1, err
-		}
+// GetFetchedLastEntryId returns the last refresh fetch lastEntry ID directly
+func (fr *FragmentFileReader) GetFetchedLastEntryId() (int64, error) {
+	fr.mu.RLock()
+	defer fr.mu.RUnlock()
+	if fr.closed {
+		return 0, errors.New("fragment file is closed")
+	}
+	// if infoFetched and is now growing ,return
+	if fr.infoFetched {
 		lastEntryID := fr.lastEntryID
 		return lastEntryID, nil
 	}
-
-	// need to fetch info first manually
 	return -1, werr.ErrFragmentInfoNotFetched.WithCauseErrMsg(fmt.Sprintf("%s info not fetched", fr.filePath))
 }
 
@@ -853,24 +869,11 @@ func (fr *FragmentFileReader) GetFirstEntryId() (int64, error) {
 	if fr.closed {
 		return 0, errors.New("fragment file is closed")
 	}
-	// if infoFetched and not growing, return
-	if fr.infoFetched && !fr.isGrowing {
-		// already fetch and not growing, return
+	// if infoFetched, return
+	if fr.infoFetched {
 		firstEntryID := fr.firstEntryID
 		return firstEntryID, nil
 	}
-
-	// otherwise it is growing or info not fetched, all these cases need to load data first
-	if fr.dataLoaded {
-		err := fr.refreshFooter()
-		if err != nil {
-			return -1, err
-		}
-		firstEntryID := fr.firstEntryID
-		return firstEntryID, nil
-	}
-
-	// need to fetch info first manually
 	return -1, werr.ErrFragmentInfoNotFetched.WithCauseErrMsg(fmt.Sprintf("%s info not fetched", fr.filePath))
 }
 
@@ -1099,6 +1102,7 @@ func (fr *FragmentFileReader) Release() error {
 
 	// decrement reference count
 	fr.dataRefCnt -= 1
+	logger.Ctx(context.TODO()).Debug("call fragment file release, dec ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	if fr.dataRefCnt > 0 {
 		// still in use, no need to release
@@ -1123,6 +1127,7 @@ func (fr *FragmentFileReader) Release() error {
 
 	// Mark data as not fetched in buffer
 	fr.dataLoaded = false
+	logger.Ctx(context.TODO()).Debug("fragment file release finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	return nil
 }

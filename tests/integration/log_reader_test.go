@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -39,6 +40,8 @@ import (
 
 // One active segment#0 with entries 0,1
 func TestActiveSegmentRead(t *testing.T) {
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, 0).Return(true, nil)
@@ -62,7 +65,7 @@ func TestActiveSegmentRead(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
+	mockSegmentHandle.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1)). /*autoBatchSize*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 0,
 			EntryId:   0, // segment#0 has entries 0
@@ -74,19 +77,20 @@ func TestActiveSegmentRead(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
+	mockSegmentHandle.EXPECT().ReadBatch(mock.Anything, int64(1) /*from*/, int64(-1) /*autoBatchSize*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 0,
 			EntryId:   1, // segment#0 has entries 0
 			Data:      msg1data,
 		},
 	}, nil)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(2) /*from*/, int64(2) /*to*/).Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle.EXPECT().ReadBatch(mock.Anything, int64(2) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 
 	// Test LogReader read entries 0,1 from segment#0
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestActiveSegmentRead")
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestActiveSegmentRead", cfg)
+	assert.NoError(t, newReaderErr)
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(0))
@@ -132,7 +136,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 		LastEntryId: int64(-1), // it is active, not completed
 	})
 	mockSegmentHandle.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
-	mockSegmentHandle.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0) /*to*/).Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 	// mock segmentHandle#1 , entries 0,1 in it
 	mockSegmentHandle1 := mocks_segment_handle.NewSegmentHandle(t)
 	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
@@ -147,7 +151,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 	}
 	mockSegmentHandle1.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
+	mockSegmentHandle1.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1)). /*autoBatchSize*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 1,
 			EntryId:   0, // segment#0 has entries 0
@@ -159,20 +163,24 @@ func TestSegmentInExceptionState(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
+	mockSegmentHandle1.EXPECT().ReadBatch(mock.Anything, int64(1) /*from*/, int64(-1) /*autoBatchSize*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 1,
 			EntryId:   1, // segment#0 has entries 0
 			Data:      msg1data,
 		},
 	}, nil)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(2) /*from*/, int64(2) /*to*/).Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle1.EXPECT().ReadBatch(mock.Anything, int64(2) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 	mockLogHandle.EXPECT().GetExistsReadonlySegmentHandle(mock.Anything, int64(1)).Return(mockSegmentHandle1, nil)
 
 	// Test LogReader read entries 0,1 from segment#1, bypass segment#0
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestSegmentInExceptionState")
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestSegmentInExceptionState", cfg)
+	assert.NoError(t, newReaderErr)
+
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(1))
@@ -229,7 +237,7 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg0data, _ := log.MarshalMessage(msg0)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return([]*processor.SegmentEntry{
+	mockSegmentHandle2.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1)). /*autoBatchSize*/ Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   0, // segment#0 has entries 0
@@ -241,20 +249,23 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
+	mockSegmentHandle2.EXPECT().ReadBatch(mock.Anything, int64(1) /*from*/, int64(-1) /*autoBatchSize*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   1, // segment#0 has entries 0
 			Data:      msg1data,
 		},
 	}, nil)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(2) /*from*/, int64(2) /*to*/).Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle2.EXPECT().ReadBatch(mock.Anything, int64(2) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 	mockLogHandle.EXPECT().GetExistsReadonlySegmentHandle(mock.Anything, int64(2)).Return(mockSegmentHandle2, nil)
 
 	// Test LogReader read entries 0,1 from segment#2
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &earliest, "TestReadFromEarlyNotExistsPoint")
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &earliest, "TestReadFromEarlyNotExistsPoint", cfg)
+	assert.NoError(t, newReaderErr)
 	msg, readErr := logReader.ReadNext(ctx) // read entry#0
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(2))
@@ -303,22 +314,25 @@ func TestReadFromSeekPoint(t *testing.T) {
 		Properties: make(map[string]string),
 	}
 	msg1data, _ := log.MarshalMessage(msg1)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(1) /*from*/, int64(1) /*to*/).Return([]*processor.SegmentEntry{
+	mockSegmentHandle2.EXPECT().ReadBatch(mock.Anything, int64(1) /*from*/, int64(-1) /*autoBatchSize*/).Return([]*processor.SegmentEntry{
 		{
 			SegmentId: 2,
 			EntryId:   1, // segment#0 has entries 0
 			Data:      msg1data,
 		},
 	}, nil)
-	mockSegmentHandle2.EXPECT().Read(mock.Anything, int64(2) /*from*/, int64(2) /*to*/).Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle2.EXPECT().ReadBatch(mock.Anything, int64(2) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 	mockLogHandle.EXPECT().GetExistsReadonlySegmentHandle(mock.Anything, int64(2)).Return(mockSegmentHandle2, nil)
 
 	// Test LogReader read entries 1 from segment#2
 	ctx := context.Background()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &log.LogMessageId{
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &log.LogMessageId{
 		SegmentId: int64(2),
 		EntryId:   int64(1),
-	}, "TestReadFromSeekPoint")
+	}, "TestReadFromSeekPoint", cfg)
+	assert.NoError(t, newReaderErr)
 	msg, readErr := logReader.ReadNext(ctx) // read entry#1
 	assert.NoError(t, readErr)
 	assert.Equal(t, msg.Id.SegmentId, int64(2))
@@ -357,7 +371,10 @@ func TestReadFromLatestWhenLatestIsCompleted(t *testing.T) {
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsCompleted")
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsCompleted", cfg)
+	assert.NoError(t, newReaderErr)
 	// no data to read, block until timeout
 	more := false
 	go func() {
@@ -392,14 +409,17 @@ func TestReadFromLatestWhenLatestIsActive(t *testing.T) {
 	})
 	mockSegmentHandle1.EXPECT().GetId(mock.Anything).Return(int64(1)) // segment#0
 	mockSegmentHandle1.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
-	mockSegmentHandle1.EXPECT().Read(mock.Anything, int64(0) /*from*/, int64(0)). /*to*/ Return(nil, werr.ErrEntryNotFound)
+	mockSegmentHandle1.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1)). /*autoBatchSize*/ Return(nil, werr.ErrEntryNotFound)
 	mockSegmentHandle1.EXPECT().GetLastAddConfirmed(mock.Anything).Return(-1, nil)
 	mockLogHandle.EXPECT().GetExistsReadonlySegmentHandle(mock.Anything, int64(1)).Return(mockSegmentHandle1, nil)
 
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	logReader := log.NewLogReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsActive")
+	cfg, err := config.NewConfiguration()
+	assert.NoError(t, err)
+	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsActive", cfg)
+	assert.NoError(t, newReaderErr)
 	// no data to read, block until timeout
 	more := false
 	go func() {

@@ -624,8 +624,6 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 		return nil, getErr
 	}
 	if len(getResp.Kvs) == 0 {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}

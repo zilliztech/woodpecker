@@ -708,9 +708,9 @@ func (_c *LogHandle_GetTruncatedRecordId_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// OpenLogReader provides a mock function with given fields: _a0, _a1, _a2, _a3
-func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId, _a2 string, _a3 bool) (log.LogReader, error) {
-	ret := _m.Called(_a0, _a1, _a2, _a3)
+// OpenLogReader provides a mock function with given fields: _a0, _a1, _a2
+func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId, _a2 string) (log.LogReader, error) {
+	ret := _m.Called(_a0, _a1, _a2)
 
 	if len(ret) == 0 {
 		panic("no return value specified for OpenLogReader")
@@ -718,19 +718,19 @@ func (_m *LogHandle) OpenLogReader(_a0 context.Context, _a1 *log.LogMessageId, _
 
 	var r0 log.LogReader
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string, bool) (log.LogReader, error)); ok {
-		return rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) (log.LogReader, error)); ok {
+		return rf(_a0, _a1, _a2)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string, bool) log.LogReader); ok {
-		r0 = rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, *log.LogMessageId, string) log.LogReader); ok {
+		r0 = rf(_a0, _a1, _a2)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(log.LogReader)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, *log.LogMessageId, string, bool) error); ok {
-		r1 = rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(1).(func(context.Context, *log.LogMessageId, string) error); ok {
+		r1 = rf(_a0, _a1, _a2)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -747,14 +747,13 @@ type LogHandle_OpenLogReader_Call struct {
 //   - _a0 context.Context
 //   - _a1 *log.LogMessageId
 //   - _a2 string
-//   - _a3 bool
-func (_e *LogHandle_Expecter) OpenLogReader(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *LogHandle_OpenLogReader_Call {
-	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", _a0, _a1, _a2, _a3)}
+func (_e *LogHandle_Expecter) OpenLogReader(_a0 interface{}, _a1 interface{}, _a2 interface{}) *LogHandle_OpenLogReader_Call {
+	return &LogHandle_OpenLogReader_Call{Call: _e.mock.On("OpenLogReader", _a0, _a1, _a2)}
 }
 
-func (_c *LogHandle_OpenLogReader_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId, _a2 string, _a3 bool)) *LogHandle_OpenLogReader_Call {
+func (_c *LogHandle_OpenLogReader_Call) Run(run func(_a0 context.Context, _a1 *log.LogMessageId, _a2 string)) *LogHandle_OpenLogReader_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*log.LogMessageId), args[2].(string), args[3].(bool))
+		run(args[0].(context.Context), args[1].(*log.LogMessageId), args[2].(string))
 	})
 	return _c
 }
@@ -764,7 +763,7 @@ func (_c *LogHandle_OpenLogReader_Call) Return(_a0 log.LogReader, _a1 error) *Lo
 	return _c
 }
 
-func (_c *LogHandle_OpenLogReader_Call) RunAndReturn(run func(context.Context, *log.LogMessageId, string, bool) (log.LogReader, error)) *LogHandle_OpenLogReader_Call {
+func (_c *LogHandle_OpenLogReader_Call) RunAndReturn(run func(context.Context, *log.LogMessageId, string) (log.LogReader, error)) *LogHandle_OpenLogReader_Call {
 	_c.Call.Return(run)
 	return _c
 }

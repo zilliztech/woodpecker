@@ -46,7 +46,7 @@ type LogHandle interface {
 	// OpenLogWriter opens a writer for the log.
 	OpenLogWriter(context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
-	OpenLogReader(context.Context, *LogMessageId, string, bool) (LogReader, error)
+	OpenLogReader(context.Context, *LogMessageId, string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
 	GetLastRecordId(context.Context) (*LogMessageId, error)
 	// Truncate truncates the log to the specified record ID (inclusive).
@@ -385,7 +385,7 @@ func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 	return maxSegNo + 1, nil
 }
 
-func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string, useBatch bool) (LogReader, error) {
+func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error) {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -394,18 +394,12 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 		readerName = fmt.Sprintf("%s-r-%s-%d", l.Name, readerBaseName, time.Now().UnixNano())
 	}
 	startPoint := l.adjustPendingReadPointIfTruncated(ctx, readerName, from)
-	var r LogReader
-	if useBatch {
-		batchReader, err := NewLogBatchReader(ctx, l, nil, startPoint, readerName, l.cfg)
-		if err != nil {
-			logger.Ctx(ctx).Warn("open log batch reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
-			return nil, err
-		}
-		r = batchReader
-	} else {
-		r = NewLogReader(ctx, l, nil, startPoint, readerName)
+	r, err := NewLogBatchReader(ctx, l, nil, startPoint, readerName, l.cfg)
+	if err != nil {
+		logger.Ctx(ctx).Warn("open log batch reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
+		return nil, err
 	}
-	err := l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
+	err = l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_reader", "error").Observe(float64(time.Since(start).Milliseconds()))

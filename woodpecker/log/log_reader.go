@@ -45,6 +45,7 @@ type LogReader interface {
 	GetName() string
 }
 
+// Deprecated
 func NewLogReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string) LogReader {
 	return &logReaderImpl{
 		logName:              logHandle.GetName(),
@@ -87,7 +88,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 		select {
 		case <-ctx.Done():
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-			return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+			return nil, ctx.Err()
 		default:
 			// Continue with read operation
 		}
@@ -136,7 +137,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			case <-ctx.Done():
 				ticker.Stop()
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+				return nil, ctx.Err()
 			}
 		}
 		readTimestamp := time.Now().UnixMilli()
@@ -184,19 +185,21 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// 2.1) if next segment exists, indicate that current segment is completed in fact
-			nextSegExists, checkErr := l.logHandle.GetMetadataProvider().CheckSegmentExists(ctx, l.logHandle.GetName(), segId+1)
-			if checkErr != nil && errors.IsAny(checkErr, context.Canceled, context.DeadlineExceeded) {
+			nextSegMeta, getNextSegMetaErr := l.logHandle.GetMetadataProvider().GetSegmentMetadata(ctx, l.logHandle.GetName(), segId+1)
+			if getNextSegMetaErr != nil && errors.IsAny(getNextSegMetaErr, context.Canceled, context.DeadlineExceeded) {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, checkErr
+				return nil, getNextSegMetaErr
 			}
-			if checkErr == nil && nextSegExists {
+			if getNextSegMetaErr == nil && nextSegMeta != nil && nextSegMeta.CreateTime+200 < readTimestamp {
 				logger.Ctx(ctx).Debug("read no entry from current segment, and the next segment already exists, move to next segment's first entry.",
 					zap.String("logName", l.logName),
 					zap.Int64("logId", l.logId),
 					zap.String("readerName", l.readerName),
+					zap.Int64("readTimestamp", readTimestamp),
 					zap.Int64("pendingReadSegmentId", segId),
 					zap.Int64("pendingReadEntryId", entryId),
-					zap.Int64("moveToReadSegmentId", segId+1))
+					zap.Int64("moveToReadSegmentId", segId+1),
+					zap.Int64("nextSegCreateTime", nextSegMeta.CreateTime))
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
 				continue
@@ -206,9 +209,10 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 				zap.String("logName", l.logName),
 				zap.Int64("logId", l.logId),
 				zap.String("readerName", l.readerName),
+				zap.Int64("readTimestamp", readTimestamp),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId),
-				zap.Error(checkErr))
+				zap.Error(getNextSegMetaErr))
 
 			// Use a ticker for backoff with context timeout support
 			ticker := time.NewTicker(200 * time.Millisecond)
@@ -219,7 +223,7 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 			case <-ctx.Done():
 				ticker.Stop()
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+				return nil, ctx.Err()
 			}
 		}
 		if err != nil {
@@ -438,7 +442,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		select {
 		case <-ctx.Done():
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-			return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+			return nil, ctx.Err()
 		default:
 			// Continue with read operation
 		}
@@ -520,7 +524,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			case <-ctx.Done():
 				ticker.Stop()
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+				return nil, ctx.Err()
 			}
 		}
 		readTimestamp := time.Now().UnixMilli()
@@ -570,19 +574,21 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			}
 			// 2) if the segmentHandle is in-progress, just wait and read again
 			// 2.1) if next segment exists, indicate that current segment is completed in fact
-			nextSegExists, checkErr := l.logHandle.GetMetadataProvider().CheckSegmentExists(ctx, l.logHandle.GetName(), segId+1)
-			if checkErr != nil && errors.IsAny(checkErr, context.Canceled, context.DeadlineExceeded) {
+			nextSegMeta, getNextSegMetaErr := l.logHandle.GetMetadataProvider().GetSegmentMetadata(ctx, l.logHandle.GetName(), segId+1)
+			if getNextSegMetaErr != nil && errors.IsAny(getNextSegMetaErr, context.Canceled, context.DeadlineExceeded) {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, checkErr
+				return nil, getNextSegMetaErr
 			}
-			if checkErr == nil && nextSegExists {
+			if getNextSegMetaErr == nil && nextSegMeta != nil && nextSegMeta.CreateTime+200 < readTimestamp {
 				logger.Ctx(ctx).Debug("read no entry from current segment, and the next segment already exists, move to next segment's first entry.",
 					zap.String("logName", l.logName),
 					zap.Int64("logId", l.logId),
 					zap.String("readerName", l.readerName),
+					zap.Int64("readTimestamp", readTimestamp),
 					zap.Int64("pendingReadSegmentId", segId),
 					zap.Int64("pendingReadEntryId", entryId),
-					zap.Int64("moveToReadSegmentId", segId+1))
+					zap.Int64("moveToReadSegmentId", segId+1),
+					zap.Int64("nextSegCreateTime", nextSegMeta.CreateTime))
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
 				continue
@@ -592,9 +598,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				zap.String("logName", l.logName),
 				zap.Int64("logId", l.logId),
 				zap.String("readerName", l.readerName),
+				zap.Int64("readTimestamp", readTimestamp),
 				zap.Int64("pendingReadSegmentId", segId),
 				zap.Int64("pendingReadEntryId", entryId),
-				zap.Error(checkErr))
+				zap.Error(getNextSegMetaErr))
 
 			// Use a ticker for backoff with context timeout support
 			ticker := time.NewTicker(200 * time.Millisecond)
@@ -605,7 +612,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			case <-ctx.Done():
 				ticker.Stop()
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, werr.ErrSegmentReadException.WithCauseErr(ctx.Err())
+				return nil, ctx.Err()
 			}
 		}
 		if err != nil {

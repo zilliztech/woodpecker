@@ -607,6 +607,7 @@ func (s *DiskSegmentImpl) rotateFragment(fragmentFirstEntryId int64) error {
 	if s.currFragment != nil {
 		logger.Ctx(context.Background()).Debug("Sync flushing current fragment before rotate",
 			zap.Int64("lastEntryID", s.lastEntryID.Load()))
+		s.currFragment.isGrowing = false
 		if err := s.currFragment.Flush(context.Background()); err != nil {
 			return errors.Wrap(err, "flush current fragment")
 		}
@@ -716,8 +717,14 @@ func (s *DiskSegmentImpl) Close() error {
 	}
 	// Close current fragment
 	if s.currFragment != nil {
+		s.currFragment.isGrowing = false
+		if err := s.currFragment.Flush(context.TODO()); err != nil {
+			logger.Ctx(context.Background()).Warn("failed to flush fragment",
+				zap.String("logFileDir", s.logFileDir),
+				zap.Error(err))
+		}
 		if err := s.currFragment.Release(); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to close fragment",
+			logger.Ctx(context.Background()).Warn("failed to release fragment",
 				zap.String("logFileDir", s.logFileDir),
 				zap.Error(err))
 		}
@@ -1474,8 +1481,8 @@ func getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context,
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		defer fragment.Release()
 		firstEntryId, err = fragment.GetFirstEntryId()
+		fragment.Release()
 		if err != nil {
 			return -1, err
 		}
@@ -1485,16 +1492,17 @@ func getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context,
 
 func getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentFileReader) (int64, error) {
 	lastEntryId, err := fragment.GetLastEntryId()
-	if werr.ErrFragmentInfoNotFetched.Is(err) {
+	if err != nil && werr.ErrFragmentInfoNotFetched.Is(err) {
 		loadErr := fragment.Load(ctx)
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		defer fragment.Release()
-		lastEntryId, err = fragment.GetLastEntryId()
+		lastEntryId, err = fragment.GetFetchedLastEntryId()
+		fragment.Release()
 		if err != nil {
 			return -1, err
 		}
+		return lastEntryId, nil
 	}
 	return lastEntryId, nil
 }

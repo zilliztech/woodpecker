@@ -100,7 +100,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
 
 	// 6. Verify data integrity with a reader
-	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader", false)
+	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")
 	assert.NoError(t, err, "Failed to open reader")
 	defer reader.Close(context.Background())
 
@@ -186,7 +186,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
 
 	// 6. Verify data integrity with a reader
-	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader", false)
+	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")
 	assert.NoError(t, err, "Failed to open reader")
 	defer reader.Close(context.Background())
 
