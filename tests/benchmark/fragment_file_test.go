@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -78,12 +79,12 @@ func TestFragmentWritePerformance(t *testing.T) {
 			filePath := filepath.Join(tempDir, fmt.Sprintf("fragment_%s.data", tc.name))
 
 			// Create FragmentFile instance
-			fragment, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 0, 1, 1)
+			fragment, err := disk.NewFragmentFileWriter(context.TODO(), filePath, tc.fileSize, 1, 0, 1, 1)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
 
-			defer fragment.Release()
+			defer fragment.Release(context.TODO())
 
 			// Prepare test data and context
 			ctx := context.Background()
@@ -248,7 +249,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 			// Step 1: First create and populate FragmentFile
 			t.Logf("Preparing test file, writing %d entries...", tc.entryCount)
-			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, tc.fileSize, 1, 0, 1, 1)
+			fragmentWriter, err := disk.NewFragmentFileWriter(context.TODO(), filePath, tc.fileSize, 1, 0, 1, 1)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
@@ -262,33 +263,35 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 				// Write data
 				if err := fragmentWriter.Write(ctx, data, int64(i)); err != nil {
-					fragmentWriter.Release()
+					fragmentWriter.Release(context.TODO())
 					t.Fatalf("Failed to write data: %v", err)
 				}
 			}
 
 			// Ensure all data is written to disk
 			if err := fragmentWriter.Flush(ctx); err != nil {
-				fragmentWriter.Release()
+				fragmentWriter.Release(context.TODO())
 				t.Fatalf("Failed to flush data: %v", err)
 			}
 
 			// Close and reopen fragment to ensure reading from disk
-			fragmentWriter.Release()
+			fragmentWriter.Release(context.TODO())
 
 			// Step 2: Reopen FragmentFile and test read performance
 			fragmentReader, err := disk.NewFragmentFileReader(context.TODO(), filePath, tc.fileSize, 1, 0, 1)
 			if err != nil {
 				t.Fatalf("Failed to open FragmentFile: %v", err)
 			}
-			defer fragmentReader.Release()
+			loadErr := fragmentReader.Load(context.TODO())
+			assert.NoError(t, loadErr)
+			defer fragmentReader.Release(context.TODO())
 
 			// Get entry range
-			firstId, err := fragmentReader.GetFirstEntryId()
+			firstId, err := fragmentReader.GetFirstEntryId(context.TODO())
 			if err != nil {
 				t.Fatalf("Failed to get first entry ID: %v", err)
 			}
-			lastId, err := fragmentReader.GetLastEntryId()
+			lastId, err := fragmentReader.GetFetchedLastEntryId(context.TODO())
 			if err != nil {
 				t.Fatalf("Failed to get last entry ID: %v", err)
 			}
@@ -304,7 +307,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 
 			// Sequentially read all entries
 			for id := firstId; id <= lastId; id++ {
-				data, err := fragmentReader.GetEntry(id)
+				data, err := fragmentReader.GetEntry(context.TODO(), id)
 				if err != nil {
 					readErrors++
 					continue
@@ -381,11 +384,11 @@ func TestFragmentMixedPerformance(t *testing.T) {
 
 			// Create FragmentFile instance
 			firstId := int64(1)
-			fragmentWriter, err := disk.NewFragmentFileWriter(filePath, int64(tc.fileSize), 1, 0, 1, firstId)
+			fragmentWriter, err := disk.NewFragmentFileWriter(context.TODO(), filePath, int64(tc.fileSize), 1, 0, 1, firstId)
 			if err != nil {
 				t.Fatalf("Failed to create FragmentFile: %v", err)
 			}
-			defer fragmentWriter.Release()
+			defer fragmentWriter.Release(context.TODO())
 
 			// Prepare test data
 			totalOps := tc.writeCount
@@ -463,7 +466,7 @@ func TestFragmentMixedPerformance(t *testing.T) {
 					entryId := int64(1 + rand.Intn(writeCount))
 
 					readStart := time.Now()
-					data, err := fragmentWriter.GetEntry(entryId)
+					data, err := fragmentWriter.GetEntry(context.TODO(), entryId)
 					readTime += time.Since(readStart)
 
 					if err != nil {
