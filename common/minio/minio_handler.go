@@ -24,7 +24,12 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+)
+
+const (
+	ObjectStorageScopeName = "ObjectStorage"
 )
 
 type ObjectReader interface {
@@ -34,7 +39,9 @@ type ObjectReader interface {
 
 // ReadObjectFull reads all content from ObjectReader and returns a byte slice
 // It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
-func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+func ReadObjectFull(ctx context.Context, objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
+	defer sp.End()
 	start := time.Now()
 	// Initial buffer size - 1MB is a reasonable starting point
 	buf := make([]byte, 0, initReadBufSize)
@@ -107,6 +114,8 @@ func NewMinioHandlerWithClient(ctx context.Context, minioCli *minio.Client) (Min
 }
 
 func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObject")
+	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -120,6 +129,8 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 }
 
 func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObjectDataAndInfo")
+	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -140,6 +151,8 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 }
 
 func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObject")
+	defer sp.End()
 	start := time.Now()
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil {
@@ -154,6 +167,8 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 }
 
 func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "RemoveObject")
+	defer sp.End()
 	start := time.Now()
 	err := m.client.RemoveObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -167,6 +182,8 @@ func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectN
 }
 
 func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "StatObject")
+	defer sp.End()
 	start := time.Now()
 	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -180,6 +197,8 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectNam
 }
 
 func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "CopyObject")
+	defer sp.End()
 	start := time.Now()
 	uploadInfo, err := m.client.CopyObject(ctx, dest, src)
 	if err != nil {
@@ -193,6 +212,8 @@ func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOp
 }
 
 func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ListObjects")
+	defer sp.End()
 	// We can't track completion metrics here as this returns a channel
 	// Instead, we'll increment the operation count for the method call
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("list_objects", "called").Inc()

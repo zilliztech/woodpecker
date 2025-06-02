@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_storage"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -38,8 +39,8 @@ func setupMockFragment(t *testing.T, id int64, key string, size int64, lastEntry
 	fragment.On("GetSegmentId").Return(int64(0)).Maybe()
 	fragment.On("GetFragmentId").Return(id).Maybe()
 	fragment.On("GetFragmentKey").Return(key).Maybe()
-	fragment.On("GetSize").Return(size).Maybe()
-	fragment.On("Release").Return(nil).Maybe()
+	fragment.EXPECT().GetSize().Return(size).Maybe()
+	fragment.EXPECT().Release(mock.Anything).Return(nil).Maybe()
 	fragment.On("GetRawBufSize").Return(size).Maybe()
 
 	return fragment

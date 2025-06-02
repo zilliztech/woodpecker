@@ -75,11 +75,13 @@ func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, call
 }
 
 func (op *AppendOp) Execute() {
+	ctx, sp := logger.NewIntentCtx("AppendOp", fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId))
+	defer sp.End()
 	// get ES/WQ/AQ
 	quorumInfo, err := op.handle.GetQuorumInfo(context.Background())
 	if err != nil {
 		op.err = err
-		op.handle.SendAppendErrorCallbacks(op.entryId, err)
+		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
 		return
 	}
 
@@ -88,27 +90,27 @@ func (op *AppendOp) Execute() {
 		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
 		if clientErr != nil {
 			op.err = clientErr
-			op.handle.SendAppendErrorCallbacks(op.entryId, err)
+			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
 			return
 		}
 		// send request to the node
-		op.sendWriteRequest(cli, i)
+		op.sendWriteRequest(ctx, cli, i)
 	}
 }
 
-func (op *AppendOp) sendWriteRequest(cli client.LogStoreClient, serverIndex int) {
+func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int) {
 	startRequestTime := time.Now()
 	// order request
-	entryId, syncedCh, err := cli.AppendEntry(context.Background(), op.logId, op.toSegmentEntry())
+	entryId, syncedCh, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry())
 	// async received ack without order
-	go op.receivedAckCallback(startRequestTime, entryId, syncedCh, err, serverIndex)
+	go op.receivedAckCallback(ctx, startRequestTime, entryId, syncedCh, err, serverIndex)
 }
 
-func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
+func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
-		op.handle.SendAppendErrorCallbacks(op.entryId, err)
+		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
 		return
 	}
 	// async call error, wait until syncedCh closed
@@ -119,31 +121,31 @@ func (op *AppendOp) receivedAckCallback(startRequestTime time.Time, entryId int6
 		select {
 		case syncedId, ok := <-syncedCh:
 			if !ok {
-				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced chan for log:%d seg:%d entry:%d closed", op.logId, op.segmentId, op.entryId))
+				logger.Ctx(ctx).Debug(fmt.Sprintf("synced chan for log:%d seg:%d entry:%d closed", op.logId, op.segmentId, op.entryId))
 				return
 			}
 			if syncedId == -1 {
-				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-				op.handle.SendAppendErrorCallbacks(op.entryId, werr.ErrSegmentWriteException)
+				logger.Ctx(ctx).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+				op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteException)
 				return
 			}
 			if syncedId != -1 && syncedId >= op.entryId {
 				op.ackSet.Set(serverIndex)
 				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
 					op.completed.Store(true)
-					op.handle.SendAppendSuccessCallbacks(op.entryId)
+					op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
 					cost := time.Now().Sub(startRequestTime)
 					metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
 					metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
 				}
-				logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedId, op.logId, op.segmentId, op.entryId))
+				logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedId, op.logId, op.segmentId, op.entryId))
 				return
 			}
-			logger.Ctx(context.TODO()).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedId, op.logId, op.segmentId, op.entryId))
+			logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedId, op.logId, op.segmentId, op.entryId))
 		case <-ticker.C:
 			elapsed := time.Now().Sub(startRequestTime)
-			logger.Ctx(context.TODO()).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, failed and retry", op.logId, op.segmentId, op.entryId, elapsed))
-			op.handle.SendAppendErrorCallbacks(op.entryId, werr.ErrSegmentWriteException)
+			logger.Ctx(ctx).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, failed and retry", op.logId, op.segmentId, op.entryId, elapsed))
+			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteException)
 			return
 		}
 	}

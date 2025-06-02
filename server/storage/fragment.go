@@ -31,13 +31,13 @@ type Fragment interface {
 	GetFragmentKey() string
 	Flush(ctx context.Context) error
 	Load(ctx context.Context) error
-	GetLastEntryId() (int64, error)
-	GetFirstEntryId() (int64, error)
-	GetLastModified() int64
-	GetEntry(entryId int64) ([]byte, error)
+	GetLastEntryId(ctx context.Context) (int64, error)
+	GetFirstEntryId(ctx context.Context) (int64, error)
+	GetLastModified(ctx context.Context) int64
+	GetEntry(ctx context.Context, entryId int64) ([]byte, error)
 	GetSize() int64
 	GetRawBufSize() int64
-	Release() error
+	Release(ctx context.Context) error
 }
 
 // LogEntry represents a single log entry with payload and its metadata

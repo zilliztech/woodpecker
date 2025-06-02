@@ -126,7 +126,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 100, defaultConfig.Log.File.MaxSize)
 	assert.Equal(t, 10, defaultConfig.Log.File.MaxBackups)
 	assert.Equal(t, 30, defaultConfig.Log.File.MaxAge)
-	assert.Equal(t, "jaeger", defaultConfig.Trace.Exporter)
+	assert.Equal(t, "noop", defaultConfig.Trace.Exporter)
 	assert.Equal(t, 1.0, defaultConfig.Trace.SampleFraction)
 	assert.Equal(t, 10, defaultConfig.Trace.InitTimeout)
 	assert.Equal(t, "http://localhost:14268/api/traces", defaultConfig.Trace.Jaeger.URL)

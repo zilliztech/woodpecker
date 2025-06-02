@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -35,6 +37,8 @@ var (
 	_globalLogger      atomic.Value
 	initLogOnce        sync.Once
 	customEncoder      = "_WpCustomTextEncoder_"
+	CtxLogKey          = "_WpLogger_"
+	CtxLogLevelKey     = "_WpLoggerLevel_"
 )
 
 func init() {
@@ -92,11 +96,11 @@ func Ctx(ctx context.Context) *zap.Logger {
 	if ctx == nil {
 		return debugLogger()
 	}
-	logger := ctx.Value("__Logger__")
+	logger := ctx.Value(CtxLogKey)
 	if logger != nil {
 		return logger.(*zap.Logger)
 	}
-	level := ctx.Value("__LogLevel__")
+	level := ctx.Value(CtxLogLevelKey)
 	if level != nil {
 		if l, ok := _globalLevelLogger.Load(level); ok {
 			return l.(*zap.Logger)
@@ -153,4 +157,50 @@ func newLogger(format string, level string) (*zap.Logger, error) {
 
 func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 	enc.AppendString(t.Format("2006/01/02 15:04:05.000 -07:00")) // custom time format
+}
+
+// ============= logger with trace context ===========
+func WithFields(ctx context.Context, fields ...zap.Field) context.Context {
+	var zLogger *zap.Logger
+	// get zap logger template
+	if ctxLogger, ok := ctx.Value(CtxLogKey).(*zap.Logger); ok {
+		zLogger = ctxLogger
+	} else {
+		zLogger = Ctx(ctx)
+	}
+	// clone a new logger with fields
+	newZLogger := zLogger.With(fields...)
+	// set it to context
+	return context.WithValue(ctx, CtxLogKey, newZLogger)
+}
+
+// NewIntentCtx creates a new context with intent information and returns it along with a span.
+func NewIntentCtx(scopeName string, intent string) (context.Context, trace.Span) {
+	return NewIntentCtxWithParent(context.Background(), scopeName, intent)
+}
+
+func NewIntentCtxWithParent(parent context.Context, scopeName string, intent string) (context.Context, trace.Span) {
+	intentCtx, initSpan := otel.Tracer(scopeName).Start(parent, intent)
+	intentCtx = WithFields(intentCtx,
+		zap.String("scope", scopeName),
+		zap.String("intent", intent),
+		zap.String("traceID", initSpan.SpanContext().TraceID().String()))
+	return intentCtx, initSpan
+}
+
+// SetupSpan add span into ctx values.
+// Also setup logger in context with tracerID field.
+func SetupSpan(ctx context.Context, span trace.Span) context.Context {
+	ctx = trace.ContextWithSpan(ctx, span)
+	ctx = WithFields(ctx, zap.Stringer("traceID", span.SpanContext().TraceID()))
+	return ctx
+}
+
+// Propagate passes span context into a new ctx with different lifetime.
+// Also setup logger in new context with traceID field.
+func Propagate(ctx, newRoot context.Context) context.Context {
+	spanCtx := trace.SpanContextFromContext(ctx)
+
+	newCtx := trace.ContextWithSpanContext(newRoot, spanCtx)
+	return WithFields(newCtx, zap.Stringer("traceID", spanCtx.TraceID()))
 }

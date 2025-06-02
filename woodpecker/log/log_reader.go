@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -31,6 +32,10 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
+)
+
+const (
+	ReaderScopeName = "WoodpeckerLogReader"
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle
@@ -76,6 +81,8 @@ type logReaderImpl struct {
 }
 
 func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ReaderScopeName, "ReadNext")
+	defer sp.End()
 	start := time.Now()
 
 	if l.logHandle == nil {
@@ -270,6 +277,8 @@ func (l *logReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
 }
 
 func (l *logReaderImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ReaderScopeName, "Close")
+	defer sp.End()
 	start := time.Now()
 
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)
@@ -430,6 +439,8 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 }
 
 func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) {
+	ctx, sp := otel.Tracer(ReaderScopeName).Start(ctx, "ReadNext")
+	defer sp.End()
 	start := time.Now()
 
 	if l.logHandle == nil {
@@ -663,6 +674,8 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 }
 
 func (l *logBatchReaderImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ReaderScopeName, "Close")
+	defer sp.End()
 	start := time.Now()
 
 	err := l.logHandle.GetMetadataProvider().DeleteReaderTempInfo(ctx, l.logHandle.GetId(), l.readerName)

@@ -136,17 +136,17 @@ func (_c *Segment_AppendAsync_Call) RunAndReturn(run func(context.Context, int64
 	return _c
 }
 
-// Close provides a mock function with no fields
-func (_m *Segment) Close() error {
-	ret := _m.Called()
+// Close provides a mock function with given fields: ctx
+func (_m *Segment) Close(ctx context.Context) error {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Close")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func() error); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -160,13 +160,14 @@ type Segment_Close_Call struct {
 }
 
 // Close is a helper method to define mock.On call
-func (_e *Segment_Expecter) Close() *Segment_Close_Call {
-	return &Segment_Close_Call{Call: _e.mock.On("Close")}
+//   - ctx context.Context
+func (_e *Segment_Expecter) Close(ctx interface{}) *Segment_Close_Call {
+	return &Segment_Close_Call{Call: _e.mock.On("Close", ctx)}
 }
 
-func (_c *Segment_Close_Call) Run(run func()) *Segment_Close_Call {
+func (_c *Segment_Close_Call) Run(run func(ctx context.Context)) *Segment_Close_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -176,7 +177,7 @@ func (_c *Segment_Close_Call) Return(_a0 error) *Segment_Close_Call {
 	return _c
 }
 
-func (_c *Segment_Close_Call) RunAndReturn(run func() error) *Segment_Close_Call {
+func (_c *Segment_Close_Call) RunAndReturn(run func(context.Context) error) *Segment_Close_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -273,9 +274,9 @@ func (_c *Segment_GetId_Call) RunAndReturn(run func() int64) *Segment_GetId_Call
 	return _c
 }
 
-// GetLastEntryId provides a mock function with no fields
-func (_m *Segment) GetLastEntryId() (int64, error) {
-	ret := _m.Called()
+// GetLastEntryId provides a mock function with given fields: ctx
+func (_m *Segment) GetLastEntryId(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastEntryId")
@@ -283,17 +284,17 @@ func (_m *Segment) GetLastEntryId() (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -307,13 +308,14 @@ type Segment_GetLastEntryId_Call struct {
 }
 
 // GetLastEntryId is a helper method to define mock.On call
-func (_e *Segment_Expecter) GetLastEntryId() *Segment_GetLastEntryId_Call {
-	return &Segment_GetLastEntryId_Call{Call: _e.mock.On("GetLastEntryId")}
+//   - ctx context.Context
+func (_e *Segment_Expecter) GetLastEntryId(ctx interface{}) *Segment_GetLastEntryId_Call {
+	return &Segment_GetLastEntryId_Call{Call: _e.mock.On("GetLastEntryId", ctx)}
 }
 
-func (_c *Segment_GetLastEntryId_Call) Run(run func()) *Segment_GetLastEntryId_Call {
+func (_c *Segment_GetLastEntryId_Call) Run(run func(ctx context.Context)) *Segment_GetLastEntryId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -323,7 +325,7 @@ func (_c *Segment_GetLastEntryId_Call) Return(_a0 int64, _a1 error) *Segment_Get
 	return _c
 }
 
-func (_c *Segment_GetLastEntryId_Call) RunAndReturn(run func() (int64, error)) *Segment_GetLastEntryId_Call {
+func (_c *Segment_GetLastEntryId_Call) RunAndReturn(run func(context.Context) (int64, error)) *Segment_GetLastEntryId_Call {
 	_c.Call.Return(run)
 	return _c
 }

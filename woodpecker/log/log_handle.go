@@ -71,6 +71,10 @@ type LogHandle interface {
 	Close(context.Context) error
 }
 
+const (
+	LogHandleScopeName = "WoodpeckerLogHandle"
+)
+
 var _ LogHandle = (*logHandleImpl)(nil)
 
 type logHandleImpl struct {
@@ -134,6 +138,8 @@ func (l *logHandleImpl) GetMetadataProvider() meta.MetadataProvider {
 }
 
 func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetSegments")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 	result, err := l.Metadata.GetAllSegmentMetadata(ctx, l.Name)
@@ -149,6 +155,8 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.Segme
 }
 
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogWriter")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -174,6 +182,8 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 }
 
 func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetOrCreateWritableSegmentHandle")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -218,6 +228,8 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 
 // GetRecoverableSegmentHandle get exists segmentHandle for recover, only logWriter can use this method
 func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetRecoverableSegmentHandle")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -243,6 +255,8 @@ func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segment
 }
 
 func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetExistsReadonlySegmentHandle")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -297,7 +311,7 @@ func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (seg
 func (l *logHandleImpl) shouldCloseAndCreateNewSegment(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
 	size := segmentHandle.GetSize(ctx)
 	last := l.lastRolloverTimeMs
-	return l.rollingPolicy.ShouldRollover(size, last)
+	return l.rollingPolicy.ShouldRollover(ctx, size, last)
 }
 
 // doCloseAndCreateNewSegment fast close segment and create new segment, no need to wait for segment async compaction
@@ -386,6 +400,8 @@ func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
 }
 
 func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogReader")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -415,6 +431,8 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 
 // Truncate truncate log by recordId
 func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Truncate")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -513,6 +531,8 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 }
 
 func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CheckAndSetSegmentTruncatedIfNeed")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -642,6 +662,8 @@ func (l *logHandleImpl) isBeforeTruncationPoint(from *LogMessageId, truncatedId 
 }
 
 func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetTruncatedRecordId")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -665,6 +687,8 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 }
 
 func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CloseAndCompleteCurrentWritableSegment")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 
@@ -716,6 +740,8 @@ func (l *logHandleImpl) getCurrentMinMaxSegmentId(ctx context.Context) (int64, i
 }
 
 func (l *logHandleImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
+	defer sp.End()
 	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.Fence(ctx)

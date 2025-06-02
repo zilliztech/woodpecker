@@ -35,6 +35,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/processor"
 )
 
+const (
+	LogStoreScopeName = "WoodpeckerLogStore"
+)
+
 //go:generate mockery --dir=./server --name=LogStore --structname=LogStore --output=mocks/mocks_server --filename=mock_logstore.go --with-expecter=true  --outpkg=mocks_server
 type LogStore interface {
 	Start() error
@@ -114,6 +118,8 @@ func (l *logStore) Register(ctx context.Context) error {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry) (int64, <-chan int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
 	segIdStr := fmt.Sprintf("%d", entry.SegmentId)
@@ -125,7 +131,7 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.S
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
 		return -1, nil, err
 	}
-	if segmentProcessor.IsFenced() {
+	if segmentProcessor.IsFenced(ctx) {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "segment_fenced").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "segment_fenced").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Debug("add entry reject, segment is fenced", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId))
@@ -176,6 +182,8 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 }
 
 func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetEntry")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
@@ -202,6 +210,8 @@ func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, e
 }
 
 func (l *logStore) GetBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntries")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
@@ -228,12 +238,14 @@ func (l *logStore) GetBatchEntries(ctx context.Context, logId int64, segmentId i
 }
 
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
 
 	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-		processor.SetFenced()
+		processor.SetFenced(ctx)
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "fence_segment", "success").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "fence_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return nil
@@ -246,12 +258,14 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 }
 
 func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "IsSegmentFenced")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
 
 	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-		isFenced := processor.IsFenced()
+		isFenced := processor.IsFenced(ctx)
 		status := "not_fenced"
 		if isFenced {
 			status = "fenced"
@@ -268,6 +282,8 @@ func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId i
 }
 
 func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
@@ -293,6 +309,8 @@ func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, 
 
 // CompactSegment merge all files in a segment into bigger files
 func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompactSegment")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
@@ -319,6 +337,8 @@ func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId in
 
 // RecoverySegmentFromInProgress read logFiles to get meta info
 func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "RecoverySegmentFromInProgress")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)
@@ -345,11 +365,15 @@ func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int6
 
 // RecoverySegmentFromInRecovery read logFiles to get meta info
 func (l *logStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "RecoverySegmentFromInRecovery")
+	defer sp.End()
 	// same as RecoverySegmentFromInProgress currently
 	return l.RecoverySegmentFromInProgress(ctx, logId, segmentId)
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CleanSegment")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 	segIdStr := fmt.Sprintf("%d", segmentId)

@@ -67,9 +67,9 @@ func (_c *Fragment_Flush_Call) RunAndReturn(run func(context.Context) error) *Fr
 	return _c
 }
 
-// GetEntry provides a mock function with given fields: entryId
-func (_m *Fragment) GetEntry(entryId int64) ([]byte, error) {
-	ret := _m.Called(entryId)
+// GetEntry provides a mock function with given fields: ctx, entryId
+func (_m *Fragment) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+	ret := _m.Called(ctx, entryId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetEntry")
@@ -77,19 +77,19 @@ func (_m *Fragment) GetEntry(entryId int64) ([]byte, error) {
 
 	var r0 []byte
 	var r1 error
-	if rf, ok := ret.Get(0).(func(int64) ([]byte, error)); ok {
-		return rf(entryId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) ([]byte, error)); ok {
+		return rf(ctx, entryId)
 	}
-	if rf, ok := ret.Get(0).(func(int64) []byte); ok {
-		r0 = rf(entryId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) []byte); ok {
+		r0 = rf(ctx, entryId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]byte)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(int64) error); ok {
-		r1 = rf(entryId)
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, entryId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -103,14 +103,15 @@ type Fragment_GetEntry_Call struct {
 }
 
 // GetEntry is a helper method to define mock.On call
+//   - ctx context.Context
 //   - entryId int64
-func (_e *Fragment_Expecter) GetEntry(entryId interface{}) *Fragment_GetEntry_Call {
-	return &Fragment_GetEntry_Call{Call: _e.mock.On("GetEntry", entryId)}
+func (_e *Fragment_Expecter) GetEntry(ctx interface{}, entryId interface{}) *Fragment_GetEntry_Call {
+	return &Fragment_GetEntry_Call{Call: _e.mock.On("GetEntry", ctx, entryId)}
 }
 
-func (_c *Fragment_GetEntry_Call) Run(run func(entryId int64)) *Fragment_GetEntry_Call {
+func (_c *Fragment_GetEntry_Call) Run(run func(ctx context.Context, entryId int64)) *Fragment_GetEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -120,14 +121,14 @@ func (_c *Fragment_GetEntry_Call) Return(_a0 []byte, _a1 error) *Fragment_GetEnt
 	return _c
 }
 
-func (_c *Fragment_GetEntry_Call) RunAndReturn(run func(int64) ([]byte, error)) *Fragment_GetEntry_Call {
+func (_c *Fragment_GetEntry_Call) RunAndReturn(run func(context.Context, int64) ([]byte, error)) *Fragment_GetEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetFirstEntryId provides a mock function with no fields
-func (_m *Fragment) GetFirstEntryId() (int64, error) {
-	ret := _m.Called()
+// GetFirstEntryId provides a mock function with given fields: ctx
+func (_m *Fragment) GetFirstEntryId(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetFirstEntryId")
@@ -135,17 +136,17 @@ func (_m *Fragment) GetFirstEntryId() (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -159,13 +160,14 @@ type Fragment_GetFirstEntryId_Call struct {
 }
 
 // GetFirstEntryId is a helper method to define mock.On call
-func (_e *Fragment_Expecter) GetFirstEntryId() *Fragment_GetFirstEntryId_Call {
-	return &Fragment_GetFirstEntryId_Call{Call: _e.mock.On("GetFirstEntryId")}
+//   - ctx context.Context
+func (_e *Fragment_Expecter) GetFirstEntryId(ctx interface{}) *Fragment_GetFirstEntryId_Call {
+	return &Fragment_GetFirstEntryId_Call{Call: _e.mock.On("GetFirstEntryId", ctx)}
 }
 
-func (_c *Fragment_GetFirstEntryId_Call) Run(run func()) *Fragment_GetFirstEntryId_Call {
+func (_c *Fragment_GetFirstEntryId_Call) Run(run func(ctx context.Context)) *Fragment_GetFirstEntryId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -175,7 +177,7 @@ func (_c *Fragment_GetFirstEntryId_Call) Return(_a0 int64, _a1 error) *Fragment_
 	return _c
 }
 
-func (_c *Fragment_GetFirstEntryId_Call) RunAndReturn(run func() (int64, error)) *Fragment_GetFirstEntryId_Call {
+func (_c *Fragment_GetFirstEntryId_Call) RunAndReturn(run func(context.Context) (int64, error)) *Fragment_GetFirstEntryId_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -270,9 +272,9 @@ func (_c *Fragment_GetFragmentKey_Call) RunAndReturn(run func() string) *Fragmen
 	return _c
 }
 
-// GetLastEntryId provides a mock function with no fields
-func (_m *Fragment) GetLastEntryId() (int64, error) {
-	ret := _m.Called()
+// GetLastEntryId provides a mock function with given fields: ctx
+func (_m *Fragment) GetLastEntryId(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastEntryId")
@@ -280,17 +282,17 @@ func (_m *Fragment) GetLastEntryId() (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -304,13 +306,14 @@ type Fragment_GetLastEntryId_Call struct {
 }
 
 // GetLastEntryId is a helper method to define mock.On call
-func (_e *Fragment_Expecter) GetLastEntryId() *Fragment_GetLastEntryId_Call {
-	return &Fragment_GetLastEntryId_Call{Call: _e.mock.On("GetLastEntryId")}
+//   - ctx context.Context
+func (_e *Fragment_Expecter) GetLastEntryId(ctx interface{}) *Fragment_GetLastEntryId_Call {
+	return &Fragment_GetLastEntryId_Call{Call: _e.mock.On("GetLastEntryId", ctx)}
 }
 
-func (_c *Fragment_GetLastEntryId_Call) Run(run func()) *Fragment_GetLastEntryId_Call {
+func (_c *Fragment_GetLastEntryId_Call) Run(run func(ctx context.Context)) *Fragment_GetLastEntryId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -320,22 +323,22 @@ func (_c *Fragment_GetLastEntryId_Call) Return(_a0 int64, _a1 error) *Fragment_G
 	return _c
 }
 
-func (_c *Fragment_GetLastEntryId_Call) RunAndReturn(run func() (int64, error)) *Fragment_GetLastEntryId_Call {
+func (_c *Fragment_GetLastEntryId_Call) RunAndReturn(run func(context.Context) (int64, error)) *Fragment_GetLastEntryId_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetLastModified provides a mock function with no fields
-func (_m *Fragment) GetLastModified() int64 {
-	ret := _m.Called()
+// GetLastModified provides a mock function with given fields: ctx
+func (_m *Fragment) GetLastModified(ctx context.Context) int64 {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastModified")
 	}
 
 	var r0 int64
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
@@ -349,13 +352,14 @@ type Fragment_GetLastModified_Call struct {
 }
 
 // GetLastModified is a helper method to define mock.On call
-func (_e *Fragment_Expecter) GetLastModified() *Fragment_GetLastModified_Call {
-	return &Fragment_GetLastModified_Call{Call: _e.mock.On("GetLastModified")}
+//   - ctx context.Context
+func (_e *Fragment_Expecter) GetLastModified(ctx interface{}) *Fragment_GetLastModified_Call {
+	return &Fragment_GetLastModified_Call{Call: _e.mock.On("GetLastModified", ctx)}
 }
 
-func (_c *Fragment_GetLastModified_Call) Run(run func()) *Fragment_GetLastModified_Call {
+func (_c *Fragment_GetLastModified_Call) Run(run func(ctx context.Context)) *Fragment_GetLastModified_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -365,7 +369,7 @@ func (_c *Fragment_GetLastModified_Call) Return(_a0 int64) *Fragment_GetLastModi
 	return _c
 }
 
-func (_c *Fragment_GetLastModified_Call) RunAndReturn(run func() int64) *Fragment_GetLastModified_Call {
+func (_c *Fragment_GetLastModified_Call) RunAndReturn(run func(context.Context) int64) *Fragment_GetLastModified_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -596,17 +600,17 @@ func (_c *Fragment_Load_Call) RunAndReturn(run func(context.Context) error) *Fra
 	return _c
 }
 
-// Release provides a mock function with no fields
-func (_m *Fragment) Release() error {
-	ret := _m.Called()
+// Release provides a mock function with given fields: ctx
+func (_m *Fragment) Release(ctx context.Context) error {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Release")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func() error); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -620,13 +624,14 @@ type Fragment_Release_Call struct {
 }
 
 // Release is a helper method to define mock.On call
-func (_e *Fragment_Expecter) Release() *Fragment_Release_Call {
-	return &Fragment_Release_Call{Call: _e.mock.On("Release")}
+//   - ctx context.Context
+func (_e *Fragment_Expecter) Release(ctx interface{}) *Fragment_Release_Call {
+	return &Fragment_Release_Call{Call: _e.mock.On("Release", ctx)}
 }
 
-func (_c *Fragment_Release_Call) Run(run func()) *Fragment_Release_Call {
+func (_c *Fragment_Release_Call) Run(run func(ctx context.Context)) *Fragment_Release_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -636,7 +641,7 @@ func (_c *Fragment_Release_Call) Return(_a0 error) *Fragment_Release_Call {
 	return _c
 }
 
-func (_c *Fragment_Release_Call) RunAndReturn(run func() error) *Fragment_Release_Call {
+func (_c *Fragment_Release_Call) RunAndReturn(run func(context.Context) error) *Fragment_Release_Call {
 	_c.Call.Return(run)
 	return _c
 }

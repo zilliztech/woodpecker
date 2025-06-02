@@ -38,7 +38,8 @@ import (
 )
 
 const (
-	FragmentVersion = 1
+	FragmentVersion   = 1
+	FragmentScopeName = "Fragment"
 )
 
 var _ storage.Fragment = (*FragmentObject)(nil)
@@ -74,8 +75,8 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
-	index, data := genFragmentDataFromRaw(entries)
+func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+	index, data := genFragmentDataFromRaw(ctx, entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	rawBufSize := int64(cap(data) + cap(index))
@@ -134,6 +135,8 @@ func (f *FragmentObject) GetRawBufSize() int64 {
 
 // Flush uploads the data to MinIO.
 func (f *FragmentObject) Flush(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Flush")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	start := time.Now()
@@ -153,7 +156,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	//}
 	////Put back to pool
 	//defer pool.PutByteBuffer(fullData)
-	fullDataReader, fullDataSize := serializeFragmentToReader(f)
+	fullDataReader, fullDataSize := serializeFragmentToReader(ctx, f)
 
 	// Upload
 	//_, err = f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
@@ -172,6 +175,8 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 
 // Load reads the data from MinIO.
 func (f *FragmentObject) Load(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Load")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// already loaded, no need to load again
@@ -195,12 +200,12 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.lastModified = objLastModified
 
 	// Read the entire object into memory
-	data, err := minioHandler.ReadObjectFull(fragObjectReader, objDataSize)
+	data, err := minioHandler.ReadObjectFull(ctx, fragObjectReader, objDataSize)
 	if err != nil || len(data) != int(objDataSize) {
 		return fmt.Errorf("failed to read object: %v", err)
 	}
 
-	tmpFrag, deserializeErr := deserializeFragment(data, objDataSize)
+	tmpFrag, deserializeErr := deserializeFragment(ctx, data, objDataSize)
 	if deserializeErr != nil {
 		return deserializeErr
 	}
@@ -226,6 +231,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 }
 
 func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "LoadSizeStateOnly")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.size > 0 {
@@ -238,7 +245,9 @@ func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
 	return objInfo.Size, nil
 }
 
-func (f *FragmentObject) GetLastEntryId() (int64, error) {
+func (f *FragmentObject) GetLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
+	defer sp.End()
 	// First check with read lock
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -248,7 +257,9 @@ func (f *FragmentObject) GetLastEntryId() (int64, error) {
 	return f.lastEntryId, nil
 }
 
-func (f *FragmentObject) GetFirstEntryId() (int64, error) {
+func (f *FragmentObject) GetFirstEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
+	defer sp.End()
 	// First check with read lock
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -258,13 +269,15 @@ func (f *FragmentObject) GetFirstEntryId() (int64, error) {
 	return f.firstEntryId, nil
 }
 
-func (f *FragmentObject) GetLastModified() int64 {
+func (f *FragmentObject) GetLastModified(ctx context.Context) int64 {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.lastModified
 }
 
-func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
+func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
+	defer sp.End()
 	// First check if we need to load data
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -280,7 +293,7 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
 	// copy entry data
 	if entryOffset+entryLength > uint32(len(f.entriesData)) {
-		logger.Ctx(context.TODO()).Debug("Entry offset out of bounds, maybe file corrupted",
+		logger.Ctx(ctx).Debug("Entry offset out of bounds, maybe file corrupted",
 			zap.Uint32("entryOffset", entryOffset),
 			zap.Uint32("entryLength", entryLength),
 			zap.Int64("fragmentSize", int64(len(f.entriesData))))
@@ -293,7 +306,9 @@ func (f *FragmentObject) GetEntry(entryId int64) ([]byte, error) {
 }
 
 // Release releases the memory used by the fragment.
-func (f *FragmentObject) Release() error {
+func (f *FragmentObject) Release(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.dataLoaded {
@@ -317,6 +332,8 @@ func (f *FragmentObject) Release() error {
 
 // AppendToMergeTarget append the fragment data to a mergeTarget fragment
 func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *FragmentObject, baseOffset int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "AppendToMergeTarget")
+	defer sp.End()
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if !f.dataLoaded {
@@ -362,7 +379,9 @@ func serializeFragment(f *FragmentObject) ([]byte, error) {
 	return fullData, nil
 }
 
-func serializeFragmentToReader(f *FragmentObject) (io.Reader, int) {
+func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reader, int) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "serializeFragment")
+	defer sp.End()
 	// Calculate required space
 	headerSize := 24 // 3 int64 fields (version+firstEntryId+lastEntryId)
 	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
@@ -381,7 +400,9 @@ func serializeFragmentToReader(f *FragmentObject) (io.Reader, int) {
 }
 
 // deserializeFragment from object data bytes
-func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, error) {
+func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64) (*FragmentObject, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "deserializeFragment")
+	defer sp.End()
 	// Create a buffer to read from the data
 	buf := bytes.NewBuffer(data)
 
@@ -424,7 +445,9 @@ func deserializeFragment(data []byte, maxFragmentSize int64) (*FragmentObject, e
 	}, nil
 }
 
-func genFragmentDataFromRaw(rawEntries [][]byte) ([]byte, []byte) {
+func genFragmentDataFromRaw(ctx context.Context, rawEntries [][]byte) ([]byte, []byte) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "genFragmentDataFromRaw")
+	defer sp.End()
 	// Calculate total data size
 	entriesCount := len(rawEntries)
 	if entriesCount == 0 {

@@ -44,6 +44,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
+const (
+	SegmentScopeName = "Segment"
+)
+
 var _ storage.Segment = (*SegmentImpl)(nil)
 
 // SegmentImpl is used to write data to object storage as a logical segment
@@ -73,8 +77,8 @@ type SegmentImpl struct {
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
-func NewSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
-	logger.Ctx(context.TODO()).Debug("new SegmentImpl created", zap.String("segmentPrefixKey", segmentPrefixKey))
+func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentPrefixKey", segmentPrefixKey))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
 	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, int64(syncPolicyConfig.MaxEntries))
 	objFile := &SegmentImpl{
@@ -119,12 +123,14 @@ func (f *SegmentImpl) run() {
 			if f.closed.Load() {
 				return
 			}
+			ctx, sp := logger.NewIntentCtx(SegmentScopeName, fmt.Sprintf("run_%d_%d", f.logId, f.segmentId))
 			err := f.Sync(context.Background())
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("sync error",
+				logger.Ctx(ctx).Warn("sync error",
 					zap.String("segmentPrefixKey", f.segmentPrefixKey),
 					zap.Error(err))
 			}
+			sp.End()
 			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 		case <-f.fileClose:
 			logger.Ctx(context.TODO()).Debug("close SegmentImpl", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
@@ -139,6 +145,8 @@ func (f *SegmentImpl) GetId() int64 {
 }
 
 func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
+	defer sp.End()
 	if f.closed.Load() {
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, nil, werr.ErrLogFileClosed
@@ -154,7 +162,7 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	currentBuffer := f.buffer.Load()
 	pendingAppendId := currentBuffer.ExpectedNextEntryId.Load() + 1
 	if pendingAppendId >= int64(currentBuffer.FirstEntryId+currentBuffer.MaxSize) {
-		logger.Ctx(context.TODO()).Debug("buffer full, trigger flush",
+		logger.Ctx(ctx).Debug("buffer full, trigger flush",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Int64("pendingAppendId", pendingAppendId),
 			zap.Int64("bufferFirstId", currentBuffer.FirstEntryId),
@@ -190,10 +198,10 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	// trigger sync by max buffer entries bytes size
 	dataSize := currentBuffer.DataSize.Load()
 	if dataSize >= f.maxBufferSize {
-		logger.Ctx(context.TODO()).Debug("reach max buffer size, trigger flush", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize))
+		logger.Ctx(ctx).Debug("reach max buffer size, trigger flush", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize))
 		syncErr := f.Sync(ctx)
 		if syncErr != nil {
-			logger.Ctx(context.TODO()).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize), zap.Error(syncErr))
+			logger.Ctx(ctx).Warn("reach max buffer size, but trigger flush failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("bufferSize", dataSize), zap.Int64("maxSize", f.maxBufferSize), zap.Error(syncErr))
 		}
 	}
 
@@ -221,7 +229,7 @@ func (f *SegmentImpl) getFirstEntryId() int64 {
 	return f.firstEntryId
 }
 
-func (f *SegmentImpl) GetLastEntryId() (int64, error) {
+func (f *SegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 	return f.lastEntryId, nil
 }
 
@@ -232,6 +240,8 @@ type flushResult struct {
 }
 
 func (f *SegmentImpl) Sync(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Sync")
+	defer sp.End()
 	// Implement sync logic, e.g., flush to persistent storage
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -282,7 +292,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, fragId)
 			part := fragmentData
-			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryIdList[i], true, false, true)
+			fragment := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryIdList[i], true, false, true)
 			flushErr := retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -294,7 +304,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("fragId", fragId), zap.Error(flushErr))
 			}
 			// release fragment immediately
-			releaseErr := fragment.Release()
+			releaseErr := fragment.Release(ctx)
 			if releaseErr != nil {
 				logger.Ctx(ctx).Warn("release fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("fragId", fragId), zap.Error(releaseErr))
 			}
@@ -323,8 +333,8 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 	flushedLastEntryId := int64(-1) // last entry id of the last fragment that was successfully flushed in sequence
 	flushedLastFragmentId := uint64(0)
 	for _, r := range resultFrags {
-		first, _ := r.target.GetFirstEntryId()
-		last, _ := r.target.GetLastEntryId()
+		first, _ := r.target.GetFirstEntryId(ctx)
+		last, _ := r.target.GetLastEntryId(ctx)
 		fragId := r.target.GetFragmentId()
 		if r.err != nil {
 			logger.Ctx(ctx).Warn("flush fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId), zap.Int64("firstEntryId", first), zap.Int64("lastEntryId", last))
@@ -376,7 +386,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 			zap.String("newBufInst", fmt.Sprintf("%p", newBuffer)))
 	} else if len(successFrags) > 0 {
 		lastSuccessFrag := successFrags[len(successFrags)-1]
-		last, _ := lastSuccessFrag.GetLastEntryId()
+		last, _ := lastSuccessFrag.GetLastEntryId(ctx)
 		restDataFirstEntryId := last + 1
 		for syncingId, ch := range f.syncedChan {
 			if syncingId < restDataFirstEntryId {
@@ -422,15 +432,17 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 	return nil
 }
 
-func (f *SegmentImpl) Close() error {
+func (f *SegmentImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Close")
+	defer sp.End()
 	if !f.closed.CompareAndSwap(false, true) {
-		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
-	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close ", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(context.Background())
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("sync error before close",
+		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Error(err))
 	}
@@ -523,7 +535,7 @@ type ROSegmentImpl struct {
 }
 
 // NewROSegmentImpl is used to read only segment
-func NewROSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+func NewROSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
 	objFile := &ROSegmentImpl{
 		logId:               logId,
 		segmentId:           segId,
@@ -535,11 +547,11 @@ func NewROSegmentImpl(logId int64, segId int64, segmentPrefixKey string, bucket 
 	}
 	existsFragments, existsMergedFragments, err := objFile.prefetchAllFragmentInfosOnce(context.TODO())
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
+		logger.Ctx(ctx).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
 			zap.String("segmentPrefixKey", segmentPrefixKey),
 			zap.Error(err))
 	} else {
-		logger.Ctx(context.TODO()).Debug("prefetch all fragment infos finish",
+		logger.Ctx(ctx).Debug("prefetch all fragment infos finish",
 			zap.String("segmentPrefixKey", segmentPrefixKey),
 			zap.Int("fragments", existsFragments),
 			zap.Int("mergedFragments", existsMergedFragments))
@@ -561,8 +573,8 @@ func (f *ROSegmentImpl) Append(ctx context.Context, data []byte) error {
 }
 
 // get the fragment for the entryId
-func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
-	logger.Ctx(context.TODO()).Debug("get fragment for entryId", zap.Int64("entryId", entryId))
+func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*FragmentObject, error) {
+	logger.Ctx(ctx).Debug("get fragment for entryId", zap.Int64("entryId", entryId))
 
 	// find from merged fragments first
 	foundMergedFrag, err := f.findMergedFragment(entryId)
@@ -576,18 +588,18 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 	// find from normal fragments
 	foundFrag, err := f.findFragment(entryId)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get fragment from cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("get fragment from cache failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId completed", zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		logger.Ctx(ctx).Debug("get fragment from cache for entryId completed", zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
 		return foundFrag, nil
 	}
 
 	// try to fetch new fragments if exists
 	existsNewFragment, fetchedLastFragment, err := f.prefetchFragmentInfos(context.TODO())
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("prefetch fragment info failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("prefetch fragment info failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 	if !existsNewFragment {
@@ -597,7 +609,7 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 
 	fetchedLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), fetchedLastFragment)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.fragmentKey), zap.Error(err))
+		logger.Ctx(ctx).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.fragmentKey), zap.Error(err))
 		return nil, err
 	}
 	if entryId > fetchedLastEntryId {
@@ -615,7 +627,7 @@ func (f *ROSegmentImpl) getFragment(entryId int64) (*FragmentObject, error) {
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(context.TODO()).Debug("get fragment from cache for entryId", zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
+		logger.Ctx(ctx).Debug("get fragment from cache for entryId", zap.Int64("entryId", entryId), zap.Int64("fragmentId", foundFrag.GetFragmentId()))
 		return foundFrag, nil
 	}
 
@@ -683,6 +695,8 @@ func (f *ROSegmentImpl) objectExists(ctx context.Context, objectKey string) (boo
 }
 
 func (f *ROSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "NewReader")
+	defer sp.End()
 	reader := NewLogFileReader(opt, f)
 	return reader, nil
 }
@@ -697,23 +711,25 @@ func (f *ROSegmentImpl) LastFragmentId() uint64 {
 	return uint64(f.fragments[len(f.fragments)-1].GetFragmentId())
 }
 
-func (f *ROSegmentImpl) GetLastEntryId() (int64, error) {
+func (f *ROSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "GetLastEntryId")
+	defer sp.End()
 	// prefetch fragmentInfos if any new fragment created
 	_, lastFragment, err := f.prefetchFragmentInfos(context.TODO())
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get last entryId failed when fetch the last fragment",
+		logger.Ctx(ctx).Warn("get last entryId failed when fetch the last fragment",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Error(err))
 		return -1, err
 	}
 	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), lastFragment)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get last entryId failed",
+		logger.Ctx(ctx).Warn("get last entryId failed",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Error(err))
 		return -1, err
 	}
-	logger.Ctx(context.TODO()).Debug("get last entryId finish",
+	logger.Ctx(ctx).Debug("get last entryId finish",
 		zap.String("segmentPrefixKey", f.segmentPrefixKey),
 		zap.Int64("lastFragId", lastFragment.GetFragmentId()),
 		zap.Int64("lastEntryId", lastEntryId))
@@ -724,12 +740,14 @@ func (f *ROSegmentImpl) Sync(ctx context.Context) error {
 	return werr.ErrNotSupport.WithCauseErrMsg("ROSegmentImpl not support sync")
 }
 
-func (f *ROSegmentImpl) Close() error {
+func (f *ROSegmentImpl) Close(ctx context.Context) error {
 	return nil
 }
 
 // Start by listing all once
 func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, int, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "prefetchAllFragmentInfosOnce")
+	defer sp.End()
 	listPrefix := fmt.Sprintf("%s/", f.segmentPrefixKey)
 	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{})
 	existsFragments := make([]*FragmentObject, 0, 32)
@@ -759,7 +777,7 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 			zap.Int64("fragmentId", fragmentId),
 			zap.Bool("isMerged", isMerged))
 
-		frag := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, uint64(fragmentId), objInfo.Key, nil, -1, false, true, false)
+		frag := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, uint64(fragmentId), objInfo.Key, nil, -1, false, true, false)
 		if isMerged {
 			existsMergedFragments = append(existsMergedFragments, frag)
 		} else {
@@ -807,6 +825,8 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 
 // incrementally fetch new fragments as they come in
 func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, *FragmentObject, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "prefetchFragmentInfos")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	startTime := time.Now()
@@ -833,24 +853,26 @@ func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, *Fragm
 		}
 
 		if exists {
-			fragment := NewFragmentObject(f.client, f.bucket, f.logId, f.segmentId, fragId, fragKey, nil, -1, false, true, false)
+			fragment := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, fragKey, nil, -1, false, true, false)
 			fetchedLastFragment = fragment
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true
 			fragId++
-			logger.Ctx(context.Background()).Debug("prefetch fragment info", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("lastFragId", fragId-1))
+			logger.Ctx(ctx).Debug("prefetch fragment info", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Uint64("lastFragId", fragId-1))
 		} else {
 			// no more fragment exists, cause the id sequence is broken
 			break
 		}
 	}
-	logger.Ctx(context.Background()).Debug("prefetch fragment infos", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("fragments", len(f.fragments)), zap.Uint64("lastFragId", fragId-1))
+	logger.Ctx(ctx).Debug("prefetch fragment infos", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("fragments", len(f.fragments)), zap.Uint64("lastFragId", fragId-1))
 	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "prefetch_fragment_infos", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "prefetch_fragment_infos", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return existsNewFragment, fetchedLastFragment, nil
 }
 
 func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Merge")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	startTime := time.Now()
@@ -883,7 +905,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
-			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
 			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
 			pendingMergeFrags = make([]*FragmentObject, 0)
@@ -899,7 +921,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
-		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
 		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
 		pendingMergeFrags = make([]*FragmentObject, 0)
@@ -916,6 +938,8 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 }
 
 func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, pendingMergeSize int64) (storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "mergeFragmentsAndReleaseAfterCompleted")
+	defer sp.End()
 	// Check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -978,7 +1002,7 @@ func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKe
 		// append fragment data to merge target
 		baseOffset := len(mergeTarget.entriesData)
 		mergeOneFragmentErr := candidateFrag.AppendToMergeTarget(ctx, mergeTarget, int64(baseOffset))
-		candidateFrag.Release() // release candidate fragment data immediately
+		candidateFrag.Release(ctx) // release candidate fragment data immediately
 		if mergeOneFragmentErr != nil {
 			logger.Ctx(ctx).Warn("failed to merge fragment", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Error(mergeOneFragmentErr))
 			return nil, mergeOneFragmentErr
@@ -1013,6 +1037,8 @@ func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKe
 }
 
 func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragment *FragmentObject) (storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "fastMergeSingleFragment")
+	defer sp.End()
 	startTime := time.Now()
 	// merge
 	mergedFrag := &FragmentObject{
@@ -1056,6 +1082,8 @@ func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFra
 // Deprecated
 // mergeFragmentsAndReleaseAfterCompleted merge fragments and release after completed
 func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey string, mergeFragId uint64, fragments []*FragmentObject, releaseImmediately bool) (storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "mergeFragmentsAndReleaseAfterCompleted")
+	defer sp.End()
 	// check args
 	if len(fragments) == 0 {
 		return nil, errors.New("no fragments to merge")
@@ -1138,6 +1166,8 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragKey s
 
 // Load here only need to load the last fragment data, only used in recover to load fragments info
 func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Load")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	startTime := time.Now()
@@ -1174,6 +1204,8 @@ func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, erro
 }
 
 func (f *ROSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFragments")
+	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -1271,6 +1303,7 @@ func NewLogFileReader(opt storage.ReaderOpt, objectFile *ROSegmentImpl) storage.
 var _ storage.Reader = (*logFileReader)(nil)
 
 type logFileReader struct {
+	ctx     context.Context
 	opt     storage.ReaderOpt
 	logfile *ROSegmentImpl
 
@@ -1278,7 +1311,9 @@ type logFileReader struct {
 	currentFragment    *FragmentObject
 }
 
-func (o *logFileReader) HasNext() (bool, error) {
+func (o *logFileReader) HasNext(ctx context.Context) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "HasNext")
+	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", o.logfile.logId)
 	segmentId := fmt.Sprintf("%d", o.logfile.segmentId)
@@ -1286,9 +1321,9 @@ func (o *logFileReader) HasNext() (bool, error) {
 		// reach the end of range
 		return false, nil
 	}
-	f, err := o.logfile.getFragment(o.pendingReadEntryId)
+	f, err := o.logfile.getFragment(ctx, o.pendingReadEntryId)
 	if err != nil {
-		logger.Ctx(context.Background()).Warn("Failed to get fragment",
+		logger.Ctx(ctx).Warn("Failed to get fragment",
 			zap.String("segmentPrefixKey", o.logfile.segmentPrefixKey),
 			zap.Int64("pendingReadEntryId", o.pendingReadEntryId),
 			zap.Error(err))
@@ -1305,7 +1340,9 @@ func (o *logFileReader) HasNext() (bool, error) {
 	return true, nil
 }
 
-func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
+func (o *logFileReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNext")
+	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", o.logfile.logId)
 	segmentId := fmt.Sprintf("%d", o.logfile.segmentId)
@@ -1316,8 +1353,8 @@ func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
 	if loadErr != nil {
 		return nil, loadErr
 	}
-	defer o.currentFragment.Release()
-	entryValue, err := o.currentFragment.GetEntry(o.pendingReadEntryId)
+	defer o.currentFragment.Release(ctx)
+	entryValue, err := o.currentFragment.GetEntry(ctx, o.pendingReadEntryId)
 	if err != nil {
 		return nil, err
 	}
@@ -1334,7 +1371,9 @@ func (o *logFileReader) ReadNext() (*proto.LogEntry, error) {
 // ReadNextBatch reads next batch of entries from the log file.
 // size = -1 means auto batch,which will read all entries of a fragment for a time,
 // otherwise it's the number of entries to read.
-func (o *logFileReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
+func (o *logFileReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNextBatch")
+	defer sp.End()
 	if size != -1 {
 		// TODO add batch size limit.
 		return nil, werr.ErrNotSupport.WithCauseErrMsg("custom batch size not supported currently")
@@ -1350,10 +1389,10 @@ func (o *logFileReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 	if loadErr != nil {
 		return nil, loadErr
 	}
-	defer o.currentFragment.Release()
+	defer o.currentFragment.Release(ctx)
 	entries := make([]*proto.LogEntry, 0, 32)
 	for {
-		entryValue, err := o.currentFragment.GetEntry(o.pendingReadEntryId)
+		entryValue, err := o.currentFragment.GetEntry(ctx, o.pendingReadEntryId)
 		if err != nil {
 			if werr.ErrEntryNotFound.Is(err) {
 				break
@@ -1404,14 +1443,16 @@ func parseFragmentFilename(key string) (id int64, isMerge bool, err error) {
 }
 
 func getLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentObject) (int64, error) {
-	lastEntryId, err := fragment.GetLastEntryId()
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getLastEntryIdWithoutDataLoadedIfPossible")
+	defer sp.End()
+	lastEntryId, err := fragment.GetLastEntryId(ctx)
 	if werr.ErrFragmentInfoNotFetched.Is(err) {
 		loadErr := fragment.Load(ctx)
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		defer fragment.Release()
-		lastEntryId, err = fragment.GetLastEntryId()
+		defer fragment.Release(ctx)
+		lastEntryId, err = fragment.GetLastEntryId(ctx)
 		if err != nil {
 			return -1, err
 		}
@@ -1420,14 +1461,16 @@ func getLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *Fr
 }
 
 func getFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentObject) (int64, error) {
-	firstEntryId, err := fragment.GetFirstEntryId()
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getFirstEntryIdWithoutDataLoadedIfPossible")
+	defer sp.End()
+	firstEntryId, err := fragment.GetFirstEntryId(ctx)
 	if werr.ErrFragmentInfoNotFetched.Is(err) {
 		loadErr := fragment.Load(ctx)
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		defer fragment.Release()
-		firstEntryId, err = fragment.GetFirstEntryId()
+		defer fragment.Release(ctx)
+		firstEntryId, err = fragment.GetFirstEntryId(ctx)
 		if err != nil {
 			return -1, err
 		}

@@ -18,6 +18,7 @@ package minio
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"testing"
 
@@ -119,7 +120,7 @@ func TestReadObjectFull(t *testing.T) {
 			}
 
 			// Call the function being tested
-			got, err := ReadObjectFull(customReader, 1024*1024)
+			got, err := ReadObjectFull(context.TODO(), customReader, 1024*1024)
 
 			// Verify results
 			if tt.wantErr {
@@ -137,7 +138,7 @@ func TestReadObjectFull(t *testing.T) {
 			err: io.ErrClosedPipe, // Simulate a read error
 		}
 
-		_, err := ReadObjectFull(r, 1024*1024)
+		_, err := ReadObjectFull(context.TODO(), r, 1024*1024)
 		assert.Error(t, err)
 		assert.Equal(t, io.ErrClosedPipe, err)
 	})

@@ -277,7 +277,7 @@ func TestFragmentReadPerformance(t *testing.T) {
 			fragmentWriter.Release()
 
 			// Step 2: Reopen FragmentFile and test read performance
-			fragmentReader, err := disk.NewFragmentFileReader(filePath, tc.fileSize, 1, 0, 1)
+			fragmentReader, err := disk.NewFragmentFileReader(context.TODO(), filePath, tc.fileSize, 1, 0, 1)
 			if err != nil {
 				t.Fatalf("Failed to open FragmentFile: %v", err)
 			}

@@ -39,6 +39,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
 
+const (
+	ProcessorScopeName = "WoodpeckerSegmentProcessor"
+)
+
 // SegmentProcessor for segment processing in server side
 //
 //go:generate mockery --dir=./server/processor --name=SegmentProcessor --structname=SegmentProcessor --output=mocks/mocks_server/mocks_segment --filename=mock_segment_processor.go --with-expecter=true  --outpkg=mocks_segment
@@ -48,8 +52,8 @@ type SegmentProcessor interface {
 	AddEntry(context.Context, *SegmentEntry) (int64, <-chan int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
-	IsFenced() bool
-	SetFenced()
+	IsFenced(ctx context.Context) bool
+	SetFenced(ctx context.Context)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
@@ -112,18 +116,22 @@ func (s *segmentProcessor) GetSegmentId() int64 {
 	return s.segId
 }
 
-func (s *segmentProcessor) IsFenced() bool {
+func (s *segmentProcessor) IsFenced(ctx context.Context) bool {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "IsFenced")
+	defer sp.End()
 	return s.fenced.Load()
 }
 
-func (s *segmentProcessor) SetFenced() {
+func (s *segmentProcessor) SetFenced(ctx context.Context) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "SetFenced")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
 	s.fenced.Store(true)
 	if s.currentSegmentWriter != nil {
-		closeSegmentWriterErr := s.currentSegmentWriter.Close()
+		closeSegmentWriterErr := s.currentSegmentWriter.Close(ctx)
 		if closeSegmentWriterErr != nil {
 			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(closeSegmentWriterErr))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Inc()
@@ -139,12 +147,14 @@ func (s *segmentProcessor) SetFenced() {
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, <-chan int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
 	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entry.EntryId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
-	if s.IsFenced() {
+	if s.IsFenced(ctx) {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "fenced").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "fenced").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
@@ -174,6 +184,8 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 }
 
 func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadEntry")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -196,7 +208,7 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 		return nil, err
 	}
 
-	hasNext, err := r.HasNext()
+	hasNext, err := r.HasNext(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to check has next", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.Error(err))
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_entry", "has_next_error").Inc()
@@ -210,7 +222,7 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 		return nil, werr.ErrEntryNotFound
 	}
 
-	e, err := r.ReadNext()
+	e, err := r.ReadNext(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.Error(err))
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_entry", "read_error").Inc()
@@ -228,6 +240,8 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 }
 
 func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, size int64) ([]*SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -250,7 +264,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 		return nil, err
 	}
 
-	hasNext, err := r.HasNext()
+	hasNext, err := r.HasNext(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to check has next", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "has_next_error").Inc()
@@ -265,7 +279,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 	}
 
 	// read batch entries
-	batchEntries, err := r.ReadNextBatch(size)
+	batchEntries, err := r.ReadNextBatch(ctx, size)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "read_batch_entries", "read_error").Inc()
@@ -289,6 +303,8 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 }
 
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "GetSegmentLastAddConfirmed")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -300,7 +316,7 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 		return -1, err
 	}
 
-	lastEntryId, err := segmentReader.GetLastEntryId()
+	lastEntryId, err := segmentReader.GetLastEntryId(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "get_last_confirmed", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -335,6 +351,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context) (storag
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
 		writerFile, err := disk.NewDiskSegmentImpl(
+			ctx,
 			s.logId,
 			s.segId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
@@ -348,6 +365,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context) (storag
 	} else {
 		// use MinIO-compatible storage
 		s.currentSegmentWriter = objectstorage.NewSegmentImpl(
+			ctx,
 			s.logId,
 			s.segId,
 			s.getSegmentKeyPrefix(),
@@ -382,6 +400,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
 		readerFile, err := disk.NewRODiskSegmentImpl(
+			ctx,
 			s.logId,
 			s.segId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
@@ -390,6 +409,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 		return s.currentSegmentReader, err
 	} else {
 		s.currentSegmentReader = objectstorage.NewROSegmentImpl(
+			ctx,
 			s.logId,
 			s.segId,
 			s.getSegmentKeyPrefix(),
@@ -410,6 +430,8 @@ func (s *segmentProcessor) getSegmentKeyPrefix() string {
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Compact")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -435,7 +457,7 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	}
 
 	lastMergedFrag := mergedFrags[len(mergedFrags)-1]
-	lastEntryIdOfAllMergedFrags, err := lastMergedFrag.GetLastEntryId()
+	lastEntryIdOfAllMergedFrags, err := lastMergedFrag.GetLastEntryId(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "compact", "get_last_entry_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact", "get_last_entry_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -458,7 +480,7 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "compact", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Sealed,
-		CompletionTime: lastMergedFrag.GetLastModified(),
+		CompletionTime: lastMergedFrag.GetLastModified(ctx),
 		SealedTime:     time.Now().UnixMilli(),
 		LastEntryId:    lastEntryIdOfAllMergedFrags,
 		Size:           totalSize,
@@ -468,6 +490,8 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 }
 
 func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Recover")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -497,7 +521,7 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 		}, nil
 	}
 
-	lastEntryId, err := lastFragment.GetLastEntryId()
+	lastEntryId, err := lastFragment.GetLastEntryId(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recover", "get_last_entry_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "recover", "get_last_entry_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -514,13 +538,15 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "recover", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return &proto.SegmentMetadata{
 		State:          proto.SegmentState_Completed,
-		CompletionTime: lastFragment.GetLastModified(),
+		CompletionTime: lastFragment.GetLastModified(ctx),
 		LastEntryId:    lastEntryId,
 		Size:           size,
 	}, nil
 }
 
 func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Clean")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)

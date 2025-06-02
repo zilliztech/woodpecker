@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/server"
@@ -104,6 +105,10 @@ type woodpeckerEmbedClient struct {
 
 func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (Client, error) {
 	logger.InitLogger(config)
+	initTraceErr := tracer.InitTracer(config, "woodpecker", 1001)
+	if initTraceErr != nil {
+		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
+	}
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		return nil, werr.ErrCreateConnection.WithCauseErr(err)

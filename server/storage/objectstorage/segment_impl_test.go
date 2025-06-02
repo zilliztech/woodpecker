@@ -53,7 +53,7 @@ func TestNewSegmentImpl(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
 	assert.Equal(t, int64(0), segmentImpl.GetId())
@@ -73,7 +73,7 @@ func TestNewROSegmentImpl(t *testing.T) {
 	listEmptyChan := make(chan minio.ObjectInfo)
 	close(listEmptyChan)
 	client.EXPECT().ListObjects(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(listEmptyChan)
-	segmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	segmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
@@ -104,7 +104,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferSize/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferSize/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test write entries
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
@@ -126,7 +126,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(9), flushedLastId)
 }
@@ -151,7 +151,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncSomeAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncSomeAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test write entries
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6}
@@ -173,7 +173,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(6), flushedLastId)
 }
@@ -198,7 +198,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncOnceAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncOnceAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test write entries
 	incomeEntryIds := []int64{0}
@@ -220,7 +220,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), flushedLastId)
 }
@@ -244,7 +244,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncNoneAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncNoneAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// wait for flush interval
 	<-time.After(2 * time.Second)
@@ -252,7 +252,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 	// check there is no data
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(-1), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(-1), flushedLastId)
 }
@@ -276,7 +276,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncWithHolesAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncWithHolesAndWaitForFlush/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -300,7 +300,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(-1), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(-1), flushedLastId)
 }
@@ -325,7 +325,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncWithHolesButFillFinally/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncWithHolesButFillFinally/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
@@ -349,7 +349,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(-1), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(-1), flushedLastId)
 
@@ -373,7 +373,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 
 	flushedFirstId = segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err = segmentImpl.GetLastEntryId()
+	flushedLastId, err = segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(9), flushedLastId)
 }
@@ -399,7 +399,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncDisorderWithinBounds/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncDisorderWithinBounds/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 8, 9, 7, 2, 3, 4, 5}
@@ -421,7 +421,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(9), flushedLastId)
 }
@@ -446,7 +446,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncDisorderAndPartialOutOfBounds/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncDisorderAndPartialOutOfBounds/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 11, 12, 10, 7, 2, 3, 4, 5} // 0-7,10-12
@@ -482,7 +482,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(7), flushedLastId)
 }
@@ -514,7 +514,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 
 	// test async append 800 + 200 = buffer max data size, sync immediately
 	{
-		segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferDataSize1/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize1/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -529,14 +529,14 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should be immediate flush, but cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
+		flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), flushedLastId)
 	}
 
 	// test async append 200 + 300, wait for flush
 	{
-		segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferDataSize2/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize2/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -550,14 +550,14 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
+		flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), flushedLastId)
 	}
 
 	// test async append 200 + 300, wait for flush
 	{
-		segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferDataSize3/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize3/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data200)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -571,7 +571,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
+		flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), flushedLastId)
 	}
@@ -580,7 +580,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// the first append 1k should be immediately flush,
 	// the second append 200 should be wait for flush.
 	{
-		segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferDataSize4/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize4/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data1k)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -590,7 +590,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should wait less then 100 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
+		flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
@@ -603,14 +603,14 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost = time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to auto flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err = segmentImpl.GetLastEntryId()
+		flushedLastId, err = segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), flushedLastId)
 	}
 
 	// test append 1(800),3(300), trigger flush 1(800). then append 2(200), wait for flush  2(200) + 3(300)
 	{
-		segmentImpl := NewSegmentImpl(1, 0, "TestAppendAsyncReachBufferDataSize5/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize5/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data800)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
@@ -623,7 +623,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should wait less then 100 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err := segmentImpl.GetLastEntryId()
+		flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
@@ -638,7 +638,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		cost = time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000*0.8, fmt.Sprintf("should wait 1000 ms to auto flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
-		flushedLastId, err = segmentImpl.GetLastEntryId()
+		flushedLastId, err = segmentImpl.GetLastEntryId(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(2), flushedLastId)
 	}
@@ -665,7 +665,7 @@ func TestSync(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestSync/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestSync/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -693,7 +693,7 @@ func TestSync(t *testing.T) {
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
 	assert.Equal(t, int64(0), flushedFirstId)
-	flushedLastId, err := segmentImpl.GetLastEntryId()
+	flushedLastId, err := segmentImpl.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(99), flushedLastId)
 
@@ -719,7 +719,7 @@ func TestClose(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestClose/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestClose/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
@@ -732,7 +732,7 @@ func TestClose(t *testing.T) {
 	assert.Equal(t, 100, len(chList))
 
 	// Close log file
-	err := segmentImpl.Close()
+	err := segmentImpl.Close(context.TODO())
 	assert.NoError(t, err)
 
 	// final flush immediately
@@ -772,7 +772,7 @@ func TestGetId(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(1, 0, "TestGetId/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestGetId/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
 	assert.Equal(t, int64(0), segmentImpl.GetId())
@@ -801,9 +801,9 @@ func TestMerge(t *testing.T) {
 	}
 
 	// mock fragments
-	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
 		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
 		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
 
 	// mock object storage interfaces
@@ -812,17 +812,17 @@ func TestMerge(t *testing.T) {
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test fragments
 	mergedFrags, entryOffset, fragmentIdOffset, err := roSegmentImpl.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
 	assert.Equal(t, []int32{100}, entryOffset) // 100 is the first entry id of merged fragment
 	assert.Equal(t, []int32{1}, fragmentIdOffset)
-	firstEntryId, err := mergedFrags[0].GetFirstEntryId()
+	firstEntryId, err := mergedFrags[0].GetFirstEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(100), firstEntryId)
-	lastEntryId, err := mergedFrags[0].GetLastEntryId()
+	lastEntryId, err := mergedFrags[0].GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(103), lastEntryId)
 }
@@ -847,9 +847,9 @@ func TestLoad(t *testing.T) {
 	}
 
 	// mock fragments
-	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
 		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
 		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
 
 	// mock object storage interfaces
@@ -857,16 +857,16 @@ func TestLoad(t *testing.T) {
 	close(listChan)
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 	// Load data
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
 	totalSize, lastFragment, err := roSegmentImpl.Load(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, mockFragment1.size+mockFragment2.size, totalSize)
 	assert.NotNil(t, lastFragment)
-	firstEntryId, err := lastFragment.GetFirstEntryId()
+	firstEntryId, err := lastFragment.GetFirstEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(102), firstEntryId)
-	lastEntryId, err := lastFragment.GetLastEntryId()
+	lastEntryId, err := lastFragment.GetLastEntryId(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(103), lastEntryId)
 }
@@ -896,9 +896,9 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 
 	// Write some data to buffer and sync
 	// mock fragments
-	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestNewReaderInWriterLogFile/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInWriterLogFile/1/0/1.frag",
 		[][]byte{[]byte("entry1"), []byte("entry2")}, 0, true, false, true)
-	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestNewReaderInWriterLogFile/1/0/2.frag",
+	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestNewReaderInWriterLogFile/1/0/2.frag",
 		[][]byte{[]byte("entry3"), []byte("entry4")}, 2, true, false, true)
 
 	// mock object storage interfaces
@@ -907,7 +907,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 
 	// Create a reader for [0, 100)
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
@@ -918,17 +918,17 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 4; i++ {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), entry.EntryId)
 		assert.Equal(t, []byte(fmt.Sprintf("entry%d", i+1)), entry.Values)
 	}
 
-	hasNext, err := reader.HasNext()
+	hasNext, err := reader.HasNext(context.TODO())
 	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
@@ -956,7 +956,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		data = append(data, []byte(fmt.Sprintf("test_data%d", i)))
 	}
-	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestNewReaderInROSegmentImpl/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInROSegmentImpl/1/0/1.frag",
 		data, 0, true, false, true)
 
 	// mock object storage interfaces
@@ -968,7 +968,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 
 	// Create a reader for [0, 100)
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
@@ -979,17 +979,17 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 
 	// Read data
 	for i := 0; i < 100; i++ {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		assert.True(t, hasNext)
 
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), entry.EntryId)
 		assert.Equal(t, []byte(fmt.Sprintf("test_data%d", i)), entry.Values)
 	}
 
-	hasNext, err := reader.HasNext()
+	hasNext, err := reader.HasNext(context.TODO())
 	assert.NoError(t, err)
 	assert.False(t, hasNext)
 }
@@ -1014,22 +1014,22 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 
 	// mock fragments
 	// test read data with holes (fragment 1,x,3) in minio
-	mockFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/1.frag",
 		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/2.frag",
+	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/2.frag",
 		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
-	//mockFragment3 := NewFragmentObject(client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/3.frag",
+	//mockFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/3.frag",
 	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
-	mockFragment4 := NewFragmentObject(client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/4.frag",
+	mockFragment4 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/4.frag",
 		[][]byte{[]byte("entry6"), []byte("entry7")}, 106, true, false, true)
 
-	mockMergedFragment0 := NewFragmentObject(client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/m_0.frag",
+	mockMergedFragment0 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/m_0.frag",
 		[][]byte{[]byte("entry1"), []byte("entry2")}, 100, true, false, true)
-	mockMergedFragment1 := NewFragmentObject(client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/m_1.frag",
+	mockMergedFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/m_1.frag",
 		[][]byte{[]byte("entry3"), []byte("entry4")}, 102, true, false, true)
-	//mockMergedFragment2 := NewFragmentObject(client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/m_2.frag",
+	//mockMergedFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/m_2.frag",
 	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
-	mockMergedFragment3 := NewFragmentObject(client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/m_3.frag",
+	mockMergedFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/m_3.frag",
 		[][]byte{[]byte("entry6"), []byte("entry7")}, 106, true, false, true)
 
 	listChan := make(chan minio.ObjectInfo, 6) // list return disorder and hole list
@@ -1061,7 +1061,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 
 	// we should only read data in fragment 1
-	roSegmentImpl := NewROSegmentImpl(1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	assert.NotNil(t, roSegmentImpl.fragments)
 	assert.Equal(t, 2, len(roSegmentImpl.fragments))
 	assert.Equal(t, mockFragment1.fragmentKey, roSegmentImpl.fragments[0].fragmentKey)
@@ -1184,7 +1184,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh).Once()
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 		assert.Equal(t, 2, len(roSegmentImpl.fragments))
 		assert.Equal(t, 1, len(roSegmentImpl.mergedFragments))
 
@@ -1233,7 +1233,7 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(emptyObjectCh).Once()
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		errorObjectCh := make(chan minio.ObjectInfo, 1)
 		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
@@ -1276,7 +1276,7 @@ func TestDeleteFragments(t *testing.T) {
 		// Set up expectations
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh).Once()
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 2)
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
@@ -1323,7 +1323,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No need for StatObject call anymore
 
 		// Create the LogFile
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1366,7 +1366,7 @@ func TestDeleteFragments(t *testing.T) {
 		// No call for metadata.json as it should be skipped
 
 		// Create the readonly segment impl
-		roSegmentImpl := NewROSegmentImpl(1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
+		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 3)
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}

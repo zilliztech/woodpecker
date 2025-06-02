@@ -45,7 +45,8 @@ func TestActiveSegmentRead(t *testing.T) {
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, 0).Return(true, nil)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(false, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(false, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(1)).Return(nil, werr.ErrSegmentNotFound)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
 	mockLogHandle.EXPECT().GetMetadataProvider().Return(mockMetadata)
@@ -119,8 +120,14 @@ func TestSegmentInExceptionState(t *testing.T) {
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, 0).Return(true, nil)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(true, nil)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(false, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(true, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(false, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(1)).Return(&proto.SegmentMetadata{
+		SegNo:      int64(1),
+		State:      proto.SegmentState_Active,
+		CreateTime: time.Now().UnixMilli(),
+	}, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(2)).Return(nil, werr.ErrSegmentNotFound)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
 	mockLogHandle.EXPECT().GetMetadataProvider().Return(mockMetadata)
@@ -212,7 +219,8 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, 0).Return(false, nil)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(false, nil)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(true, nil)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(3)).Return(false, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(3)).Return(false, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(3)).Return(nil, werr.ErrSegmentNotFound)
 	mockMetadata.EXPECT().UpdateReaderTempInfo(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
@@ -294,7 +302,8 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 func TestReadFromSeekPoint(t *testing.T) {
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(3)).Return(false, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(3)).Return(false, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(3)).Return(nil, werr.ErrSegmentNotFound)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
 	mockLogHandle.EXPECT().GetMetadataProvider().Return(mockMetadata)
@@ -393,7 +402,8 @@ func TestReadFromLatestWhenLatestIsCompleted(t *testing.T) {
 func TestReadFromLatestWhenLatestIsActive(t *testing.T) {
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(false, nil)
+	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(false, nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(2)).Return(nil, werr.ErrSegmentNotFound)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
 	mockLogHandle.EXPECT().GetMetadataProvider().Return(mockMetadata)

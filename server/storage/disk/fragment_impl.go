@@ -45,6 +45,8 @@ const (
 	footerSize = 4 * 1024
 	// Size of each index item
 	indexItemSize = 4
+	// trace scope name
+	FragmentScopeName = "DiskFragment"
 )
 
 // FragmentFileWriter manages fragment data write
@@ -71,7 +73,7 @@ type FragmentFileWriter struct {
 }
 
 // NewFragmentFileWriter creates a new FragmentFile, which can write only
-func NewFragmentFileWriter(filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64, firstEntryID int64) (*FragmentFileWriter, error) {
+func NewFragmentFileWriter(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64, firstEntryID int64) (*FragmentFileWriter, error) {
 	fw := &FragmentFileWriter{
 		logId:      logId,
 		segmentId:  segmentId,
@@ -115,17 +117,17 @@ func NewFragmentFileWriter(filePath string, fileSize int64, logId int64, segment
 	}
 
 	// 写入footer
-	if err := fw.writeFooter(); err != nil {
-		fw.Release()
+	if err := fw.writeFooter(ctx); err != nil {
+		fw.Release(ctx)
 		return nil, err
 	}
 	// 写入header
-	if err := fw.writeHeader(); err != nil {
-		fw.Release()
+	if err := fw.writeHeader(ctx); err != nil {
+		fw.Release(ctx)
 		return nil, err
 	}
 
-	logger.Ctx(context.Background()).Debug("FragmentFile created", zap.String("filePath", filePath), zap.Int64("fragmentId", fragmentId), zap.String("fragmentInst", fmt.Sprintf("%p", fw)))
+	logger.Ctx(ctx).Debug("FragmentFile created", zap.String("filePath", filePath), zap.Int64("fragmentId", fragmentId), zap.String("fragmentInst", fmt.Sprintf("%p", fw)))
 
 	// update metrics
 	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Add(float64(fileSize))
@@ -135,7 +137,9 @@ func NewFragmentFileWriter(filePath string, fileSize int64, logId int64, segment
 }
 
 // writeHeader writes the file header.
-func (fw *FragmentFileWriter) writeHeader() error {
+func (fw *FragmentFileWriter) writeHeader(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "writeHeader")
+	defer sp.End()
 	// Write magic string
 	copy(fw.mappedFile[0:8], []byte("FRAGMENT"))
 
@@ -165,6 +169,8 @@ func (fw *FragmentFileWriter) GetFragmentKey() string {
 
 // Flush ensures all data is written to disk.
 func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Flush")
+	defer sp.End()
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	start := time.Now()
@@ -176,7 +182,7 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 	}
 
 	// write footer
-	if err := fw.writeFooter(); err != nil {
+	if err := fw.writeFooter(ctx); err != nil {
 		return err
 	}
 
@@ -196,7 +202,9 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 }
 
 // writeFooter writes the file footer.
-func (fw *FragmentFileWriter) writeFooter() error {
+func (fw *FragmentFileWriter) writeFooter(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "writeFooter")
+	defer sp.End()
 	footerOffset := uint32(fw.fileSize - footerSize)
 	// Write entry count
 	binary.LittleEndian.PutUint32(fw.mappedFile[footerOffset:], uint32(fw.entryCount))
@@ -211,7 +219,7 @@ func (fw *FragmentFileWriter) writeFooter() error {
 		isGrowingFlag = uint32(1)
 	}
 	binary.LittleEndian.PutUint32(fw.mappedFile[footerOffset+20:], isGrowingFlag)
-	logger.Ctx(context.Background()).Debug("write footer",
+	logger.Ctx(ctx).Debug("write footer",
 		zap.Int32("entryCount", fw.entryCount),
 		zap.Int64("firstEntryID", fw.firstEntryID),
 		zap.Int64("lastEntryID", fw.lastEntryID),
@@ -226,7 +234,9 @@ func (fw *FragmentFileWriter) Load(ctx context.Context) error {
 }
 
 // GetLastEntryId returns the last entry ID.
-func (fw *FragmentFileWriter) GetLastEntryId() (int64, error) {
+func (fw *FragmentFileWriter) GetLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
+	defer sp.End()
 	if fw.closed {
 		return 0, errors.New("fragment file is closed")
 	}
@@ -234,7 +244,9 @@ func (fw *FragmentFileWriter) GetLastEntryId() (int64, error) {
 }
 
 // GetFirstEntryId returns the first entry ID.
-func (fw *FragmentFileWriter) GetFirstEntryId() (int64, error) {
+func (fw *FragmentFileWriter) GetFirstEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
+	defer sp.End()
 	if fw.closed {
 		return 0, errors.New("fragment file is closed")
 	}
@@ -242,7 +254,7 @@ func (fw *FragmentFileWriter) GetFirstEntryId() (int64, error) {
 }
 
 // GetLastModified returns the last modification time.
-func (fw *FragmentFileWriter) GetLastModified() int64 {
+func (fw *FragmentFileWriter) GetLastModified(ctx context.Context) int64 {
 	info, err := os.Stat(fw.filePath)
 	if err != nil {
 		return 0
@@ -252,16 +264,18 @@ func (fw *FragmentFileWriter) GetLastModified() int64 {
 
 // GetEntry returns the entry at the specified ID.
 // NOTE: The result entry maybe not flush to disk yet.
-func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
+func (fw *FragmentFileWriter) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
+	defer sp.End()
 	if fw.closed {
-		logger.Ctx(context.Background()).Warn("failed to get entry from a closed fragment file",
+		logger.Ctx(ctx).Warn("failed to get entry from a closed fragment file",
 			zap.String("filePath", fw.filePath),
 			zap.Int64("fragmentId", fw.fragmentId),
 			zap.Int64("readingEntryId", entryId))
 		return nil, errors.New("fragment file is closed")
 	}
 
-	logger.Ctx(context.Background()).Debug("Try get entry from this fragment",
+	logger.Ctx(ctx).Debug("Try get entry from this fragment",
 		zap.String("filePath", fw.filePath),
 		zap.Int64("firstEntryId", fw.firstEntryID),
 		zap.Int64("lastEntryId", fw.lastEntryID),
@@ -270,7 +284,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 
 	// Check if entryId is within range
 	if entryId < fw.firstEntryID || entryId > fw.lastEntryID {
-		logger.Ctx(context.Background()).Debug("entry ID out of range",
+		logger.Ctx(ctx).Debug("entry ID out of range",
 			zap.Int64("requestedID", entryId),
 			zap.Int64("firstEntryID", fw.firstEntryID),
 			zap.Int64("lastEntryID", fw.lastEntryID))
@@ -281,7 +295,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 	idxPos := uint32(fw.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-fw.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(fw.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Invalid index position",
+		logger.Ctx(ctx).Debug("Invalid index position",
 			zap.Uint32("idxPos", idxPos),
 			zap.Uint32("headerSize", headerSize),
 			zap.Int64("fileSize", fw.fileSize),
@@ -292,7 +306,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 	// Read data offset
 	offset := binary.LittleEndian.Uint32(fw.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(fw.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Invalid data offset",
+		logger.Ctx(ctx).Debug("Invalid data offset",
 			zap.Uint32("offset", offset),
 			zap.Uint32("headerSize", headerSize),
 			zap.Int64("fileSize", fw.fileSize))
@@ -302,7 +316,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 	// Read data length
 	length := binary.LittleEndian.Uint32(fw.mappedFile[offset:])
 	if length == 0 || length > uint32(fw.fileSize-footerSize)-offset-8 {
-		logger.Ctx(context.Background()).Debug("Invalid data length",
+		logger.Ctx(ctx).Debug("Invalid data length",
 			zap.Uint32("length", length),
 			zap.Uint32("offset", offset),
 			zap.Int64("fileSize", fw.fileSize))
@@ -316,7 +330,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 	dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 	dataEnd := dataStart + length
 	if dataEnd > uint32(fw.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Data region out of bounds",
+		logger.Ctx(ctx).Debug("Data region out of bounds",
 			zap.Uint32("dataStart", dataStart),
 			zap.Uint32("dataEnd", dataEnd),
 			zap.Int64("fileSize", fw.fileSize))
@@ -327,7 +341,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 	data := make([]byte, length)
 	copy(data, fw.mappedFile[dataStart:dataEnd])
 
-	logger.Ctx(context.Background()).Debug("Fragment data read completed",
+	logger.Ctx(ctx).Debug("Fragment data read completed",
 		zap.String("fragmentFile", fw.filePath),
 		zap.Int64("readingEntryId", entryId),
 		zap.Uint32("start", dataStart),
@@ -338,7 +352,7 @@ func (fw *FragmentFileWriter) GetEntry(entryId int64) ([]byte, error) {
 
 	// Verify CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
-		logger.Ctx(context.Background()).Debug("CRC mismatch",
+		logger.Ctx(ctx).Debug("CRC mismatch",
 			zap.Int64("entryId", entryId),
 			zap.Uint32("computedCRC", crc32.ChecksumIEEE(data)),
 			zap.Uint32("storedCRC", storedCRC))
@@ -358,7 +372,9 @@ func (fw *FragmentFileWriter) GetRawBufSize() int64 {
 }
 
 // Release releases the fragment file.
-func (fw *FragmentFileWriter) Release() error {
+func (fw *FragmentFileWriter) Release(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
+	defer sp.End()
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
@@ -377,7 +393,7 @@ func (fw *FragmentFileWriter) Release() error {
 	// close the file
 	if fw.fd != nil {
 		if err := fw.fd.Close(); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to close fragment file", zap.String("filePath", fw.filePath))
+			logger.Ctx(ctx).Warn("failed to close fragment file", zap.String("filePath", fw.filePath))
 		}
 	}
 
@@ -395,6 +411,8 @@ func (fw *FragmentFileWriter) Close() {
 
 // Write writes data to the fragment file.
 func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntryId int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Write")
+	defer sp.End()
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
@@ -453,7 +471,7 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 	} else if fw.lastEntryID+1 == writeEntryId {
 		fw.lastEntryID = writeEntryId
 	} else {
-		logger.Ctx(context.Background()).Warn("fragment write data, lastEntryID auto-increment",
+		logger.Ctx(ctx).Warn("fragment write data, lastEntryID auto-increment",
 			zap.String("fragmentFile", fw.filePath),
 			zap.Int64("writeEntryId", writeEntryId),
 			zap.Int64("lastEntryID", fw.lastEntryID),
@@ -476,7 +494,7 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 	// Write index - store data offset
 	binary.LittleEndian.PutUint32(fw.mappedFile[idxPos:idxPos+indexItemSize], currentDataOffset)
 
-	logger.Ctx(context.Background()).Debug("fragment data written",
+	logger.Ctx(ctx).Debug("fragment data written",
 		zap.String("fragmentFile", fw.filePath),
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("start", fw.dataOffset+8),
@@ -486,7 +504,7 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 		zap.String("fragInst", fmt.Sprintf("%p", fw)))
 
 	// Update internal state
-	logger.Ctx(context.Background()).Debug("fragment data written, before index update",
+	logger.Ctx(ctx).Debug("fragment data written, before index update",
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("dataOffset", fw.dataOffset),
 		zap.Uint32("indexOffset", fw.indexOffset),
@@ -495,7 +513,7 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 	fw.dataOffset += requiredSpace
 	fw.indexOffset -= indexItemSize
 	fw.entryCount++
-	logger.Ctx(context.Background()).Debug("fragment data written, after index update",
+	logger.Ctx(ctx).Debug("fragment data written, after index update",
 		zap.Int64("writingEntryId", writeEntryId),
 		zap.Uint32("dataOffset", fw.dataOffset),
 		zap.Uint32("indexOffset", fw.indexOffset),
@@ -535,7 +553,7 @@ type FragmentFileReader struct {
 }
 
 // NewFragmentFileReader creates a new FragmentFile, which can read only
-func NewFragmentFileReader(filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64) (*FragmentFileReader, error) {
+func NewFragmentFileReader(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64) (*FragmentFileReader, error) {
 	ff := &FragmentFileReader{
 		filePath:   filePath,
 		fileSize:   fileSize,
@@ -555,6 +573,7 @@ func NewFragmentFileReader(filePath string, fileSize int64, logId int64, segment
 
 		dataRefCnt: 0, // mmap not open, initial reference count is zero
 	}
+	logger.Ctx(ctx).Debug("FragmentFile reader created", zap.String("filePath", filePath), zap.Int64("fragmentId", fragmentId), zap.String("fragmentInst", fmt.Sprintf("%p", ff)))
 	return ff, nil
 }
 
@@ -583,20 +602,22 @@ func (fr *FragmentFileReader) Flush(ctx context.Context) error {
 
 // Load loads the fragment file.
 func (fr *FragmentFileReader) Load(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Load")
+	defer sp.End()
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 	// already loaded, no need to load again
 	if fr.dataLoaded {
 		// refresh info
 		if fr.isGrowing {
-			readFootErr := fr.readFooter()
+			readFootErr := fr.readFooter(ctx)
 			if readFootErr != nil {
 				return readFootErr
 			}
 		}
 		// Increase the reference count
 		fr.dataRefCnt += 1
-		logger.Ctx(context.TODO()).Debug("fragment file loaded, inc ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+		logger.Ctx(ctx).Debug("fragment file loaded, inc ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 		return nil
 	}
 
@@ -621,7 +642,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	}
 
 	// Read file header
-	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+	if validateHeaderErr := fr.validateHeader(ctx); validateHeaderErr != nil {
 		fr.mappedFile.Unmap()
 		fr.mappedFile = nil
 		fr.fd.Close()
@@ -630,7 +651,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 	}
 
 	// Read footer
-	if readFootErr := fr.readFooter(); readFootErr != nil {
+	if readFootErr := fr.readFooter(ctx); readFootErr != nil {
 		fr.mappedFile.Unmap()
 		fr.mappedFile = nil
 		fr.fd.Close()
@@ -654,9 +675,11 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 }
 
 // validateHeader validates the file header.
-func (fr *FragmentFileReader) validateHeader() error {
+func (fr *FragmentFileReader) validateHeader(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "validateHeader")
+	defer sp.End()
 	if int64(len(fr.mappedFile)) < fr.fileSize {
-		logger.Ctx(context.Background()).Warn("invalid file size retries, file maybe creating",
+		logger.Ctx(ctx).Warn("invalid file size retries, file maybe creating",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("expectedSize", fr.fileSize),
 			zap.Int64("actualSize", int64(len(fr.mappedFile))))
@@ -665,7 +688,7 @@ func (fr *FragmentFileReader) validateHeader() error {
 
 	// Check magic string
 	if string(fr.mappedFile[0:8]) != "FRAGMENT" {
-		logger.Ctx(context.Background()).Warn("invalid magic bytes, file maybe creating", zap.String("filePath", fr.filePath), zap.Int64("fileSize", fr.fileSize))
+		logger.Ctx(ctx).Warn("invalid magic bytes, file maybe creating", zap.String("filePath", fr.filePath), zap.Int64("fileSize", fr.fileSize))
 		return errors.New("invalid magic bytes, file maybe creating")
 	}
 
@@ -678,9 +701,11 @@ func (fr *FragmentFileReader) validateHeader() error {
 }
 
 // readFooter reads the file footer.
-func (fr *FragmentFileReader) readFooter() error {
+func (fr *FragmentFileReader) readFooter(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "readFooter")
+	defer sp.End()
 	if int64(len(fr.mappedFile)) < fr.fileSize {
-		logger.Ctx(context.Background()).Warn("invalid file size after retries, file maybe creating",
+		logger.Ctx(ctx).Warn("invalid file size after retries, file maybe creating",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("expectedSize", fr.fileSize),
 			zap.Int64("actualSize", int64(len(fr.mappedFile))))
@@ -689,7 +714,7 @@ func (fr *FragmentFileReader) readFooter() error {
 
 	footerOffset := fr.fileSize - footerSize
 	if footerOffset > fr.fileSize || footerOffset <= 0 {
-		logger.Ctx(context.Background()).Warn("invalid footer offset, file maybe creating",
+		logger.Ctx(ctx).Warn("invalid footer offset, file maybe creating",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("fileSize", fr.fileSize),
 			zap.Int64("footerOffset", footerOffset))
@@ -705,7 +730,7 @@ func (fr *FragmentFileReader) readFooter() error {
 
 	// Read write state
 	fr.isGrowing = binary.LittleEndian.Uint32(fr.mappedFile[footerOffset+20:]) == 1
-	logger.Ctx(context.Background()).Debug("read footer",
+	logger.Ctx(ctx).Debug("read footer",
 		zap.Int32("entryCount", fr.entryCount),
 		zap.Int64("firstEntryID", fr.firstEntryID),
 		zap.Int64("lastEntryID", fr.lastEntryID),
@@ -717,6 +742,8 @@ func (fr *FragmentFileReader) readFooter() error {
 
 // IsMMapReadable check and release resource immediately, avoid memory surges when catching up read
 func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "IsMMapReadable")
+	defer sp.End()
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 
@@ -767,7 +794,7 @@ func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 			continue
 		}
 		// check header
-		if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
+		if validateHeaderErr := fr.validateHeader(ctx); validateHeaderErr != nil {
 			fr.mappedFile.Unmap()
 			fr.mappedFile = nil
 			file.Close()
@@ -784,7 +811,7 @@ func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 		}
 
 		// check footer
-		if readFootErr := fr.readFooter(); readFootErr != nil {
+		if readFootErr := fr.readFooter(ctx); readFootErr != nil {
 			fr.mappedFile.Unmap()
 			fr.mappedFile = nil
 			file.Close()
@@ -818,22 +845,26 @@ func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 	return isReady
 }
 
-func (fr *FragmentFileReader) refreshFooter() error {
+func (fr *FragmentFileReader) refreshFooter(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "refreshFooter")
+	defer sp.End()
 	// Read file header
-	if validateHeaderErr := fr.validateHeader(); validateHeaderErr != nil {
-		logger.Ctx(context.TODO()).Debug("refreshFooter: validate header failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(validateHeaderErr))
+	if validateHeaderErr := fr.validateHeader(ctx); validateHeaderErr != nil {
+		logger.Ctx(ctx).Debug("refreshFooter: validate header failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(validateHeaderErr))
 		return validateHeaderErr
 	}
-	if readFooterErr := fr.readFooter(); readFooterErr != nil {
-		logger.Ctx(context.TODO()).Debug("refreshFooter: read footer failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(readFooterErr))
+	if readFooterErr := fr.readFooter(ctx); readFooterErr != nil {
+		logger.Ctx(ctx).Debug("refreshFooter: read footer failed", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)), zap.Error(readFooterErr))
 		return readFooterErr
 	}
-	logger.Ctx(context.TODO()).Debug("refreshFooter: refresh footer finish", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)))
+	logger.Ctx(ctx).Debug("refreshFooter: refresh footer finish", zap.String("filePath", fr.filePath), zap.String("fragmentInst", fmt.Sprintf("%p", fr)))
 	return nil
 }
 
 // GetLastEntryId returns the last entry ID.
-func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
+func (fr *FragmentFileReader) GetLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
+	defer sp.End()
 	fr.mu.RLock()
 	defer fr.mu.RUnlock()
 	if fr.closed {
@@ -848,7 +879,9 @@ func (fr *FragmentFileReader) GetLastEntryId() (int64, error) {
 }
 
 // GetFetchedLastEntryId returns the last refresh fetch lastEntry ID directly
-func (fr *FragmentFileReader) GetFetchedLastEntryId() (int64, error) {
+func (fr *FragmentFileReader) GetFetchedLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFetchedLastEntryId")
+	defer sp.End()
 	fr.mu.RLock()
 	defer fr.mu.RUnlock()
 	if fr.closed {
@@ -863,7 +896,9 @@ func (fr *FragmentFileReader) GetFetchedLastEntryId() (int64, error) {
 }
 
 // GetFirstEntryId returns the first entry ID.
-func (fr *FragmentFileReader) GetFirstEntryId() (int64, error) {
+func (fr *FragmentFileReader) GetFirstEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
+	defer sp.End()
 	fr.mu.RLock()
 	defer fr.mu.RUnlock()
 	if fr.closed {
@@ -878,7 +913,9 @@ func (fr *FragmentFileReader) GetFirstEntryId() (int64, error) {
 }
 
 // GetLastModified returns the last modification time.
-func (fr *FragmentFileReader) GetLastModified() int64 {
+func (fr *FragmentFileReader) GetLastModified(ctx context.Context) int64 {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastModified")
+	defer sp.End()
 	info, err := os.Stat(fr.filePath)
 	if err != nil {
 		return 0
@@ -887,11 +924,13 @@ func (fr *FragmentFileReader) GetLastModified() int64 {
 }
 
 // GetEntry returns the entry at the specified ID.
-func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
+func (fr *FragmentFileReader) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
+	defer sp.End()
 	fr.mu.RLock()
 	defer fr.mu.RUnlock()
 	if fr.closed {
-		logger.Ctx(context.Background()).Warn("failed to get entry from a closed fragment file",
+		logger.Ctx(ctx).Warn("failed to get entry from a closed fragment file",
 			zap.String("filePath", fr.filePath),
 			zap.Int64("fragmentId", fr.fragmentId),
 			zap.Int64("readingEntryId", entryId))
@@ -901,23 +940,25 @@ func (fr *FragmentFileReader) GetEntry(entryId int64) ([]byte, error) {
 		return nil, werr.ErrFragmentNotLoaded.WithCauseErrMsg(fmt.Sprintf("%s not loaded", fr.filePath))
 	}
 
-	logger.Ctx(context.Background()).Debug("Try get entry from this fragment",
+	logger.Ctx(ctx).Debug("Try get entry from this fragment",
 		zap.String("filePath", fr.filePath),
 		zap.Int64("firstEntryId", fr.firstEntryID),
 		zap.Int64("lastEntryId", fr.lastEntryID),
 		zap.Int64("readingEntryId", entryId),
 		zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
-	return fr.getEntryLocked(entryId)
+	return fr.getEntryLocked(ctx, entryId)
 }
 
 // getEntryLocked is a helper method to retrieve an entry with lock already held
-func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
+func (fr *FragmentFileReader) getEntryLocked(ctx context.Context, entryId int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "getEntryLocked")
+	defer sp.End()
 	// Calculate index position - relative position of entry ID in index area
 	idxPos := uint32(fr.fileSize - footerSize - int64(indexItemSize)*(int64(entryId-fr.firstEntryID+1)))
 
 	if idxPos < headerSize || idxPos >= uint32(fr.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Invalid index position",
+		logger.Ctx(ctx).Debug("Invalid index position",
 			zap.Uint32("idxPos", idxPos),
 			zap.Uint32("headerSize", headerSize),
 			zap.Int64("fileSize", fr.fileSize),
@@ -928,7 +969,7 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 	// Read data offset
 	offset := binary.LittleEndian.Uint32(fr.mappedFile[idxPos:])
 	if offset < headerSize || offset >= uint32(fr.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Invalid data offset",
+		logger.Ctx(ctx).Debug("Invalid data offset",
 			zap.Uint32("offset", offset),
 			zap.Uint32("headerSize", headerSize),
 			zap.Int64("fileSize", fr.fileSize))
@@ -938,7 +979,7 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 	// Read data length
 	length := binary.LittleEndian.Uint32(fr.mappedFile[offset:])
 	if length == 0 || length > uint32(fr.fileSize-footerSize)-offset-8 {
-		logger.Ctx(context.Background()).Debug("Invalid data length",
+		logger.Ctx(ctx).Debug("Invalid data length",
 			zap.Uint32("length", length),
 			zap.Uint32("offset", offset),
 			zap.Int64("fileSize", fr.fileSize))
@@ -952,7 +993,7 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 	dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 	dataEnd := dataStart + length
 	if dataEnd > uint32(fr.fileSize-footerSize) {
-		logger.Ctx(context.Background()).Debug("Data region out of bounds",
+		logger.Ctx(ctx).Debug("Data region out of bounds",
 			zap.Uint32("dataStart", dataStart),
 			zap.Uint32("dataEnd", dataEnd),
 			zap.Int64("fileSize", fr.fileSize))
@@ -963,7 +1004,7 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 	data := make([]byte, length)
 	copy(data, fr.mappedFile[dataStart:dataEnd])
 
-	logger.Ctx(context.Background()).Debug("Fragment data read completed",
+	logger.Ctx(ctx).Debug("Fragment data read completed",
 		zap.String("fragmentFile", fr.filePath),
 		zap.Int64("readingEntryId", entryId),
 		zap.Uint32("start", dataStart),
@@ -974,7 +1015,7 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 
 	// Verify CRC
 	if crc32.ChecksumIEEE(data) != storedCRC {
-		logger.Ctx(context.Background()).Debug("CRC mismatch",
+		logger.Ctx(ctx).Debug("CRC mismatch",
 			zap.Int64("entryId", entryId),
 			zap.Uint32("computedCRC", crc32.ChecksumIEEE(data)),
 			zap.Uint32("storedCRC", storedCRC))
@@ -986,9 +1027,10 @@ func (fr *FragmentFileReader) getEntryLocked(entryId int64) ([]byte, error) {
 
 // IteratorPrint for Debug Test only
 func (fr *FragmentFileReader) IteratorPrint() error {
+	ctx := context.Background()
 	if fr.closed {
 		// Use context.Background() for logging since we don't have a context parameter
-		logger.Ctx(context.Background()).Debug("Fragment file is closed")
+		logger.Ctx(ctx).Debug("Fragment file is closed")
 		return errors.New("fragment file is closed")
 	}
 
@@ -1004,7 +1046,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 	for i := 0; i < int(fr.entryCount); i++ {
 		idxPos := uint32(fr.fileSize - footerSize - int64(indexItemSize)*(int64(i+1)))
 		if idxPos < headerSize || idxPos >= uint32(fr.fileSize-footerSize) {
-			logger.Ctx(context.Background()).Debug("Invalid index position",
+			logger.Ctx(ctx).Debug("Invalid index position",
 				zap.Uint32("idxPos", idxPos),
 				zap.Uint32("headerSize", headerSize),
 				zap.Int64("fileSize", fr.fileSize),
@@ -1015,7 +1057,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		// Read data offset
 		offset := binary.LittleEndian.Uint32(fr.mappedFile[idxPos:])
 		if offset < headerSize || offset >= uint32(fr.fileSize) {
-			logger.Ctx(context.Background()).Debug("Invalid data offset",
+			logger.Ctx(ctx).Debug("Invalid data offset",
 				zap.Uint32("offset", offset),
 				zap.Uint32("headerSize", headerSize),
 				zap.Int64("fileSize", fr.fileSize))
@@ -1025,7 +1067,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		// Read data length
 		length := binary.LittleEndian.Uint32(fr.mappedFile[offset:])
 		if length == 0 || length > uint32(fr.fileSize)-offset-8 {
-			logger.Ctx(context.Background()).Debug("Invalid data length",
+			logger.Ctx(ctx).Debug("Invalid data length",
 				zap.Uint32("length", length),
 				zap.Uint32("offset", offset),
 				zap.Int64("fileSize", fr.fileSize))
@@ -1039,7 +1081,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		dataStart := offset + 8 // Skip length(4 bytes) and CRC(4 bytes)
 		dataEnd := dataStart + length
 		if dataEnd > uint32(fr.fileSize) {
-			logger.Ctx(context.Background()).Debug("Data region out of bounds",
+			logger.Ctx(ctx).Debug("Data region out of bounds",
 				zap.Uint32("dataStart", dataStart),
 				zap.Uint32("dataEnd", dataEnd),
 				zap.Int64("fileSize", fr.fileSize))
@@ -1054,7 +1096,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 		actualID := int64(binary.LittleEndian.Uint64(data[:8]))
 		actualData := data[8:]
 
-		logger.Ctx(context.Background()).Debug("Fragment data read",
+		logger.Ctx(ctx).Debug("Fragment data read",
 			zap.String("fragmentFile", fr.filePath),
 			zap.Int64("entryId", actualID),
 			zap.Int64("segmentEntryId", fr.firstEntryID+int64(i)),
@@ -1067,7 +1109,7 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 
 		// Verify CRC
 		if crc32.ChecksumIEEE(data) != storedCRC {
-			logger.Ctx(context.Background()).Debug("CRC mismatch",
+			logger.Ctx(ctx).Debug("CRC mismatch",
 				zap.Int64("entryId", actualID),
 				zap.Uint32("computedCRC", crc32.ChecksumIEEE(data)),
 				zap.Uint32("storedCRC", storedCRC))
@@ -1087,7 +1129,9 @@ func (fr *FragmentFileReader) GetRawBufSize() int64 {
 }
 
 // Release releases the fragment file.
-func (fr *FragmentFileReader) Release() error {
+func (fr *FragmentFileReader) Release(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
+	defer sp.End()
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 
@@ -1102,7 +1146,7 @@ func (fr *FragmentFileReader) Release() error {
 
 	// decrement reference count
 	fr.dataRefCnt -= 1
-	logger.Ctx(context.TODO()).Debug("call fragment file release, dec ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+	logger.Ctx(ctx).Debug("call fragment file release, dec ref", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	if fr.dataRefCnt > 0 {
 		// still in use, no need to release
@@ -1112,7 +1156,7 @@ func (fr *FragmentFileReader) Release() error {
 	// Unmap memory mapping
 	if fr.mappedFile != nil {
 		if err := fr.mappedFile.Unmap(); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to unmap fragment file", zap.String("filePath", fr.filePath))
+			logger.Ctx(ctx).Warn("failed to unmap fragment file", zap.String("filePath", fr.filePath))
 		}
 		fr.mappedFile = nil
 	}
@@ -1120,14 +1164,14 @@ func (fr *FragmentFileReader) Release() error {
 	// close the file
 	if fr.fd != nil {
 		if err := fr.fd.Close(); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to close fragment file", zap.String("filePath", fr.filePath))
+			logger.Ctx(ctx).Warn("failed to close fragment file", zap.String("filePath", fr.filePath))
 		}
 		fr.fd = nil
 	}
 
 	// Mark data as not fetched in buffer
 	fr.dataLoaded = false
-	logger.Ctx(context.TODO()).Debug("fragment file release finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+	logger.Ctx(ctx).Debug("fragment file release finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 
 	return nil
 }

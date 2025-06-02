@@ -37,7 +37,7 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	mockLogStoreClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockLogStoreClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockSegmentHandle := mocks_segment_handle.NewSegmentHandle(t)
-	mockSegmentHandle.EXPECT().SendAppendSuccessCallbacks(int64(0)).Return()
+	mockSegmentHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(0)).Return()
 	quorumInfo := &proto.QuorumInfo{
 		Nodes: []string{"node1"},
 		Wq:    1,
@@ -80,7 +80,7 @@ func TestAppendOp_Execute_Error(t *testing.T) {
 	mockLogStoreClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockLogStoreClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockSegmentHandle := mocks_segment_handle.NewSegmentHandle(t)
-	mockSegmentHandle.EXPECT().SendAppendErrorCallbacks(int64(0), mock.Anything).Return()
+	mockSegmentHandle.EXPECT().SendAppendErrorCallbacks(mock.Anything, int64(0), mock.Anything).Return()
 	quorumInfo := &proto.QuorumInfo{
 		Nodes: []string{"node1"},
 		Wq:    1,

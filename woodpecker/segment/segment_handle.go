@@ -37,6 +37,10 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
+const (
+	SegmentHandleScopeName = "WoodpeckerSegmentHandle"
+)
+
 //go:generate mockery --dir=./woodpecker/segment --name=SegmentHandle --structname=SegmentHandle --output=mocks/mocks_woodpecker/mocks_segment_handle --filename=mock_segment_handle.go --with-expecter=true  --outpkg=mocks_segment_handle
 type SegmentHandle interface {
 	// GetLogName to which the segment belongs
@@ -64,9 +68,9 @@ type SegmentHandle interface {
 	// Close the segment
 	Close(context.Context) error
 	// SendAppendSuccessCallbacks called when an appendOp operation is successful
-	SendAppendSuccessCallbacks(int64)
+	SendAppendSuccessCallbacks(context.Context, int64)
 	// SendAppendErrorCallbacks called when an appendOp operation fails
-	SendAppendErrorCallbacks(int64, error)
+	SendAppendErrorCallbacks(context.Context, int64, error)
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
 	// RequestCompactionAsync request compaction for the segment asynchronously
@@ -180,6 +184,8 @@ func (s *segmentHandleImpl) GetId(ctx context.Context) int64 {
 }
 
 func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
+	defer sp.End()
 	s.Lock()
 	defer s.Unlock()
 	currentSegmentMeta := s.segmentMetaCache.Load()
@@ -222,8 +228,8 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 }
 
 // SendAppendSuccessCallbacks will do ack sequentially
-func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
-	logger.Ctx(context.TODO()).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d", triggerEntryId))
+func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64) {
+	logger.Ctx(ctx).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
@@ -231,12 +237,12 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op := e.Value.(*AppendOp)
 		if !op.completed.Load() {
-			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 		// Check if it is the next entry in the sequence.
 		if op.entryId != s.lastAddConfirmed.Load()+1 {
-			logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks not the next lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not the next lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
 
@@ -251,15 +257,15 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(triggerEntryId int64) {
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
-		logger.Ctx(context.TODO()).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 	}
 }
 
 // SendAppendErrorCallbacks will do error callback and remove from pendingAppendOps sequentially
-func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err error) {
+func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
-	logger.Ctx(context.Background()).Info("SendAppendFailedCallbacks", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
+	logger.Ctx(ctx).Info("SendAppendFailedCallbacks", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
 
 	// all after triggerEntryId will be removed
 	elementsToRemove := make([]*list.Element, 0)
@@ -294,14 +300,14 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		op := element.Value.(*AppendOp)
 		if op.entryId == triggerEntryId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 			continue
 		}
 		if op.entryId < minRemoveId {
 			s.executor.Submit(op)
-			logger.Ctx(context.Background()).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 		} else {
-			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
 			elementsToRemove = append(elementsToRemove, element)
 		}
 	}
@@ -312,7 +318,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		element := e
 		op := element.Value.(*AppendOp)
 		if op.entryId > minRemoveId {
-			logger.Ctx(context.Background()).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
+			logger.Ctx(ctx).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
 			elementsToRemove = append(elementsToRemove, element)
 		}
 	}
@@ -321,11 +327,13 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(triggerEntryId int64, err e
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		op.callback(s.segmentId, op.entryId, err)
-		logger.Ctx(context.Background()).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 	}
 }
 
 func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*processor.SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Read")
+	defer sp.End()
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -362,6 +370,8 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 
 // ReadBatch reads batch entries from segment.
 func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int64) ([]*processor.SegmentEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
+	defer sp.End()
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -390,6 +400,8 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int6
 
 // GetLastAddConfirmed call by reader
 func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "GetLastAddConfirmed")
+	defer sp.End()
 	currentSegmentMeta := s.segmentMetaCache.Load()
 	// should get from meta if seg completed, other wise get from data
 	if currentSegmentMeta.State != proto.SegmentState_Active {
@@ -432,6 +444,8 @@ func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetad
 }
 
 func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RefreshAndGetMetadata")
+	defer sp.End()
 	s.Lock()
 	defer s.Unlock()
 	start := time.Now()
@@ -455,6 +469,8 @@ func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "GetQuorumInfo")
+	defer sp.End()
 	if s.quorumInfo != nil {
 		return s.quorumInfo, nil
 	}
@@ -481,6 +497,8 @@ func (s *segmentHandleImpl) IsClosed(ctx context.Context) (bool, error) {
 // Close marks the segment as read-only. Only writable segments can be closed.
 // TODO: Rename method to better reflect that segments remain readable after closing
 func (s *segmentHandleImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
+	defer sp.End()
 	if !s.closedState.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -488,7 +506,7 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
 	// error out all pending append operations
-	s.SendAppendErrorCallbacks(-1, werr.ErrSegmentClosed)
+	s.SendAppendErrorCallbacks(ctx, -1, werr.ErrSegmentClosed)
 
 	// shutdown segment executor
 	s.executor.Stop()
@@ -521,11 +539,12 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
-	//return s.size.Load()
 	return s.pendingSize.Load()
 }
 
 func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RequestCompactionAsync")
+	defer sp.End()
 	// select one node to compact segment asynchronously
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -555,6 +574,8 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) Fence(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
+	defer sp.End()
 	if s.fencedState.Load() {
 		return nil
 	}
@@ -586,6 +607,8 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 }
 
 func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "IsFence")
+	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
@@ -619,6 +642,8 @@ func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 
 // RecoveryOrCompact used for the auditor of this Log
 func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RecoveryOrCompact")
+	defer sp.End()
 	err := s.RefreshAndGetMetadata(ctx)
 	if err != nil {
 		return err

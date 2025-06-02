@@ -211,7 +211,7 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 
 		m.dataMemory -= fragmentSize
 		m.usedMemory -= rawFragmentBufSize
-		item.fragment.Release()
+		item.fragment.Release(context.TODO())
 		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
 			zap.String("key", key),
 			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -306,7 +306,7 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 	m.order.Remove(item.element)
 	m.dataMemory -= fragmentSize
 	m.usedMemory -= rawFragmentBufSize
-	item.fragment.Release()
+	item.fragment.Release(context.TODO())
 	logger.Ctx(req.ctx).Debug("remove fragment finish",
 		zap.String("key", key),
 		zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -374,7 +374,7 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 		delete(m.cache, keyToEvict)
 		m.dataMemory -= fragmentSize
 		m.usedMemory -= rawFragmentBufSize
-		item.fragment.Release()
+		item.fragment.Release(context.TODO())
 		m.order.Remove(evictElement)
 		logger.Ctx(req.ctx).Debug("evict fragment automatically",
 			zap.String("key", keyToEvict),

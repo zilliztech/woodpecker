@@ -37,11 +37,11 @@ type ReaderOpt struct {
 type Reader interface {
 	io.Closer
 	// ReadNext returns the next entry in the log according to the Reader's direction.
-	ReadNext() (*proto.LogEntry, error)
+	ReadNext(ctx context.Context) (*proto.LogEntry, error)
 	// ReadNextBatch returns the next batch of entries in the log according to the Reader's direction.
-	ReadNextBatch(int64) ([]*proto.LogEntry, error)
+	ReadNextBatch(context.Context, int64) ([]*proto.LogEntry, error)
 	// HasNext returns true if there is an entry to read.
-	HasNext() (bool, error)
+	HasNext(context.Context) (bool, error)
 }
 
 // Segment represents a segment interface with read and write operations.
@@ -61,7 +61,7 @@ type Segment interface {
 	// LastFragmentId returns the last fragment id of this logFile.
 	LastFragmentId() uint64
 	// GetLastEntryId returns the last entry id of this logFile.
-	GetLastEntryId() (int64, error)
+	GetLastEntryId(ctx context.Context) (int64, error)
 	// Sync ensures all buffered data is written to persistent storage.
 	Sync(ctx context.Context) error
 	// Merge the log file fragments.
@@ -71,5 +71,5 @@ type Segment interface {
 	// DeleteFragments delete the segment log file fragments.
 	DeleteFragments(ctx context.Context, flag int) error
 	// Closer closes the log file.
-	io.Closer
+	Close(ctx context.Context) error
 }

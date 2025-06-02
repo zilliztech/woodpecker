@@ -324,7 +324,7 @@ func getDefaultLoggerConfig() LogConfig {
 
 func getDefaultTraceConfig() TraceConfig {
 	return TraceConfig{
-		Exporter: "jaeger",
+		Exporter: "noop",
 		Jaeger: JaegerConfig{
 			URL: "http://localhost:14268/api/traces",
 		},

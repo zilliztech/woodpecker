@@ -39,6 +39,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
+const (
+	SegmentScopeName = "DiskSegment"
+)
+
 var _ storage.Segment = (*DiskSegmentImpl)(nil)
 
 // DiskSegmentImpl is used to write data to disk-based storage as a logical segment
@@ -74,7 +78,7 @@ type DiskSegmentImpl struct {
 }
 
 // NewDiskSegmentImpl creates a new DiskSegmentImpl instance
-func NewDiskSegmentImpl(logId int64, segId int64, parentDir string, options ...Option) (*DiskSegmentImpl, error) {
+func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir string, options ...Option) (*DiskSegmentImpl, error) {
 	// Set default configuration
 	s := &DiskSegmentImpl{
 		logId:           logId,
@@ -105,7 +109,7 @@ func NewDiskSegmentImpl(logId int64, segId int64, parentDir string, options ...O
 	}
 
 	// writer should open an empty dir too begin
-	err := s.checkDirIsEmpty()
+	err := s.checkDirIsEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +122,7 @@ func NewDiskSegmentImpl(logId int64, segId int64, parentDir string, options ...O
 		go s.run()
 	}
 
-	logger.Ctx(context.Background()).Info("NewDiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
+	logger.Ctx(ctx).Info("NewDiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
 	return s, nil
 }
 
@@ -143,12 +147,14 @@ func (s *DiskSegmentImpl) run() {
 				continue
 			}
 
-			err := s.Sync(context.Background())
+			ctx, sp := logger.NewIntentCtx(SegmentScopeName, fmt.Sprintf("run_%d_%d", s.logId, s.segmentId))
+			err := s.Sync(ctx)
 			if err != nil {
-				logger.Ctx(context.Background()).Warn("disk log file sync error",
+				logger.Ctx(ctx).Warn("disk log file sync error",
 					zap.String("logFileDir", s.logFileDir),
 					zap.Error(err))
 			}
+			sp.End()
 			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
 		case <-s.closeCh:
 			logger.Ctx(context.Background()).Info("DiskSegmentImpl successfully closed",
@@ -167,6 +173,8 @@ func (s *DiskSegmentImpl) GetId() int64 {
 // Append synchronously appends a log entry
 // Deprecated TODO
 func (s *DiskSegmentImpl) Append(ctx context.Context, data []byte) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Append")
+	defer sp.End()
 	// Get current max ID and increment by 1
 	entryId := s.lastEntryID.Add(1) // TODO delete this
 
@@ -198,6 +206,8 @@ func (s *DiskSegmentImpl) Append(ctx context.Context, data []byte) error {
 
 // AppendAsync appends data to the log file asynchronously.
 func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
+	defer sp.End()
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
 
 	startTime := time.Now()
@@ -269,6 +279,8 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 
 // Sync syncs the log file to disk.
 func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Sync")
+	defer sp.End()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() {
@@ -385,6 +397,8 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 }
 
 func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cache.SequentialBuffer) ([][]byte, int64) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getToFlushData")
+	defer sp.End()
 	entryCount := len(currentBuffer.Values)
 	if entryCount == 0 {
 		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("logFileDir", s.logFileDir))
@@ -420,6 +434,8 @@ func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cac
 }
 
 func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, toFlushDataFirstEntryId int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "flushData")
+	defer sp.End()
 	var writeError error
 	var lastWrittenToBuffEntryID int64 = s.lastEntryID.Load()
 	var pendingFlushBytes int = 0
@@ -431,7 +447,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 	// Ensure fragment is created
 	if s.currFragment == nil {
 		logger.Ctx(ctx).Debug("Sync needs to create a new fragment")
-		if rotateErr := s.rotateFragment(s.lastEntryID.Load() + 1); rotateErr != nil {
+		if rotateErr := s.rotateFragment(ctx, s.lastEntryID.Load()+1); rotateErr != nil {
 			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(rotateErr))
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "flush", "rotate_error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "flush", "rotate_error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -451,7 +467,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 		}
 
 		// Check if current fragment is full, if so create a new one
-		if s.needNewFragment() {
+		if s.needNewFragment(ctx) {
 			logger.Ctx(ctx).Debug("Sync detected need for new fragment")
 			// First flush current fragment to disk
 			logger.Ctx(ctx).Debug("Sync flushing current fragment",
@@ -468,7 +484,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 			pendingFlushBytes = 0
 
 			// Create new fragment
-			if err := s.rotateFragment(s.lastEntryID.Load() + 1); err != nil {
+			if err := s.rotateFragment(ctx, s.lastEntryID.Load()+1); err != nil {
 				logger.Ctx(ctx).Debug("Sync failed to create new fragment",
 					zap.Error(err))
 				writeError = err
@@ -502,7 +518,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 			s.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
-			if rotateErr := s.rotateFragment(s.lastEntryID.Load() + 1); rotateErr != nil {
+			if rotateErr := s.rotateFragment(ctx, s.lastEntryID.Load()+1); rotateErr != nil {
 				logger.Ctx(ctx).Warn("Sync failed to create new fragment",
 					zap.Error(rotateErr))
 				writeError = rotateErr
@@ -546,7 +562,9 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 }
 
 // needNewFragment checks if a new fragment needs to be created
-func (s *DiskSegmentImpl) needNewFragment() bool {
+func (s *DiskSegmentImpl) needNewFragment(ctx context.Context) bool {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "needNewFragment")
+	defer sp.End()
 	if s.currFragment == nil {
 		return true
 	}
@@ -559,7 +577,7 @@ func (s *DiskSegmentImpl) needNewFragment() bool {
 	// Check if already reached file size limit
 	currentLeftSize := s.currFragment.indexOffset - s.currFragment.dataOffset
 	if currentLeftSize <= 1024 { // Leave some margin to prevent overflow
-		logger.Ctx(context.Background()).Debug("Need new fragment due to size limit",
+		logger.Ctx(ctx).Debug("Need new fragment due to size limit",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Uint32("currentLeftSize", currentLeftSize),
 			zap.Int64("fragmentSize", s.fragmentSize))
@@ -567,19 +585,19 @@ func (s *DiskSegmentImpl) needNewFragment() bool {
 	}
 
 	// Check if reached entry count limit
-	lastEntry, err := s.currFragment.GetLastEntryId()
+	lastEntry, err := s.currFragment.GetLastEntryId(ctx)
 	if err != nil {
 		// If get failed, possibly the fragment is problematic, create a new one
-		logger.Ctx(context.Background()).Warn("Cannot get last entry ID, rotating fragment",
+		logger.Ctx(ctx).Warn("Cannot get last entry ID, rotating fragment",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Error(err))
 		return true
 	}
 
-	firstEntry, err := s.currFragment.GetFirstEntryId()
+	firstEntry, err := s.currFragment.GetFirstEntryId(ctx)
 	if err != nil {
 		// If get failed, possibly the fragment is problematic, create a new one
-		logger.Ctx(context.Background()).Warn("Cannot get first entry ID, rotating fragment",
+		logger.Ctx(ctx).Warn("Cannot get first entry ID, rotating fragment",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Error(err))
 		return true
@@ -587,7 +605,7 @@ func (s *DiskSegmentImpl) needNewFragment() bool {
 
 	entriesInFragment := lastEntry - firstEntry + 1
 	if entriesInFragment >= int64(s.maxEntryPerFile) {
-		logger.Ctx(context.Background()).Debug("Need new fragment due to entry count limit",
+		logger.Ctx(ctx).Debug("Need new fragment due to entry count limit",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Int64("entriesInFragment", entriesInFragment),
 			zap.Int("maxEntryPerFile", s.maxEntryPerFile))
@@ -598,24 +616,26 @@ func (s *DiskSegmentImpl) needNewFragment() bool {
 }
 
 // rotateFragment closes the current fragment and creates a new one
-func (s *DiskSegmentImpl) rotateFragment(fragmentFirstEntryId int64) error {
-	logger.Ctx(context.Background()).Info("rotating fragment",
+func (s *DiskSegmentImpl) rotateFragment(ctx context.Context, fragmentFirstEntryId int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "rotateFragment")
+	defer sp.End()
+	logger.Ctx(ctx).Info("rotating fragment",
 		zap.String("logFileDir", s.logFileDir),
 		zap.Int64("fragmentFirstEntryId", fragmentFirstEntryId))
 
 	// If current fragment exists, close it first
 	if s.currFragment != nil {
-		logger.Ctx(context.Background()).Debug("Sync flushing current fragment before rotate",
+		logger.Ctx(ctx).Debug("Sync flushing current fragment before rotate",
 			zap.Int64("lastEntryID", s.lastEntryID.Load()))
 		s.currFragment.isGrowing = false
 		if err := s.currFragment.Flush(context.Background()); err != nil {
 			return errors.Wrap(err, "flush current fragment")
 		}
-		logger.Ctx(context.Background()).Debug("Sync flushing current fragment after rotate",
+		logger.Ctx(ctx).Debug("Sync flushing current fragment after rotate",
 			zap.Int64("lastEntryID", s.lastEntryID.Load()))
 
 		// Release immediately frees resources
-		if err := s.currFragment.Release(); err != nil {
+		if err := s.currFragment.Release(ctx); err != nil {
 			return errors.Wrap(err, "close current fragment")
 		}
 	}
@@ -623,14 +643,14 @@ func (s *DiskSegmentImpl) rotateFragment(fragmentFirstEntryId int64) error {
 	// Create new fragment ID
 	fragmentID := s.lastFragmentID.Add(1)
 
-	logger.Ctx(context.Background()).Info("creating new fragment",
+	logger.Ctx(ctx).Info("creating new fragment",
 		zap.String("logFileDir", s.logFileDir),
 		zap.Int64("fragmentID", fragmentID),
 		zap.Int64("firstEntryID", fragmentFirstEntryId))
 
 	// Create new fragment
 	fragmentPath := getFragmentFileKey(s.logFileDir, fragmentID)
-	fragment, err := NewFragmentFileWriter(fragmentPath, s.fragmentSize, s.logId, s.segmentId, fragmentID, fragmentFirstEntryId)
+	fragment, err := NewFragmentFileWriter(ctx, fragmentPath, s.fragmentSize, s.logId, s.segmentId, fragmentID, fragmentFirstEntryId)
 	if err != nil {
 		return errors.Wrapf(err, "create new fragment: %s", fragmentPath)
 	}
@@ -663,7 +683,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 
 	// merge
 	fragmentFirstEntryId := fragments[0].lastEntryID
-	mergedFragmentWriter, err := NewFragmentFileWriter(mergedFragPath, int64(mergeFragSize), logId, segmentId, mergeFragId, fragmentFirstEntryId)
+	mergedFragmentWriter, err := NewFragmentFileWriter(ctx, mergedFragPath, int64(mergeFragSize), logId, segmentId, mergeFragId, fragmentFirstEntryId)
 	if err != nil {
 		return nil, errors.Wrapf(err, "create new fragment: %s", mergedFragPath)
 	}
@@ -673,7 +693,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 		err := fragment.Load(ctx)
 		if err != nil {
 			// Merge failed, explicitly release fragment
-			mergedFragmentWriter.Release()
+			mergedFragmentWriter.Release(ctx)
 			return nil, err
 		}
 		// check the order of entries
@@ -683,7 +703,7 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 		} else {
 			if expectedEntryId != fragment.firstEntryID {
 				// Merge failed, explicitly release fragments
-				mergedFragmentWriter.Release()
+				mergedFragmentWriter.Release(ctx)
 				return nil, errors.New("fragments are not in order")
 			}
 			expectedEntryId = fragment.lastEntryID + 1
@@ -696,22 +716,24 @@ func mergeFragmentsAndReleaseAfterCompleted(ctx context.Context, mergedFragPath 
 	}
 
 	// Add merged fragment to cache
-	mergedFragmentWriter.Release()
+	mergedFragmentWriter.Release(ctx)
 
 	return mergedFragmentWriter, nil
 }
 
 // Close closes the log file and releases resources
-func (s *DiskSegmentImpl) Close() error {
+func (s *DiskSegmentImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Close")
+	defer sp.End()
 	if !s.closed.CompareAndSwap(false, true) {
-		logger.Ctx(context.Background()).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", s)))
+		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", s)))
 		return nil
 	}
 
-	logger.Ctx(context.Background()).Info("run: received close signal,trigger sync before close")
+	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close")
 	// Try to sync remaining data
 	if err := s.Sync(context.Background()); err != nil {
-		logger.Ctx(context.Background()).Warn("sync failed during close",
+		logger.Ctx(ctx).Warn("sync failed during close",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Error(err))
 	}
@@ -719,12 +741,12 @@ func (s *DiskSegmentImpl) Close() error {
 	if s.currFragment != nil {
 		s.currFragment.isGrowing = false
 		if err := s.currFragment.Flush(context.TODO()); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to flush fragment",
+			logger.Ctx(ctx).Warn("failed to flush fragment",
 				zap.String("logFileDir", s.logFileDir),
 				zap.Error(err))
 		}
-		if err := s.currFragment.Release(); err != nil {
-			logger.Ctx(context.Background()).Warn("failed to release fragment",
+		if err := s.currFragment.Release(ctx); err != nil {
+			logger.Ctx(ctx).Warn("failed to release fragment",
 				zap.String("logFileDir", s.logFileDir),
 				zap.Error(err))
 		}
@@ -732,7 +754,7 @@ func (s *DiskSegmentImpl) Close() error {
 		s.currFragment = nil
 	}
 
-	logger.Ctx(context.Background()).Info("Closing DiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
+	logger.Ctx(ctx).Info("Closing DiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
 
 	// Send close signal
 	s.closeOnce.Do(func() {
@@ -743,7 +765,9 @@ func (s *DiskSegmentImpl) Close() error {
 	return nil
 }
 
-func (s *DiskSegmentImpl) checkDirIsEmpty() error {
+func (s *DiskSegmentImpl) checkDirIsEmpty(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "checkDirIsEmpty")
+	defer sp.End()
 	// Read directory contents
 	entries, err := os.ReadDir(s.logFileDir)
 	if err != nil {
@@ -764,7 +788,7 @@ func (s *DiskSegmentImpl) LastFragmentId() uint64 {
 }
 
 // GetLastEntryId returns the last entry ID
-func (s *DiskSegmentImpl) GetLastEntryId() (int64, error) {
+func (s *DiskSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 	return s.lastEntryID.Load(), nil
 }
 
@@ -788,7 +812,7 @@ type RODiskSegmentImpl struct {
 	fragments []*FragmentFileReader // LogFile cached fragments in order
 }
 
-func NewRODiskSegmentImpl(logId int64, segId int64, basePath string, options ...ROption) (*RODiskSegmentImpl, error) {
+func NewRODiskSegmentImpl(ctx context.Context, logId int64, segId int64, basePath string, options ...ROption) (*RODiskSegmentImpl, error) {
 	// Set default configuration
 	rs := &RODiskSegmentImpl{
 		logId:        logId,
@@ -809,11 +833,11 @@ func NewRODiskSegmentImpl(logId int64, segId int64, basePath string, options ...
 	}
 
 	// Load existing fragments
-	_, _, err := rs.fetchROFragments()
+	_, _, err := rs.fetchROFragments(ctx)
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(context.Background()).Info("NewRODiskSegmentImpl", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)))
+	logger.Ctx(ctx).Info("NewRODiskSegmentImpl", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)))
 	return rs, nil
 }
 
@@ -838,6 +862,8 @@ func (rs *RODiskSegmentImpl) Sync(ctx context.Context) error {
 
 // NewReader creates a new Reader instance
 func (rs *RODiskSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "NewReader")
+	defer sp.End()
 	// Create new DiskReader
 	reader := &DiskReader{
 		ctx:     ctx,
@@ -855,6 +881,8 @@ func (rs *RODiskSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOp
 
 // Load loads data from disk
 func (rs *RODiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Load")
+	defer sp.End()
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	if len(rs.fragments) == 0 {
@@ -886,6 +914,8 @@ func (rs *RODiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment,
 // Deprecated
 // Merge merges log file fragments
 func (rs *RODiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32, []int32, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Merge")
+	defer sp.End()
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	if len(rs.fragments) == 0 {
@@ -923,7 +953,7 @@ func (rs *RODiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []i
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
-			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
 			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 			pendingMergeFrags = make([]*FragmentFileReader, 0)
@@ -939,7 +969,7 @@ func (rs *RODiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []i
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
-		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId()
+		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
 		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].fragmentId))
 		pendingMergeFrags = make([]*FragmentFileReader, 0)
@@ -951,12 +981,12 @@ func (rs *RODiskSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []i
 }
 
 // Close closes the log file and releases resources
-func (rs *RODiskSegmentImpl) Close() error {
+func (rs *RODiskSegmentImpl) Close(ctx context.Context) error {
 	return nil
 }
 
 // fetchROFragments returns all exists fragments in the log file, which is readonly
-func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, error) {
+func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *FragmentFileReader, error) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
@@ -983,14 +1013,14 @@ func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, erro
 		}
 
 		// Create FragmentFile instance and load
-		fragment, err := NewFragmentFileReader(fragmentPath, fileInfo.Size(), rs.logId, rs.segmentId, fragId)
+		fragment, err := NewFragmentFileReader(ctx, fragmentPath, fileInfo.Size(), rs.logId, rs.segmentId, fragId)
 		if err != nil {
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			break
 		}
 		if !fragment.IsMMapReadable(context.TODO()) {
-			logger.Ctx(context.TODO()).Warn("found a new fragment unreadable", zap.String("logFileDir", rs.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
+			logger.Ctx(ctx).Warn("found a new fragment unreadable", zap.String("logFileDir", rs.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			break
@@ -1000,7 +1030,7 @@ func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, erro
 		rs.fragments = append(rs.fragments, fragment)
 		existsNewFragment = true
 		fragId++
-		logger.Ctx(context.Background()).Debug("fetch fragment info", zap.String("logFileDir", rs.logFileDir), zap.Int64("lastFragId", fragId-1))
+		logger.Ctx(ctx).Debug("fetch fragment info", zap.String("logFileDir", rs.logFileDir), zap.Int64("lastFragId", fragId-1))
 	}
 
 	// Update metrics
@@ -1013,7 +1043,7 @@ func (rs *RODiskSegmentImpl) fetchROFragments() (bool, *FragmentFileReader, erro
 		totalSize += frag.GetSize()
 	}
 
-	logger.Ctx(context.Background()).Debug("fetch fragment infos", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)), zap.Int64("lastFragId", fragId-1))
+	logger.Ctx(ctx).Debug("fetch fragment infos", zap.String("logFileDir", rs.logFileDir), zap.Int("fragments", len(rs.fragments)), zap.Int64("lastFragId", fragId-1))
 	return existsNewFragment, fetchedLastFragment, nil
 }
 
@@ -1029,11 +1059,13 @@ func (rs *RODiskSegmentImpl) LastFragmentId() uint64 {
 }
 
 // GetLastEntryId returns the last entry ID
-func (rs *RODiskSegmentImpl) GetLastEntryId() (int64, error) {
+func (rs *RODiskSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "GetLastEntryId")
+	defer sp.End()
 	// prefetch fragmentInfos if any new fragment created
-	_, lastFragment, err := rs.fetchROFragments()
+	_, lastFragment, err := rs.fetchROFragments(ctx)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("get fragments failed",
+		logger.Ctx(ctx).Warn("get fragments failed",
 			zap.String("logFileDir", rs.logFileDir),
 			zap.Error(err))
 		return -1, err
@@ -1045,7 +1077,7 @@ func (rs *RODiskSegmentImpl) GetLastEntryId() (int64, error) {
 }
 
 // findFragmentFrom returns the fragment index and fragment object
-func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, endEntryID int64) (int, *FragmentFileReader, int64, error) {
+func (rs *RODiskSegmentImpl) findFragmentFrom(ctx context.Context, fromIdx int, currEntryID int64, endEntryID int64) (int, *FragmentFileReader, int64, error) {
 	rs.mu.RLock()
 	pendingReadEntryID := currEntryID
 	lastIdx := fromIdx
@@ -1055,7 +1087,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 		firstID, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
 		if err != nil {
 			rs.mu.RUnlock()
-			logger.Ctx(context.TODO()).Warn("get fragment firstEntryId failed",
+			logger.Ctx(ctx).Warn("get fragment firstEntryId failed",
 				zap.String("logFileDir", rs.logFileDir),
 				zap.String("fragmentFile", fragment.filePath),
 				zap.Error(err))
@@ -1064,7 +1096,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 		lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
 		if err != nil {
 			rs.mu.RUnlock()
-			logger.Ctx(context.TODO()).Warn("get fragment lastEntryId failed",
+			logger.Ctx(ctx).Warn("get fragment lastEntryId failed",
 				zap.String("logFileDir", rs.logFileDir),
 				zap.String("fragmentFile", fragment.filePath),
 				zap.Error(err))
@@ -1075,7 +1107,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 		if pendingReadEntryID < firstID {
 			// If endID less than fragment's firstID, means no more data
 			if endEntryID > 0 && endEntryID <= firstID {
-				logger.Ctx(context.Background()).Debug("No more entries to read", zap.String("logFileDir", rs.logFileDir), zap.Int64("currEntryId", currEntryID), zap.Int64("endEntryId", endEntryID), zap.Int64("firstId", firstID), zap.Int64("lastId", lastID))
+				logger.Ctx(ctx).Debug("No more entries to read", zap.String("logFileDir", rs.logFileDir), zap.Int64("currEntryId", currEntryID), zap.Int64("endEntryId", endEntryID), zap.Int64("firstId", firstID), zap.Int64("lastId", lastID))
 				rs.mu.RUnlock()
 				return -1, nil, -1, nil
 			}
@@ -1089,22 +1121,24 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(fromIdx int, currEntryID int64, en
 		}
 	}
 	rs.mu.RUnlock()
-	newFragmentExists, _, err := rs.fetchROFragments()
+	newFragmentExists, _, err := rs.fetchROFragments(ctx)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("fetch fragments failed",
+		logger.Ctx(ctx).Warn("fetch fragments failed",
 			zap.String("logFileDir", rs.logFileDir),
 			zap.Error(err))
 		return -1, nil, -1, err
 	}
 
 	if newFragmentExists {
-		return rs.findFragmentFrom(lastIdx+1, pendingReadEntryID, endEntryID)
+		return rs.findFragmentFrom(ctx, lastIdx+1, pendingReadEntryID, endEntryID)
 	}
-	logger.Ctx(context.Background()).Debug("No more entries to read", zap.String("logFileDir", rs.logFileDir), zap.Int64("currEntryId", currEntryID), zap.Int64("endEntryId", endEntryID))
+	logger.Ctx(ctx).Debug("No more entries to read", zap.String("logFileDir", rs.logFileDir), zap.Int64("currEntryId", currEntryID), zap.Int64("endEntryId", endEntryID))
 	return -1, nil, -1, nil
 }
 
 func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFragments")
+	defer sp.End()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
@@ -1186,19 +1220,21 @@ type DiskReader struct {
 }
 
 // HasNext returns true if there are more entries to read
-func (dr *DiskReader) HasNext() (bool, error) {
+func (dr *DiskReader) HasNext(ctx context.Context) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "HasNext")
+	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", dr.logFile.logId)
 	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
 
 	if dr.closed {
-		logger.Ctx(context.Background()).Debug("No more entries to read, current reader is closed", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
+		logger.Ctx(ctx).Debug("No more entries to read, current reader is closed", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
 		return false, nil
 	}
 
 	// If reached endID, return false
 	if dr.endEntryID > 0 && dr.currEntryID >= dr.endEntryID {
-		logger.Ctx(context.Background()).Debug("No more entries to read, reach the end entryID", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
+		logger.Ctx(ctx).Debug("No more entries to read, reach the end entryID", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
 		return false, nil
 	}
 
@@ -1206,12 +1242,12 @@ func (dr *DiskReader) HasNext() (bool, error) {
 	if dr.currFragment != nil {
 		first, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
+			logger.Ctx(ctx).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
 		last, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
+			logger.Ctx(ctx).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
 		// fast return if current entry is in this current fragment
@@ -1220,7 +1256,7 @@ func (dr *DiskReader) HasNext() (bool, error) {
 		}
 	}
 
-	idx, f, pendingReadEntryID, err := dr.logFile.findFragmentFrom(dr.currFragmentIdx, dr.currEntryID, dr.endEntryID)
+	idx, f, pendingReadEntryID, err := dr.logFile.findFragmentFrom(ctx, dr.currFragmentIdx, dr.currEntryID, dr.endEntryID)
 	if err != nil {
 		return false, err
 	}
@@ -1236,7 +1272,9 @@ func (dr *DiskReader) HasNext() (bool, error) {
 	return true, nil
 }
 
-func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
+func (dr *DiskReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNextBatch")
+	defer sp.End()
 	if size != -1 {
 		// TODO add batch size limit.
 		return nil, werr.ErrNotSupport.WithCauseErrMsg("custom batch size not supported currently")
@@ -1266,14 +1304,14 @@ func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 	if loadErr != nil {
 		return nil, loadErr
 	}
-	defer dr.currFragment.Release()
+	defer dr.currFragment.Release(ctx)
 	entries := make([]*proto.LogEntry, 0, 32)
 	for {
 		// Read data from current fragment
-		data, err := dr.currFragment.GetEntry(dr.currEntryID)
+		data, err := dr.currFragment.GetEntry(ctx, dr.currEntryID)
 		if err != nil {
 			// If current entryID not in fragment, may need to move to next fragment
-			logger.Ctx(context.Background()).Warn("Failed to read entry",
+			logger.Ctx(ctx).Warn("Failed to read entry",
 				zap.Int64("entryId", dr.currEntryID),
 				zap.String("fragmentFile", dr.currFragment.filePath),
 				zap.Error(err))
@@ -1282,13 +1320,13 @@ func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 
 		// Ensure data length is reasonable
 		if len(data) < 8 {
-			logger.Ctx(context.Background()).Warn("Invalid data format: data too short",
+			logger.Ctx(ctx).Warn("Invalid data format: data too short",
 				zap.Int64("entryId", dr.currEntryID),
 				zap.Int("dataLength", len(data)))
 			return nil, fmt.Errorf("invalid data format for entry %d: data too short", dr.currEntryID)
 		}
 
-		logger.Ctx(context.Background()).Debug("Data read complete",
+		logger.Ctx(ctx).Debug("Data read complete",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.Int64("fragmentId", dr.currFragment.fragmentId),
 			zap.String("fragmentPath", dr.currFragment.filePath))
@@ -1299,7 +1337,7 @@ func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 
 		// Ensure read ID matches expected ID
 		if actualID != dr.currEntryID {
-			logger.Ctx(context.Background()).Warn("EntryID mismatch",
+			logger.Ctx(ctx).Warn("EntryID mismatch",
 				zap.Int64("expectedId", dr.currEntryID),
 				zap.Int64("actualId", actualID))
 		}
@@ -1326,7 +1364,9 @@ func (dr *DiskReader) ReadNextBatch(size int64) ([]*proto.LogEntry, error) {
 }
 
 // ReadNext reads the next entry
-func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
+func (dr *DiskReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNext")
+	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", dr.logFile.logId)
 	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
@@ -1348,11 +1388,11 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 	if loadErr != nil {
 		return nil, loadErr
 	}
-	defer dr.currFragment.Release()
-	data, err := dr.currFragment.GetEntry(dr.currEntryID)
+	defer dr.currFragment.Release(ctx)
+	data, err := dr.currFragment.GetEntry(ctx, dr.currEntryID)
 	if err != nil {
 		// If current entryID not in fragment, may need to move to next fragment
-		logger.Ctx(context.Background()).Warn("Failed to read entry",
+		logger.Ctx(ctx).Warn("Failed to read entry",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.String("fragmentFile", dr.currFragment.filePath),
 			zap.Error(err))
@@ -1361,13 +1401,13 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 
 	// Ensure data length is reasonable
 	if len(data) < 8 {
-		logger.Ctx(context.Background()).Warn("Invalid data format: data too short",
+		logger.Ctx(ctx).Warn("Invalid data format: data too short",
 			zap.Int64("entryId", dr.currEntryID),
 			zap.Int("dataLength", len(data)))
 		return nil, fmt.Errorf("invalid data format for entry %d: data too short", dr.currEntryID)
 	}
 
-	logger.Ctx(context.Background()).Debug("Data read complete",
+	logger.Ctx(ctx).Debug("Data read complete",
 		zap.Int64("entryId", dr.currEntryID),
 		zap.Int64("fragmentId", dr.currFragment.fragmentId),
 		zap.String("fragmentPath", dr.currFragment.filePath))
@@ -1378,7 +1418,7 @@ func (dr *DiskReader) ReadNext() (*proto.LogEntry, error) {
 
 	// Ensure read ID matches expected ID
 	if actualID != dr.currEntryID {
-		logger.Ctx(context.Background()).Warn("EntryID mismatch",
+		logger.Ctx(ctx).Warn("EntryID mismatch",
 			zap.Int64("expectedId", dr.currEntryID),
 			zap.Int64("actualId", actualID))
 	}
@@ -1475,14 +1515,14 @@ func getMergedFragmentFileKey(logFileDir string, mergedFragmentId int64) string 
 }
 
 func getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentFileReader) (int64, error) {
-	firstEntryId, err := fragment.GetFirstEntryId()
+	firstEntryId, err := fragment.GetFirstEntryId(ctx)
 	if werr.ErrFragmentInfoNotFetched.Is(err) {
 		loadErr := fragment.Load(ctx)
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		firstEntryId, err = fragment.GetFirstEntryId()
-		fragment.Release()
+		firstEntryId, err = fragment.GetFirstEntryId(ctx)
+		fragment.Release(ctx)
 		if err != nil {
 			return -1, err
 		}
@@ -1491,14 +1531,14 @@ func getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context,
 }
 
 func getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentFileReader) (int64, error) {
-	lastEntryId, err := fragment.GetLastEntryId()
+	lastEntryId, err := fragment.GetLastEntryId(ctx)
 	if err != nil && werr.ErrFragmentInfoNotFetched.Is(err) {
 		loadErr := fragment.Load(ctx)
 		if loadErr != nil {
 			return -1, loadErr
 		}
-		lastEntryId, err = fragment.GetFetchedLastEntryId()
-		fragment.Release()
+		lastEntryId, err = fragment.GetFetchedLastEntryId(ctx)
+		fragment.Release(ctx)
 		if err != nil {
 			return -1, err
 		}

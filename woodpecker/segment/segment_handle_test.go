@@ -464,14 +464,14 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 	for i := 3; i < 10; i++ {
 		ops[i].ackSet.Set(0)
 		ops[i].completed.Store(true)
-		segmentHandle.SendAppendSuccessCallbacks(int64(i))
+		segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
 	}
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 0, successCount)
 	for i := 0; i < 3; i++ {
 		ops[i].ackSet.Set(0)
 		ops[i].completed.Store(true)
-		segmentHandle.SendAppendSuccessCallbacks(int64(i))
+		segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
 	}
 	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 10, successCount)
@@ -533,12 +533,12 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		if i == 5 {
 			// fail
 			ops[i].attempt = 3
-			segmentHandle.SendAppendErrorCallbacks(int64(i), werr.ErrSegmentWriteException)
+			segmentHandle.SendAppendErrorCallbacks(context.TODO(), int64(i), werr.ErrSegmentWriteException)
 		} else {
 			// success
 			ops[i].ackSet.Set(0)
 			ops[i].completed.Store(true)
-			segmentHandle.SendAppendSuccessCallbacks(int64(i))
+			segmentHandle.SendAppendSuccessCallbacks(context.TODO(), int64(i))
 		}
 	}
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete

@@ -101,11 +101,11 @@ func TestDiskSegmentImplWritePerformance(t *testing.T) {
 			}
 
 			// Create DiskSegmentImpl instance
-			segmentImpl, err := disk.NewDiskSegmentImpl(1, 0, tempDir, options...)
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DiskSegmentImpl: %v", err)
 			}
-			defer segmentImpl.Close()
+			defer segmentImpl.Close(context.TODO())
 
 			// Prepare test data and context
 			ctx := context.Background()
@@ -282,7 +282,7 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 			options := []disk.Option{
 				disk.WithWriteFragmentSize(128 * 1024 * 1024), // 128MB
 			}
-			segmentImpl, err := disk.NewDiskSegmentImpl(1, 0, tempDir, options...)
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DisksegmentImpl: %v", err)
 			}
@@ -308,7 +308,7 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 				for j := i; j < end; j++ {
 					_, ch, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j])
 					if err != nil {
-						segmentImpl.Close()
+						segmentImpl.Close(context.TODO())
 						t.Fatalf("Failed to write data: %v", err)
 					}
 					resultChannels[j] = ch
@@ -319,11 +319,11 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 					select {
 					case result := <-resultChannels[j]:
 						if result < 0 {
-							segmentImpl.Close()
+							segmentImpl.Close(context.TODO())
 							t.Fatalf("Write did not complete successfully: %d", j)
 						}
 					case <-time.After(5 * time.Second):
-						segmentImpl.Close()
+						segmentImpl.Close(context.TODO())
 						t.Fatalf("Write timeout: %d", j)
 					}
 				}
@@ -333,20 +333,20 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 
 			// Ensure all data is written to disk
 			if err := segmentImpl.Sync(ctx); err != nil {
-				segmentImpl.Close()
+				segmentImpl.Close(context.TODO())
 				t.Fatalf("Failed to sync data: %v", err)
 			}
 
 			t.Logf("Preparation complete, starting read test...")
 
 			// Step 2: Create Reader and test read performance
-			roSegmentImpl, err := disk.NewRODiskSegmentImpl(1, 0, tempDir)
+			roSegmentImpl, err := disk.NewRODiskSegmentImpl(context.TODO(), 1, 0, tempDir)
 			reader, err := roSegmentImpl.NewReader(ctx, storage.ReaderOpt{
 				StartSequenceNum: 1, // Start from the first entry
 				EndSequenceNum:   0, // 0 means read to the end
 			})
 			if err != nil {
-				roSegmentImpl.Close()
+				roSegmentImpl.Close(context.TODO())
 				t.Fatalf("Failed to create Reader: %v", err)
 			}
 
@@ -373,12 +373,12 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 			if tc.sequential {
 				// Sequential read
 				for {
-					hasNext, err := reader.HasNext()
+					hasNext, err := reader.HasNext(context.TODO())
 					assert.NoError(t, err)
 					if !hasNext {
 						break
 					}
-					entry, err := reader.ReadNext()
+					entry, err := reader.ReadNext(context.TODO())
 					if err != nil {
 						readErrors++
 						continue
@@ -405,10 +405,10 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 						continue
 					}
 
-					hasNext, err := singleReader.HasNext()
+					hasNext, err := singleReader.HasNext(context.TODO())
 					assert.NoError(t, err)
 					if hasNext {
-						entry, err := singleReader.ReadNext()
+						entry, err := singleReader.ReadNext(context.TODO())
 						if err != nil {
 							readErrors++
 							singleReader.Close()
@@ -427,7 +427,7 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 
 			// Close file
 			reader.Close()
-			segmentImpl.Close()
+			segmentImpl.Close(context.TODO())
 
 			// Calculate performance metrics
 			throughput := float64(totalBytesRead) / (1024 * 1024) / duration.Seconds()
@@ -492,11 +492,11 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 				disk.WithWriteMaxBufferSize(tc.bufferSize),
 			}
 
-			segmentImpl, err := disk.NewDiskSegmentImpl(1, 0, tempDir, options...)
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
 				t.Fatalf("Failed to create DiskSegmentImpl: %v", err)
 			}
-			defer segmentImpl.Close()
+			defer segmentImpl.Close(context.TODO())
 
 			// Prepare parameters
 			readOps := tc.totalOps * tc.readPercentage / 100
@@ -624,7 +624,7 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 
 						// Create Reader to read specific entry
 						readStart := time.Now()
-						roSegmentImpl, err := disk.NewRODiskSegmentImpl(1, 0, tempDir)
+						roSegmentImpl, err := disk.NewRODiskSegmentImpl(context.TODO(), 1, 0, tempDir)
 						reader, err := roSegmentImpl.NewReader(ctx, storage.ReaderOpt{
 							StartSequenceNum: entryId,
 							EndSequenceNum:   entryId + 1,
@@ -634,10 +634,10 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 							t.Fatalf("Failed to create Reader: %v", err)
 						}
 
-						hasNext, err := reader.HasNext()
+						hasNext, err := reader.HasNext(context.TODO())
 						assert.NoError(t, err)
 						if hasNext {
-							entry, err := reader.ReadNext()
+							entry, err := reader.ReadNext(context.TODO())
 							if err == nil {
 								totalBytesRead += len(entry.Values)
 								readOpsCount++

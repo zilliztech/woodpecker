@@ -876,9 +876,9 @@ func (_c *SegmentHandle_RequestCompactionAsync_Call) RunAndReturn(run func(conte
 	return _c
 }
 
-// SendAppendErrorCallbacks provides a mock function with given fields: _a0, _a1
-func (_m *SegmentHandle) SendAppendErrorCallbacks(_a0 int64, _a1 error) {
-	_m.Called(_a0, _a1)
+// SendAppendErrorCallbacks provides a mock function with given fields: _a0, _a1, _a2
+func (_m *SegmentHandle) SendAppendErrorCallbacks(_a0 context.Context, _a1 int64, _a2 error) {
+	_m.Called(_a0, _a1, _a2)
 }
 
 // SegmentHandle_SendAppendErrorCallbacks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SendAppendErrorCallbacks'
@@ -887,15 +887,16 @@ type SegmentHandle_SendAppendErrorCallbacks_Call struct {
 }
 
 // SendAppendErrorCallbacks is a helper method to define mock.On call
-//   - _a0 int64
-//   - _a1 error
-func (_e *SegmentHandle_Expecter) SendAppendErrorCallbacks(_a0 interface{}, _a1 interface{}) *SegmentHandle_SendAppendErrorCallbacks_Call {
-	return &SegmentHandle_SendAppendErrorCallbacks_Call{Call: _e.mock.On("SendAppendErrorCallbacks", _a0, _a1)}
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 error
+func (_e *SegmentHandle_Expecter) SendAppendErrorCallbacks(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentHandle_SendAppendErrorCallbacks_Call {
+	return &SegmentHandle_SendAppendErrorCallbacks_Call{Call: _e.mock.On("SendAppendErrorCallbacks", _a0, _a1, _a2)}
 }
 
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Run(run func(_a0 int64, _a1 error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
+func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64), args[1].(error))
+		run(args[0].(context.Context), args[1].(int64), args[2].(error))
 	})
 	return _c
 }
@@ -905,14 +906,14 @@ func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Return() *SegmentHandle_S
 	return _c
 }
 
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) RunAndReturn(run func(int64, error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
+func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) RunAndReturn(run func(context.Context, int64, error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
 	_c.Run(run)
 	return _c
 }
 
-// SendAppendSuccessCallbacks provides a mock function with given fields: _a0
-func (_m *SegmentHandle) SendAppendSuccessCallbacks(_a0 int64) {
-	_m.Called(_a0)
+// SendAppendSuccessCallbacks provides a mock function with given fields: _a0, _a1
+func (_m *SegmentHandle) SendAppendSuccessCallbacks(_a0 context.Context, _a1 int64) {
+	_m.Called(_a0, _a1)
 }
 
 // SegmentHandle_SendAppendSuccessCallbacks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SendAppendSuccessCallbacks'
@@ -921,14 +922,15 @@ type SegmentHandle_SendAppendSuccessCallbacks_Call struct {
 }
 
 // SendAppendSuccessCallbacks is a helper method to define mock.On call
-//   - _a0 int64
-func (_e *SegmentHandle_Expecter) SendAppendSuccessCallbacks(_a0 interface{}) *SegmentHandle_SendAppendSuccessCallbacks_Call {
-	return &SegmentHandle_SendAppendSuccessCallbacks_Call{Call: _e.mock.On("SendAppendSuccessCallbacks", _a0)}
+//   - _a0 context.Context
+//   - _a1 int64
+func (_e *SegmentHandle_Expecter) SendAppendSuccessCallbacks(_a0 interface{}, _a1 interface{}) *SegmentHandle_SendAppendSuccessCallbacks_Call {
+	return &SegmentHandle_SendAppendSuccessCallbacks_Call{Call: _e.mock.On("SendAppendSuccessCallbacks", _a0, _a1)}
 }
 
-func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) Run(run func(_a0 int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
+func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) Run(run func(_a0 context.Context, _a1 int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -938,7 +940,7 @@ func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) Return() *SegmentHandle
 	return _c
 }
 
-func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) RunAndReturn(run func(int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
+func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) RunAndReturn(run func(context.Context, int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
 	_c.Run(run)
 	return _c
 }

@@ -43,7 +43,7 @@ func TestAppendAsync(t *testing.T) {
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 
 	assert.NoError(t, err)
-	segmentImpl := objectstorage.NewSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, segmentImpl)
 	objectSegmentImpl := segmentImpl.(*objectstorage.SegmentImpl)
 	assert.NotNil(t, objectSegmentImpl)
@@ -109,7 +109,7 @@ func TestNewReader(t *testing.T) {
 	cfg.Minio.BucketName = bucket
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	segmentImpl := objectstorage.NewSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
@@ -135,7 +135,7 @@ func TestNewReader(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	roSegmentImpl := objectstorage.NewROSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
@@ -143,12 +143,12 @@ func TestNewReader(t *testing.T) {
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
 	for {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		if !hasNext {
 			break
 		}
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		entries = append(entries, entry)
 	}
@@ -173,7 +173,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	cfg.Minio.BucketName = bucket
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	segmentImpl := objectstorage.NewSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
@@ -187,7 +187,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roSegmentImpl := objectstorage.NewROSegmentImpl(1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	roSegmentImpl := objectstorage.NewROSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
@@ -195,13 +195,13 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
 	for {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		if !hasNext {
 			break
 		}
 		fmt.Printf("read one ... ")
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		entries = append(entries, entry)
 	}
