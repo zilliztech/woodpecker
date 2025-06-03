@@ -22,15 +22,17 @@ import (
 
 // SequentialExecutor is a sequential append executor
 type SequentialExecutor struct {
-	appendOpsQueue chan *AppendOp
+	operationQueue chan Operation
 	wg             sync.WaitGroup
-	closeOnce      sync.Once
+	mu             sync.RWMutex
+	closed         bool
 }
 
 // NewSequentialExecutor initializes a SequentialExecutor
 func NewSequentialExecutor(bufferSize int) *SequentialExecutor {
 	return &SequentialExecutor{
-		appendOpsQueue: make(chan *AppendOp, bufferSize),
+		operationQueue: make(chan Operation, bufferSize),
+		closed:         false,
 	}
 }
 
@@ -41,22 +43,37 @@ func (se *SequentialExecutor) Start() {
 
 // worker executes the logic for each order
 func (se *SequentialExecutor) worker() {
-	for appendOp := range se.appendOpsQueue {
-		appendOp.Execute()
+	for op := range se.operationQueue {
+		op.Execute()
 		se.wg.Done()
 	}
 }
 
 // Submit an op to the queue
-func (se *SequentialExecutor) Submit(op *AppendOp) {
+func (se *SequentialExecutor) Submit(op Operation) bool {
+	se.mu.RLock()
+	defer se.mu.RUnlock()
+
+	if se.closed {
+		return false
+	}
+
 	se.wg.Add(1)
-	se.appendOpsQueue <- op
+
+	// Block and wait
+	se.operationQueue <- op
+	return true
 }
 
 // Stop stops the sequential append executor
 func (se *SequentialExecutor) Stop() {
-	se.closeOnce.Do(func() {
-		close(se.appendOpsQueue)
-	})
+	se.mu.Lock()
+	if se.closed {
+		se.mu.Unlock()
+		return
+	}
+	se.closed = true
+	close(se.operationQueue)
+	se.mu.Unlock()
 	se.wg.Wait()
 }

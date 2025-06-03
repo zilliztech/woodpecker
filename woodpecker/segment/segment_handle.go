@@ -209,7 +209,10 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
-	s.executor.Submit(appendOp)
+	if submitOk := s.executor.Submit(appendOp); !submitOk {
+		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
+		return
+	}
 	s.pendingSize.Add(int64(len(bytes)))
 }
 

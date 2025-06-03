@@ -31,6 +31,12 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
+type Operation interface {
+	Execute()
+}
+
+var _ Operation = (*AppendOp)(nil)
+
 // AppendOp represents an operation to append data to a log segment.
 // Once all LogStores have successfully acknowledged the append operation,
 // it checks if it is at the head of the pending adds queue.
