@@ -17,6 +17,8 @@
 package segment
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,6 +45,10 @@ func (m *MockOperation) IsExecuted() bool {
 	return m.executed.Load()
 }
 
+func (m *MockOperation) Identifier() string {
+	return ""
+}
+
 // OrderedMockOperation is a mock operation that records execution order
 type OrderedMockOperation struct {
 	executed atomic.Bool
@@ -65,6 +71,10 @@ func (m *OrderedMockOperation) IsExecuted() bool {
 	return m.executed.Load()
 }
 
+func (m *OrderedMockOperation) Identifier() string {
+	return fmt.Sprintf("%d", m.index)
+}
+
 // BlockingMockOperation is a mock operation that can be controlled to block
 type BlockingMockOperation struct {
 	executed atomic.Bool
@@ -80,6 +90,10 @@ func (m *BlockingMockOperation) Execute() {
 
 func (m *BlockingMockOperation) IsExecuted() bool {
 	return m.executed.Load()
+}
+
+func (m *BlockingMockOperation) Identifier() string {
+	return ""
 }
 
 // createMockOperation creates a mock operation for testing
@@ -112,14 +126,14 @@ func TestNewSequentialExecutor(t *testing.T) {
 
 func TestSequentialExecutor_BasicExecution(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
-	defer executor.Stop()
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	// Create a mock operation
 	mockOp := createMockOperation(0)
 
 	// Submit the operation
-	success := executor.Submit(mockOp)
+	success := executor.Submit(context.TODO(), mockOp)
 	assert.True(t, success)
 
 	// Wait for execution
@@ -131,8 +145,8 @@ func TestSequentialExecutor_BasicExecution(t *testing.T) {
 
 func TestSequentialExecutor_MultipleOperations(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
-	defer executor.Stop()
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	numOps := 5
 	mockOps := make([]*MockOperation, numOps)
@@ -140,7 +154,7 @@ func TestSequentialExecutor_MultipleOperations(t *testing.T) {
 	// Submit multiple operations
 	for i := 0; i < numOps; i++ {
 		mockOps[i] = createMockOperation(0)
-		success := executor.Submit(mockOps[i])
+		success := executor.Submit(context.TODO(), mockOps[i])
 		assert.True(t, success)
 	}
 
@@ -155,8 +169,8 @@ func TestSequentialExecutor_MultipleOperations(t *testing.T) {
 
 func TestSequentialExecutor_SequentialOrder(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
-	defer executor.Stop()
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	var executionOrder []int
 	var mu sync.Mutex
@@ -172,7 +186,7 @@ func TestSequentialExecutor_SequentialOrder(t *testing.T) {
 
 	for i := 0; i < numOps; i++ {
 		mockOp := createOrderedMockOperation(i, 10*time.Millisecond, recorder)
-		success := executor.Submit(mockOp)
+		success := executor.Submit(context.TODO(), mockOp)
 		assert.True(t, success)
 	}
 
@@ -190,14 +204,14 @@ func TestSequentialExecutor_SequentialOrder(t *testing.T) {
 
 func TestSequentialExecutor_SubmitAfterStop(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
+	executor.Start(context.TODO())
 
 	// Stop the executor
-	executor.Stop()
+	executor.Stop(context.TODO())
 
 	// Try to submit after stop
 	mockOp := createMockOperation(0)
-	success := executor.Submit(mockOp)
+	success := executor.Submit(context.TODO(), mockOp)
 
 	// Should return false
 	assert.False(t, success)
@@ -211,7 +225,7 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 	// This test verifies the race condition fix
 	for i := 0; i < 100; i++ { // Run multiple times to increase chance of hitting race condition
 		executor := NewSequentialExecutor(10)
-		executor.Start()
+		executor.Start(context.TODO())
 
 		var wg sync.WaitGroup
 		var successCount atomic.Int32
@@ -223,7 +237,7 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				mockOp := createMockOperation(0)
-				if executor.Submit(mockOp) {
+				if executor.Submit(context.TODO(), mockOp) {
 					successCount.Add(1)
 				}
 			}()
@@ -232,7 +246,7 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 		// Stop the executor concurrently
 		go func() {
 			time.Sleep(1 * time.Millisecond) // Small delay to let some submits happen
-			executor.Stop()
+			executor.Stop(context.TODO())
 		}()
 
 		wg.Wait()
@@ -248,8 +262,8 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 	bufferSize := 2
 	executor := NewSequentialExecutor(bufferSize)
-	executor.Start()
-	defer executor.Stop()
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	// Create a blocker to control when the first operation completes
 	var workerBlocked sync.WaitGroup
@@ -257,14 +271,14 @@ func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 
 	// Submit the blocking operation first - this will block the worker
 	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(blockingOp)
+	success := executor.Submit(context.TODO(), blockingOp)
 	assert.True(t, success)
 
 	// Now submit operations to fill the buffer
 	slowOps := make([]*MockOperation, bufferSize)
 	for i := 0; i < bufferSize; i++ {
 		slowOps[i] = createMockOperation(0)
-		success := executor.Submit(slowOps[i])
+		success := executor.Submit(context.TODO(), slowOps[i])
 		assert.True(t, success)
 	}
 
@@ -275,7 +289,7 @@ func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 	extraOp := createMockOperation(0)
 
 	go func() {
-		success := executor.Submit(extraOp)
+		success := executor.Submit(context.TODO(), extraOp)
 		assert.True(t, success)
 		submitDone.Store(true)
 	}()
@@ -297,16 +311,16 @@ func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 
 func TestSequentialExecutor_StopWaitsForCompletion(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
+	executor.Start(context.TODO())
 
 	// Submit a slow operation
 	slowOp := createMockOperation(200 * time.Millisecond)
-	success := executor.Submit(slowOp)
+	success := executor.Submit(context.TODO(), slowOp)
 	assert.True(t, success)
 
 	// Stop should wait for the operation to complete
 	start := time.Now()
-	executor.Stop()
+	executor.Stop(context.TODO())
 	duration := time.Since(start)
 
 	// Stop should have waited for the slow operation
@@ -316,7 +330,7 @@ func TestSequentialExecutor_StopWaitsForCompletion(t *testing.T) {
 
 func TestSequentialExecutor_MultipleStopCalls(t *testing.T) {
 	executor := NewSequentialExecutor(10)
-	executor.Start()
+	executor.Start(context.TODO())
 
 	// Multiple stop calls should not panic or cause issues
 	var wg sync.WaitGroup
@@ -324,7 +338,7 @@ func TestSequentialExecutor_MultipleStopCalls(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			executor.Stop()
+			executor.Stop(context.TODO())
 		}()
 	}
 
@@ -337,7 +351,7 @@ func TestSequentialExecutor_StopWithoutStart(t *testing.T) {
 
 	// Stop without start should not panic
 	require.NotPanics(t, func() {
-		executor.Stop()
+		executor.Stop(context.TODO())
 	})
 }
 
@@ -347,7 +361,7 @@ func TestSequentialExecutor_SubmitWithoutStart(t *testing.T) {
 	mockOp := createMockOperation(0)
 
 	// Submit without start should work (but operation won't be processed)
-	success := executor.Submit(mockOp)
+	success := executor.Submit(context.TODO(), mockOp)
 	assert.True(t, success)
 
 	// Operation should not be executed since worker is not running
@@ -360,8 +374,8 @@ func TestSequentialExecutor_SubmitWithoutStart(t *testing.T) {
 
 func TestSequentialExecutor_ConcurrentSubmits(t *testing.T) {
 	executor := NewSequentialExecutor(100)
-	executor.Start()
-	defer executor.Stop()
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	numGoroutines := 50
 	numOpsPerGoroutine := 10
@@ -379,7 +393,7 @@ func TestSequentialExecutor_ConcurrentSubmits(t *testing.T) {
 			for j := 0; j < numOpsPerGoroutine; j++ {
 				opIdx := startIdx*numOpsPerGoroutine + j
 				allOps[opIdx] = createMockOperation(0)
-				if executor.Submit(allOps[opIdx]) {
+				if executor.Submit(context.TODO(), allOps[opIdx]) {
 					successCount.Add(1)
 				}
 			}

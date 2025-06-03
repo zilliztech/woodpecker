@@ -35,6 +35,7 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
 
 const (
@@ -75,7 +76,7 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries [][]byte, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries []*cache.BufferEntry, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(ctx, entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
@@ -445,7 +446,7 @@ func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64
 	}, nil
 }
 
-func genFragmentDataFromRaw(ctx context.Context, rawEntries [][]byte) ([]byte, []byte) {
+func genFragmentDataFromRaw(ctx context.Context, rawEntries []*cache.BufferEntry) ([]byte, []byte) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "genFragmentDataFromRaw")
 	defer sp.End()
 	// Calculate total data size
@@ -456,8 +457,8 @@ func genFragmentDataFromRaw(ctx context.Context, rawEntries [][]byte) ([]byte, [
 
 	// Calculate total data and index size
 	totalDataSize := 0
-	for _, entry := range rawEntries {
-		totalDataSize += len(entry)
+	for _, item := range rawEntries {
+		totalDataSize += len(item.Data)
 	}
 	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
 
@@ -471,8 +472,8 @@ func genFragmentDataFromRaw(ctx context.Context, rawEntries [][]byte) ([]byte, [
 	// Fill data and indexes
 	offset := 0
 	for i := 0; i < entriesCount; i++ {
-		entry := rawEntries[i]
-		entryLength := uint32(len(entry))
+		item := rawEntries[i]
+		entryLength := uint32(len(item.Data))
 		entryOffset := uint32(offset)
 
 		// Fill index data
@@ -483,9 +484,9 @@ func genFragmentDataFromRaw(ctx context.Context, rawEntries [][]byte) ([]byte, [
 		index = append(index, entryIndex...)
 
 		// Add to data buffer
-		data = append(data, entry...)
+		data = append(data, item.Data...)
 
-		offset += len(entry)
+		offset += len(item.Data)
 	}
 
 	// No need to return buffers before returning, as they will be held by FragmentObject

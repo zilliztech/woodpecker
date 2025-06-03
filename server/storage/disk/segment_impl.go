@@ -45,7 +45,7 @@ const (
 
 var _ storage.Segment = (*DiskSegmentImpl)(nil)
 
-// DiskSegmentImpl is used to write data to disk-based storage as a logical segment
+// DiskSegmentImpl is used to write data to disk as a logical segment
 type DiskSegmentImpl struct {
 	mu           sync.RWMutex
 	logId        int64
@@ -63,11 +63,11 @@ type DiskSegmentImpl struct {
 	firstEntryID   atomic.Int64
 
 	// Use SequentialBuffer to store entries within the window
-	buffer        atomic.Pointer[cache.SequentialBuffer]
-	maxBufferSize int64                // Maximum buffer size (bytes)
-	maxIntervalMs int                  // Maximum interval between syncs
-	lastSync      atomic.Int64         // Last sync time
-	syncedChan    map[int64]chan int64 // Channels for sync completion
+	buffer           atomic.Pointer[cache.SequentialBuffer]
+	maxBufferSize    int64        // Maximum buffer size (bytes)
+	maxBufferEntries int64        // Maximum number of entries per buffer
+	maxIntervalMs    int          // Maximum interval between syncs
+	lastSync         atomic.Int64 // Last sync time
 
 	autoSync bool // Whether to automatically sync data
 
@@ -81,16 +81,16 @@ type DiskSegmentImpl struct {
 func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir string, options ...Option) (*DiskSegmentImpl, error) {
 	// Set default configuration
 	s := &DiskSegmentImpl{
-		logId:           logId,
-		segmentId:       segId,
-		logFileDir:      parentDir,
-		fragmentSize:    128 * 1024 * 1024, // Default 128MB
-		maxEntryPerFile: 100000,            // Default 100k entries per flush
-		maxBufferSize:   32 * 1024 * 1024,  // Default 32MB buffer
-		maxIntervalMs:   1000,              // Default 1s
-		syncedChan:      make(map[int64]chan int64),
-		closeCh:         make(chan struct{}, 1),
-		autoSync:        true,
+		logId:            logId,
+		segmentId:        segId,
+		logFileDir:       parentDir,
+		fragmentSize:     128 * 1024 * 1024, // Default 128MB
+		maxEntryPerFile:  100000,            // Default 100k entries per flush
+		maxBufferSize:    32 * 1024 * 1024,  // Default 32MB buffer
+		maxBufferEntries: 10000,
+		maxIntervalMs:    1000, // Default 1s
+		closeCh:          make(chan struct{}, 1),
+		autoSync:         true,
 	}
 	s.lastSync.Store(time.Now().UnixMilli())
 	s.firstEntryID.Store(-1)
@@ -114,7 +114,7 @@ func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir
 		return nil, err
 	}
 
-	newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, s.lastEntryID.Load()+1, 10000) // Default cache for 10000 entries
+	newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, s.lastEntryID.Load()+1, s.maxBufferEntries) // Default cache for 10000 entries
 	s.buffer.Store(newBuffer)
 
 	// Start periodic sync goroutine
@@ -239,8 +239,8 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 
 	s.mu.Lock()
 	currentBuffer := s.buffer.Load()
-	// Write to buffer
-	id, err := currentBuffer.WriteEntry(entryId, value)
+	// Write to buffer with notification channel
+	id, err := currentBuffer.WriteEntryWithNotify(entryId, value, ch)
 	if err != nil {
 		logger.Ctx(ctx).Debug("AppendAsync: writing to buffer failed", zap.Error(err))
 		ch <- -1
@@ -250,8 +250,6 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return -1, ch, err
 	}
-	// Save to pending sync channels
-	s.syncedChan[id] = ch
 	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()))
 	s.mu.Unlock()
 
@@ -294,7 +292,7 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 	currentBuffer := s.buffer.Load()
 
 	logger.Ctx(ctx).Debug("Try sync if necessary",
-		zap.Int("bufferSize", len(currentBuffer.Values)),
+		zap.Int("bufferSize", len(currentBuffer.Entries)),
 		zap.Int64("firstEntryId", currentBuffer.FirstEntryId),
 		zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()),
 		zap.String("SegmentImplInst", fmt.Sprintf("%p", s)))
@@ -313,19 +311,10 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 	// Process result notifications
 	if originWrittenEntryID == afterFlushEntryID {
 		// No entries were successfully written, notify all channels of write failure, let clients retry
-		// no flush success, callback all append sync error
-		for syncingId, ch := range s.syncedChan {
-			// append error
-			ch <- -1
-			delete(s.syncedChan, syncingId)
-			close(ch)
-			logger.Ctx(ctx).Warn("Call Sync, but flush failed",
-				zap.String("logFileDir", s.logFileDir),
-				zap.Int64("syncingId", syncingId),
-				zap.Error(writeError))
-		}
+		// no flush success, notify all entries with error
+		currentBuffer.NotifyAllPendingEntries(ctx, -1)
 		// reset buffer as empty
-		currentBuffer.Reset()
+		currentBuffer.Reset(ctx)
 
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -334,9 +323,7 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 			restDataFirstEntryId := currentBuffer.ExpectedNextEntryId.Load()
 			restData, err := currentBuffer.ReadEntriesToLast(restDataFirstEntryId)
 			if err != nil {
-				logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLast failed",
-					zap.String("logFileDir", s.logFileDir),
-					zap.Error(err))
+				logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLastData failed", zap.String("logFileDir", s.logFileDir), zap.Error(err))
 				metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 				metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 				return err
@@ -344,39 +331,21 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 			newBuffer := cache.NewSequentialBufferWithData(s.logId, s.segmentId, restDataFirstEntryId, 10000, restData)
 			s.buffer.Store(newBuffer)
 
-			// notify all waiting channels
-			for syncingId, ch := range s.syncedChan {
-				if syncingId < restDataFirstEntryId {
-					ch <- syncingId
-					delete(s.syncedChan, syncingId)
-					close(ch)
-				}
-			}
+			// notify all successfully flushed entries
+			currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, restDataFirstEntryId, afterFlushEntryID)
 
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "success").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		} else { // Indicates partial success
 			restDataFirstEntryId := afterFlushEntryID + 1
-			for syncingId, ch := range s.syncedChan {
-				if syncingId < restDataFirstEntryId { // Notify success for entries flushed to disk
-					// append success
-					ch <- syncingId
-					delete(s.syncedChan, syncingId)
-					close(ch)
-				} else { // Notify failure for entries not flushed to disk
-					// append error
-					ch <- -1
-					delete(s.syncedChan, syncingId)
-					close(ch)
-					logger.Ctx(ctx).Warn("Call Sync, but flush failed",
-						zap.String("logFileDir", s.logFileDir),
-						zap.Int64("syncingId", syncingId),
-						zap.Error(writeError))
-				}
-			}
+
+			// Notify successful entries with success and failed entries with error
+			currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, restDataFirstEntryId, afterFlushEntryID)
+			currentBuffer.NotifyEntriesInRange(ctx, restDataFirstEntryId, currentBuffer.ExpectedNextEntryId.Load(), -1)
+
 			// Need to recreate buffer to allow client retry
 			// new a empty buffer
-			newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, restDataFirstEntryId, int64(10000)) // TODO config
+			newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, restDataFirstEntryId, s.maxBufferEntries)
 			s.buffer.Store(newBuffer)
 
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "partial").Inc()
@@ -396,10 +365,10 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 	return nil
 }
 
-func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cache.SequentialBuffer) ([][]byte, int64) {
+func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cache.SequentialBuffer) ([]*cache.BufferEntry, int64) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getToFlushData")
 	defer sp.End()
-	entryCount := len(currentBuffer.Values)
+	entryCount := len(currentBuffer.Entries)
 	if entryCount == 0 {
 		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("logFileDir", s.logFileDir))
 		return nil, -1
@@ -423,7 +392,7 @@ func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cac
 		zap.Int64("expectedNextEntryId", expectedNextEntryId))
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed",
+		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRangeData failed",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Error(err))
 		return nil, -1
@@ -433,7 +402,7 @@ func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cac
 	return toFlushData, toFlushDataFirstEntryId
 }
 
-func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, toFlushDataFirstEntryId int64) error {
+func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "flushData")
 	defer sp.End()
 	var writeError error
@@ -456,8 +425,8 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 	}
 
 	logger.Ctx(ctx).Debug("Sync starting to write data to fragment")
-	for i, data := range toFlushData {
-		if data == nil {
+	for i, bufferItem := range toFlushData {
+		if bufferItem == nil {
 			// Empty data means no data or a gap, end this flush
 			logger.Ctx(ctx).Warn("write entry to fragment failed, empty entry data found",
 				zap.String("logFileDir", s.logFileDir),
@@ -496,12 +465,12 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData [][]byte, t
 		entryID := toFlushDataFirstEntryId + int64(i)
 		entryIDBytes := make([]byte, 8)
 		binary.LittleEndian.PutUint64(entryIDBytes, uint64(entryID))
-		dataWithID := append(entryIDBytes, data...)
+		dataWithID := append(entryIDBytes, bufferItem.Data...)
 
 		// Write data
 		logger.Ctx(ctx).Debug("Sync writing data",
 			zap.Int64("entryID", entryID),
-			zap.Int("dataLen", len(data)))
+			zap.Int("dataLen", len(bufferItem.Data)))
 		writeErr := s.currFragment.Write(ctx, dataWithID, entryID)
 		// If fragment full error, rotate fragment and retry
 		if writeErr != nil && werr.ErrDiskFragmentNoSpace.Is(writeErr) {

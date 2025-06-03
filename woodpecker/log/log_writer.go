@@ -133,7 +133,8 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		logger.Ctx(ctx).Debug("write log entry callback", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Debug("write log entry callback",
+			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,

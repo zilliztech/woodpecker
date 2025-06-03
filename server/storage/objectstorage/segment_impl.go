@@ -63,10 +63,10 @@ type SegmentImpl struct {
 	// write buffer
 	buffer           atomic.Pointer[cache.SequentialBuffer] // Write buffer
 	maxBufferSize    int64                                  // Max buffer size to sync buffer to object storage
+	maxBufferEntries int64                                  // Maximum number of entries per buffer
 	maxIntervalMs    int                                    // Max interval to sync buffer to object storage
 	syncPolicyConfig *config.LogFileSyncPolicyConfig
-	syncedChan       map[int64]chan int64 // Synced entryId chan map
-	fileClose        chan struct{}        // Close signal
+	fileClose        chan struct{} // Close signal
 	closeOnce        sync.Once
 	closed           atomic.Bool
 
@@ -80,7 +80,8 @@ type SegmentImpl struct {
 func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
 	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentPrefixKey", segmentPrefixKey))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
-	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, int64(syncPolicyConfig.MaxEntries))
+	maxBufferEntries := int64(syncPolicyConfig.MaxEntries)
+	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, maxBufferEntries)
 	objFile := &SegmentImpl{
 		logId:            logId,
 		segmentId:        segId,
@@ -89,10 +90,10 @@ func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefix
 		bucket:           bucket,
 
 		maxBufferSize:    syncPolicyConfig.MaxBytes,
+		maxBufferEntries: maxBufferEntries,
 		maxIntervalMs:    syncPolicyConfig.MaxInterval,
 		syncPolicyConfig: syncPolicyConfig,
 		fileClose:        make(chan struct{}, 1),
-		syncedChan:       make(map[int64]chan int64),
 
 		firstEntryId:   -1,
 		lastEntryId:    -1,
@@ -161,12 +162,12 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	// trigger sync by max buffer entries num
 	currentBuffer := f.buffer.Load()
 	pendingAppendId := currentBuffer.ExpectedNextEntryId.Load() + 1
-	if pendingAppendId >= int64(currentBuffer.FirstEntryId+currentBuffer.MaxSize) {
+	if pendingAppendId >= int64(currentBuffer.FirstEntryId+currentBuffer.MaxEntries) {
 		logger.Ctx(ctx).Debug("buffer full, trigger flush",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Int64("pendingAppendId", pendingAppendId),
 			zap.Int64("bufferFirstId", currentBuffer.FirstEntryId),
-			zap.Int64("bufferLastId", currentBuffer.FirstEntryId+currentBuffer.MaxSize))
+			zap.Int64("bufferLastId", currentBuffer.FirstEntryId+currentBuffer.MaxEntries))
 		err := f.Sync(ctx)
 		if err != nil {
 			// sync does not success
@@ -180,10 +181,10 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 
 	f.mu.Lock()
 	currentBuffer = f.buffer.Load()
-	// write buffer
-	id, err := currentBuffer.WriteEntry(entryId, data)
+	// write buffer with notification channel
+	id, err := currentBuffer.WriteEntryWithNotify(entryId, data, ch)
 	if err != nil {
-		// sync does not success
+		// write to buffer failed
 		ch <- -1
 		close(ch)
 		f.mu.Unlock()
@@ -191,7 +192,6 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return id, ch, err
 	}
-	f.syncedChan[id] = ch
 	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	f.mu.Unlock()
 
@@ -255,7 +255,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 	currentBuffer := f.buffer.Load()
 
-	entryCount := len(currentBuffer.Values)
+	entryCount := len(currentBuffer.Entries)
 	if entryCount == 0 {
 		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return nil
@@ -271,7 +271,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRange failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
@@ -360,23 +360,22 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 	// callback to notify all waiting append request channels
 	if len(successFrags) == len(resultFrags) {
+
 		restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 		if err != nil {
-			logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLast failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
+			logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
 			return err
+		}
+		if len(restData) == 0 {
+			fmt.Sprintf("")
 		}
 		restDataFirstEntryId := expectedNextEntryId
 		newBuffer := cache.NewSequentialBufferWithData(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
 		f.buffer.Store(newBuffer)
 
-		// notify all waiting channels
-		for syncingId, ch := range f.syncedChan {
-			if syncingId < restDataFirstEntryId {
-				ch <- syncingId
-				delete(f.syncedChan, syncingId)
-				close(ch)
-			}
-		}
+		// Notify all successfully flushed entries
+		currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, expectedNextEntryId, flushedLastEntryId)
+
 		logger.Ctx(ctx).Debug("Sync to object storage success",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Int("fragments", len(fragmentDataList)),
@@ -388,21 +387,13 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 		lastSuccessFrag := successFrags[len(successFrags)-1]
 		last, _ := lastSuccessFrag.GetLastEntryId(ctx)
 		restDataFirstEntryId := last + 1
-		for syncingId, ch := range f.syncedChan {
-			if syncingId < restDataFirstEntryId {
-				// append success
-				ch <- syncingId
-				delete(f.syncedChan, syncingId)
-				close(ch)
-			} else {
-				// append error
-				ch <- -1
-				delete(f.syncedChan, syncingId)
-				close(ch)
-			}
-		}
+
+		// Notify successful entries with success and failed entries with error
+		currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, restDataFirstEntryId, last)
+		currentBuffer.NotifyEntriesInRange(ctx, restDataFirstEntryId, expectedNextEntryId, -1)
+
 		// new a empty buffer
-		newBuffer := cache.NewSequentialBuffer(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries))
+		newBuffer := cache.NewSequentialBuffer(f.logId, f.segmentId, restDataFirstEntryId, f.maxBufferEntries)
 		f.buffer.Store(newBuffer)
 		logger.Ctx(ctx).Debug("Sync to object storage partial success",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -412,15 +403,10 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)),
 			zap.String("newBufInst", fmt.Sprintf("%p", newBuffer)))
 	} else {
-		// no flush success, callback all append sync error
-		for syncingId, ch := range f.syncedChan {
-			// append error
-			ch <- -1
-			delete(f.syncedChan, syncingId)
-			close(ch)
-		}
+		// no flush success, notify all entries with error
+		currentBuffer.NotifyAllPendingEntries(ctx, -1)
 		// reset buffer as empty
-		currentBuffer.Reset()
+		currentBuffer.Reset(ctx)
 		logger.Ctx(ctx).Debug("Sync to object storage all failed,reset buffer",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Int("fragments", len(fragmentDataList)),
@@ -454,7 +440,7 @@ func (f *SegmentImpl) Close(ctx context.Context) error {
 	return nil
 }
 
-func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData [][]byte, toFlushDataFirstEntryId int64) ([][][]byte, []int64) {
+func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64) {
 	if len(toFlushData) == 0 {
 		return nil, nil
 	}
@@ -471,8 +457,8 @@ func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData [][]byte, 
 	currentStart := 0
 	currentSize := int64(0)
 
-	for i, entry := range toFlushData {
-		entrySize := int64(len(entry))
+	for i, item := range toFlushData {
+		entrySize := int64(len(item.Data))
 
 		// Check if adding this entry would exceed the max partition size
 		if currentSize+entrySize > maxPartitionSize && currentSize > 0 {
@@ -491,7 +477,7 @@ func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData [][]byte, 
 	}
 
 	// Second pass: create partitions using slice references (no copying)
-	partitions := make([][][]byte, len(ranges))
+	partitions := make([][]*cache.BufferEntry, len(ranges))
 	partitionFirstEntryIds := make([]int64, len(ranges))
 
 	offset := toFlushDataFirstEntryId

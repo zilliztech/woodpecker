@@ -18,7 +18,7 @@ package tracer
 
 import (
 	"context"
-	
+
 	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,11 +36,11 @@ import (
 )
 
 var (
-	InitTracerOnce sync.Once
+	initOnce sync.Once
 )
 
 func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) error {
-	InitTracerOnce.Do(func() {
+	initOnce.Do(func() {
 		err := Init(cfg, serviceName, nodeID)
 		if err != nil {
 			panic(err)

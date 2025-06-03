@@ -32,6 +32,9 @@ import (
 )
 
 type Operation interface {
+	// Identifier returns a unique identifier for this operation.
+	Identifier() string
+	// Execute executes the operation.
 	Execute()
 }
 
@@ -78,6 +81,10 @@ func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, call
 	}
 	op.completed.Store(false)
 	return op
+}
+
+func (op *AppendOp) Identifier() string {
+	return fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId)
 }
 
 func (op *AppendOp) Execute() {
@@ -151,7 +158,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		case <-ticker.C:
 			elapsed := time.Now().Sub(startRequestTime)
 			logger.Ctx(ctx).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, failed and retry", op.logId, op.segmentId, op.entryId, elapsed))
-			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteException)
+			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteError.WithCauseErrMsg("slow append error"))
 			return
 		}
 	}

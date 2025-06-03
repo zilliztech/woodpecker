@@ -121,6 +121,8 @@ const (
 	SegmentReadException
 	// SegmentWriteException indicates that an exception occurred while writing a segment.
 	SegmentWriteException
+	// SegmentWriteError indicates that an error occurred while writing a segment.
+	SegmentWriteError
 	// LogFileClosed indicates that the log file is closed.
 	LogFileClosed
 	// FragmentEmpty indicates that the fragment is empty.
@@ -172,6 +174,7 @@ var (
 	ErrSegmentNotFound       = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
 	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
 	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
+	ErrSegmentWriteError     = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
 	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
 	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
 	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)

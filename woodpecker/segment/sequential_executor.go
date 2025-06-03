@@ -17,7 +17,13 @@
 package segment
 
 import (
+	"context"
+	"fmt"
 	"sync"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 // SequentialExecutor is a sequential append executor
@@ -37,7 +43,8 @@ func NewSequentialExecutor(bufferSize int) *SequentialExecutor {
 }
 
 // Start starts the sequential append executor
-func (se *SequentialExecutor) Start() {
+func (se *SequentialExecutor) Start(ctx context.Context) {
+	logger.Ctx(ctx).Debug("start sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 	go se.worker()
 }
 
@@ -50,11 +57,13 @@ func (se *SequentialExecutor) worker() {
 }
 
 // Submit an op to the queue
-func (se *SequentialExecutor) Submit(op Operation) bool {
+func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
+	logger.Ctx(ctx).Debug("try to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 	se.mu.RLock()
 	defer se.mu.RUnlock()
 
 	if se.closed {
+		logger.Ctx(ctx).Debug("submit failed, executor already closed", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 		return false
 	}
 
@@ -62,13 +71,16 @@ func (se *SequentialExecutor) Submit(op Operation) bool {
 
 	// Block and wait
 	se.operationQueue <- op
+	logger.Ctx(ctx).Debug("finish to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 	return true
 }
 
 // Stop stops the sequential append executor
-func (se *SequentialExecutor) Stop() {
+func (se *SequentialExecutor) Stop(ctx context.Context) {
+	logger.Ctx(ctx).Debug("try to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 	se.mu.Lock()
 	if se.closed {
+		logger.Ctx(ctx).Debug("sequential executor already stopped,skip", zap.String("inst", fmt.Sprintf("%p", se)))
 		se.mu.Unlock()
 		return
 	}
@@ -76,4 +88,5 @@ func (se *SequentialExecutor) Stop() {
 	close(se.operationQueue)
 	se.mu.Unlock()
 	se.wg.Wait()
+	logger.Ctx(ctx).Debug("finish to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 }

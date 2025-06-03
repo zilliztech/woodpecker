@@ -110,7 +110,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
 	if canWrite {
-		segmentHandle.executor.Start()
+		segmentHandle.executor.Start(ctx)
 	}
 	return segmentHandle
 }
@@ -209,7 +209,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
-	if submitOk := s.executor.Submit(appendOp); !submitOk {
+	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
 		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
 		return
 	}
@@ -302,12 +302,12 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 	for _, element := range elementsToRetry {
 		op := element.Value.(*AppendOp)
 		if op.entryId == triggerEntryId {
-			s.executor.Submit(op)
+			s.executor.Submit(ctx, op)
 			logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 			continue
 		}
 		if op.entryId < minRemoveId {
-			s.executor.Submit(op)
+			s.executor.Submit(ctx, op)
 			logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", triggerEntryId), zap.Int64("triggerId", triggerEntryId))
 		} else {
 			logger.Ctx(ctx).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
@@ -512,7 +512,7 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	s.SendAppendErrorCallbacks(ctx, -1, werr.ErrSegmentClosed)
 
 	// shutdown segment executor
-	s.executor.Stop()
+	s.executor.Stop(ctx)
 
 	// update metadata as completed
 	currentSegmentMeta := s.segmentMetaCache.Load()
