@@ -628,15 +628,48 @@ func (enc *textEncoder) tryAddRuneError(r rune, size int) bool {
 }
 
 func (enc *textEncoder) addFields(fields []zapcore.Field) {
+	// Check if we have trace-related fields (scope, intent, traceID)
+	var traceFields []zapcore.Field
+	var otherFields []zapcore.Field
+
 	for _, f := range fields {
-		if f.Type == zapcore.ErrorType {
-			// handle ErrorType in pingcap/log to fix "[key=?,keyVerbose=?]" problem.
-			// see more detail at https://github.com/pingcap/log/pull/5
-			enc.encodeError(f)
-			continue
+		if f.Key == "scope" || f.Key == "intent" || f.Key == "traceID" {
+			traceFields = append(traceFields, f)
+		} else {
+			otherFields = append(otherFields, f)
 		}
+	}
+
+	// Add trace fields with space separation (like zap's standard format)
+	if len(traceFields) > 0 {
+		if enc.buf.Len() > 0 {
+			enc.buf.AppendByte(' ')
+		}
+		for i, f := range traceFields {
+			if i > 0 {
+				enc.buf.AppendByte(',')
+			}
+			if f.Type == zapcore.ErrorType {
+				enc.encodeError(f)
+				continue
+			}
+			enc.addKey(f.Key)
+			f.AddTo(enc)
+		}
+	}
+
+	// Add other fields in brackets (standard zap format)
+	if len(otherFields) > 0 {
 		enc.beginQuoteFiled()
-		f.AddTo(enc)
+		for _, f := range otherFields {
+			if f.Type == zapcore.ErrorType {
+				// handle ErrorType in pingcap/log to fix "[key=?,keyVerbose=?]" problem.
+				// see more detail at https://github.com/pingcap/log/pull/5
+				enc.encodeError(f)
+				continue
+			}
+			f.AddTo(enc)
+		}
 		enc.endQuoteFiled()
 	}
 }

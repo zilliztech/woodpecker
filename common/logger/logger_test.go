@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -130,7 +129,7 @@ func TestTraceLoggerWithParentCtx(t *testing.T) {
 }
 
 func testPrintSomething(ctx context.Context) {
-	ctx, span := otel.Tracer("subRole").Start(ctx, "subIntent")
+	ctx, span := NewIntentCtxWithParent(ctx, "subRole", "subIntent")
 	defer span.End()
 	span.AddEvent("event01", trace.WithAttributes(attribute.Int64("timestamp", 123), attribute.Bool("isOK", true)))
 	span.AddEvent("event02", trace.WithAttributes(attribute.Int64("timestamp", 456), attribute.Bool("isOK", false)))

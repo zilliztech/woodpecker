@@ -174,6 +174,14 @@ func WithFields(ctx context.Context, fields ...zap.Field) context.Context {
 	return context.WithValue(ctx, CtxLogKey, newZLogger)
 }
 
+// WithFieldsReplace replaces existing fields instead of accumulating them
+func WithFieldsReplace(ctx context.Context, fields ...zap.Field) context.Context {
+	// Always start from the base logger to avoid field accumulation
+	baseLogger := Ctx(context.Background())
+	newZLogger := baseLogger.With(fields...)
+	return context.WithValue(ctx, CtxLogKey, newZLogger)
+}
+
 // NewIntentCtx creates a new context with intent information and returns it along with a span.
 func NewIntentCtx(scopeName string, intent string) (context.Context, trace.Span) {
 	return NewIntentCtxWithParent(context.Background(), scopeName, intent)
@@ -181,7 +189,8 @@ func NewIntentCtx(scopeName string, intent string) (context.Context, trace.Span)
 
 func NewIntentCtxWithParent(parent context.Context, scopeName string, intent string) (context.Context, trace.Span) {
 	intentCtx, initSpan := otel.Tracer(scopeName).Start(parent, intent)
-	intentCtx = WithFields(intentCtx,
+	// Use WithFieldsReplace to avoid accumulating duplicate scope/intent fields
+	intentCtx = WithFieldsReplace(intentCtx,
 		zap.String("scope", scopeName),
 		zap.String("intent", intent),
 		zap.String("traceID", initSpan.SpanContext().TraceID().String()))
