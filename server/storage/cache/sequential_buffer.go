@@ -33,9 +33,9 @@ import (
 
 // BufferEntry represents a single entry in the buffer with its data and notification channel
 type BufferEntry struct {
-	EntryId    int64      // The entry ID for this buffer entry
-	Data       []byte     // The actual data
-	NotifyChan chan int64 // Channel to notify when this entry is synced
+	EntryId    int64        // The entry ID for this buffer entry
+	Data       []byte       // The actual data
+	NotifyChan chan<- int64 // Channel to notify when this entry is synced
 }
 
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
@@ -81,7 +81,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 }
 
 // WriteEntryWithNotify writes a new entry into the buffer with notification channel.
-func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, notifyChan chan int64) (int64, error) {
+func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, notifyChan chan<- int64) (int64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -178,14 +178,29 @@ func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryI
 				notifyValue = entry.EntryId
 			}
 
-			select {
-			case entry.NotifyChan <- notifyValue:
-				close(entry.NotifyChan)
-				notifiedCount++
-				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-			default:
-				// Channel might be closed or full, ignore
-			}
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
 			entry.NotifyChan = nil // Clear the channel reference
 		}
 	}
@@ -219,14 +234,29 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 				notifyValue = entry.EntryId
 			}
 
-			select {
-			case entry.NotifyChan <- notifyValue:
-				close(entry.NotifyChan)
-				notifiedCount++
-				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-			default:
-				// Channel might be closed or full, ignore
-			}
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
 			entry.NotifyChan = nil // Clear the channel reference
 		}
 	}
@@ -312,14 +342,29 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 				notifyValue = entry.EntryId
 			}
 
-			select {
-			case entry.NotifyChan <- notifyValue:
-				close(entry.NotifyChan)
-				notifiedCount++
-				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-			default:
-				// Channel might be closed or full, ignore
-			}
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
 			entry.NotifyChan = nil // Clear the channel reference
 		}
 	}

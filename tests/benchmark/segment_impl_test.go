@@ -49,7 +49,8 @@ func TestAppendAsync(t *testing.T) {
 	assert.NotNil(t, objectSegmentImpl)
 
 	// Test appending a valid entry
-	entryId, ch, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"))
+	ch := make(chan int64, 1)
+	entryId, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch)
 	assert.Equal(t, int64(0), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -60,23 +61,25 @@ func TestAppendAsync(t *testing.T) {
 	}
 
 	// Test appending another valid entry
-	entryId, ch, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"))
+	ch2 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
 	assert.Equal(t, int64(1), entryId)
-	assert.NotNil(t, ch)
+	assert.NotNil(t, ch2)
 	select {
-	case result := <-ch:
+	case result := <-ch2:
 		assert.Equal(t, int64(1), result)
 	case <-time.After(2000 * time.Millisecond):
 		t.Error("Timeout waiting for channel")
 	}
 
 	// Test appending an entry with an invalid ID
-	entryId, ch, _ = segmentImpl.AppendAsync(context.Background(), 3, []byte("data3"))
+	ch3 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 3, []byte("data3"), ch3)
 	assert.Equal(t, int64(3), entryId)
-	assert.NotNil(t, ch)
+	assert.NotNil(t, ch3)
 	var timeoutErr error
 	select {
-	case result := <-ch:
+	case result := <-ch3:
 		assert.Equal(t, int64(-1), result)
 	case <-time.After(2000 * time.Millisecond):
 		timeoutErr = errors.New("timeout")
@@ -84,11 +87,14 @@ func TestAppendAsync(t *testing.T) {
 	assert.Error(t, timeoutErr)
 
 	// Test appending an entry that exceeds the buffer size
-	entryId, ch, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"))
+	ch4 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch4)
 	for i := 4; i < 100_000; i++ {
-		segmentImpl.AppendAsync(context.Background(), int64(i), []byte("data"))
+		ch000 := make(chan int64, 1)
+		segmentImpl.AppendAsync(context.Background(), int64(i), []byte("data"), ch000)
 	}
-	entryId, ch, _ = segmentImpl.AppendAsync(context.Background(), 100_000, []byte("data"))
+	ch5 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 100_000, []byte("data"), ch5)
 	assert.Equal(t, int64(100_000), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -113,9 +119,12 @@ func TestNewReader(t *testing.T) {
 	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
-	_, ch1, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"))
-	_, ch2, _ := segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"))
-	_, ch3, _ := segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"))
+	ch1 := make(chan int64, 1)
+	ch2 := make(chan int64, 1)
+	ch3 := make(chan int64, 1)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch1)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch3)
 
 	// Wait for the data to be appended
 	select {
@@ -178,7 +187,8 @@ func TestNewReaderForManyFragments(t *testing.T) {
 
 	// Append some data to the log file
 	for i := 0; i < 5; i++ {
-		_, ch, _ := segmentImpl.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)))
+		ch := make(chan int64, 1)
+		_, _ = segmentImpl.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)), ch)
 		select {
 		case <-ch:
 		case <-time.After(2000 * time.Millisecond):

@@ -69,41 +69,32 @@ func (_c *Segment_Append_Call) RunAndReturn(run func(context.Context, []byte) er
 	return _c
 }
 
-// AppendAsync provides a mock function with given fields: ctx, entryId, data
-func (_m *Segment) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
-	ret := _m.Called(ctx, entryId, data)
+// AppendAsync provides a mock function with given fields: ctx, entryId, data, resultCh
+func (_m *Segment) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error) {
+	ret := _m.Called(ctx, entryId, data, resultCh)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AppendAsync")
 	}
 
 	var r0 int64
-	var r1 <-chan int64
-	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, []byte) (int64, <-chan int64, error)); ok {
-		return rf(ctx, entryId, data)
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, []byte, chan<- int64) (int64, error)); ok {
+		return rf(ctx, entryId, data, resultCh)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, []byte) int64); ok {
-		r0 = rf(ctx, entryId, data)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, []byte, chan<- int64) int64); ok {
+		r0 = rf(ctx, entryId, data, resultCh)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, []byte) <-chan int64); ok {
-		r1 = rf(ctx, entryId, data)
+	if rf, ok := ret.Get(1).(func(context.Context, int64, []byte, chan<- int64) error); ok {
+		r1 = rf(ctx, entryId, data, resultCh)
 	} else {
-		if ret.Get(1) != nil {
-			r1 = ret.Get(1).(<-chan int64)
-		}
+		r1 = ret.Error(1)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, int64, []byte) error); ok {
-		r2 = rf(ctx, entryId, data)
-	} else {
-		r2 = ret.Error(2)
-	}
-
-	return r0, r1, r2
+	return r0, r1
 }
 
 // Segment_AppendAsync_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendAsync'
@@ -115,23 +106,24 @@ type Segment_AppendAsync_Call struct {
 //   - ctx context.Context
 //   - entryId int64
 //   - data []byte
-func (_e *Segment_Expecter) AppendAsync(ctx interface{}, entryId interface{}, data interface{}) *Segment_AppendAsync_Call {
-	return &Segment_AppendAsync_Call{Call: _e.mock.On("AppendAsync", ctx, entryId, data)}
+//   - resultCh chan<- int64
+func (_e *Segment_Expecter) AppendAsync(ctx interface{}, entryId interface{}, data interface{}, resultCh interface{}) *Segment_AppendAsync_Call {
+	return &Segment_AppendAsync_Call{Call: _e.mock.On("AppendAsync", ctx, entryId, data, resultCh)}
 }
 
-func (_c *Segment_AppendAsync_Call) Run(run func(ctx context.Context, entryId int64, data []byte)) *Segment_AppendAsync_Call {
+func (_c *Segment_AppendAsync_Call) Run(run func(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64)) *Segment_AppendAsync_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].([]byte))
+		run(args[0].(context.Context), args[1].(int64), args[2].([]byte), args[3].(chan<- int64))
 	})
 	return _c
 }
 
-func (_c *Segment_AppendAsync_Call) Return(_a0 int64, _a1 <-chan int64, _a2 error) *Segment_AppendAsync_Call {
-	_c.Call.Return(_a0, _a1, _a2)
+func (_c *Segment_AppendAsync_Call) Return(_a0 int64, _a1 error) *Segment_AppendAsync_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *Segment_AppendAsync_Call) RunAndReturn(run func(context.Context, int64, []byte) (int64, <-chan int64, error)) *Segment_AppendAsync_Call {
+func (_c *Segment_AppendAsync_Call) RunAndReturn(run func(context.Context, int64, []byte, chan<- int64) (int64, error)) *Segment_AppendAsync_Call {
 	_c.Call.Return(run)
 	return _c
 }

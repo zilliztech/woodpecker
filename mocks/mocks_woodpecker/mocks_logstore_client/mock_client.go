@@ -24,41 +24,32 @@ func (_m *LogStoreClient) EXPECT() *LogStoreClient_Expecter {
 	return &LogStoreClient_Expecter{mock: &_m.Mock}
 }
 
-// AppendEntry provides a mock function with given fields: ctx, logId, entry
-func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry) (int64, <-chan int64, error) {
-	ret := _m.Called(ctx, logId, entry)
+// AppendEntry provides a mock function with given fields: ctx, logId, entry, syncedResultCh
+func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
+	ret := _m.Called(ctx, logId, entry, syncedResultCh)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AppendEntry")
 	}
 
 	var r0 int64
-	var r1 <-chan int64
-	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)); ok {
-		return rf(ctx, logId, entry)
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)); ok {
+		return rf(ctx, logId, entry, syncedResultCh)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry) int64); ok {
-		r0 = rf(ctx, logId, entry)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) int64); ok {
+		r0 = rf(ctx, logId, entry, syncedResultCh)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, *processor.SegmentEntry) <-chan int64); ok {
-		r1 = rf(ctx, logId, entry)
+	if rf, ok := ret.Get(1).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) error); ok {
+		r1 = rf(ctx, logId, entry, syncedResultCh)
 	} else {
-		if ret.Get(1) != nil {
-			r1 = ret.Get(1).(<-chan int64)
-		}
+		r1 = ret.Error(1)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, int64, *processor.SegmentEntry) error); ok {
-		r2 = rf(ctx, logId, entry)
-	} else {
-		r2 = ret.Error(2)
-	}
-
-	return r0, r1, r2
+	return r0, r1
 }
 
 // LogStoreClient_AppendEntry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendEntry'
@@ -70,23 +61,24 @@ type LogStoreClient_AppendEntry_Call struct {
 //   - ctx context.Context
 //   - logId int64
 //   - entry *processor.SegmentEntry
-func (_e *LogStoreClient_Expecter) AppendEntry(ctx interface{}, logId interface{}, entry interface{}) *LogStoreClient_AppendEntry_Call {
-	return &LogStoreClient_AppendEntry_Call{Call: _e.mock.On("AppendEntry", ctx, logId, entry)}
+//   - syncedResultCh chan<- int64
+func (_e *LogStoreClient_Expecter) AppendEntry(ctx interface{}, logId interface{}, entry interface{}, syncedResultCh interface{}) *LogStoreClient_AppendEntry_Call {
+	return &LogStoreClient_AppendEntry_Call{Call: _e.mock.On("AppendEntry", ctx, logId, entry, syncedResultCh)}
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, logId int64, entry *processor.SegmentEntry)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(*processor.SegmentEntry))
+		run(args[0].(context.Context), args[1].(int64), args[2].(*processor.SegmentEntry), args[3].(chan<- int64))
 	})
 	return _c
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) Return(_a0 int64, _a1 <-chan int64, _a2 error) *LogStoreClient_AppendEntry_Call {
-	_c.Call.Return(_a0, _a1, _a2)
+func (_c *LogStoreClient_AppendEntry_Call) Return(_a0 int64, _a1 error) *LogStoreClient_AppendEntry_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }

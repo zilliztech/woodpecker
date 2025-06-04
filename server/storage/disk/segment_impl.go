@@ -180,8 +180,10 @@ func (s *DiskSegmentImpl) Append(ctx context.Context, data []byte) error {
 
 	logger.Ctx(ctx).Debug("Append: synchronous write", zap.Int64("entryId", entryId))
 
+	resultCh := make(chan int64, 1)
+
 	// Use AppendAsync for asynchronous write
-	_, resultCh, err := s.AppendAsync(ctx, entryId, data)
+	_, err := s.AppendAsync(ctx, entryId, data, resultCh)
 	if err != nil {
 		logger.Ctx(ctx).Debug("Append: async write failed", zap.Error(err))
 		return err
@@ -205,7 +207,7 @@ func (s *DiskSegmentImpl) Append(ctx context.Context, data []byte) error {
 }
 
 // AppendAsync appends data to the log file asynchronously.
-func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
+func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte, resultCh chan<- int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
@@ -219,36 +221,30 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return -1, nil, errors.New("DiskSegmentImpl closed")
+		return -1, errors.New("DiskSegmentImpl closed")
 	}
-
-	// Create result channel
-	ch := make(chan int64, 1)
 
 	// First check if ID already exists in synced data
 	lastId := s.lastEntryID.Load()
 	if entryId <= lastId {
 		logger.Ctx(ctx).Debug("AppendAsync: ID already exists, returning success", zap.Int64("entryId", entryId))
 		// For data already written to disk, don't try to rewrite, just return success
-		ch <- entryId
-		close(ch)
+		resultCh <- entryId
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-		return entryId, ch, nil
+		return entryId, nil
 	}
 
 	s.mu.Lock()
 	currentBuffer := s.buffer.Load()
 	// Write to buffer with notification channel
-	id, err := currentBuffer.WriteEntryWithNotify(entryId, value, ch)
+	id, err := currentBuffer.WriteEntryWithNotify(entryId, value, resultCh)
 	if err != nil {
 		logger.Ctx(ctx).Debug("AppendAsync: writing to buffer failed", zap.Error(err))
-		ch <- -1
-		close(ch)
 		s.mu.Unlock()
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return -1, ch, err
+		return -1, err
 	}
 	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()))
 	s.mu.Unlock()
@@ -272,7 +268,7 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 
 	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return id, ch, nil
+	return id, nil
 }
 
 // Sync syncs the log file to disk.
@@ -820,8 +816,8 @@ func (rs *RODiskSegmentImpl) Append(ctx context.Context, data []byte) error {
 }
 
 // AppendAsync appends data to the log file asynchronously.
-func (rs *RODiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte) (int64, <-chan int64, error) {
-	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("RODiskSegmentImpl not support append")
+func (rs *RODiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value []byte, resultCh chan<- int64) (int64, error) {
+	return entryId, werr.ErrNotSupport.WithCauseErrMsg("RODiskSegmentImpl not support append")
 }
 
 // Sync syncs the log file to disk.

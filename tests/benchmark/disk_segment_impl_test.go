@@ -143,7 +143,8 @@ func TestDiskSegmentImplWritePerformance(t *testing.T) {
 					entryId := int64(i + j)
 					entryIds[j] = entryId
 
-					_, ch, err := segmentImpl.AppendAsync(ctx, entryId, dataSet[i+j])
+					ch := make(chan int64, 1)
+					_, err := segmentImpl.AppendAsync(ctx, entryId, dataSet[i+j], ch)
 					if err != nil {
 						t.Fatalf("Write failed: %v", err)
 					}
@@ -306,7 +307,8 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 				end := min(i+batchSize, tc.entryCount)
 				// Submit a batch of data
 				for j := i; j < end; j++ {
-					_, ch, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j])
+					ch := make(chan int64, 1)
+					_, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j], ch)
 					if err != nil {
 						segmentImpl.Close(context.TODO())
 						t.Fatalf("Failed to write data: %v", err)
@@ -567,7 +569,8 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 						maxEntryId++
 
 						writeStart := time.Now()
-						_, ch, err := segmentImpl.AppendAsync(ctx, entryId, writeData[writeOpsCount])
+						ch := make(chan int64, 1)
+						_, err := segmentImpl.AppendAsync(ctx, entryId, writeData[writeOpsCount], ch)
 						if err != nil {
 							t.Fatalf("Write failed: %v", err)
 						}

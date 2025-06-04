@@ -27,41 +27,32 @@ func (_m *LogStore) EXPECT() *LogStore_Expecter {
 	return &LogStore_Expecter{mock: &_m.Mock}
 }
 
-// AddEntry provides a mock function with given fields: _a0, _a1, _a2
-func (_m *LogStore) AddEntry(_a0 context.Context, _a1 int64, _a2 *processor.SegmentEntry) (int64, <-chan int64, error) {
-	ret := _m.Called(_a0, _a1, _a2)
+// AddEntry provides a mock function with given fields: _a0, _a1, _a2, _a3
+func (_m *LogStore) AddEntry(_a0 context.Context, _a1 int64, _a2 *processor.SegmentEntry, _a3 chan<- int64) (int64, error) {
+	ret := _m.Called(_a0, _a1, _a2, _a3)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AddEntry")
 	}
 
 	var r0 int64
-	var r1 <-chan int64
-	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)); ok {
-		return rf(_a0, _a1, _a2)
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)); ok {
+		return rf(_a0, _a1, _a2, _a3)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry) int64); ok {
-		r0 = rf(_a0, _a1, _a2)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) int64); ok {
+		r0 = rf(_a0, _a1, _a2, _a3)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, *processor.SegmentEntry) <-chan int64); ok {
-		r1 = rf(_a0, _a1, _a2)
+	if rf, ok := ret.Get(1).(func(context.Context, int64, *processor.SegmentEntry, chan<- int64) error); ok {
+		r1 = rf(_a0, _a1, _a2, _a3)
 	} else {
-		if ret.Get(1) != nil {
-			r1 = ret.Get(1).(<-chan int64)
-		}
+		r1 = ret.Error(1)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, int64, *processor.SegmentEntry) error); ok {
-		r2 = rf(_a0, _a1, _a2)
-	} else {
-		r2 = ret.Error(2)
-	}
-
-	return r0, r1, r2
+	return r0, r1
 }
 
 // LogStore_AddEntry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddEntry'
@@ -73,23 +64,24 @@ type LogStore_AddEntry_Call struct {
 //   - _a0 context.Context
 //   - _a1 int64
 //   - _a2 *processor.SegmentEntry
-func (_e *LogStore_Expecter) AddEntry(_a0 interface{}, _a1 interface{}, _a2 interface{}) *LogStore_AddEntry_Call {
-	return &LogStore_AddEntry_Call{Call: _e.mock.On("AddEntry", _a0, _a1, _a2)}
+//   - _a3 chan<- int64
+func (_e *LogStore_Expecter) AddEntry(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *LogStore_AddEntry_Call {
+	return &LogStore_AddEntry_Call{Call: _e.mock.On("AddEntry", _a0, _a1, _a2, _a3)}
 }
 
-func (_c *LogStore_AddEntry_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 *processor.SegmentEntry)) *LogStore_AddEntry_Call {
+func (_c *LogStore_AddEntry_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 *processor.SegmentEntry, _a3 chan<- int64)) *LogStore_AddEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(*processor.SegmentEntry))
+		run(args[0].(context.Context), args[1].(int64), args[2].(*processor.SegmentEntry), args[3].(chan<- int64))
 	})
 	return _c
 }
 
-func (_c *LogStore_AddEntry_Call) Return(_a0 int64, _a1 <-chan int64, _a2 error) *LogStore_AddEntry_Call {
-	_c.Call.Return(_a0, _a1, _a2)
+func (_c *LogStore_AddEntry_Call) Return(_a0 int64, _a1 error) *LogStore_AddEntry_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStore_AddEntry_Call) RunAndReturn(run func(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)) *LogStore_AddEntry_Call {
+func (_c *LogStore_AddEntry_Call) RunAndReturn(run func(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)) *LogStore_AddEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }

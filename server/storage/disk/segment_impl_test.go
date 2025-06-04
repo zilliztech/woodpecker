@@ -116,7 +116,8 @@ func TestAppendAsync(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test with auto-assigned ID (0 means auto-assign, will use internal incrementing ID)
-	entryID, resultCh, err := segmentImpl.AppendAsync(context.Background(), 0, []byte("test_data"))
+	resultCh := make(chan int64, 1)
+	entryID, err := segmentImpl.AppendAsync(context.Background(), 0, []byte("test_data"), resultCh)
 	assert.NoError(t, err)
 	assert.Equal(t, entryID, int64(0))
 
@@ -173,7 +174,8 @@ func TestAppendAsyncMultipleEntries(t *testing.T) {
 	entryIDs := make([]int64, 0, numEntries)
 	for i := 0; i < numEntries; i++ {
 		entryID := int64(i)
-		id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)))
+		ch := make(chan int64, 1)
+		id, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)), ch)
 		assert.NoError(t, err)
 		assert.Equal(t, entryID, id)
 		resultChannels = append(resultChannels, ch)
@@ -217,7 +219,8 @@ func TestOutOfOrderAppend(t *testing.T) {
 		entryData[id] = data
 		t.Logf("Appending entry with ID %d and data '%s'", id, string(data))
 
-		assignedID, ch, err := segmentImpl.AppendAsync(context.Background(), id, data)
+		ch := make(chan int64, 1)
+		assignedID, err := segmentImpl.AppendAsync(context.Background(), id, data, ch)
 		assert.NoError(t, err)
 		assert.Equal(t, id, assignedID, "Assigned ID should match requested ID")
 		resultChannels = append(resultChannels, ch)
@@ -301,7 +304,8 @@ func TestDelayedAppend(t *testing.T) {
 	// First send request for ID 2
 	data2 := []byte("data-2")
 	entryData[startID+2] = data2
-	_, ch2, err := segmentImpl.AppendAsync(context.Background(), startID+2, data2)
+	ch2 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+2, data2, ch2)
 	assert.NoError(t, err)
 
 	// Wait a short time to simulate delay
@@ -310,7 +314,8 @@ func TestDelayedAppend(t *testing.T) {
 	// Send request for ID 1
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
-	_, ch1, err := segmentImpl.AppendAsync(context.Background(), startID+1, data1)
+	ch1 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+1, data1, ch1)
 	assert.NoError(t, err)
 
 	// Wait a short time to simulate delay
@@ -319,7 +324,8 @@ func TestDelayedAppend(t *testing.T) {
 	// Send request for ID 0
 	data0 := []byte("data-0")
 	entryData[startID] = data0
-	_, ch0, err := segmentImpl.AppendAsync(context.Background(), startID, data0)
+	ch0 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID, data0, ch0)
 	assert.NoError(t, err)
 
 	// Wait for all results
@@ -407,7 +413,8 @@ func TestOutOfBoundsAppend(t *testing.T) {
 		entryIDs := make([]int64, 0, numEntries)
 		for i := 0; i < numEntries; i++ {
 			entryID := int64(i)
-			id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)))
+			ch := make(chan int64, 1)
+			id, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)), ch)
 			assert.NoError(t, err)
 			assert.Equal(t, entryID, id)
 			resultChannels = append(resultChannels, ch)
@@ -427,21 +434,24 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	// First send a normal ID request
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
-	_, ch1, err := segmentImpl.AppendAsync(context.Background(), startID+1, data1)
+	ch1 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+1, data1, ch1)
 	assert.NoError(t, err)
 	t.Logf("Appending entry with ID %d and data '%s'", startID+1, string(data1))
 
 	// Send a request with an ID smaller than the current ID
 	data0 := []byte("data-0")
 	entryData[startID+0] = data0
-	_, ch2, err := segmentImpl.AppendAsync(context.Background(), startID+0, data0)
+	ch2 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+0, data0, ch2)
 	assert.NoError(t, err) // This request should be accepted
 	t.Logf("Appending entry with ID %d and data '%s'", startID+0, string(data0))
 
 	// Send a request with a very small ID, which has already been persisted
 	dataN1 := []byte("data-N1")
 	entryData[startID-1] = dataN1
-	syncedId, ch3, err := segmentImpl.AppendAsync(context.Background(), startID-1, dataN1)
+	ch3 := make(chan int64, 1)
+	syncedId, err := segmentImpl.AppendAsync(context.Background(), startID-1, dataN1, ch3)
 	assert.NoError(t, err) // This request should be accepted, indicating it's already been added
 	assert.Equal(t, syncedId, startID-1)
 	t.Logf("Appending entry with ID %d and data '%s'", startID-1, string(dataN1))
@@ -449,7 +459,8 @@ func TestOutOfBoundsAppend(t *testing.T) {
 	// Send a request with an ID greater than the buffer window
 	dataN2 := []byte("data-N2")
 	entryData[startID+1_00000_0000] = dataN1
-	_, ch4, err := segmentImpl.AppendAsync(context.Background(), startID+1_00000_0000, dataN2)
+	ch4 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+1_00000_0000, dataN2, ch4)
 	assert.Error(t, err) // This request should be immediately rejected, indicating it exceeds the buffer window
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
 	t.Logf("Appending entry with ID %d and data '%s'", startID+1_00000_0000, string(dataN2))
@@ -477,14 +488,6 @@ func TestOutOfBoundsAppend(t *testing.T) {
 		t.Logf("Received result for ID %d", result)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for append result for ID 999")
-	}
-
-	select {
-	case result := <-ch4:
-		assert.Equal(t, int64(-1), result) // This returns an error because it exceeds the window range
-		t.Logf("Received result for ID %d", result)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Timeout waiting for append result for ID 1001")
 	}
 
 	// Ensure all data is written
@@ -550,7 +553,8 @@ func TestMixedAppendScenarios(t *testing.T) {
 		entryIDs := make([]int64, 0, numEntries)
 		for i := 0; i < numEntries; i++ {
 			entryID := int64(i)
-			id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)))
+			ch := make(chan int64, 1)
+			id, err := segmentImpl.AppendAsync(context.Background(), entryID, []byte(fmt.Sprintf("test_data_%d", i)), ch)
 			assert.NoError(t, err)
 			assert.Equal(t, entryID, id)
 			resultChannels = append(resultChannels, ch)
@@ -571,14 +575,16 @@ func TestMixedAppendScenarios(t *testing.T) {
 	// Scenario 1: Normal sequential request
 	data0 := []byte("data-0")
 	entryData[startID] = data0
-	_, ch1, err := segmentImpl.AppendAsync(context.Background(), startID, data0)
+	ch1 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID, data0, ch1)
 	assert.NoError(t, err)
 	channels[startID] = ch1
 
 	// Scenario 2: Out-of-order request
 	data2 := []byte("data-2")
 	entryData[startID+2] = data2
-	_, ch2, err := segmentImpl.AppendAsync(context.Background(), startID+2, data2)
+	ch2 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+2, data2, ch2)
 	assert.NoError(t, err)
 	channels[startID+2] = ch2
 
@@ -586,27 +592,30 @@ func TestMixedAppendScenarios(t *testing.T) {
 	time.Sleep(2000 * time.Millisecond)
 	data1 := []byte("data-1")
 	entryData[startID+1] = data1
-	_, ch3, err := segmentImpl.AppendAsync(context.Background(), startID+1, data1)
+	ch3 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+1, data1, ch3)
 	assert.NoError(t, err)
 	channels[startID+1] = ch3
 
 	// Scenario 4: Out-of-bounds request
 	data5 := []byte("data-5_000_0000")
-	_, ch4, err := segmentImpl.AppendAsync(context.Background(), startID+5_000_0000, data5)
+	ch4 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+5_000_0000, data5, ch4)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrInvalidEntryId.Is(err))
-	assert.Equal(t, int64(-1), <-ch4) // This returns an error because it exceeds the window range
 
 	// Scenario 5: Fill missing request
 	data3 := []byte("data-3")
 	entryData[startID+3] = data3
-	_, ch5, err := segmentImpl.AppendAsync(context.Background(), startID+3, data3)
+	ch5 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+3, data3, ch5)
 	assert.NoError(t, err)
 	channels[startID+3] = ch5
 
 	data4 := []byte("data-4")
 	entryData[startID+4] = data4
-	_, ch6, err := segmentImpl.AppendAsync(context.Background(), startID+4, data4)
+	ch6 := make(chan int64, 1)
+	_, err = segmentImpl.AppendAsync(context.Background(), startID+4, data4, ch6)
 	assert.NoError(t, err)
 	channels[startID+4] = ch6
 
@@ -720,7 +729,8 @@ func TestFragmentRotation(t *testing.T) {
 			entryID := int64(i)
 			entryValue := []byte(fmt.Sprintf("test_data_%d", i))
 			entryData[entryID] = entryValue
-			id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue)
+			ch := make(chan int64, 1)
+			id, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue, ch)
 			assert.NoError(t, err)
 			assert.Equal(t, entryID, id)
 			resultChannels = append(resultChannels, ch)
@@ -813,7 +823,8 @@ func TestNewReader(t *testing.T) {
 			entryID := int64(i)
 			entryValue := []byte(fmt.Sprintf("test_data_%d", i))
 			entryData[entryID] = entryValue
-			id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue)
+			ch := make(chan int64, 1)
+			id, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue, ch)
 			assert.NoError(t, err)
 			assert.Equal(t, entryID, id)
 			resultChannels = append(resultChannels, ch)
@@ -975,7 +986,8 @@ func TestLoad(t *testing.T) {
 		for i := 0; i < initialEntries; i++ {
 			entryID := int64(i)
 			entryValue := []byte(fmt.Sprintf("test_data_%d", i))
-			id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue)
+			ch := make(chan int64, 1)
+			id, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue, ch)
 			assert.NoError(t, err)
 			assert.Equal(t, entryID, id)
 			resultChannels = append(resultChannels, ch)
@@ -1041,7 +1053,8 @@ func TestInvalidReaderRange(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		data := []byte{byte(i)}
 		// Use AppendAsync to get ID
-		id, resultCh, err := segmentImpl.AppendAsync(context.Background(), int64(i), data)
+		resultCh := make(chan int64, 1)
+		id, err := segmentImpl.AppendAsync(context.Background(), int64(i), data, resultCh)
 		assert.NoError(t, err)
 		// Wait for append to complete
 		select {
@@ -1130,7 +1143,8 @@ func TestReadAfterClose(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		entryID := int64(i)
 		entryValue := []byte(fmt.Sprintf("test_data_%d", i))
-		id, _, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue)
+		ch := make(chan int64, 1)
+		id, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue, ch)
 		assert.NoError(t, err)
 		assert.Equal(t, entryID, id)
 	}
@@ -1199,7 +1213,8 @@ func TestBasicReader(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		entryID := startID + int64(i)
 		data := []byte(fmt.Sprintf("data-%d", i))
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, data)
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryID, data, ch)
 		assert.NoError(t, err)
 		<-ch // Wait for write to complete
 	}
@@ -1288,7 +1303,8 @@ func TestSequentialBufferAppend(t *testing.T) {
 	// Test continuous ordered write
 	for i := 0; i < 5; i++ {
 		data := []byte(fmt.Sprintf("data-%d", i))
-		id, ch, err := dlf.AppendAsync(context.Background(), int64(i), data)
+		ch := make(chan int64, 1)
+		id, err := dlf.AppendAsync(context.Background(), int64(i), data, ch)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(i), id)
 		<-ch // Wait for write to complete
@@ -1352,8 +1368,8 @@ func TestWrite10kAndReadInOrder(t *testing.T) {
 		// Create data, include ID information for verification
 		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
 		entryData[id] = data
-
-		assignedID, ch, err := segmentImpl.AppendAsync(context.Background(), int64(id), data)
+		ch := make(chan int64, 1)
+		assignedID, err := segmentImpl.AppendAsync(context.Background(), int64(id), data, ch)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
 		resultChannels[id] = ch
@@ -1502,7 +1518,8 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 		data := []byte(fmt.Sprintf("data-for-entry-%d", id))
 		entryData[id] = data
 
-		assignedID, ch, err := segmentImpl.AppendAsync(context.Background(), int64(id), data)
+		ch := make(chan int64, 1)
+		assignedID, err := segmentImpl.AppendAsync(context.Background(), int64(id), data, ch)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(id), assignedID, "Assigned ID should match requested ID")
 		resultChannels[id] = ch
@@ -1759,7 +1776,8 @@ func TestDeleteFragments(t *testing.T) {
 					entryID := int64(i)
 					entryValue := []byte(fmt.Sprintf("test_data_%d", i))
 					entryData[entryID] = entryValue
-					id, ch, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue)
+					ch := make(chan int64, 1)
+					id, err := segmentImpl.AppendAsync(context.Background(), entryID, entryValue, ch)
 					assert.NoError(t, err)
 					assert.Equal(t, entryID, id)
 					resultChannels = append(resultChannels, ch)

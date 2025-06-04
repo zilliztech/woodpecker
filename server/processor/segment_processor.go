@@ -49,7 +49,7 @@ const (
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
-	AddEntry(context.Context, *SegmentEntry) (int64, <-chan int64, error)
+	AddEntry(context.Context, *SegmentEntry, chan<- int64) (int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	IsFenced(ctx context.Context) bool
@@ -146,7 +146,7 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) {
 	}
 }
 
-func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (int64, <-chan int64, error) {
+func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh chan<- int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
@@ -157,30 +157,30 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry) (i
 	if s.IsFenced(ctx) {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "fenced").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "fenced").Observe(float64(time.Since(start).Milliseconds()))
-		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
+		return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
 	}
 
 	segmentWriter, err := s.getOrCreateSegmentWriter(ctx)
 	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "writer_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "writer_error").Observe(float64(time.Since(start).Milliseconds()))
-		return -1, nil, err
+		return -1, err
 	}
 
-	bufferedSeqNo, syncedCh, err := segmentWriter.AppendAsync(ctx, entry.EntryId, entry.Data)
+	bufferedSeqNo, err := segmentWriter.AppendAsync(ctx, entry.EntryId, entry.Data, resultCh)
 	if bufferedSeqNo == -1 {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Observe(float64(time.Since(start).Milliseconds()))
-		return -1, syncedCh, fmt.Errorf("failed to append to log file")
+		return -1, fmt.Errorf("failed to append to log file")
 	} else if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return -1, syncedCh, err
+		return -1, err
 	}
 
 	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Inc()
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return bufferedSeqNo, syncedCh, nil
+	return bufferedSeqNo, nil
 }
 
 func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {

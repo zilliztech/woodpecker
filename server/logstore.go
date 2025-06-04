@@ -47,7 +47,7 @@ type LogStore interface {
 	GetAddress() string
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
-	AddEntry(context.Context, int64, *processor.SegmentEntry) (int64, <-chan int64, error)
+	AddEntry(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)
 	GetEntry(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)
 	GetBatchEntries(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)
 	FenceSegment(context.Context, int64, int64) error
@@ -117,7 +117,7 @@ func (l *logStore) Register(ctx context.Context) error {
 	return nil
 }
 
-func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry) (int64, <-chan int64, error) {
+func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
@@ -129,25 +129,25 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.S
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error_get_processor").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
-		return -1, nil, err
+		return -1, err
 	}
 	if segmentProcessor.IsFenced(ctx) {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "segment_fenced").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "segment_fenced").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Debug("add entry reject, segment is fenced", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId))
-		return -1, nil, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced, reject add entry:%d", logId, entry.SegmentId, entry.EntryId))
+		return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced, reject add entry:%d", logId, entry.SegmentId, entry.EntryId))
 	}
-	entryId, syncedCh, err := segmentProcessor.AddEntry(ctx, entry)
+	entryId, err := segmentProcessor.AddEntry(ctx, entry, syncedResultCh)
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
-		return -1, nil, werr.ErrSegmentWriteException.WithCauseErr(err)
+		return -1, werr.ErrSegmentWriteException.WithCauseErr(err)
 	}
 
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Inc()
 	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return entryId, syncedCh, nil
+	return entryId, nil
 }
 
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (processor.SegmentProcessor, error) {

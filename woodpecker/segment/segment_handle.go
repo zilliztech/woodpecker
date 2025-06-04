@@ -100,9 +100,8 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 				"127.0.0.1",
 			},
 		},
-		executor:             NewSequentialExecutor(executeRequestMaxQueueSize),
-		failedAppendOpsQueue: list.New(),
-		cfg:                  cfg,
+		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:      cfg,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
@@ -134,9 +133,8 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 				"127.0.0.1",
 			},
 		},
-		executor:             NewSequentialExecutor(executeRequestMaxQueueSize),
-		failedAppendOpsQueue: list.New(),
-		cfg:                  cfg,
+		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:      cfg,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
@@ -170,8 +168,6 @@ type segmentHandleImpl struct {
 
 	executor *SequentialExecutor
 
-	failedAppendOpsQueue *list.List
-
 	doingRecoveryOrCompact atomic.Bool
 }
 
@@ -184,8 +180,15 @@ func (s *segmentHandleImpl) GetId(ctx context.Context) int64 {
 }
 
 func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "AppendAsync")
 	defer sp.End()
+
+	// Check fenced state first without lock to avoid deadlock
+	if s.fencedState.Load() {
+		callback(s.segmentId, -1, werr.ErrSegmentFenced)
+		return
+	}
+
 	s.Lock()
 	defer s.Unlock()
 	currentSegmentMeta := s.segmentMetaCache.Load()
@@ -196,24 +199,26 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 		return
 	}
 
-	// check segment is fenced
-	isFenced, _ := s.IsFence(ctx)
-	if isFenced {
+	// Double-check fenced state under lock
+	if s.fencedState.Load() {
 		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentFenced)
 		return
 	}
 
-	// Create pending append operation and execute asynchronously
+	// Create pending append operation
 	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
-	//fmt.Printf("pushed %d \n", appendOp.entryId)
-	s.appendOpsQueue.PushBack(appendOp)
-	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
-	metrics.WpClientAppendRequestsTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
+
+	// Try to submit first, only add to queue if successful
 	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
 		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
 		return
 	}
+
+	// Only add to queue and update metrics after successful submit
+	s.appendOpsQueue.PushBack(appendOp)
 	s.pendingSize.Add(int64(len(bytes)))
+	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
+	metrics.WpClientAppendRequestsTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -232,13 +237,20 @@ func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []b
 
 // SendAppendSuccessCallbacks will do ack sequentially
 func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64) {
-	logger.Ctx(ctx).Debug(fmt.Sprintf("SendAppendSuccessCallbacks by: %d", triggerEntryId))
+	logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks trigger", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("triggerEntryId", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
 	// success executed one by one in sequence
 	elementsToRemove := make([]*list.Element, 0)
+	if s.appendOpsQueue.Len() <= 0 {
+		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks with appendOps empty queue, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId))
+		return
+	}
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		op := e.Value.(*AppendOp)
+		op, ok := e.Value.(*AppendOp)
+		if !ok {
+			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks op is not append op", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("op", fmt.Sprintf("%v", e.Value)))
+		}
 		if !op.completed.Load() {
 			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
@@ -254,8 +266,8 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 		s.lastAddConfirmed.Store(op.entryId)
 		// update size
 		s.commitedSize.Add(int64(len(op.value)))
-		// callback
-		op.callback(op.segmentId, op.entryId, nil)
+		// success callback
+		op.FastSuccess(ctx)
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
@@ -329,7 +341,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
-		op.callback(s.segmentId, op.entryId, err)
+		op.FastFail(ctx, err)
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 	}
 }
@@ -505,11 +517,16 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 	if !s.closedState.CompareAndSwap(false, true) {
 		return nil
 	}
+
+	// Acquire lock to ensure mutual exclusion with AppendAsync
+	s.Lock()
+	defer s.Unlock()
+
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
-	// error out all pending append operations
-	s.SendAppendErrorCallbacks(ctx, -1, werr.ErrSegmentClosed)
+	// fast fail all pending append operations
+	s.fastFailAppendOpsUnsafe(ctx, werr.ErrSegmentClosed)
 
 	// shutdown segment executor
 	s.executor.Stop(ctx)
@@ -520,25 +537,45 @@ func (s *segmentHandleImpl) Close(ctx context.Context) error {
 		// not active writable segmentHandle, just return
 		return nil
 	}
-	// TODO should wait all appendOp end before using lac to update metadata, otherwise, let it be completed by auditor later
-	//newSegmentMeta := currentSegmentMeta.CloneVT()
-	//newSegmentMeta.State = proto.SegmentState_Completed
-	//newSegmentMeta.Size = s.commitedSize.Load()
-	//newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
-	//newSegmentMeta.CompletionTime = time.Now().UnixMilli()
-	//err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	//if err != nil {
-	//	logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime), zap.Error(err))
-	//	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Inc()
-	//	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
-	//} else {
-	//logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime))
-	logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
-	//}
-	//return err
-	return nil
+	newSegmentMeta := currentSegmentMeta.CloneVT()
+	newSegmentMeta.State = proto.SegmentState_Completed
+	newSegmentMeta.Size = s.commitedSize.Load()
+	newSegmentMeta.LastEntryId = s.lastAddConfirmed.Load()
+	newSegmentMeta.CompletionTime = time.Now().UnixMilli()
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	if err != nil {
+		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime), zap.Error(err))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+	} else {
+		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", newSegmentMeta.LastEntryId), zap.Int64("completionTime", newSegmentMeta.CompletionTime))
+		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+	}
+	return err
+}
+
+func (s *segmentHandleImpl) fastFailAppendOps(ctx context.Context, err error) {
+	s.Lock()
+	defer s.Unlock()
+	s.fastFailAppendOpsUnsafe(ctx, err)
+}
+
+func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, err error) {
+	logger.Ctx(ctx).Info("fastFailAppendOps", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(err))
+	// check exists in queue currently, avoid delay ack
+	elementsToRemove := make([]*list.Element, 0)
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		element := e
+		op := element.Value.(*AppendOp)
+		op.FastFail(ctx, err)
+		elementsToRemove = append(elementsToRemove, element)
+	}
+	// Clear the queue
+	for _, element := range elementsToRemove {
+		s.appendOpsQueue.Remove(element)
+	}
 }
 
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
@@ -579,31 +616,52 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 func (s *segmentHandleImpl) Fence(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
+
+	// Acquire lock to ensure mutual exclusion with AppendAsync
+	s.Lock()
+	defer s.Unlock()
+
 	if s.fencedState.Load() {
 		return nil
 	}
+
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
+
+	// First, fast fail all pending append operations
+	s.fastFailAppendOpsUnsafe(ctx, werr.ErrSegmentFenced)
+
+	// Set fenced state to prevent new append operations
+	s.fencedState.Store(true)
+
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
+		// Revert fenced state on error
+		s.fencedState.Store(false)
 		return err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		// Revert fenced state on error
+		s.fencedState.Store(false)
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
+		// Revert fenced state on error
+		s.fencedState.Store(false)
 		return err
 	}
 	err = cli.FenceSegment(ctx, s.logId, s.segmentId)
 	if err != nil {
+		// Revert fenced state on storage fence failure
+		s.fencedState.Store(false)
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
-	s.fencedState.Store(true)
+
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
@@ -638,6 +696,18 @@ func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "is_fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return false, err
 	}
+
+	// Sync local state with remote state
+	if isSegFenced && !s.fencedState.Load() {
+		s.Lock()
+		// Double-check under lock
+		if !s.fencedState.Load() {
+			s.fastFailAppendOpsUnsafe(ctx, werr.ErrSegmentFenced)
+			s.fencedState.Store(true)
+		}
+		s.Unlock()
+	}
+
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "is_fence", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "is_fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return isSegFenced, err
@@ -671,7 +741,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	// only one recovery operation at the same time
-	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
+	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return nil
 	}

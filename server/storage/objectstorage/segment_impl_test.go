@@ -111,7 +111,8 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -159,7 +160,8 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -206,7 +208,8 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 	incomeEntryIds := []int64{0}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -284,7 +287,8 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -333,7 +337,8 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -358,7 +363,8 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	// fill finally
 	newIncomeEntryIds := []int64{0, 2, 5, 6, 7} // rest of the entries
 	for _, entryId := range newIncomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -407,7 +413,8 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 	incomeEntryIds := []int64{1, 0, 6, 8, 9, 7, 2, 3, 4, 5}
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)
@@ -454,14 +461,14 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 	incomeEntryIds := []int64{1, 0, 6, 11, 12, 10, 7, 2, 3, 4, 5} // 0-7,10-12
 	chList := make([]<-chan int64, 0)
 	for _, entryId := range incomeEntryIds {
-		assignId, ch, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"))
+		ch := make(chan int64, 1)
+		assignId, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
 		if entryId >= 10 {
 			// 10-12 should async write buffer fail
 			assert.Equal(t, int64(-1), assignId)
 			assert.Error(t, err)
 			assert.True(t, werr.ErrInvalidEntryId.Is(err))
 			assert.NotNil(t, ch)
-			assert.Equal(t, int64(-1), <-ch)
 		} else {
 			// 0-7 should async write buffer success
 			assert.Equal(t, entryId, assignId)
@@ -517,10 +524,12 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 800 + 200 = buffer max data size, sync immediately
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize1/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data800)
+		ch0 := make(chan int64, 1)
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, ch0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data200)
+		ch1 := make(chan int64, 1)
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// reach the max size, should be immediate flush
@@ -539,10 +548,12 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 200 + 300, wait for flush
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize2/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data200)
+		ch0 := make(chan int64, 1)
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, ch0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data300)
+		ch1 := make(chan int64, 1)
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, ch1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// wait for flush
@@ -560,10 +571,12 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 200 + 300, wait for flush
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize3/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data200)
+		ch0 := make(chan int64, 1)
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, ch0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data300)
+		ch1 := make(chan int64, 1)
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, ch1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// wait for flush
@@ -583,7 +596,8 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// the second append 200 should be wait for flush.
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize4/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data1k)
+		ch0 := make(chan int64, 1)
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data1k, ch0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
 		// flush immediately
@@ -596,7 +610,8 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data200)
+		ch1 := make(chan int64, 1)
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// wait for flush
@@ -613,10 +628,12 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test append 1(800),3(300), trigger flush 1(800). then append 2(200), wait for flush  2(200) + 3(300)
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize5/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		assignId0, ch0, err := segmentImpl.AppendAsync(context.Background(), 0, data800)
+		ch0 := make(chan int64, 1)
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, ch0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		assignId2, ch2, err := segmentImpl.AppendAsync(context.Background(), 2, data300)
+		ch2 := make(chan int64, 1)
+		assignId2, err := segmentImpl.AppendAsync(context.Background(), 2, data300, ch2)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(2), assignId2)
 		// flush 1(800) immediately
@@ -629,7 +646,8 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		assignId1, ch1, err := segmentImpl.AppendAsync(context.Background(), 1, data200)
+		ch1 := make(chan int64, 1)
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 
@@ -672,7 +690,8 @@ func TestSync(t *testing.T) {
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
 	for i := 0; i < 100; i++ {
-		assignId, ch, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
+		ch := make(chan int64, 1)
+		assignId, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), ch)
 		assert.Equal(t, int64(i), assignId)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
@@ -726,7 +745,8 @@ func TestClose(t *testing.T) {
 	// Write some data to buffer
 	chList := make([]<-chan int64, 0)
 	for i := 0; i < 100; i++ {
-		_, ch, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"))
+		ch := make(chan int64, 1)
+		_, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), ch)
 		assert.NoError(t, err)
 		assert.NotNil(t, ch)
 		chList = append(chList, ch)

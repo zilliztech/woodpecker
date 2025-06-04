@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
@@ -61,13 +63,8 @@ func TestAppendAsync_Success(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(false, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
-	// int64, <-chan int64, error
-	ch := make(chan int64, 1)
-	ch <- 0
-	close(ch)
-	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything).Return(0, ch, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(0, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -93,7 +90,21 @@ func TestAppendAsync_Success(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	segmentHandle.AppendAsync(context.Background(), []byte("test"), callback)
-	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	op := segImpl.appendOpsQueue.Front().Value
+	appendOp := op.(*AppendOp)
+	go func(op2 *AppendOp) {
+		for i := 0; i < 5; i++ {
+			if len(appendOp.resultChannels) > 0 {
+				appendOp.resultChannels[0] <- 0
+				close(appendOp.resultChannels[0])
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Errorf("Wait timeout for append")
+	}(appendOp)
+	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.True(t, callbackCalled)
 }
 
@@ -101,23 +112,19 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(false, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
-		ch := make(chan int64, 1)
-		ch <- int64(i)
-		close(ch)
 		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 			SegmentId: 1,
 			EntryId:   int64(i),
 			Data:      []byte(fmt.Sprintf("test_%d", i)),
-		}).Return(int64(i), ch, nil)
+		}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				SegmentAppend: config.SegmentAppendConfig{
-					QueueSize:  10, // only 10 execute queue, so some callback will be block but finally success
+					QueueSize:  25,
 					MaxRetries: 2,
 				},
 			},
@@ -134,16 +141,39 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
 	for i := 0; i < 20; i++ {
+		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
 			callbackCalledNum++
 			assert.Equal(t, int64(1), segmentId)
-			assert.Equal(t, int64(i), entryId)
+			assert.Equal(t, int64(entryIndex), entryId)
 			assert.Nil(t, err)
 			syncedIds = append(syncedIds, entryId)
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
-	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
+
+	// Manually trigger the async callbacks
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	go func() {
+		processedCount := 0
+		maxAttempts := 50
+		attempts := 0
+		for processedCount < 20 && attempts < maxAttempts {
+			time.Sleep(20 * time.Millisecond)
+			attempts++
+
+			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+				appendOp := e.Value.(*AppendOp)
+				if len(appendOp.resultChannels) > 0 {
+					appendOp.resultChannels[0] <- appendOp.entryId
+					close(appendOp.resultChannels[0])
+					processedCount++
+				}
+			}
+		}
+	}()
+
+	time.Sleep(500 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 20, callbackCalledNum)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, syncedIds)
 }
@@ -152,7 +182,6 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(false, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
 		ch := make(chan int64, 1)
@@ -164,16 +193,15 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil)
+			}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
 		} else {
 			// 2 fail, and retry 3 times
 			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, errors.New("test error"))
+			}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), errors.New("test error"))
 		}
-
 	}
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -197,24 +225,47 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	successAttempts := 0
 	syncedIds := make([]int64, 0)
 	for i := 0; i < 5; i++ {
+		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
-			if i >= 2 {
+			if entryIndex >= 2 {
 				failedAttempts++
 				// received callback 2,3,4 fail
 				assert.Error(t, err)
 				assert.Equal(t, int64(1), segmentId)
-				assert.Equal(t, int64(i), entryId)
+				assert.Equal(t, int64(entryIndex), entryId)
 			} else {
 				successAttempts++
 				// received callback 0,1 success
 				assert.NoError(t, err)
 				assert.Equal(t, int64(1), segmentId)
-				assert.Equal(t, int64(i), entryId)
+				assert.Equal(t, int64(entryIndex), entryId)
 				syncedIds = append(syncedIds, entryId)
 			}
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
+
+	// Manually trigger the async callbacks
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	go func() {
+		processedCount := 0
+		maxAttempts := 50
+		attempts := 0
+		for processedCount < 5 && attempts < maxAttempts {
+			time.Sleep(20 * time.Millisecond)
+			attempts++
+
+			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+				appendOp := e.Value.(*AppendOp)
+				if len(appendOp.resultChannels) > 0 {
+					appendOp.resultChannels[0] <- appendOp.entryId
+					close(appendOp.resultChannels[0])
+					processedCount++
+				}
+			}
+		}
+	}()
+
 	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 2, successAttempts) // 0,1
 	assert.Equal(t, 3, failedAttempts)  // 2,3,4
@@ -225,34 +276,9 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(false, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
-		ch := make(chan int64, 1)
-		ch <- int64(i)
-		close(ch)
-		if i != 2 {
-			// 0,1,3,4 success
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil)
-		} else {
-			// two failed attempts to append entry 2
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, werr.ErrSegmentWriteException).Times(2)
-			// append entry 2 success at the 3rd retry
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil)
-		}
-
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -276,11 +302,12 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	successCount := 0
 	syncedIds := make([]int64, 0)
 	for i := 0; i < 5; i++ {
+		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
 			callbackCalled++
 			assert.NoError(t, err, fmt.Sprintf("entry:%d add fail", entryId))
 			assert.Equal(t, int64(1), segmentId)
-			assert.Equal(t, int64(i), entryId)
+			assert.Equal(t, int64(entryIndex), entryId)
 			if err == nil {
 				successCount++
 				syncedIds = append(syncedIds, entryId)
@@ -288,7 +315,29 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
-	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
+
+	// Manually trigger the async callbacks
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	go func() {
+		processedCount := 0
+		maxAttempts := 50
+		attempts := 0
+		for processedCount < 5 && attempts < maxAttempts {
+			time.Sleep(20 * time.Millisecond)
+			attempts++
+
+			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+				appendOp := e.Value.(*AppendOp)
+				if len(appendOp.resultChannels) > 0 {
+					appendOp.resultChannels[0] <- appendOp.entryId
+					close(appendOp.resultChannels[0])
+					processedCount++
+				}
+			}
+		}
+	}()
+
+	time.Sleep(1000 * time.Millisecond)
 	assert.Equal(t, 5, callbackCalled)
 	assert.Equal(t, 5, successCount)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4}, syncedIds)
@@ -298,49 +347,16 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(false, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
-		ch := make(chan int64, 1)
-		ch <- int64(i)
-		close(ch)
-		if i%2 == 0 {
-			// 0,2,4,6,8,10,12,14,16,18,20  fail first time,
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil).Times(1)
-			// 0,2,4,6,8,10,12,14,16,18,20  success at the second time,
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil)
-		} else {
-			// 1,3,5,7,9,11,13,15,17,19  success first time
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}).Return(int64(i), ch, nil)
-		}
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-			SegmentId: 1,
-			EntryId:   int64(i),
-			Data:      []byte(fmt.Sprintf("test_%d", i)),
-		}).Return(int64(i), ch, nil)
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
 	}
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				SegmentAppend: config.SegmentAppendConfig{
-					QueueSize:  10, // only 10 execute queue, so some callback will be block but finally success
-					MaxRetries: 2,
-				},
-			},
-		},
-	}
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Client.SegmentAppend.QueueSize = 10
+	cfg.Woodpecker.Client.SegmentAppend.MaxRetries = 2
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+	_ = tracer.InitTracer(cfg, "test", 1001)
 
 	segmentMeta := &proto.SegmentMetadata{
 		SegNo:       1,
@@ -361,14 +377,45 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
-	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	go func() {
+		processedCount := 0
+		maxAttempts := 10
+		attempts := 0
+		for processedCount < 20 && attempts < maxAttempts {
+			time.Sleep(1000 * time.Millisecond)
+			attempts++
+			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+				appendOp := e.Value.(*AppendOp)
+				// when chan ready
+				if len(appendOp.resultChannels) > 0 {
+					if appendOp.entryId == 2 {
+						fmt.Sprintf("debug")
+					}
+					if appendOp.entryId%2 == 0 && appendOp.attempt <= 1 {
+						// if attempt=1 and entryId is even, mock fail in this attempt
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						appendOp.resultChannels[0] <- -1
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+					} else {
+						// otherwise, mock success
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						appendOp.resultChannels[0] <- appendOp.entryId
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						processedCount++
+					}
+				}
+			}
+		}
+	}()
+	time.Sleep(5000 * time.Millisecond) // Give some time for the async operation to complete
 	assert.Equal(t, 20, callbackCalledNum)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, syncedIds)
 }
 
 func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	//mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)

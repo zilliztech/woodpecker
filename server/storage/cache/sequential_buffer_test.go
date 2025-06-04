@@ -20,6 +20,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -137,7 +138,7 @@ func TestWriteEntryWithNotify(t *testing.T) {
 	assert.NotNil(t, entry)
 	assert.Equal(t, int64(1), entry.EntryId)
 	assert.Equal(t, []byte("data1"), entry.Data)
-	assert.Equal(t, ch, entry.NotifyChan)
+	assert.NotNil(t, entry.NotifyChan)
 
 	// Test notification
 	buffer.NotifyEntriesInRange(context.TODO(), 1, 2, 1) // result >= 0 means success
@@ -541,4 +542,211 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 	fmt.Println("\n=== Test Summary ===")
 	fmt.Println("✓ Successful entries (result >= 0): Each entry receives its own EntryId")
 	fmt.Println("✓ Failed entries (result < 0): All entries receive the same error result")
+}
+
+// TestNotifyEntriesInRangeWithClosedChannels tests notification behavior when channels are closed
+func TestNotifyEntriesInRangeWithClosedChannels(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
+
+	// Add entries with notification channels
+	ch1 := make(chan int64, 1)
+	ch2 := make(chan int64, 1)
+	ch3 := make(chan int64, 1)
+
+	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+
+	// Close some channels before notification
+	close(ch1)
+	close(ch3)
+
+	// This should not panic even with closed channels
+	assert.NotPanics(t, func() {
+		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 100)
+	})
+
+	// Only ch2 should receive the notification
+	result := <-ch2
+	assert.Equal(t, int64(2), result) // Should receive its own ID
+
+	// Verify closed channels behavior - reading from closed channel returns zero value and false
+	select {
+	case val, ok := <-ch1:
+		if ok {
+			t.Fatalf("Channel ch1 should be closed, but received value: %d", val)
+		}
+		// Expected - channel is closed, val should be 0
+		assert.Equal(t, int64(0), val)
+	default:
+		// This is also acceptable - channel might not have any data
+	}
+
+	select {
+	case val, ok := <-ch3:
+		if ok {
+			t.Fatalf("Channel ch3 should be closed, but received value: %d", val)
+		}
+		// Expected - channel is closed, val should be 0
+		assert.Equal(t, int64(0), val)
+	default:
+		// This is also acceptable - channel might not have any data
+	}
+}
+
+// TestNotifyAllPendingEntriesWithClosedChannels tests NotifyAllPendingEntries with closed channels
+func TestNotifyAllPendingEntriesWithClosedChannels(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
+
+	// Add entries with notification channels
+	ch1 := make(chan int64, 1)
+	ch2 := make(chan int64, 1)
+	ch3 := make(chan int64, 1)
+
+	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+
+	// Close some channels before notification
+	close(ch1)
+	close(ch3)
+
+	// This should not panic even with closed channels
+	assert.NotPanics(t, func() {
+		buffer.NotifyAllPendingEntries(context.TODO(), 200)
+	})
+
+	// Only ch2 should receive the notification
+	result := <-ch2
+	assert.Equal(t, int64(2), result) // Should receive its own ID
+
+	// Verify closed channels behavior - reading from closed channel returns zero value and false
+	select {
+	case val, ok := <-ch1:
+		if ok {
+			t.Fatalf("Channel ch1 should be closed, but received value: %d", val)
+		}
+		// Expected - channel is closed, val should be 0
+		assert.Equal(t, int64(0), val)
+	default:
+		// This is also acceptable - channel might not have any data
+	}
+
+	select {
+	case val, ok := <-ch3:
+		if ok {
+			t.Fatalf("Channel ch3 should be closed, but received value: %d", val)
+		}
+		// Expected - channel is closed, val should be 0
+		assert.Equal(t, int64(0), val)
+	default:
+		// This is also acceptable - channel might not have any data
+	}
+}
+
+// TestResetWithClosedChannels tests Reset method with closed channels
+func TestResetWithClosedChannels(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
+
+	// Add entries with notification channels
+	ch1 := make(chan int64, 1)
+	ch2 := make(chan int64, 1)
+	ch3 := make(chan int64, 1)
+
+	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+
+	// Close some channels before reset
+	close(ch1)
+	close(ch3)
+
+	// This should not panic even with closed channels
+	assert.NotPanics(t, func() {
+		buffer.Reset(context.TODO())
+	})
+
+	// Only ch2 should receive the error notification
+	result := <-ch2
+	assert.Equal(t, int64(-1), result) // Should receive error result
+
+	// Verify buffer is reset
+	assert.Equal(t, int64(0), buffer.DataSize.Load())
+	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
+
+	// Check that all entries are nil after reset
+	for _, entry := range buffer.Entries {
+		assert.Nil(t, entry)
+	}
+}
+
+// TestMixedClosedAndFullChannels tests behavior with both closed and full channels
+func TestMixedClosedAndFullChannels(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 5)
+
+	// Add entries with different channel states
+	closedCh := make(chan int64)
+	close(closedCh) // Closed channel
+
+	fullCh := make(chan int64) // Unbuffered channel (will be full)
+
+	normalCh := make(chan int64, 1) // Normal buffered channel
+
+	buffer.WriteEntryWithNotify(1, []byte("data1"), closedCh)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), fullCh)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), normalCh)
+
+	// This should not panic or block
+	assert.NotPanics(t, func() {
+		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 300)
+	})
+
+	// Only normalCh should receive the notification
+	result := <-normalCh
+	assert.Equal(t, int64(3), result) // Should receive its own ID
+
+	// Verify fullCh didn't receive anything (because it's unbuffered and no reader)
+	select {
+	case <-fullCh:
+		t.Fatal("Should not receive from full channel")
+	default:
+		// Expected - channel was full
+	}
+}
+
+// TestConcurrentNotificationWithClosedChannels tests concurrent notifications with closed channels
+func TestConcurrentNotificationWithClosedChannels(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 10)
+
+	// Add multiple entries
+	channels := make([]chan int64, 5)
+	for i := 0; i < 5; i++ {
+		channels[i] = make(chan int64, 1)
+		buffer.WriteEntryWithNotify(int64(i+1), []byte(fmt.Sprintf("data%d", i+1)), channels[i])
+	}
+
+	// Close some channels
+	close(channels[0])
+	close(channels[2])
+	close(channels[4])
+
+	// Run multiple notifications concurrently
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(iteration int) {
+			defer wg.Done()
+			// This should not panic
+			assert.NotPanics(t, func() {
+				buffer.NotifyEntriesInRange(context.TODO(), 1, 6, int64(100+iteration))
+			})
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Only open channels should have received notifications
+	// Note: Due to concurrent access, we can't predict exact values,
+	// but we can verify no panics occurred and channels work
+	fmt.Println("Concurrent notification test completed without panics")
 }

@@ -145,12 +145,12 @@ func (f *SegmentImpl) GetId() int64 {
 	return f.segmentId
 }
 
-func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
+func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
 	defer sp.End()
 	if f.closed.Load() {
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, nil, werr.ErrLogFileClosed
+		return -1, werr.ErrLogFileClosed
 	}
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 
@@ -158,7 +158,6 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	logId := fmt.Sprintf("%d", f.logId)
 	segmentId := fmt.Sprintf("%d", f.segmentId)
 
-	ch := make(chan int64, 1)
 	// trigger sync by max buffer entries num
 	currentBuffer := f.buffer.Load()
 	pendingAppendId := currentBuffer.ExpectedNextEntryId.Load() + 1
@@ -171,26 +170,22 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 		err := f.Sync(ctx)
 		if err != nil {
 			// sync does not success
-			ch <- -1
-			close(ch)
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			return entryId, ch, err
+			return entryId, err
 		}
 	}
 
 	f.mu.Lock()
 	currentBuffer = f.buffer.Load()
 	// write buffer with notification channel
-	id, err := currentBuffer.WriteEntryWithNotify(entryId, data, ch)
+	id, err := currentBuffer.WriteEntryWithNotify(entryId, data, resultCh)
 	if err != nil {
 		// write to buffer failed
-		ch <- -1
-		close(ch)
 		f.mu.Unlock()
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return id, ch, err
+		return id, err
 	}
 	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	f.mu.Unlock()
@@ -208,7 +203,7 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
-	return id, ch, nil
+	return id, nil
 }
 
 // Deprecated: use AppendAsync instead
@@ -549,8 +544,8 @@ func (f *ROSegmentImpl) GetId() int64 {
 	return f.segmentId
 }
 
-func (f *ROSegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte) (int64, <-chan int64, error) {
-	return entryId, nil, werr.ErrNotSupport.WithCauseErrMsg("read only SegmentImpl reader cannot support append")
+func (f *ROSegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error) {
+	return entryId, werr.ErrNotSupport.WithCauseErrMsg("read only SegmentImpl reader cannot support append")
 }
 
 // Deprecated: use AppendAsync instead
