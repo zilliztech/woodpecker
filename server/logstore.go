@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	LogStoreScopeName = "WoodpeckerLogStore"
+	LogStoreScopeName = "LogStore"
 )
 
 //go:generate mockery --dir=./server --name=LogStore --structname=LogStore --output=mocks/mocks_server --filename=mock_logstore.go --with-expecter=true  --outpkg=mocks_server

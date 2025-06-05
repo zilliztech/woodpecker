@@ -38,7 +38,7 @@ import (
 )
 
 const (
-	SegmentHandleScopeName = "WoodpeckerSegmentHandle"
+	SegmentHandleScopeName = "SegmentHandle"
 )
 
 //go:generate mockery --dir=./woodpecker/segment --name=SegmentHandle --structname=SegmentHandle --output=mocks/mocks_woodpecker/mocks_segment_handle --filename=mock_segment_handle.go --with-expecter=true  --outpkg=mocks_segment_handle

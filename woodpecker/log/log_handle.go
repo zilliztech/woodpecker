@@ -72,7 +72,7 @@ type LogHandle interface {
 }
 
 const (
-	LogHandleScopeName = "WoodpeckerLogHandle"
+	LogHandleScopeName = "LogHandle"
 )
 
 var _ LogHandle = (*logHandleImpl)(nil)
@@ -84,6 +84,10 @@ type logHandleImpl struct {
 	Id             int64
 	LastSegmentId  atomic.Int64 // Holds the last segment ID for cache only; only used to fetch the next New segment ID.
 	SegmentHandles map[int64]segment.SegmentHandle
+	// Track last access time for segment handles to enable cleanup
+	SegmentHandleLastAccess map[int64]time.Time
+	// Track last cleanup time to avoid too frequent cleanup
+	lastCleanupTime time.Time
 	// active writable segment handle index
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
@@ -106,15 +110,17 @@ func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMet
 		}
 	}
 	l := &logHandleImpl{
-		Name:               name,
-		Id:                 logId,
-		SegmentHandles:     make(map[int64]segment.SegmentHandle),
-		WritableSegmentId:  -1,
-		Metadata:           meta,
-		ClientPool:         clientPool,
-		lastRolloverTimeMs: -1,
-		rollingPolicy:      defaultRollingPolicy,
-		cfg:                cfg,
+		Name:                    name,
+		Id:                      logId,
+		SegmentHandles:          make(map[int64]segment.SegmentHandle),
+		SegmentHandleLastAccess: make(map[int64]time.Time),
+		lastCleanupTime:         time.Now(),
+		WritableSegmentId:       -1,
+		Metadata:                meta,
+		ClientPool:              clientPool,
+		lastRolloverTimeMs:      -1,
+		rollingPolicy:           defaultRollingPolicy,
+		cfg:                     cfg,
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
 	return l
@@ -147,10 +153,10 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.Segme
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_segments", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_segments", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("failed to get segments", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
-	} else {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_segments", "success").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_segments", "success").Observe(float64(time.Since(start).Milliseconds()))
+		return nil, err
 	}
+	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_segments", "success").Inc()
+	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_segments", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return result, err
 }
 
@@ -167,9 +173,17 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		logger.Ctx(ctx).Warn("failed to acquire log writer lock", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(acquireLockErr))
 		return nil, acquireLockErr
 	}
+
 	// getOrCreate writable segment handle
 	_, err := l.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
+		// Release the acquired lock before returning error
+		if releaseErr := l.Metadata.ReleaseLogWriterLock(ctx, l.Name); releaseErr != nil {
+			logger.Ctx(ctx).Warn("failed to release log writer lock after error",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id),
+				zap.Error(releaseErr))
+		}
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("failed to acquire log writer lock", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
@@ -189,26 +203,31 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 
 	l.Lock()
 	defer l.Unlock()
+
+	// Clean up idle segment handles periodically, same as in GetExistsReadonlySegmentHandle
+	// This ensures cleanup happens even in write-only scenarios
+	l.tryCleanupIdleSegmentHandles(ctx)
+
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
 
 	// create new segment handle if not exists
 	if !writableExists {
-		handle, err := l.createAndCacheNewSegmentHandle(ctx)
+		handle, err := l.createAndCacheWritableSegmentHandle(ctx)
 		if err != nil {
 			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "create_error").Inc()
 			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "create_error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
-		} else {
-			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "success").Inc()
-			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
+			return nil, err
 		}
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "success").Inc()
+		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return handle, nil
 	}
 
 	// check if writable segment handle should be closed and create new segment handle
-	if l.shouldCloseAndCreateNewSegment(ctx, writeableSegmentHandle) {
+	if l.shouldCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle) {
 		// close old writable segment handle
-		newSeg, err := l.doCloseAndCreateNewSegment(ctx, writeableSegmentHandle)
+		newSeg, err := l.doCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle)
 		if err != nil {
 			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "rollover_error").Inc()
 			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "rollover_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -262,9 +281,16 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 
 	l.Lock()
 	defer l.Unlock()
+
+	// Clean up idle segment handles periodically based on time, not access count
+	// This ensures cleanup happens even if we don't hit exact multiples
+	l.tryCleanupIdleSegmentHandles(ctx)
+
 	// get from cache directly
 	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
 	if exists {
+		// Update last access time
+		l.SegmentHandleLastAccess[segmentId] = time.Now()
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "cache_hit").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "cache_hit").Observe(float64(time.Since(start).Milliseconds()))
 		return readableSegmentHandle, nil
@@ -286,6 +312,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	if segMeta != nil {
 		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false)
 		l.SegmentHandles[segmentId] = handle
+		l.SegmentHandleLastAccess[segmentId] = time.Now()
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "created").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "created").Observe(float64(time.Since(start).Milliseconds()))
 		return handle, nil
@@ -295,27 +322,28 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	return nil, nil
 }
 
-func (l *logHandleImpl) createAndCacheNewSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
-	newSegMeta, err := l.createNewSegmentMeta()
+func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+	newSegMeta, err := l.createNewSegmentMeta(ctx)
 	if err != nil {
 		return nil, err
 	}
 	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
+	l.SegmentHandleLastAccess[newSegMeta.SegNo] = time.Now()
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime
 	logger.Ctx(ctx).Debug("create and cache new SegmentHandle success", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.SegNo))
 	return newSegHandle, nil
 }
 
-func (l *logHandleImpl) shouldCloseAndCreateNewSegment(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
+func (l *logHandleImpl) shouldCloseAndCreateWritableSegmentHandle(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
 	size := segmentHandle.GetSize(ctx)
 	last := l.lastRolloverTimeMs
 	return l.rollingPolicy.ShouldRollover(ctx, size, last)
 }
 
-// doCloseAndCreateNewSegment fast close segment and create new segment, no need to wait for segment async compaction
-func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
+// doCloseAndCreateWritableSegmentHandle fast close segment and create new segment, no need to wait for segment async compaction
+func (l *logHandleImpl) doCloseAndCreateWritableSegmentHandle(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
 	logger.Ctx(ctx).Debug("start to close segment",
 		zap.String("logName", l.Name),
 		zap.Int64("logId", l.GetId()),
@@ -340,7 +368,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 
 	logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
 	// 2. create new segMeta(active)
-	newSegmentHandle, err := l.createAndCacheNewSegmentHandle(ctx)
+	newSegmentHandle, err := l.createAndCacheWritableSegmentHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -353,11 +381,7 @@ func (l *logHandleImpl) doCloseAndCreateNewSegment(ctx context.Context, oldSegme
 	return newSegmentHandle, nil
 }
 
-func (l *logHandleImpl) segmentCompactionCompletedCallback(logId int64, segmentMeta *proto.SegmentMetadata, err error) {
-	// TODO update meta or retry if failed
-}
-
-func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
+func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*proto.SegmentMetadata, error) {
 	// construct new segment metadata
 	segmentNo, err := l.GetNextSegmentId()
 	if err != nil {
@@ -374,7 +398,7 @@ func (l *logHandleImpl) createNewSegmentMeta() (*proto.SegmentMetadata, error) {
 		FragmentOffset: make([]int32, 0),
 	}
 	// create segment metadata
-	err = l.Metadata.StoreSegmentMetadata(context.Background(), l.Name, newSegmentMeta)
+	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, newSegmentMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -415,8 +439,16 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 		logger.Ctx(ctx).Warn("open log batch reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
 		return nil, err
 	}
+
 	err = l.Metadata.CreateReaderTempInfo(ctx, readerName, l.Id, startPoint.SegmentId, startPoint.EntryId)
 	if err != nil {
+		// Clean up the created reader before returning error
+		if closeErr := r.Close(ctx); closeErr != nil {
+			logger.Ctx(ctx).Warn("failed to close reader after CreateReaderTempInfo error",
+				zap.String("logName", l.Name),
+				zap.String("readerName", readerName),
+				zap.Error(closeErr))
+		}
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_reader", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("open log reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
@@ -734,14 +766,11 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	return nil
 }
 
-func (l *logHandleImpl) getCurrentMinMaxSegmentId(ctx context.Context) (int64, int64, error) {
-	// TODO
-	return 0, -1, nil
-}
-
 func (l *logHandleImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
 	defer sp.End()
+
+	var lastError error
 	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.Fence(ctx)
@@ -751,6 +780,9 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
 				zap.Error(err))
+			if lastError == nil {
+				lastError = err
+			}
 		}
 		err = segmentHandle.Close(ctx)
 		if err != nil {
@@ -759,8 +791,73 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
 				zap.Error(err))
-			return err
+			if lastError == nil {
+				lastError = err
+			}
 		}
 	}
-	return nil
+
+	// Clear the segment handles map to prevent memory leaks
+	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
+	l.SegmentHandleLastAccess = make(map[int64]time.Time)
+	l.WritableSegmentId = -1
+
+	return lastError
+}
+
+// tryCleanupIdleSegmentHandles attempts to clean up idle segment handles if conditions are met
+// This method should be called while holding the write lock
+func (l *logHandleImpl) tryCleanupIdleSegmentHandles(ctx context.Context) {
+	// Cleanup configuration - centralized for easy modification
+	const cleanupInterval = 30 * time.Second // How often to check for cleanup
+	const maxIdleTime = 1 * time.Minute      // How long a segment can be idle before cleanup
+	const minSegmentThreshold = 5            // Minimum segments before cleanup is considered
+
+	now := time.Now()
+	if len(l.SegmentHandles) > minSegmentThreshold && now.Sub(l.lastCleanupTime) > cleanupInterval {
+		l.cleanupIdleSegmentHandles(ctx, maxIdleTime)
+		l.lastCleanupTime = now
+	}
+}
+
+// cleanupIdleSegmentHandles removes segment handles that haven't been accessed for the specified duration
+// This method should be called while holding the write lock
+func (l *logHandleImpl) cleanupIdleSegmentHandles(ctx context.Context, maxIdleTime time.Duration) {
+	now := time.Now()
+	var toRemove []int64
+
+	for segmentId, lastAccess := range l.SegmentHandleLastAccess {
+		// Don't cleanup the current writable segment
+		if segmentId == l.WritableSegmentId {
+			continue
+		}
+
+		if now.Sub(lastAccess) > maxIdleTime {
+			toRemove = append(toRemove, segmentId)
+		}
+	}
+
+	for _, segmentId := range toRemove {
+		if handle, exists := l.SegmentHandles[segmentId]; exists {
+			// Try to close the handle gracefully
+			if err := handle.Close(ctx); err != nil {
+				logger.Ctx(ctx).Warn("failed to close segment handle during cleanup",
+					zap.String("logName", l.Name),
+					zap.Int64("segmentId", segmentId),
+					zap.Error(err))
+			}
+			delete(l.SegmentHandles, segmentId)
+			delete(l.SegmentHandleLastAccess, segmentId)
+			logger.Ctx(ctx).Debug("cleaned up idle segment handle",
+				zap.String("logName", l.Name),
+				zap.Int64("segmentId", segmentId))
+		}
+	}
+
+	if len(toRemove) > 0 {
+		logger.Ctx(ctx).Info("cleaned up idle segment handles",
+			zap.String("logName", l.Name),
+			zap.Int("cleanedCount", len(toRemove)),
+			zap.Int("remainingCount", len(l.SegmentHandles)))
+	}
 }

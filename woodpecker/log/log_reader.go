@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	ReaderScopeName = "WoodpeckerLogReader"
+	ReaderScopeName = "LogReader"
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle

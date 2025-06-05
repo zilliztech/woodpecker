@@ -40,7 +40,7 @@ import (
 )
 
 const (
-	CurrentScopeName = "WoodpeckerMeta"
+	CurrentScopeName = "Meta"
 )
 
 var _ MetadataProvider = (*metadataProviderEtcd)(nil)

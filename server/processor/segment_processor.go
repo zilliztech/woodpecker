@@ -40,7 +40,7 @@ import (
 )
 
 const (
-	ProcessorScopeName = "WoodpeckerSegmentProcessor"
+	ProcessorScopeName = "SegmentProcessor"
 )
 
 // SegmentProcessor for segment processing in server side
