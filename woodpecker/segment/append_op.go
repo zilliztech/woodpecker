@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"go.uber.org/zap"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,7 @@ var _ Operation = (*AppendOp)(nil)
 // If it is, it sends an acknowledgment back to the application.
 // If a LogStore fails, it retries multiple times.
 type AppendOp struct {
+	mu        sync.Mutex
 	logId     int64
 	segmentId int64
 	entryId   int64
@@ -94,6 +96,8 @@ func (op *AppendOp) Identifier() string {
 func (op *AppendOp) Execute() {
 	ctx, sp := logger.NewIntentCtx("AppendOp", fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId))
 	defer sp.End()
+	op.mu.Lock()
+	defer op.mu.Unlock()
 	// get ES/WQ/AQ
 	quorumInfo, err := op.handle.GetQuorumInfo(ctx)
 	if err != nil {
@@ -187,6 +191,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 }
 
 func (op *AppendOp) FastFail(ctx context.Context, err error) {
+	op.mu.Lock()
+	defer op.mu.Unlock()
 	// Use atomic operation to ensure it is executed only once
 	if !op.fastCalled.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail already called for log:%d seg:%d entry:%d, skipping", op.logId, op.segmentId, op.entryId))
@@ -219,6 +225,8 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 }
 
 func (op *AppendOp) FastSuccess(ctx context.Context) {
+	op.mu.Lock()
+	defer op.mu.Unlock()
 	// Use atomic operation to ensure it is executed only once
 	if !op.fastCalled.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess already called for log:%d seg:%d entry:%d, skipping", op.logId, op.segmentId, op.entryId))

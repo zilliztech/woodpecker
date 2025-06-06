@@ -58,6 +58,7 @@ type SegmentProcessor interface {
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
 	Clean(ctx context.Context, flag int) error
+	Close(ctx context.Context) error
 }
 
 func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler) SegmentProcessor {
@@ -573,5 +574,37 @@ func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 
 	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "clean", "success").Inc()
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return nil
+}
+
+func (s *segmentProcessor) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Close")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", s.logId)
+	segIdStr := fmt.Sprintf("%d", s.segId)
+
+	if s.currentSegmentWriter != nil {
+		err := s.currentSegmentWriter.Close(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Error("close segment writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Inc()
+			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Observe(float64(time.Since(start).Milliseconds()))
+			return err
+		}
+	}
+
+	if s.currentSegmentReader != nil {
+		err := s.currentSegmentReader.Close(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Error("close segment reader failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Inc()
+			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Observe(float64(time.Since(start).Milliseconds()))
+			return err
+		}
+	}
+
+	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "success").Inc()
+	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }

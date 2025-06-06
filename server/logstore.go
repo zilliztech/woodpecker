@@ -20,6 +20,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -71,17 +72,22 @@ type logStore struct {
 
 	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]processor.SegmentProcessor
+	// Track last access time for segment processors to enable cleanup
+	segmentProcessorLastAccess map[int64]map[int64]time.Time
+	// Track last cleanup time to avoid too frequent cleanup
+	lastCleanupTime time.Time
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	return &logStore{
-		cfg:               cfg,
-		ctx:               ctx,
-		cancel:            cancel,
-		etcdCli:           etcdCli,
-		minioCli:          minioCli,
-		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
+		cfg:                        cfg,
+		ctx:                        ctx,
+		cancel:                     cancel,
+		etcdCli:                    etcdCli,
+		minioCli:                   minioCli,
+		segmentProcessors:          make(map[int64]map[int64]processor.SegmentProcessor),
+		segmentProcessorLastAccess: make(map[int64]map[int64]time.Time),
 	}
 }
 
@@ -95,6 +101,21 @@ func (l *logStore) Start() error {
 }
 func (l *logStore) Stop() error {
 	l.cancel()
+
+	// Clean up all segment processors
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
+
+	for logId, processors := range l.segmentProcessors {
+		for segmentId, processor := range processors {
+			l.closeSegmentProcessorUnsafe(context.Background(), logId, segmentId, processor)
+		}
+	}
+
+	// Clear the maps
+	l.segmentProcessors = make(map[int64]map[int64]processor.SegmentProcessor)
+	l.segmentProcessorLastAccess = make(map[int64]map[int64]time.Time)
+
 	metrics.WpLogStoreRunningTotal.WithLabelValues("default").Add(-1)
 	return nil
 }
@@ -153,16 +174,32 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.S
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64, segmentId int64) (processor.SegmentProcessor, error) {
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
+
+	// Try cleanup idle processors if conditions are met
+	l.tryCleanupIdleSegmentProcessorsUnsafe(ctx)
+
 	segProcessors := make(map[int64]processor.SegmentProcessor)
+	segAccessTimes := make(map[int64]time.Time)
+
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		segProcessors = processors
 	}
+	if accessTimes, logExists := l.segmentProcessorLastAccess[logId]; logExists {
+		segAccessTimes = accessTimes
+	}
+
 	if processor, segExists := segProcessors[segmentId]; segExists {
+		// Update access time
+		segAccessTimes[segmentId] = time.Now()
+		l.segmentProcessorLastAccess[logId] = segAccessTimes
 		return processor, nil
 	}
+
 	s := processor.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
 	segProcessors[segmentId] = s
+	segAccessTimes[segmentId] = time.Now()
 	l.segmentProcessors[logId] = segProcessors
+	l.segmentProcessorLastAccess[logId] = segAccessTimes
 
 	// Update metrics for active segment processors
 	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
@@ -175,6 +212,11 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 	defer l.spMu.Unlock()
 	if processors, logExists := l.segmentProcessors[logId]; logExists {
 		if processor, segExists := processors[segmentId]; segExists {
+			// Update access time
+			if accessTimes, exists := l.segmentProcessorLastAccess[logId]; exists {
+				accessTimes[segmentId] = time.Now()
+				l.segmentProcessorLastAccess[logId] = accessTimes
+			}
 			return processor
 		}
 	}
@@ -395,4 +437,173 @@ func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int6
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "clean_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
+}
+
+// closeSegmentProcessorUnsafe closes a segment processor and updates metrics
+// This method should be called while holding the spMu lock
+func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logId int64, segmentId int64, processor processor.SegmentProcessor) {
+	// Close the processor
+	if err := processor.Close(ctx); err != nil {
+		logger.Ctx(ctx).Warn("failed to close segment processor",
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId),
+			zap.Error(err))
+	}
+
+	// Update metrics
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", logId)).Dec()
+
+	logger.Ctx(ctx).Debug("closed segment processor",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId))
+}
+
+// tryCleanupIdleSegmentProcessorsUnsafe attempts to clean up idle segment processors if conditions are met
+// This method should be called while holding the spMu lock
+func (l *logStore) tryCleanupIdleSegmentProcessorsUnsafe(ctx context.Context) {
+	// Cleanup configuration - centralized for easy modification
+	const cleanupInterval = 1 * time.Minute // How often to check for cleanup
+	const maxIdleTime = 5 * time.Minute     // How long a processor can be idle before cleanup
+	const minProcessorThreshold = 10        // Minimum processors before cleanup is considered
+
+	now := time.Now()
+	totalProcessors := 0
+	for _, processors := range l.segmentProcessors {
+		totalProcessors += len(processors)
+	}
+
+	if totalProcessors > minProcessorThreshold && now.Sub(l.lastCleanupTime) > cleanupInterval {
+		l.cleanupIdleSegmentProcessorsUnsafe(ctx, maxIdleTime)
+		l.lastCleanupTime = now
+	}
+}
+
+// cleanupIdleSegmentProcessorsUnsafe removes segment processors that haven't been accessed for the specified duration
+// This method should be called while holding the spMu lock
+func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxIdleTime time.Duration) {
+	now := time.Now()
+	var toRemove []struct {
+		logId     int64
+		segmentId int64
+	}
+
+	// For each log, collect all segment IDs and sort them to find the latest ones
+	for logId, accessTimes := range l.segmentProcessorLastAccess {
+		// Collect all segment IDs for this log
+		var segmentIds []int64
+		for segmentId := range accessTimes {
+			segmentIds = append(segmentIds, segmentId)
+		}
+
+		// Sort segment IDs in descending order (largest first)
+		sort.Slice(segmentIds, func(i, j int) bool {
+			return segmentIds[i] > segmentIds[j]
+		})
+
+		// Determine which segments to protect (top 10 by segment ID)
+		protectedSegments := make(map[int64]bool)
+		protectCount := 10
+		if len(segmentIds) < protectCount {
+			protectCount = len(segmentIds)
+		}
+		for i := 0; i < protectCount; i++ {
+			protectedSegments[segmentIds[i]] = true
+		}
+
+		// Check each segment for cleanup eligibility
+		for segmentId, lastAccess := range accessTimes {
+			// Skip if this segment is protected (one of the top 10 by ID)
+			if protectedSegments[segmentId] {
+				continue
+			}
+
+			// Check if idle time exceeds threshold
+			if now.Sub(lastAccess) > maxIdleTime {
+				toRemove = append(toRemove, struct {
+					logId     int64
+					segmentId int64
+				}{logId, segmentId})
+			}
+		}
+	}
+
+	for _, item := range toRemove {
+		if processors, logExists := l.segmentProcessors[item.logId]; logExists {
+			if processor, segExists := processors[item.segmentId]; segExists {
+				// Close the processor
+				l.closeSegmentProcessorUnsafe(ctx, item.logId, item.segmentId, processor)
+
+				// Remove from maps
+				delete(processors, item.segmentId)
+				if len(processors) == 0 {
+					delete(l.segmentProcessors, item.logId)
+				} else {
+					l.segmentProcessors[item.logId] = processors
+				}
+
+				if accessTimes, exists := l.segmentProcessorLastAccess[item.logId]; exists {
+					delete(accessTimes, item.segmentId)
+					if len(accessTimes) == 0 {
+						delete(l.segmentProcessorLastAccess, item.logId)
+					} else {
+						l.segmentProcessorLastAccess[item.logId] = accessTimes
+					}
+				}
+
+				logger.Ctx(ctx).Debug("cleaned up idle segment processor",
+					zap.Int64("logId", item.logId),
+					zap.Int64("segmentId", item.segmentId))
+			}
+		}
+	}
+
+	if len(toRemove) > 0 {
+		logger.Ctx(ctx).Info("cleaned up idle segment processors",
+			zap.Int("cleanedCount", len(toRemove)),
+			zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
+	}
+}
+
+// getTotalProcessorCountUnsafe returns the total number of segment processors
+// This method should be called while holding the spMu lock
+func (l *logStore) getTotalProcessorCountUnsafe() int {
+	total := 0
+	for _, processors := range l.segmentProcessors {
+		total += len(processors)
+	}
+	return total
+}
+
+// RemoveSegmentProcessor removes a specific segment processor (e.g., after segment cleanup)
+func (l *logStore) RemoveSegmentProcessor(ctx context.Context, logId int64, segmentId int64) {
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
+
+	if processors, logExists := l.segmentProcessors[logId]; logExists {
+		if processor, segExists := processors[segmentId]; segExists {
+			// Close the processor
+			l.closeSegmentProcessorUnsafe(ctx, logId, segmentId, processor)
+
+			// Remove from maps
+			delete(processors, segmentId)
+			if len(processors) == 0 {
+				delete(l.segmentProcessors, logId)
+			} else {
+				l.segmentProcessors[logId] = processors
+			}
+
+			if accessTimes, exists := l.segmentProcessorLastAccess[logId]; exists {
+				delete(accessTimes, segmentId)
+				if len(accessTimes) == 0 {
+					delete(l.segmentProcessorLastAccess, logId)
+				} else {
+					l.segmentProcessorLastAccess[logId] = accessTimes
+				}
+			}
+
+			logger.Ctx(ctx).Info("removed segment processor",
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segmentId))
+		}
+	}
 }

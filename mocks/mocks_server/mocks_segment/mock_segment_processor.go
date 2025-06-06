@@ -129,6 +129,52 @@ func (_c *SegmentProcessor_Clean_Call) RunAndReturn(run func(context.Context, in
 	return _c
 }
 
+// Close provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) Close(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Close")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// SegmentProcessor_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
+type SegmentProcessor_Close_Call struct {
+	*mock.Call
+}
+
+// Close is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) Close(ctx interface{}) *SegmentProcessor_Close_Call {
+	return &SegmentProcessor_Close_Call{Call: _e.mock.On("Close", ctx)}
+}
+
+func (_c *SegmentProcessor_Close_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Close_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_Close_Call) Return(_a0 error) *SegmentProcessor_Close_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *SegmentProcessor_Close_Call) RunAndReturn(run func(context.Context) error) *SegmentProcessor_Close_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Compact provides a mock function with given fields: ctx
 func (_m *SegmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
 	ret := _m.Called(ctx)

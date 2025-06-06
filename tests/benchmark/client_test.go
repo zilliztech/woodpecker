@@ -19,6 +19,7 @@ package benchmark
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -367,11 +368,11 @@ func TestReadThroughput(t *testing.T) {
 			}
 
 			// read loop
-			totalEntries := 0
-			totalBytes := 0
+			totalEntries := atomic.Int64{}
+			totalBytes := atomic.Int64{}
 			go func() {
 				for {
-					fmt.Printf("Result: read %d entries, %d bytes success \n", totalEntries, totalBytes)
+					fmt.Printf("Result: read %d entries, %d bytes success \n", totalEntries.Load(), totalBytes.Load())
 					time.Sleep(5 * time.Second)
 				}
 			}()
@@ -388,10 +389,10 @@ func TestReadThroughput(t *testing.T) {
 					MinioIOBytes.WithLabelValues("0").Observe(float64(len(msg.Payload)))
 					MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 				}
-				totalBytes += len(msg.Payload)
-				totalEntries += 1
-				if totalEntries%100 == 0 {
-					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries, totalBytes, msg.Id.SegmentId, msg.Id.EntryId)
+				totalBytes.Add(int64(len(msg.Payload)))
+				totalEntries.Add(1)
+				if totalEntries.Load()%100 == 0 {
+					fmt.Printf(" read %d entries, %d bytes success, current msg(seg:%d,entry:%d) \n", totalEntries.Load(), totalBytes.Load(), msg.Id.SegmentId, msg.Id.EntryId)
 				}
 			}
 
@@ -399,7 +400,7 @@ func TestReadThroughput(t *testing.T) {
 			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
 			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
-			fmt.Printf("final read %d success \n", totalEntries)
+			fmt.Printf("final read %d success \n", totalEntries.Load())
 			fmt.Printf("Test Read finished\n")
 		})
 	}
