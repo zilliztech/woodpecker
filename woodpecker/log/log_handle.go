@@ -352,12 +352,12 @@ func (l *logHandleImpl) doCloseAndCreateWritableSegmentHandle(ctx context.Contex
 	//  it will send fence request to logStores
 	//  and error out all pendingAppendOps with segmentCloseError
 	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	err := oldSegmentHandle.Fence(ctx)
+	lastFlushedEntryId, err := oldSegmentHandle.Fence(ctx)
 	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("start to close segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	err = oldSegmentHandle.Close(ctx)
+	logger.Ctx(ctx).Debug("start to close segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)), zap.Int64("lastFlushedEntryId", lastFlushedEntryId))
+	err = oldSegmentHandle.CloseWritingAndUpdateMetaIfNecessary(ctx, lastFlushedEntryId)
 	if err != nil {
 		return nil, err
 	}
@@ -739,22 +739,24 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	}
 	// 1. fence segmentHandle
 	// Send fence request to log stores and fail pending append operations
-	err := writeableSegmentHandle.Fence(ctx) // fence first, which will wait for all writing request to be done
+	lastFlushedEntryId, err := writeableSegmentHandle.Fence(ctx) // fence first, which will wait for all writing request to be done
 	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		logger.Ctx(ctx).Info("fence segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
+			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "fence_error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 	// 2. close segmentHandle,
-	err = writeableSegmentHandle.Close(ctx)
+	err = writeableSegmentHandle.CloseWritingAndUpdateMetaIfNecessary(ctx, lastFlushedEntryId)
 	if err != nil {
 		logger.Ctx(ctx).Warn("close segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
+			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "close_error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -773,23 +775,25 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	var lastError error
 	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
-		err := segmentHandle.Fence(ctx)
+		lastFlushedEntryId, err := segmentHandle.Fence(ctx)
 		if err != nil {
 			logger.Ctx(ctx).Info("fence segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
+				zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 				zap.Error(err))
 			if lastError == nil {
 				lastError = err
 			}
 		}
-		err = segmentHandle.Close(ctx)
+		err = segmentHandle.CloseWritingAndUpdateMetaIfNecessary(ctx, lastFlushedEntryId)
 		if err != nil {
 			logger.Ctx(ctx).Info("close segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
+				zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 				zap.Error(err))
 			if lastError == nil {
 				lastError = err
@@ -840,7 +844,7 @@ func (l *logHandleImpl) cleanupIdleSegmentHandles(ctx context.Context, maxIdleTi
 	for _, segmentId := range toRemove {
 		if handle, exists := l.SegmentHandles[segmentId]; exists {
 			// Try to close the handle gracefully
-			if err := handle.Close(ctx); err != nil {
+			if err := handle.CloseWritingAndUpdateMetaIfNecessary(ctx, -1); err != nil {
 				logger.Ctx(ctx).Warn("failed to close segment handle during cleanup",
 					zap.String("logName", l.Name),
 					zap.Int64("segmentId", segmentId),

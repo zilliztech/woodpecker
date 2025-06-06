@@ -557,8 +557,31 @@ func (_c *SegmentProcessor_Recover_Call) RunAndReturn(run func(context.Context) 
 }
 
 // SetFenced provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) SetFenced(ctx context.Context) {
-	_m.Called(ctx)
+func (_m *SegmentProcessor) SetFenced(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetFenced")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // SegmentProcessor_SetFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetFenced'
@@ -579,13 +602,13 @@ func (_c *SegmentProcessor_SetFenced_Call) Run(run func(ctx context.Context)) *S
 	return _c
 }
 
-func (_c *SegmentProcessor_SetFenced_Call) Return() *SegmentProcessor_SetFenced_Call {
-	_c.Call.Return()
+func (_c *SegmentProcessor_SetFenced_Call) Return(_a0 int64, _a1 error) *SegmentProcessor_SetFenced_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *SegmentProcessor_SetFenced_Call) RunAndReturn(run func(context.Context)) *SegmentProcessor_SetFenced_Call {
-	_c.Run(run)
+func (_c *SegmentProcessor_SetFenced_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_SetFenced_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

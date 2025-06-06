@@ -59,7 +59,7 @@ type Segment interface {
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)
 	// LastFragmentId returns the last fragment id of this logFile.
-	LastFragmentId() uint64
+	LastFragmentId() int64
 	// GetLastEntryId returns the last entry id of this logFile.
 	GetLastEntryId(ctx context.Context) (int64, error)
 	// Sync ensures all buffered data is written to persistent storage.

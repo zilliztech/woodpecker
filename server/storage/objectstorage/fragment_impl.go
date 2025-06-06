@@ -54,7 +54,7 @@ type FragmentObject struct {
 	bucket       string
 	logId        int64
 	segmentId    int64
-	fragmentId   uint64
+	fragmentId   int64
 	fragmentKey  string
 	firstEntryId int64 // First entryId in the fragment
 	lastEntryId  int64 // Last entryId in the fragment, inclusive
@@ -76,7 +76,7 @@ type FragmentObject struct {
 }
 
 // NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId uint64, fragmentKey string, entries []*cache.BufferEntry, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId int64, fragmentKey string, entries []*cache.BufferEntry, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
 	index, data := genFragmentDataFromRaw(ctx, entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))

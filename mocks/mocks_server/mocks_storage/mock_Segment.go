@@ -323,18 +323,18 @@ func (_c *Segment_GetLastEntryId_Call) RunAndReturn(run func(context.Context) (i
 }
 
 // LastFragmentId provides a mock function with no fields
-func (_m *Segment) LastFragmentId() uint64 {
+func (_m *Segment) LastFragmentId() int64 {
 	ret := _m.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for LastFragmentId")
 	}
 
-	var r0 uint64
-	if rf, ok := ret.Get(0).(func() uint64); ok {
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
 		r0 = rf()
 	} else {
-		r0 = ret.Get(0).(uint64)
+		r0 = ret.Get(0).(int64)
 	}
 
 	return r0
@@ -357,12 +357,12 @@ func (_c *Segment_LastFragmentId_Call) Run(run func()) *Segment_LastFragmentId_C
 	return _c
 }
 
-func (_c *Segment_LastFragmentId_Call) Return(_a0 uint64) *Segment_LastFragmentId_Call {
+func (_c *Segment_LastFragmentId_Call) Return(_a0 int64) *Segment_LastFragmentId_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *Segment_LastFragmentId_Call) RunAndReturn(run func() uint64) *Segment_LastFragmentId_Call {
+func (_c *Segment_LastFragmentId_Call) RunAndReturn(run func() int64) *Segment_LastFragmentId_Call {
 	_c.Call.Return(run)
 	return _c
 }

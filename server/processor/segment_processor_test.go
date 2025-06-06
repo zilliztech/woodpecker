@@ -42,6 +42,7 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	ch <- int64(0)
 	close(ch)
 	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(0), mock.Anything, mock.Anything).Return(int64(0), nil)
+	mockLogFile.EXPECT().GetLastEntryId(mock.Anything).Return(int64(0), nil)
 	mockLogFile.EXPECT().Close(mock.Anything).Return(nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -64,7 +65,9 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	assert.Equal(t, int64(0), <-syncedCh)
 
 	// set fence
-	segProc.SetFenced(context.TODO())
+	lastEntryId, fencedErr := segProc.SetFenced(context.TODO())
+	assert.NoError(t, fencedErr)
+	assert.Equal(t, int64(0), lastEntryId)
 	syncedCh2 := make(chan int64, 1)
 	close(syncedCh2)
 	seqNo, err = segProc.AddEntry(ctx, &SegmentEntry{
@@ -119,14 +122,14 @@ func TestSegmentProcessor_Compact(t *testing.T) {
 	mockMinio := mocks_minio.NewMinioHandler(t)
 	mockLogFile := mocks_storage.NewSegment(t)
 	mockLogFile.EXPECT().Merge(mock.Anything).Return([]storage.Fragment{
-		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, uint64(0), "woodpecker/1/1/m_0.frag",
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(0), "woodpecker/1/1/m_0.frag",
 			[]*cache.BufferEntry{
 				{EntryId: 10, Data: []byte("data0"), NotifyChan: nil},
 				{EntryId: 11, Data: []byte("data1"), NotifyChan: nil},
 				{EntryId: 12, Data: []byte("data2"), NotifyChan: nil},
 			},
 			int64(10), true, false, true),
-		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/m_1.frag",
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(1), "woodpecker/1/1/m_1.frag",
 			[]*cache.BufferEntry{
 				{EntryId: 13, Data: []byte("data3"), NotifyChan: nil},
 				{EntryId: 14, Data: []byte("data4"), NotifyChan: nil},
@@ -156,7 +159,7 @@ func TestSegmentProcessor_Recover(t *testing.T) {
 	mockLogFile := mocks_storage.NewSegment(t)
 	mockLogFile.EXPECT().Load(mock.Anything).Return(
 		int64(0),
-		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/1.frag",
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(1), "woodpecker/1/1/1.frag",
 			[]*cache.BufferEntry{
 				{EntryId: 13, Data: []byte("data3"), NotifyChan: nil},
 				{EntryId: 14, Data: []byte("data4"), NotifyChan: nil},

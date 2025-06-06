@@ -53,7 +53,7 @@ type SegmentProcessor interface {
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	IsFenced(ctx context.Context) bool
-	SetFenced(ctx context.Context)
+	SetFenced(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
@@ -122,28 +122,34 @@ func (s *segmentProcessor) IsFenced(ctx context.Context) bool {
 	return s.fenced.Load()
 }
 
-func (s *segmentProcessor) SetFenced(ctx context.Context) {
+func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "SetFenced")
 	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
 
+	// for idempotent fence, the storage layer can only fence until it is successful
 	s.fenced.Store(true)
 	if s.currentSegmentWriter != nil {
+		// Close&sync segment writer
 		closeSegmentWriterErr := s.currentSegmentWriter.Close(ctx)
 		if closeSegmentWriterErr != nil {
 			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(closeSegmentWriterErr))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Observe(float64(time.Since(start).Milliseconds()))
-		} else {
-			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Inc()
-			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Observe(float64(time.Since(start).Milliseconds()))
 		}
-	} else {
-		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Inc()
-		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Observe(float64(time.Since(start).Milliseconds()))
+		lastEntryId, getLastEntryIdErr := s.currentSegmentWriter.GetLastEntryId(ctx)
+		if getLastEntryIdErr != nil {
+			logger.Ctx(context.TODO()).Error("get log file last entry id failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(getLastEntryIdErr))
+			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "get_last_error").Inc()
+			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "get_last_error").Observe(float64(time.Since(start).Milliseconds()))
+		}
+		return lastEntryId, getLastEntryIdErr
 	}
+	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Inc()
+	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return -1, werr.ErrSegmentNoWritingFragment
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh chan<- int64) (int64, error) {

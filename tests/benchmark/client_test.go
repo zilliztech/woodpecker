@@ -150,7 +150,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 	//startReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
-	writeCount := 20_000   // total rows to write
+	writeCount := 10_000   // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -174,6 +174,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			// ### Create client
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			//cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -332,6 +333,7 @@ func TestReadThroughput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			//cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -367,6 +369,13 @@ func TestReadThroughput(t *testing.T) {
 			// read loop
 			totalEntries := 0
 			totalBytes := 0
+			go func() {
+				for {
+					fmt.Printf("Result: read %d entries, %d bytes success \n", totalEntries, totalBytes)
+					time.Sleep(5 * time.Second)
+				}
+			}()
+
 			for {
 				start := time.Now()
 				msg, err := logReader.ReadNext(context.Background())

@@ -122,8 +122,8 @@ func TestSegmentHandlesCacheCleanup(t *testing.T) {
 
 	// Expect Close calls for old segments (except writable one)
 	// Segments 1, 3, 4, 6 should be cleaned (4 calls total)
-	mockSegment1.EXPECT().Close(mock.Anything).Return(nil).Times(2) // segments 1, 4
-	mockSegment3.EXPECT().Close(mock.Anything).Return(nil).Times(2) // segments 3, 6
+	mockSegment1.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil).Times(2) // segments 1, 4
+	mockSegment3.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil).Times(2) // segments 3, 6
 
 	// Call GetExistsReadonlySegmentHandle to trigger cleanup
 	_, _ = logHandle.GetExistsReadonlySegmentHandle(ctx, 999) // Non-existent segment to trigger cleanup
@@ -163,7 +163,7 @@ func TestSegmentHandlesCacheCleanup_CloseError(t *testing.T) {
 	logHandle.lastCleanupTime = now.Add(-1 * time.Minute)
 
 	// Expect Close calls that return error
-	mockSegment.EXPECT().Close(mock.Anything).Return(errors.New("close error")).Times(6)
+	mockSegment.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(errors.New("close error")).Times(6)
 
 	// Call cleanup directly
 	logHandle.cleanupIdleSegmentHandles(ctx, 1*time.Minute)
@@ -195,14 +195,14 @@ func TestClose_ContinuesOnError(t *testing.T) {
 	mockSegment3.EXPECT().GetId(mock.Anything).Return(int64(3)).Maybe()
 
 	// Set up expectations - segment 1 fails to fence, segment 2 fails to close, segment 3 succeeds
-	mockSegment1.EXPECT().Fence(mock.Anything).Return(errors.New("fence error"))
-	mockSegment1.EXPECT().Close(mock.Anything).Return(nil)
+	mockSegment1.EXPECT().Fence(mock.Anything).Return(-1, errors.New("fence error"))
+	mockSegment1.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil)
 
-	mockSegment2.EXPECT().Fence(mock.Anything).Return(nil)
-	mockSegment2.EXPECT().Close(mock.Anything).Return(errors.New("close error"))
+	mockSegment2.EXPECT().Fence(mock.Anything).Return(-1, nil)
+	mockSegment2.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(errors.New("close error"))
 
-	mockSegment3.EXPECT().Fence(mock.Anything).Return(nil)
-	mockSegment3.EXPECT().Close(mock.Anything).Return(nil)
+	mockSegment3.EXPECT().Fence(mock.Anything).Return(-1, nil)
+	mockSegment3.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil)
 
 	// Call Close
 	err := logHandle.Close(ctx)
@@ -336,7 +336,7 @@ func TestGetOrCreateWritableSegmentHandle_TriggersCleanup(t *testing.T) {
 	logHandle.lastCleanupTime = now.Add(-1 * time.Minute) // 1 minute ago
 
 	// Expect Close calls for old segments during cleanup
-	mockSegment1.EXPECT().Close(mock.Anything).Return(nil).Times(6)
+	mockSegment1.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil).Times(6)
 
 	// Call GetOrCreateWritableSegmentHandle - this should trigger cleanup AND create new segment
 	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
@@ -390,7 +390,7 @@ func TestGetOrCreateWritableSegmentHandle_ExistingWritableTriggersCleanup(t *tes
 	mockWritableSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // Small size, won't trigger rollover
 
 	// Expect Close calls for old segments during cleanup
-	mockOldSegment.EXPECT().Close(mock.Anything).Return(nil).Times(6)
+	mockOldSegment.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil).Times(6)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger cleanup and return existing writable segment
 	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)

@@ -113,6 +113,8 @@ const (
 	// use this error to indicate that this segment is now permanently
 	// fenced.
 	SegmentFenced
+	// SegmentNoWritingFragment when a segment is not writing a fragment, this error
+	SegmentNoWritingFragment
 	// SegmentStateInvalid indicates that the segment is in an invalid state for current Operation.
 	SegmentStateInvalid
 	// SegmentClosed indicates that the segment is closed.
@@ -170,14 +172,15 @@ var (
 	ErrClientClosed     = newWoodpeckerError("Client is closed", ClientClosedError, false)
 
 	// log&segment related
-	ErrLogAlreadyExists      = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
-	ErrSegmentNotFound       = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
-	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
-	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
-	ErrSegmentWriteError     = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
-	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
-	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
-	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
+	ErrLogAlreadyExists         = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
+	ErrSegmentNotFound          = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
+	ErrSegmentReadException     = newWoodpeckerError("failed to read segment", SegmentReadException, true)
+	ErrSegmentWriteException    = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
+	ErrSegmentWriteError        = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
+	ErrSegmentClosed            = newWoodpeckerError("Segment is closed", SegmentClosed, true)
+	ErrSegmentFenced            = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
+	ErrSegmentStateInvalid      = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
+	ErrSegmentNoWritingFragment = newWoodpeckerError("Segment is not writing", SegmentNoWritingFragment, false)
 
 	// LogFile & Fragment related
 	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, true)

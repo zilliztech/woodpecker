@@ -748,8 +748,8 @@ func (s *DiskSegmentImpl) checkDirIsEmpty(ctx context.Context) error {
 }
 
 // LastFragmentId returns the last fragment ID
-func (s *DiskSegmentImpl) LastFragmentId() uint64 {
-	return uint64(s.lastFragmentID.Load())
+func (s *DiskSegmentImpl) LastFragmentId() int64 {
+	return s.lastFragmentID.Load()
 }
 
 // GetLastEntryId returns the last entry ID
@@ -1014,13 +1014,13 @@ func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *Fragm
 
 // Deprecated, no use
 // LastFragmentId returns the last fragment ID
-func (rs *RODiskSegmentImpl) LastFragmentId() uint64 {
+func (rs *RODiskSegmentImpl) LastFragmentId() int64 {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	if len(rs.fragments) == 0 {
-		return 0
+		return -1
 	}
-	return uint64(rs.fragments[len(rs.fragments)-1].GetFragmentId())
+	return rs.fragments[len(rs.fragments)-1].GetFragmentId()
 }
 
 // GetLastEntryId returns the last entry ID

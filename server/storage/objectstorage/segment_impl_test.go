@@ -1034,19 +1034,19 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	}
 
 	// test read data with holes (fragment 1,x,3) in minio
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/1.frag",
+	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/0.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 100, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 101, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/2.frag",
+	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 102, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 103, Data: []byte("entry4"), NotifyChan: nil},
 		}, 102, true, false, true)
-	//mockFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/3.frag",
+	//mockFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/2.frag",
 	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
-	mockFragment4 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/4.frag",
+	mockFragment4 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/3.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 106, Data: []byte("entry6"), NotifyChan: nil},
 			{EntryId: 107, Data: []byte("entry7"), NotifyChan: nil},
@@ -1125,19 +1125,19 @@ func TestFindFragment(t *testing.T) {
 	t.Run("Find Fragment in middle position", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(150)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), frag.fragmentId)
+		assert.Equal(t, int64(2), frag.fragmentId)
 	})
 
 	t.Run("Find first Fragment", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(50)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), frag.fragmentId)
+		assert.Equal(t, int64(1), frag.fragmentId)
 	})
 
 	t.Run("Find last Fragment", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(250)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(3), frag.fragmentId)
+		assert.Equal(t, int64(3), frag.fragmentId)
 	})
 
 	t.Run("entryId after the last Fragment", func(t *testing.T) {
@@ -1149,30 +1149,30 @@ func TestFindFragment(t *testing.T) {
 	t.Run("First Fragment boundary values", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(0)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), frag.fragmentId)
+		assert.Equal(t, int64(1), frag.fragmentId)
 
 		frag, err = roSegmentImpl.findFragment(99)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), frag.fragmentId)
+		assert.Equal(t, int64(1), frag.fragmentId)
 	})
 	t.Run("Second Fragment boundary values", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(100)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), frag.fragmentId)
+		assert.Equal(t, int64(2), frag.fragmentId)
 
 		frag, err = roSegmentImpl.findFragment(199)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), frag.fragmentId)
+		assert.Equal(t, int64(2), frag.fragmentId)
 	})
 
 	t.Run("Last Fragment boundary values", func(t *testing.T) {
 		frag, err := roSegmentImpl.findFragment(200)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(3), frag.fragmentId)
+		assert.Equal(t, int64(3), frag.fragmentId)
 
 		frag, err = roSegmentImpl.findFragment(299)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(3), frag.fragmentId)
+		assert.Equal(t, int64(3), frag.fragmentId)
 	})
 
 	t.Run("Return leftmost match when multiple candidate Fragments", func(t *testing.T) {
@@ -1187,7 +1187,7 @@ func TestFindFragment(t *testing.T) {
 
 		frag, err := newLogFile.findFragment(150)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(1), frag.fragmentId)
+		assert.Equal(t, int64(1), frag.fragmentId)
 	})
 }
 
@@ -1213,8 +1213,8 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 2048}
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
 		close(objectCh)
 
@@ -1227,13 +1227,13 @@ func TestDeleteFragments(t *testing.T) {
 		assert.Equal(t, 1, len(roSegmentImpl.mergedFragments))
 
 		objectCh2 := make(chan minio.ObjectInfo, 3)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 2048}
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
 		close(objectCh2)
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/2.frag", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.frag", mock.Anything).Return(nil)
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1307,8 +1307,8 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects to be returned by ListObjects
 		objectCh := make(chan minio.ObjectInfo, 2)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 2048}
 		close(objectCh)
 
 		// Set up expectations
@@ -1317,12 +1317,12 @@ func TestDeleteFragments(t *testing.T) {
 		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 2)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/2.frag", Size: 2048}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 2048}
 		close(objectCh2)
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/2.frag", mock.Anything).Return(errors.New("remove error"))
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(errors.New("remove error"))
 
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)
@@ -1394,9 +1394,9 @@ func TestDeleteFragments(t *testing.T) {
 
 		// Create a list of mock objects including non-fragment files
 		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_1.frag", Size: 4096}
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
 		close(objectCh)
 
 		// Set up expectations
@@ -1407,13 +1407,13 @@ func TestDeleteFragments(t *testing.T) {
 		roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 3)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.frag", Size: 1024}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.frag", Size: 1024}
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_1.frag", Size: 4096}
+		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.frag", Size: 4096}
 		close(objectCh2)
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.frag", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_1.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.frag", mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.frag", mock.Anything).Return(nil)
 		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// Call DeleteFragments
 		err := roSegmentImpl.DeleteFragments(context.Background(), 0)

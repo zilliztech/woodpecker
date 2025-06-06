@@ -196,21 +196,31 @@ func (_c *LogStore_CompactSegment_Call) RunAndReturn(run func(context.Context, i
 }
 
 // FenceSegment provides a mock function with given fields: _a0, _a1, _a2
-func (_m *LogStore) FenceSegment(_a0 context.Context, _a1 int64, _a2 int64) error {
+func (_m *LogStore) FenceSegment(_a0 context.Context, _a1 int64, _a2 int64) (int64, error) {
 	ret := _m.Called(_a0, _a1, _a2)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FenceSegment")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) error); ok {
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
+		return rf(_a0, _a1, _a2)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
 		r0 = rf(_a0, _a1, _a2)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int64)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(_a0, _a1, _a2)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // LogStore_FenceSegment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FenceSegment'
@@ -233,12 +243,12 @@ func (_c *LogStore_FenceSegment_Call) Run(run func(_a0 context.Context, _a1 int6
 	return _c
 }
 
-func (_c *LogStore_FenceSegment_Call) Return(_a0 error) *LogStore_FenceSegment_Call {
-	_c.Call.Return(_a0)
+func (_c *LogStore_FenceSegment_Call) Return(_a0 int64, _a1 error) *LogStore_FenceSegment_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStore_FenceSegment_Call) RunAndReturn(run func(context.Context, int64, int64) error) *LogStore_FenceSegment_Call {
+func (_c *LogStore_FenceSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStore_FenceSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }

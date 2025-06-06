@@ -19,6 +19,7 @@ package segment
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"sync/atomic"
 	"time"
 
@@ -192,7 +193,7 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 		return // Already called
 	}
 
-	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail called for log:%d seg:%d entry:%d, processing %d channels", op.logId, op.segmentId, op.entryId, len(op.resultChannels)))
+	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail called for log:%d seg:%d entry:%d, processing %d channels", op.logId, op.segmentId, op.entryId, len(op.resultChannels)), zap.Error(err))
 
 	for i, ch := range op.resultChannels {
 		// Safely handle channel operations
@@ -214,7 +215,7 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 	}
 
 	op.callback(op.segmentId, op.entryId, err)
-	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail completed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail completed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId), zap.Error(err))
 }
 
 func (op *AppendOp) FastSuccess(ctx context.Context) {

@@ -45,7 +45,7 @@ func TestNewFragmentObject(t *testing.T) {
 
 	assert.NotNil(t, fragment)
 	assert.Equal(t, "test-bucket", fragment.bucket)
-	assert.Equal(t, uint64(1), fragment.fragmentId)
+	assert.Equal(t, int64(1), fragment.fragmentId)
 	assert.Equal(t, "test-key", fragment.fragmentKey)
 }
 
@@ -280,7 +280,7 @@ func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
 		}, 101, true, false, true)
 	fragments := []*FragmentObject{fragment1, fragment2}
 
-	mergedFragment, err := mergeFragmentsAndReleaseAfterCompleted(context.Background(), "merged-key", 3, fragments, false)
+	mergedFragment, err := mergeFragmentsAndReleaseAfterCompletedPro(context.Background(), "merged-key", 3, fragments, fragment1.size+fragment2.size, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, mergedFragment)
 	firstEntryId, err := mergedFragment.GetFirstEntryId(context.TODO())

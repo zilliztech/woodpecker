@@ -59,17 +59,17 @@ func (_c *SegmentHandle_AppendAsync_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
-// Close provides a mock function with given fields: _a0
-func (_m *SegmentHandle) Close(_a0 context.Context) error {
-	ret := _m.Called(_a0)
+// CloseWritingAndUpdateMetaIfNecessary provides a mock function with given fields: _a0, _a1
+func (_m *SegmentHandle) CloseWritingAndUpdateMetaIfNecessary(_a0 context.Context, _a1 int64) error {
+	ret := _m.Called(_a0, _a1)
 
 	if len(ret) == 0 {
-		panic("no return value specified for Close")
+		panic("no return value specified for CloseWritingAndUpdateMetaIfNecessary")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(_a0)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(_a0, _a1)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -77,50 +77,61 @@ func (_m *SegmentHandle) Close(_a0 context.Context) error {
 	return r0
 }
 
-// SegmentHandle_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
-type SegmentHandle_Close_Call struct {
+// SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CloseWritingAndUpdateMetaIfNecessary'
+type SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call struct {
 	*mock.Call
 }
 
-// Close is a helper method to define mock.On call
+// CloseWritingAndUpdateMetaIfNecessary is a helper method to define mock.On call
 //   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) Close(_a0 interface{}) *SegmentHandle_Close_Call {
-	return &SegmentHandle_Close_Call{Call: _e.mock.On("Close", _a0)}
+//   - _a1 int64
+func (_e *SegmentHandle_Expecter) CloseWritingAndUpdateMetaIfNecessary(_a0 interface{}, _a1 interface{}) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
+	return &SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call{Call: _e.mock.On("CloseWritingAndUpdateMetaIfNecessary", _a0, _a1)}
 }
 
-func (_c *SegmentHandle_Close_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Close_Call {
+func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) Run(run func(_a0 context.Context, _a1 int64)) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
 
-func (_c *SegmentHandle_Close_Call) Return(_a0 error) *SegmentHandle_Close_Call {
+func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) Return(_a0 error) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *SegmentHandle_Close_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_Close_Call {
+func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) RunAndReturn(run func(context.Context, int64) error) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Fence provides a mock function with given fields: _a0
-func (_m *SegmentHandle) Fence(_a0 context.Context) error {
+func (_m *SegmentHandle) Fence(_a0 context.Context) (int64, error) {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Fence")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
 		r0 = rf(_a0)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int64)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // SegmentHandle_Fence_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Fence'
@@ -141,12 +152,12 @@ func (_c *SegmentHandle_Fence_Call) Run(run func(_a0 context.Context)) *SegmentH
 	return _c
 }
 
-func (_c *SegmentHandle_Fence_Call) Return(_a0 error) *SegmentHandle_Fence_Call {
-	_c.Call.Return(_a0)
+func (_c *SegmentHandle_Fence_Call) Return(_a0 int64, _a1 error) *SegmentHandle_Fence_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *SegmentHandle_Fence_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_Fence_Call {
+func (_c *SegmentHandle_Fence_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentHandle_Fence_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -506,62 +517,6 @@ func (_c *SegmentHandle_GetSize_Call) RunAndReturn(run func(context.Context) int
 	return _c
 }
 
-// IsClosed provides a mock function with given fields: _a0
-func (_m *SegmentHandle) IsClosed(_a0 context.Context) (bool, error) {
-	ret := _m.Called(_a0)
-
-	if len(ret) == 0 {
-		panic("no return value specified for IsClosed")
-	}
-
-	var r0 bool
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
-		return rf(_a0)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
-		r0 = rf(_a0)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentHandle_IsClosed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsClosed'
-type SegmentHandle_IsClosed_Call struct {
-	*mock.Call
-}
-
-// IsClosed is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) IsClosed(_a0 interface{}) *SegmentHandle_IsClosed_Call {
-	return &SegmentHandle_IsClosed_Call{Call: _e.mock.On("IsClosed", _a0)}
-}
-
-func (_c *SegmentHandle_IsClosed_Call) Run(run func(_a0 context.Context)) *SegmentHandle_IsClosed_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_IsClosed_Call) Return(_a0 bool, _a1 error) *SegmentHandle_IsClosed_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentHandle_IsClosed_Call) RunAndReturn(run func(context.Context) (bool, error)) *SegmentHandle_IsClosed_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // IsFence provides a mock function with given fields: _a0
 func (_m *SegmentHandle) IsFence(_a0 context.Context) (bool, error) {
 	ret := _m.Called(_a0)
@@ -614,6 +569,62 @@ func (_c *SegmentHandle_IsFence_Call) Return(_a0 bool, _a1 error) *SegmentHandle
 }
 
 func (_c *SegmentHandle_IsFence_Call) RunAndReturn(run func(context.Context) (bool, error)) *SegmentHandle_IsFence_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// IsWritable provides a mock function with given fields: _a0
+func (_m *SegmentHandle) IsWritable(_a0 context.Context) (bool, error) {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsWritable")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
+		r0 = rf(_a0)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentHandle_IsWritable_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsWritable'
+type SegmentHandle_IsWritable_Call struct {
+	*mock.Call
+}
+
+// IsWritable is a helper method to define mock.On call
+//   - _a0 context.Context
+func (_e *SegmentHandle_Expecter) IsWritable(_a0 interface{}) *SegmentHandle_IsWritable_Call {
+	return &SegmentHandle_IsWritable_Call{Call: _e.mock.On("IsWritable", _a0)}
+}
+
+func (_c *SegmentHandle_IsWritable_Call) Run(run func(_a0 context.Context)) *SegmentHandle_IsWritable_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_IsWritable_Call) Return(_a0 bool, _a1 error) *SegmentHandle_IsWritable_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentHandle_IsWritable_Call) RunAndReturn(run func(context.Context) (bool, error)) *SegmentHandle_IsWritable_Call {
 	_c.Call.Return(run)
 	return _c
 }
