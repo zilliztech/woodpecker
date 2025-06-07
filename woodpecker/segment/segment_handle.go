@@ -818,6 +818,10 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	return updateMetaErr
 }
 
+// TODO: It may be necessary to use a last flushed entry id for safe compaction,
+// because in local fs mode, data might be written but the flush could fail,
+// while the system might have fsynced it to disk.
+// This data is beyond the business's flush entry id.
 func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "compactToSealed")
 	defer sp.End()

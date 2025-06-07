@@ -48,6 +48,7 @@ type LogStore interface {
 	GetAddress() string
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
+	// TODO use ResultChannel abstract instead of chan
 	AddEntry(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)
 	GetEntry(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)
 	GetBatchEntries(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)

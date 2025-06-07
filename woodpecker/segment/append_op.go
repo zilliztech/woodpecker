@@ -59,7 +59,7 @@ type AppendOp struct {
 	handle         SegmentHandle
 	ackSet         *bitset.BitSet
 	quorumInfo     *proto.QuorumInfo
-	resultChannels []chan int64
+	resultChannels []chan int64 // TODO use ResultChannel abstract instead
 
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
