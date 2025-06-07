@@ -1816,3 +1816,437 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg, err := config.NewConfiguration()
+			assert.NoError(t, err)
+			cfg.Log.Level = "debug"
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+			// Set small segment rolling policy to force multiple segments
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+
+			// Create a new embed client
+			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+			assert.NoError(t, err)
+			defer client.Close()
+
+			// Number of overall test cycles to run
+			const testCycles = 3
+			// Number of messages to write in each cycle
+			const messageCount = 20
+
+			// Create a single test log with timestamp to ensure uniqueness
+			logName := "test_concurrent_write_read_rolling_final_verification_" + tc.name + time.Now().Format("20060102150405")
+			createErr := client.CreateLog(ctx, logName)
+			assert.NoError(t, createErr)
+
+			// Open log handle
+			logHandle, err := client.OpenLog(ctx, logName)
+			assert.NoError(t, err)
+
+			t.Logf("Created test log: %s", logName)
+
+			// Track total messages written for verification
+			totalMessagesWritten := 0
+			// Store all expected messages for final verification
+			allExpectedMessages := make([]string, 0, testCycles*messageCount)
+
+			// Run the complete test multiple times on the same log
+			for cycle := 0; cycle < testCycles; cycle++ {
+				t.Logf("====== Starting Test Cycle %d/%d ======", cycle+1, testCycles)
+
+				// Create channels to track completion and results
+				writerDone := make(chan struct{})
+				reader1Done := make(chan []string)
+				reader2Done := make(chan []string)
+				reader3Done := make(chan []string)
+				reader4Done := make(chan []string)
+				reader5Done := make(chan []string)
+				reader6Done := make(chan []string)
+				reader7Done := make(chan []string)
+				reader8Done := make(chan []string)
+				reader9Done := make(chan []string)
+				reader10Done := make(chan []string)
+				reader11Done := make(chan []string)
+				reader12Done := make(chan []string)
+				reader13Done := make(chan []string)
+				reader14Done := make(chan []string)
+				reader15Done := make(chan []string)
+				reader16Done := make(chan []string)
+
+				// Start writer goroutine
+				go func() {
+					defer close(writerDone)
+
+					// Open writer
+					writer, err := logHandle.OpenLogWriter(ctx)
+					assert.NoError(t, err)
+					defer writer.Close(ctx)
+
+					t.Logf("Cycle %d - Writer: Started writing messages", cycle+1)
+
+					// Write messages
+					for i := 0; i < messageCount; i++ {
+						messageContent := fmt.Sprintf("Cycle %d - Message %d", cycle+1, i)
+						message := &log.WriterMessage{
+							Payload: []byte(messageContent),
+							Properties: map[string]string{
+								"cycle": fmt.Sprintf("%d", cycle+1),
+								"index": fmt.Sprintf("%d", i),
+								"type":  "concurrent-test",
+							},
+						}
+
+						result := writer.Write(ctx, message)
+						assert.NoError(t, result.Err)
+
+						// Store expected message for final verification
+						allExpectedMessages = append(allExpectedMessages, messageContent)
+
+						// Log milestone messages
+						if i%5 == 0 || i == messageCount-1 {
+							t.Logf("Cycle %d - Writer: Written message %d with ID: segment=%d, entry=%d",
+								cycle+1, i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+						}
+
+						// Small delay to allow readers to catch up
+						time.Sleep(10 * time.Millisecond)
+					}
+
+					t.Logf("Cycle %d - Writer: Completed writing all messages", cycle+1)
+				}()
+
+				// Update total messages to be read in this cycle
+				totalMessagesWritten += messageCount
+				expectedMessagesThisCycle := totalMessagesWritten
+
+				// Function to create a reader goroutine that reads all messages from the beginning
+				createReader := func(readerName string, resultChan chan<- []string) {
+					// Add a small delay to ensure writer has started
+					time.Sleep(100 * time.Millisecond)
+
+					// Always start reading from the beginning
+					startPoint := &log.LogMessageId{
+						SegmentId: 0,
+						EntryId:   0,
+					}
+
+					reader, err := logHandle.OpenLogReader(ctx, startPoint, readerName)
+					assert.NoError(t, err)
+					defer reader.Close(ctx)
+
+					t.Logf("Cycle %d - %s: Started reading from beginning, expecting %d total messages",
+						cycle+1, readerName, expectedMessagesThisCycle)
+
+					// Read messages with simple for loop and fixed timeout
+					messages := make([]string, 0, expectedMessagesThisCycle)
+
+					// Simple loop to read the expected number of messages
+					for i := 0; i < expectedMessagesThisCycle; i++ {
+						// Use a fixed timeout for each read
+						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						msg, err := reader.ReadNext(readCtx)
+						cancel()
+
+						if err != nil {
+							t.Logf("Cycle %d - %s: Error reading message %d: %v",
+								cycle+1, readerName, i, err)
+							resultChan <- messages
+							return
+						}
+
+						if msg == nil {
+							t.Logf("Cycle %d - %s: Received nil message at position %d",
+								cycle+1, readerName, i)
+							resultChan <- messages
+							return
+						}
+
+						messages = append(messages, string(msg.Payload))
+
+						// Log milestone messages
+						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
+							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+						//}
+					}
+
+					t.Logf("Cycle %d - %s: Completed reading all %d messages",
+						cycle+1, readerName, len(messages))
+					resultChan <- messages
+				}
+
+				// Start reader goroutines
+				go createReader(fmt.Sprintf("Cycle%d-Reader1", cycle+1), reader1Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader2", cycle+1), reader2Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader3", cycle+1), reader3Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader4", cycle+1), reader4Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader5", cycle+1), reader5Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader6", cycle+1), reader6Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader7", cycle+1), reader7Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader8", cycle+1), reader8Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader9", cycle+1), reader9Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader10", cycle+1), reader10Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader11", cycle+1), reader11Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader12", cycle+1), reader12Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader13", cycle+1), reader13Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader14", cycle+1), reader14Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader15", cycle+1), reader15Done)
+				go createReader(fmt.Sprintf("Cycle%d-Reader16", cycle+1), reader16Done)
+
+				// Wait for writer to complete
+				<-writerDone
+				t.Logf("Cycle %d - Writer goroutine completed", cycle+1)
+
+				// Wait for readers to complete and collect results
+				reader1Messages := <-reader1Done
+				t.Logf("Cycle %d - Reader-1 completed with %d/%d messages", cycle+1, len(reader1Messages), expectedMessagesThisCycle)
+				reader2Messages := <-reader2Done
+				t.Logf("Cycle %d - Reader-2 completed with %d/%d messages", cycle+1, len(reader2Messages), expectedMessagesThisCycle)
+				reader3Messages := <-reader3Done
+				t.Logf("Cycle %d - Reader-3 completed with %d/%d messages", cycle+1, len(reader3Messages), expectedMessagesThisCycle)
+				reader4Messages := <-reader4Done
+				t.Logf("Cycle %d - Reader-4 completed with %d/%d messages", cycle+1, len(reader4Messages), expectedMessagesThisCycle)
+				reader5Messages := <-reader5Done
+				t.Logf("Cycle %d - Reader-5 completed with %d/%d messages", cycle+1, len(reader5Messages), expectedMessagesThisCycle)
+				reader6Messages := <-reader6Done
+				t.Logf("Cycle %d - Reader-6 completed with %d/%d messages", cycle+1, len(reader6Messages), expectedMessagesThisCycle)
+				reader7Messages := <-reader7Done
+				t.Logf("Cycle %d - Reader-7 completed with %d/%d messages", cycle+1, len(reader7Messages), expectedMessagesThisCycle)
+				reader8Messages := <-reader8Done
+				t.Logf("Cycle %d - Reader-8 completed with %d/%d messages", cycle+1, len(reader8Messages), expectedMessagesThisCycle)
+				reader9Messages := <-reader9Done
+				t.Logf("Cycle %d - Reader-9 completed with %d/%d messages", cycle+1, len(reader9Messages), expectedMessagesThisCycle)
+				reader10Messages := <-reader10Done
+				t.Logf("Cycle %d - Reader-10 completed with %d/%d messages", cycle+1, len(reader10Messages), expectedMessagesThisCycle)
+				reader11Messages := <-reader11Done
+				t.Logf("Cycle %d - Reader-11 completed with %d/%d messages", cycle+1, len(reader11Messages), expectedMessagesThisCycle)
+				reader12Messages := <-reader12Done
+				t.Logf("Cycle %d - Reader-12 completed with %d/%d messages", cycle+1, len(reader12Messages), expectedMessagesThisCycle)
+				reader13Messages := <-reader13Done
+				t.Logf("Cycle %d - Reader-13 completed with %d/%d messages", cycle+1, len(reader13Messages), expectedMessagesThisCycle)
+				reader14Messages := <-reader14Done
+				t.Logf("Cycle %d - Reader-14 completed with %d/%d messages", cycle+1, len(reader14Messages), expectedMessagesThisCycle)
+				reader15Messages := <-reader15Done
+				t.Logf("Cycle %d - Reader-15 completed with %d/%d messages", cycle+1, len(reader15Messages), expectedMessagesThisCycle)
+				reader16Messages := <-reader16Done
+				t.Logf("Cycle %d - Reader-16 completed with %d/%d messages", cycle+1, len(reader16Messages), expectedMessagesThisCycle)
+
+				// Verify results - each reader should read all messages from all cycles so far
+				assert.Equal(t, expectedMessagesThisCycle, len(reader1Messages), "Cycle %d - Reader-1 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader2Messages), "Cycle %d - Reader-2 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader3Messages), "Cycle %d - Reader-3 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader4Messages), "Cycle %d - Reader-4 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader5Messages), "Cycle %d - Reader-5 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader6Messages), "Cycle %d - Reader-6 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader7Messages), "Cycle %d - Reader-7 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader8Messages), "Cycle %d - Reader-8 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader9Messages), "Cycle %d - Reader-9 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader10Messages), "Cycle %d - Reader-10 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader11Messages), "Cycle %d - Reader-11 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader12Messages), "Cycle %d - Reader-12 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader13Messages), "Cycle %d - Reader-13 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader14Messages), "Cycle %d - Reader-14 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader15Messages), "Cycle %d - Reader-15 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+				assert.Equal(t, expectedMessagesThisCycle, len(reader16Messages), "Cycle %d - Reader-16 should read all %d messages written so far", cycle+1, expectedMessagesThisCycle)
+
+				// Verify message content - need to verify all messages from all cycles
+				// First verify cycle 1's messages
+				for cycleNum := 1; cycleNum <= cycle+1; cycleNum++ {
+					t.Logf("Verifying messages from cycle %d", cycleNum)
+
+					// Calculate the start and end indices for messages from this cycle
+					startIdx := (cycleNum - 1) * messageCount
+
+					for i := 0; i < messageCount; i++ {
+						msgIdx := startIdx + i
+						expectedMsg := fmt.Sprintf("Cycle %d - Message %d", cycleNum, i)
+
+						// Verify in reader1
+						if msgIdx < len(reader1Messages) {
+							assert.Equal(t, expectedMsg, reader1Messages[msgIdx], "Cycle %d - Reader-1 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader2
+						if msgIdx < len(reader2Messages) {
+							assert.Equal(t, expectedMsg, reader2Messages[msgIdx], "Cycle %d - Reader-2 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader3
+						if msgIdx < len(reader3Messages) {
+							assert.Equal(t, expectedMsg, reader3Messages[msgIdx], "Cycle %d - Reader-3 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader4
+						if msgIdx < len(reader4Messages) {
+							assert.Equal(t, expectedMsg, reader4Messages[msgIdx], "Cycle %d - Reader-4 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader5
+						if msgIdx < len(reader5Messages) {
+							assert.Equal(t, expectedMsg, reader5Messages[msgIdx], "Cycle %d - Reader-5 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader6
+						if msgIdx < len(reader6Messages) {
+							assert.Equal(t, expectedMsg, reader6Messages[msgIdx], "Cycle %d - Reader-6 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader7
+						if msgIdx < len(reader7Messages) {
+							assert.Equal(t, expectedMsg, reader7Messages[msgIdx], "Cycle %d - Reader-7 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader8
+						if msgIdx < len(reader8Messages) {
+							assert.Equal(t, expectedMsg, reader8Messages[msgIdx], "Cycle %d - Reader-8 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader9
+						if msgIdx < len(reader9Messages) {
+							assert.Equal(t, expectedMsg, reader9Messages[msgIdx], "Cycle %d - Reader-9 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader10
+						if msgIdx < len(reader10Messages) {
+							assert.Equal(t, expectedMsg, reader10Messages[msgIdx], "Cycle %d - Reader-10 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader11
+						if msgIdx < len(reader11Messages) {
+							assert.Equal(t, expectedMsg, reader11Messages[msgIdx], "Cycle %d - Reader-11 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader12
+						if msgIdx < len(reader12Messages) {
+							assert.Equal(t, expectedMsg, reader12Messages[msgIdx], "Cycle %d - Reader-12 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader13
+						if msgIdx < len(reader13Messages) {
+							assert.Equal(t, expectedMsg, reader13Messages[msgIdx], "Cycle %d - Reader-13 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader14
+						if msgIdx < len(reader14Messages) {
+							assert.Equal(t, expectedMsg, reader14Messages[msgIdx], "Cycle %d - Reader-14 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader15
+						if msgIdx < len(reader15Messages) {
+							assert.Equal(t, expectedMsg, reader15Messages[msgIdx], "Cycle %d - Reader-15 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+						// Verify in reader16
+						if msgIdx < len(reader16Messages) {
+							assert.Equal(t, expectedMsg, reader16Messages[msgIdx], "Cycle %d - Reader-16 message %d (from cycle %d) content mismatch", cycle+1, msgIdx, cycleNum)
+						}
+					}
+				}
+
+				// Add a short delay between cycles
+				time.Sleep(500 * time.Millisecond)
+
+				// Open empty writer then close
+				emptyWriter, createEmptyWriterErr := logHandle.OpenLogWriter(ctx)
+				assert.NoError(t, createEmptyWriterErr)
+				closeEmptyWriterErr := emptyWriter.Close(ctx)
+				assert.NoError(t, closeEmptyWriterErr)
+
+				t.Logf("====== Completed Test Cycle %d/%d Successfully ======", cycle+1, testCycles)
+			}
+			t.Log("All test cycles completed successfully")
+
+			// ====== FINAL VERIFICATION: Read all data from beginning to end ======
+			t.Log("====== Starting Final Verification: Reading all data from beginning to end ======")
+
+			// Wait a moment to ensure all operations are complete
+			time.Sleep(1 * time.Second)
+
+			// Create a final verification reader
+			startPoint := &log.LogMessageId{
+				SegmentId: 0,
+				EntryId:   0,
+			}
+
+			finalReader, err := logHandle.OpenLogReader(ctx, startPoint, "final-verification-reader")
+			assert.NoError(t, err)
+			assert.NotNil(t, finalReader)
+			defer finalReader.Close(ctx)
+
+			t.Logf("Final Verification: Started reading from beginning, expecting %d total messages", totalMessagesWritten)
+
+			// Read all messages sequentially
+			finalMessages := make([]string, 0, totalMessagesWritten)
+			readTimeout := 10 * time.Second // Longer timeout for final verification
+
+			for i := 0; i < totalMessagesWritten; i++ {
+				readCtx, cancel := context.WithTimeout(ctx, readTimeout)
+				msg, err := finalReader.ReadNext(readCtx)
+				cancel()
+
+				if err != nil {
+					t.Logf("Final Verification: Error reading message %d: %v", i+1, err)
+					break
+				}
+
+				if msg == nil {
+					t.Logf("Final Verification: Received nil message at position %d", i+1)
+					break
+				}
+
+				finalMessages = append(finalMessages, string(msg.Payload))
+
+				// Log milestone messages
+				if i%10 == 0 || i == totalMessagesWritten-1 {
+					t.Logf("Final Verification: Read message %d/%d: seg:%d,entry:%d payload:%s",
+						i+1, totalMessagesWritten, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+				}
+			}
+
+			// Verify the total count
+			assert.Equal(t, totalMessagesWritten, len(finalMessages), "Final Verification: Should read exactly %d messages", totalMessagesWritten)
+			assert.Equal(t, len(allExpectedMessages), len(finalMessages), "Final Verification: Should read exactly the same number of messages as expected")
+
+			// Verify each message content matches expected
+			for i, expectedMsg := range allExpectedMessages {
+				if i < len(finalMessages) {
+					assert.Equal(t, expectedMsg, finalMessages[i], "Final Verification: Message %d content mismatch", i)
+				} else {
+					t.Errorf("Final Verification: Missing message %d: expected '%s'", i, expectedMsg)
+				}
+			}
+
+			// Try to read one more message - should timeout or return nil
+			extraReadCtx, cancelExtra := context.WithTimeout(ctx, 1*time.Second)
+			extraMessage, err := finalReader.ReadNext(extraReadCtx)
+			cancelExtra()
+
+			if err != nil {
+				t.Log("Final Verification: No extra messages as expected (timeout/error)")
+			} else if extraMessage == nil {
+				t.Log("Final Verification: No extra messages as expected (nil response)")
+			} else {
+				t.Errorf("Final Verification: Unexpected extra message: %s", string(extraMessage.Payload))
+			}
+
+			t.Logf("====== Final Verification Completed Successfully: Read and verified %d messages ======", len(finalMessages))
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
