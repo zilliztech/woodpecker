@@ -764,8 +764,6 @@ func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 		return s.recoveryFromInProgress(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_Completed {
 		return s.compactToSealed(ctx)
-	} else if currentSegmentMeta.State == proto.SegmentState_InRecovery {
-		return s.recoveryFromInRecovery(ctx)
 	}
 	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
 }
@@ -875,49 +873,5 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	_ = s.RefreshAndGetMetadata(ctx)
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return updateMetaErr
-}
-
-func (s *segmentHandleImpl) recoveryFromInRecovery(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "recoveryFromInRecovery")
-	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
-	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
-	currentSegmentMeta := s.GetMetadata(ctx)
-	if currentSegmentMeta.State != proto.SegmentState_InRecovery {
-		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InRecovery, skip this compaction. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
-	}
-	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
-		return nil
-	}
-	defer s.doingRecoveryOrCompact.Store(false)
-
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return err
-	}
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return err
-	}
-	recoverySegMetaInfo, recoveryErr := cli.SegmentRecoveryFromInRecovery(ctx, s.logId, s.segmentId)
-	if recoveryErr != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "recover_from_interrupted_recovery", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "recover_from_interrupted_recovery", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return recoveryErr
-	}
-	// update segment state and meta
-	newSegmentMeta := currentSegmentMeta.CloneVT()
-	newSegmentMeta.State = recoverySegMetaInfo.State
-	newSegmentMeta.LastEntryId = recoverySegMetaInfo.LastEntryId
-	newSegmentMeta.CompletionTime = recoverySegMetaInfo.CompletionTime
-	newSegmentMeta.Size = recoverySegMetaInfo.Size
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "recover_from_interrupted_recovery", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "recover_from_interrupted_recovery", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return updateMetaErr
 }

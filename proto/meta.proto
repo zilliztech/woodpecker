@@ -26,7 +26,6 @@ message LogMeta{
  */
 enum SegmentState{
   Active = 0;
-  InRecovery = 1;
   Completed = 2;
   Sealed = 3;
   Truncated = 4;

@@ -55,7 +55,6 @@ type LogStore interface {
 	IsSegmentFenced(context.Context, int64, int64) (bool, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
-	RecoverySegmentFromInRecovery(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
 	CleanSegment(context.Context, int64, int64, int) error
 }
@@ -403,14 +402,6 @@ func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int6
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, segIdStr, "recovery_segment", "success").Inc()
 	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, segIdStr, "recovery_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return metadata, nil
-}
-
-// RecoverySegmentFromInRecovery read logFiles to get meta info
-func (l *logStore) RecoverySegmentFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "RecoverySegmentFromInRecovery")
-	defer sp.End()
-	// same as RecoverySegmentFromInProgress currently
-	return l.RecoverySegmentFromInProgress(ctx, logId, segmentId)
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error {

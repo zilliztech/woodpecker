@@ -272,7 +272,7 @@ func (l *logWriterImpl) runAuditor() {
 					continue
 				}
 				stateBefore := seg.State
-				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active || stateBefore == proto.SegmentState_InRecovery {
+				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active {
 					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
 					if getRecoverySegmentHandleErr != nil {
 						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))

@@ -40,8 +40,6 @@ type LogStoreClient interface {
 	IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
 	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
-	// SegmentRecoveryFromInRecovery recovers the specified log segment from the InRecovery state and returns the updated metadata and an error if any.
-	SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentRecoveryFromInProgress recovers the specified log segment from the InProgress state and returns the updated metadata and an error if any.
 	SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
@@ -87,10 +85,6 @@ func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int
 
 func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	return l.store.CompactSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.RecoverySegmentFromInRecovery(ctx, logId, segmentId)
 }
 
 func (l *logStoreClientLocal) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
@@ -143,11 +137,6 @@ func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId in
 }
 
 func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	//TODO implement me
 	panic("implement me")
 }

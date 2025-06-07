@@ -611,66 +611,6 @@ func (_c *LogStoreClient_SegmentRecoveryFromInProgress_Call) RunAndReturn(run fu
 	return _c
 }
 
-// SegmentRecoveryFromInRecovery provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx, logId, segmentId)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SegmentRecoveryFromInRecovery")
-	}
-
-	var r0 *proto.SegmentMetadata
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx, logId, segmentId)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx, logId, segmentId)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*proto.SegmentMetadata)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// LogStoreClient_SegmentRecoveryFromInRecovery_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SegmentRecoveryFromInRecovery'
-type LogStoreClient_SegmentRecoveryFromInRecovery_Call struct {
-	*mock.Call
-}
-
-// SegmentRecoveryFromInRecovery is a helper method to define mock.On call
-//   - ctx context.Context
-//   - logId int64
-//   - segmentId int64
-func (_e *LogStoreClient_Expecter) SegmentRecoveryFromInRecovery(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_SegmentRecoveryFromInRecovery_Call {
-	return &LogStoreClient_SegmentRecoveryFromInRecovery_Call{Call: _e.mock.On("SegmentRecoveryFromInRecovery", ctx, logId, segmentId)}
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInRecovery_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_SegmentRecoveryFromInRecovery_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
-	})
-	return _c
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInRecovery_Call) Return(_a0 *proto.SegmentMetadata, _a1 error) *LogStoreClient_SegmentRecoveryFromInRecovery_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInRecovery_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentRecoveryFromInRecovery_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // NewLogStoreClient creates a new instance of LogStoreClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewLogStoreClient(t interface {
