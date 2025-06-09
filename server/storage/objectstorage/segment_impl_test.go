@@ -41,7 +41,7 @@ func TestNewSegmentImpl(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -92,7 +92,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -141,7 +141,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -189,7 +189,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -236,7 +236,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -268,7 +268,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -318,7 +318,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -394,7 +394,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -442,7 +442,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      10,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -503,7 +503,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1000,
 					MaxInterval:     1000,
@@ -672,7 +672,7 @@ func TestSync(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -727,7 +727,7 @@ func TestClose(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -781,7 +781,7 @@ func TestGetId(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -806,7 +806,7 @@ func TestMerge(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+				SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 					MaxBytes: 1024 * 1024,
 				},
 			},
@@ -852,7 +852,7 @@ func TestLoad(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -902,7 +902,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
 					MaxInterval:     1000,
@@ -968,7 +968,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+				SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 					MaxBytes: 1024 * 1024,
 				},
 			},
@@ -1026,7 +1026,7 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
-				LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+				SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 					MaxBytes: 1024 * 1024,
 				},
 			},
@@ -1198,7 +1198,7 @@ func TestDeleteFragments(t *testing.T) {
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
 						MaxInterval:     1000,
@@ -1249,7 +1249,7 @@ func TestDeleteFragments(t *testing.T) {
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
 						MaxInterval:     1000,
@@ -1258,7 +1258,7 @@ func TestDeleteFragments(t *testing.T) {
 						MaxFlushRetries: 3,
 						RetryInterval:   100,
 					},
-					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
 					},
 				},
@@ -1289,7 +1289,7 @@ func TestDeleteFragments(t *testing.T) {
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
 						MaxInterval:     1000,
@@ -1298,7 +1298,7 @@ func TestDeleteFragments(t *testing.T) {
 						MaxFlushRetries: 3,
 						RetryInterval:   100,
 					},
-					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
 					},
 				},
@@ -1336,7 +1336,7 @@ func TestDeleteFragments(t *testing.T) {
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
 						MaxInterval:     1000,
@@ -1345,7 +1345,7 @@ func TestDeleteFragments(t *testing.T) {
 						MaxFlushRetries: 3,
 						RetryInterval:   100,
 					},
-					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
 					},
 				},
@@ -1376,7 +1376,7 @@ func TestDeleteFragments(t *testing.T) {
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
-					LogFileSyncPolicy: config.LogFileSyncPolicyConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
 						MaxInterval:     1000,
@@ -1385,7 +1385,7 @@ func TestDeleteFragments(t *testing.T) {
 						MaxFlushRetries: 3,
 						RetryInterval:   100,
 					},
-					LogFileCompactionPolicy: config.LogFileCompactionPolicy{
+					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
 					},
 				},
@@ -1423,7 +1423,7 @@ func TestDeleteFragments(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_EmptyData(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
 	}
@@ -1440,7 +1440,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EmptyData(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_SingleSmallEntry(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
 	}
@@ -1462,7 +1462,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleSmallEntry(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_MultipleSmallEntries(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
 	}
@@ -1488,7 +1488,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultipleSmallEntries(t *testing.T) 
 
 func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Very small max size to force partitioning
 		},
 	}
@@ -1517,7 +1517,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) 
 
 func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Smaller than the entry
 		},
 	}
@@ -1539,7 +1539,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
 	}
@@ -1578,7 +1578,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 0, // Edge case
 		},
 	}
@@ -1602,7 +1602,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
 	}
@@ -1644,7 +1644,7 @@ func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 2, // Very small size to force multiple partitions
 		},
 	}
@@ -1676,7 +1676,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_LargeMaxFlushSize(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024 * 1024, // 1MB max flush size (very large)
 		},
 	}
@@ -1708,7 +1708,7 @@ func TestPrepareMultiFragmentDataIfNecessary_LargeMaxFlushSize(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_ExactSizeMatch(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Exactly 10 bytes max flush size
 		},
 	}
@@ -1737,7 +1737,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ExactSizeMatch(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_NegativeEntryId(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 20,
 		},
 	}
@@ -1760,7 +1760,7 @@ func TestPrepareMultiFragmentDataIfNecessary_NegativeEntryId(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_SingleByteEntries(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 3, // 3 bytes max flush size
 		},
 	}
@@ -1797,7 +1797,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleByteEntries(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_MaxInt64EntryId(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
 	}
@@ -1819,7 +1819,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MaxInt64EntryId(t *testing.T) {
 
 func TestPrepareMultiFragmentDataIfNecessary_EmptyEntries(t *testing.T) {
 	segment := &SegmentImpl{
-		syncPolicyConfig: &config.LogFileSyncPolicyConfig{
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10,
 		},
 	}

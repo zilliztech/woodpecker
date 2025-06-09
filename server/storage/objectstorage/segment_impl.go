@@ -64,7 +64,7 @@ type SegmentImpl struct {
 	maxBufferSize    int64                                  // Max buffer size to sync buffer to object storage
 	maxBufferEntries int64                                  // Maximum number of entries per buffer
 	maxIntervalMs    int                                    // Max interval to sync buffer to object storage
-	syncPolicyConfig *config.LogFileSyncPolicyConfig
+	syncPolicyConfig *config.SegmentSyncPolicyConfig
 	fileClose        chan struct{} // Close signal
 	closeOnce        sync.Once
 	closed           atomic.Bool
@@ -78,7 +78,7 @@ type SegmentImpl struct {
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
 func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefixKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
 	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentPrefixKey", segmentPrefixKey))
-	syncPolicyConfig := &cfg.Woodpecker.Logstore.LogFileSyncPolicy
+	syncPolicyConfig := &cfg.Woodpecker.Logstore.SegmentSyncPolicy
 	maxBufferEntries := int64(syncPolicyConfig.MaxEntries)
 	newBuffer := cache.NewSequentialBuffer(logId, segId, 0, maxBufferEntries)
 	objFile := &SegmentImpl{
@@ -502,7 +502,7 @@ var _ storage.Segment = (*ROSegmentImpl)(nil)
 type ROSegmentImpl struct {
 	mu sync.RWMutex
 
-	compactPolicyConfig *config.LogFileCompactionPolicy
+	compactPolicyConfig *config.SegmentCompactionPolicy
 	client              minioHandler.MinioHandler
 	segmentPrefixKey    string // The prefix key for the segment to which this Segment belongs
 	bucket              string // The bucket name
@@ -518,7 +518,7 @@ func NewROSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPref
 	objFile := &ROSegmentImpl{
 		logId:               logId,
 		segmentId:           segId,
-		compactPolicyConfig: &cfg.Woodpecker.Logstore.LogFileCompactionPolicy,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
 		client:              objectCli,
 		segmentPrefixKey:    segmentPrefixKey,
 		bucket:              bucket,

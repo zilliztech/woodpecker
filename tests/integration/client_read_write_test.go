@@ -785,7 +785,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			}
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 60s
 
 			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
@@ -984,7 +984,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1200,7 +1200,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType

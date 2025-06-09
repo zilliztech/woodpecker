@@ -51,18 +51,19 @@ type AuditorConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
 }
 
-// LogFileSyncPolicyConfig stores the log file sync policy configuration.
-type LogFileSyncPolicyConfig struct {
-	MaxInterval     int   `yaml:"maxInterval"`
-	MaxEntries      int   `yaml:"maxEntries"`
-	MaxBytes        int64 `yaml:"maxBytes"`
-	MaxFlushRetries int   `yaml:"maxFlushRetries"`
-	RetryInterval   int   `yaml:"retryInterval"`
-	MaxFlushSize    int64 `yaml:"maxFlushSize"`
-	MaxFlushThreads int   `yaml:"maxFlushThreads"`
+// SegmentSyncPolicyConfig stores the log file sync policy configuration.
+type SegmentSyncPolicyConfig struct {
+	MaxInterval                int   `yaml:"maxInterval"`
+	MaxIntervalForLocalStorage int   `yaml:"maxIntervalForLocalStorage"`
+	MaxEntries                 int   `yaml:"maxEntries"`
+	MaxBytes                   int64 `yaml:"maxBytes"`
+	MaxFlushRetries            int   `yaml:"maxFlushRetries"`
+	RetryInterval              int   `yaml:"retryInterval"`
+	MaxFlushSize               int64 `yaml:"maxFlushSize"`
+	MaxFlushThreads            int   `yaml:"maxFlushThreads"`
 }
 
-type LogFileCompactionPolicy struct {
+type SegmentCompactionPolicy struct {
 	MaxBytes int64 `yaml:"maxBytes"`
 }
 
@@ -191,9 +192,8 @@ type MinioConfig struct {
 
 // LogstoreConfig stores the logstore configuration.
 type LogstoreConfig struct {
-	LogFileSyncPolicy       LogFileSyncPolicyConfig `yaml:"logFileSyncPolicy"`
-	LogFileCompactionPolicy LogFileCompactionPolicy `yaml:"logFileCompactionPolicy"`
-	FragmentManager         FragmentManagerConfig   `yaml:"fragmentManager"`
+	SegmentSyncPolicy       SegmentSyncPolicyConfig `yaml:"segmentSyncPolicy"`
+	SegmentCompactionPolicy SegmentCompactionPolicy `yaml:"segmentCompactionPolicy"`
 }
 
 type StorageConfig struct {
@@ -284,21 +284,18 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 		},
 		Logstore: LogstoreConfig{
-			LogFileSyncPolicy: LogFileSyncPolicyConfig{
-				MaxInterval:     1000,
-				MaxEntries:      2000,
-				MaxBytes:        100000000,
-				MaxFlushRetries: 3,
-				RetryInterval:   2000,
-				MaxFlushSize:    16000000,
-				MaxFlushThreads: 8,
+			SegmentSyncPolicy: SegmentSyncPolicyConfig{
+				MaxInterval:                1000,
+				MaxIntervalForLocalStorage: 5,
+				MaxEntries:                 2000,
+				MaxBytes:                   100000000,
+				MaxFlushRetries:            3,
+				RetryInterval:              2000,
+				MaxFlushSize:               16000000,
+				MaxFlushThreads:            8,
 			},
-			LogFileCompactionPolicy: LogFileCompactionPolicy{
+			SegmentCompactionPolicy: SegmentCompactionPolicy{
 				MaxBytes: 32000000,
-			},
-			FragmentManager: FragmentManagerConfig{
-				MaxBytes:    128_000_000,
-				MaxInterval: 2000,
 			},
 		},
 		Storage: StorageConfig{

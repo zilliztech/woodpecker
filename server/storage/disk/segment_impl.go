@@ -129,7 +129,7 @@ func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir
 // run performs periodic sync operations, similar to the sync mechanism in ObjectStorage
 func (s *DiskSegmentImpl) run() {
 	// Timer
-	ticker := time.NewTicker(500 * time.Millisecond) // Sync every 500ms
+	ticker := time.NewTicker(time.Duration(s.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segmentId)

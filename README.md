@@ -102,7 +102,7 @@ woodpecker:
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
   logstore:
-    logFileSyncPolicy:
+    segmentSyncPolicy:
       maxInterval: 1000 # Maximum interval between two sync operations in milliseconds
       maxEntries: 100000 # Maximum entries number of write buffer
       maxBytes: 64000000 # Maximum size of write buffer in bytes

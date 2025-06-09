@@ -362,10 +362,10 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context) (storag
 			s.logId,
 			s.segId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
-			disk.WithWriteFragmentSize(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxBytes),
-			disk.WithWriteMaxBufferSize(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxFlushSize),
-			disk.WithWriteMaxEntryPerFile(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxEntries),
-			disk.WithWriteMaxIntervalMs(s.cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval))
+			disk.WithWriteFragmentSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes),
+			disk.WithWriteMaxBufferSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize),
+			disk.WithWriteMaxEntryPerFile(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries),
+			disk.WithWriteMaxIntervalMs(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage))
 		s.currentSegmentWriter = writerFile
 		logger.Ctx(ctx).Info("create DiskSegmentImpl for write", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("logFileInst", fmt.Sprintf("%p", writerFile)))
 		return s.currentSegmentWriter, err
@@ -410,7 +410,8 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 			ctx,
 			s.logId,
 			s.segId,
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
+			disk.WithReadFragmentSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes))
 		s.currentSegmentReader = readerFile
 		logger.Ctx(ctx).Info("create RODiskSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
 		return s.currentSegmentReader, err
