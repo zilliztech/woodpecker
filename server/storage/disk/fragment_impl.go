@@ -400,6 +400,12 @@ func (fw *FragmentFileWriter) Release(ctx context.Context) error {
 	// mark data is not fetched in buff
 	fw.infoFetched = false
 
+	// update metrics
+	logIdStr := fmt.Sprintf("%d", fw.logId)
+	segmentIdStr := fmt.Sprintf("%d", fw.segmentId)
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Sub(float64(fw.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Dec()
+
 	return nil
 }
 
@@ -1172,6 +1178,12 @@ func (fr *FragmentFileReader) Release(ctx context.Context) error {
 	// Mark data as not fetched in buffer
 	fr.dataLoaded = false
 	logger.Ctx(ctx).Debug("fragment file release finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
+
+	// update metrics
+	logIdStr := fmt.Sprintf("%d", fr.logId)
+	segmentIdStr := fmt.Sprintf("%d", fr.segmentId)
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Sub(float64(fr.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Dec()
 
 	return nil
 }

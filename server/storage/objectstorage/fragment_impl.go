@@ -151,16 +151,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 		return werr.ErrFragmentEmpty
 	}
 
-	//fullData, err := serializeFragment(f)
-	//if err != nil {
-	//	return err
-	//}
-	////Put back to pool
-	//defer pool.PutByteBuffer(fullData)
 	fullDataReader, fullDataSize := serializeFragmentToReader(ctx, f)
 
 	// Upload
-	//_, err = f.client.PutObject(ctx, f.bucket, f.fragmentKey, bytes.NewReader(fullData), int64(len(fullData)), minio.PutObjectOptions{})
 	_, err := f.client.PutObject(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize), minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to put object: %w", err)
@@ -168,7 +161,6 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	cost := time.Now().Sub(start)
 	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
 	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
-	//metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(len(fullData)))
 	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(fullDataSize))
 	f.dataUploaded = true
 	return nil
@@ -225,8 +217,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 
 	// update metrics
 	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Inc()
-	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Add(float64(f.GetSize()))
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
 
 	return nil
 }
@@ -328,6 +320,13 @@ func (f *FragmentObject) Release(ctx context.Context) error {
 	f.indexes = nil
 	f.entriesData = nil
 	f.dataLoaded = false
+
+	// update metrics
+	logId := fmt.Sprintf("%d", f.logId)
+	segId := fmt.Sprintf("%d", f.segmentId)
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Dec()
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Sub(float64(f.GetSize()))
+
 	return nil
 }
 
@@ -356,28 +355,6 @@ func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *F
 	// write data to pendingMergedFragment
 	mergeTarget.entriesData = append(mergeTarget.entriesData, f.entriesData...)
 	return nil
-}
-
-// Deprecated
-// serializeFragment to object data bytes
-func serializeFragment(f *FragmentObject) ([]byte, error) {
-	// Calculate required space
-	headerSize := 24 // 3 int64 fields (version+firstEntryId+lastEntryId)
-	totalSize := headerSize + len(f.indexes) + len(f.entriesData)
-
-	// Get buffer from pool
-	fullData := make([]byte, 0, totalSize)
-
-	// Write header information
-	fullData = append(fullData, codec.Int64ToBytes(FragmentVersion)...)
-	fullData = append(fullData, codec.Int64ToBytes(f.firstEntryId)...)
-	fullData = append(fullData, codec.Int64ToBytes(f.lastEntryId)...)
-
-	// Write indexes and data
-	fullData = append(fullData, f.indexes...)
-	fullData = append(fullData, f.entriesData...)
-
-	return fullData, nil
 }
 
 func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reader, int) {

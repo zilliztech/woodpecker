@@ -221,6 +221,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.pendingSize.Add(int64(len(bytes)))
 	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
+	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId), fmt.Sprintf("%d", s.segmentId)).Inc()
 }
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
@@ -281,6 +282,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 		s.appendOpsQueue.Remove(element)
 		op := element.Value.(*AppendOp)
 		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId), fmt.Sprintf("%d", s.segmentId)).Dec()
 	}
 }
 
@@ -351,6 +353,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 		op := element.Value.(*AppendOp)
 		op.FastFail(ctx, err)
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId), fmt.Sprintf("%d", s.segmentId)).Dec()
 	}
 }
 
@@ -596,6 +599,7 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 	// Clear the queue
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId), fmt.Sprintf("%d", s.segmentId)).Dec()
 	}
 	logger.Ctx(ctx).Debug("fastFailAppendOps finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("fastFailOps", len(elementsToRemove)), zap.Int("successCount", successCount), zap.Int("failCount", failCount), zap.Error(err))
 }
