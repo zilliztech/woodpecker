@@ -35,6 +35,10 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
+const (
+	WriterScopeName = "LogWriter"
+)
+
 //go:generate mockery --dir=./woodpecker/log --name=LogWriter --structname=LogWriter --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_writer.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
@@ -51,6 +55,8 @@ type LogWriter interface {
 }
 
 func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewLogWriter")
+	defer sp.End()
 	w := &logWriterImpl{
 		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:          logHandle,
@@ -110,6 +116,8 @@ func (l *logWriterImpl) monitorSession() {
 }
 
 func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Write")
+	defer sp.End()
 	start := time.Now()
 
 	// Check if session is valid
@@ -125,7 +133,8 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 
 	ch := make(chan *WriteResult, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		logger.Ctx(ctx).Debug("write log entry callback", zap.String("logName", l.logHandle.GetName()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Debug("write log entry callback",
+			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -154,8 +163,9 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	result := <-ch
 
 	// Update metrics based on result
-	if result.Err == nil {
+	if result.Err != nil {
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("write log entry failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(result.Err))
 	} else {
 		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -165,6 +175,8 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 }
 
 func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
+	defer sp.End()
 	start := time.Now()
 	l.Lock()
 	defer l.Unlock()
@@ -179,6 +191,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 		close(ch)
+		logger.Ctx(ctx).Warn("Writer lock session has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
 		return ch
 	}
 
@@ -228,22 +241,26 @@ func (l *logWriterImpl) runAuditor() {
 	for {
 		select {
 		case <-ticker.C:
+			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 			// check and set segment truncate state if necessary
-			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(context.TODO()); err != nil {
-				logger.Ctx(context.TODO()).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+			if err := l.logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx); err != nil {
+				logger.Ctx(ctx).Warn("check and set segment truncated failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				sp.End()
 				continue
 			}
 
 			// get all current segments meta
-			segmentMetaList, err := l.logHandle.GetSegments(context.TODO())
+			segmentMetaList, err := l.logHandle.GetSegments(ctx)
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				logger.Ctx(ctx).Warn("get log segments failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				sp.End()
 				continue
 			}
 			nextSegId, err := l.logHandle.GetNextSegmentId()
 			if err != nil {
-				logger.Ctx(context.TODO()).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				logger.Ctx(ctx).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+				sp.End()
 				continue
 			}
 
@@ -255,15 +272,15 @@ func (l *logWriterImpl) runAuditor() {
 					continue
 				}
 				stateBefore := seg.State
-				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active || stateBefore == proto.SegmentState_InRecovery {
+				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active {
 					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
 					if getRecoverySegmentHandleErr != nil {
-						logger.Ctx(context.TODO()).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
+						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(getRecoverySegmentHandleErr))
 						continue
 					}
 					maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
 					if err != nil {
-						logger.Ctx(context.TODO()).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
+						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
 						continue
 					}
 				} else if stateBefore == proto.SegmentState_Truncated {
@@ -273,9 +290,10 @@ func (l *logWriterImpl) runAuditor() {
 
 			// Check for truncated segments to clean up
 			if len(truncatedSegmentExists) > 0 {
-				logger.Ctx(context.TODO()).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
-				l.cleanupTruncatedSegmentsIfNecessary(context.TODO())
+				logger.Ctx(ctx).Info("auditor try to clean up truncated segments", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64s("truncatedSegmentExists", truncatedSegmentExists))
+				l.cleanupTruncatedSegmentsIfNecessary(ctx)
 			}
+			sp.End()
 
 			// Track auditor latency
 			metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "auditor_run", "success").Observe(float64(time.Since(startAudit).Milliseconds()))
@@ -416,6 +434,8 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 }
 
 func (l *logWriterImpl) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Close")
+	defer sp.End()
 	start := time.Now()
 
 	l.writerClose <- struct{}{}
@@ -440,7 +460,7 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	return werr.Combine(closeErr, releaseLockErr)
 }
 
-// GetWriterSession For Test only
+// GetWriterSessionForTest For Test only
 func (l *logWriterImpl) GetWriterSessionForTest() *concurrency.Session {
 	return l.session
 }

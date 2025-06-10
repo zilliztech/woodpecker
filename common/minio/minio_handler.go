@@ -24,8 +24,12 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/pool"
+)
+
+const (
+	ObjectStorageScopeName = "ObjectStorage"
 )
 
 type ObjectReader interface {
@@ -35,11 +39,12 @@ type ObjectReader interface {
 
 // ReadObjectFull reads all content from ObjectReader and returns a byte slice
 // It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
-func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+func ReadObjectFull(ctx context.Context, objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
+	defer sp.End()
 	start := time.Now()
 	// Initial buffer size - 1MB is a reasonable starting point
-	initialSize := initReadBufSize
-	buf := pool.GetByteBuffer(int(initialSize))
+	buf := make([]byte, 0, initReadBufSize)
 
 	// Temporary read buffer
 	readBuf := make([]byte, 32*1024) // 32KB read block
@@ -48,15 +53,6 @@ func ReadObjectFull(objectReader ObjectReader, initReadBufSize int64) ([]byte, e
 	for {
 		// Read a chunk of data
 		n, err := objectReader.Read(readBuf)
-
-		if len(buf)+32*1024 >= cap(buf) {
-			// Increase buffer size if necessary
-			initialSize = int64(cap(buf) * 2)
-			newBuf := pool.GetByteBuffer(int(initialSize))
-			newBuf = append(newBuf, buf...)
-			pool.PutByteBuffer(buf)
-			buf = newBuf
-		}
 
 		// If data is read, append to result buffer
 		if n > 0 {
@@ -90,7 +86,8 @@ type MinioHandler interface {
 	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
-	StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
 	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
@@ -117,6 +114,8 @@ func NewMinioHandlerWithClient(ctx context.Context, minioCli *minio.Client) (Min
 }
 
 func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObject")
+	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -130,6 +129,8 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 }
 
 func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObjectDataAndInfo")
+	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -150,6 +151,8 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 }
 
 func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObject")
+	defer sp.End()
 	start := time.Now()
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil {
@@ -164,6 +167,8 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 }
 
 func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "RemoveObject")
+	defer sp.End()
 	start := time.Now()
 	err := m.client.RemoveObject(ctx, bucketName, objectName, opts)
 	if err != nil {
@@ -176,9 +181,11 @@ func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectN
 	return err
 }
 
-func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, prefix string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "StatObject")
+	defer sp.End()
 	start := time.Now()
-	info, err := m.client.StatObject(ctx, bucketName, prefix, opts)
+	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "error").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -189,7 +196,24 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, prefix st
 	return info, err
 }
 
+func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "CopyObject")
+	defer sp.End()
+	start := time.Now()
+	uploadInfo, err := m.client.CopyObject(ctx, dest, src)
+	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+	} else {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	}
+	return uploadInfo, err
+}
+
 func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ListObjects")
+	defer sp.End()
 	// We can't track completion metrics here as this returns a channel
 	// Instead, we'll increment the operation count for the method call
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("list_objects", "called").Inc()

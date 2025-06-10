@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package segment
+package processor
 
 import (
 	"context"
@@ -30,18 +30,20 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_storage"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
 
 func TestSegmentProcessor_AddEntry(t *testing.T) {
 	ctx := context.Background()
 	mockMinio := mocks_minio.NewMinioHandler(t)
-	mockLogFile := mocks_storage.NewLogFile(t)
+	mockLogFile := mocks_storage.NewSegment(t)
 	ch := make(chan int64, 1)
 	ch <- int64(0)
 	close(ch)
-	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(0), mock.Anything).Return(int64(0), ch, nil)
-	mockLogFile.EXPECT().Close().Return(nil)
+	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(0), mock.Anything, mock.Anything).Return(int64(0), nil)
+	mockLogFile.EXPECT().GetLastEntryId(mock.Anything).Return(int64(0), nil)
+	mockLogFile.EXPECT().Close(mock.Anything).Return(nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
 			BucketName: "test-bucket",
@@ -49,10 +51,13 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	}
 	segProc := NewSegmentProcessorWithLogFile(context.TODO(), cfg, 1, 1, mockMinio, mockLogFile)
 
-	seqNo, syncedCh, err := segProc.AddEntry(ctx, &SegmentEntry{
+	syncedCh := make(chan int64, 1)
+	syncedCh <- int64(0)
+	close(syncedCh)
+	seqNo, err := segProc.AddEntry(ctx, &SegmentEntry{
 		EntryId: 0,
 		Data:    []byte("data"),
-	})
+	}, syncedCh)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), seqNo)
@@ -60,21 +65,24 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	assert.Equal(t, int64(0), <-syncedCh)
 
 	// set fence
-	segProc.SetFenced()
-	seqNo, syncedCh, err = segProc.AddEntry(ctx, &SegmentEntry{
+	lastEntryId, fencedErr := segProc.SetFenced(context.TODO())
+	assert.NoError(t, fencedErr)
+	assert.Equal(t, int64(0), lastEntryId)
+	syncedCh2 := make(chan int64, 1)
+	close(syncedCh2)
+	seqNo, err = segProc.AddEntry(ctx, &SegmentEntry{
 		EntryId: 1,
 		Data:    []byte("data"),
-	})
+	}, syncedCh2)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrSegmentFenced.Is(err))
 	assert.Equal(t, int64(-1), seqNo)
-	assert.Nil(t, syncedCh)
 }
 
 func TestSegmentProcessor_ReadEntry(t *testing.T) {
 	ctx := context.Background()
 	mockMinio := mocks_minio.NewMinioHandler(t)
-	mockLogFile := mocks_storage.NewLogFile(t)
+	mockLogFile := mocks_storage.NewSegment(t)
 	mockReader := new(mockLogFileReader)
 	mockLogFile.EXPECT().NewReader(mock.Anything, mock.Anything).Return(mockReader, nil)
 
@@ -112,10 +120,22 @@ func TestSegmentProcessor_ReadEntry(t *testing.T) {
 func TestSegmentProcessor_Compact(t *testing.T) {
 	ctx := context.Background()
 	mockMinio := mocks_minio.NewMinioHandler(t)
-	mockLogFile := mocks_storage.NewLogFile(t)
+	mockLogFile := mocks_storage.NewSegment(t)
 	mockLogFile.EXPECT().Merge(mock.Anything).Return([]storage.Fragment{
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(0), "woodpecker/1/1/0/m_0.frag", [][]byte{[]byte("data0"), []byte("data1"), []byte("data2")}, int64(10), true, false, true),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/0/m_1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(0), "woodpecker/1/1/m_0.frag",
+			[]*cache.BufferEntry{
+				{EntryId: 10, Data: []byte("data0"), NotifyChan: nil},
+				{EntryId: 11, Data: []byte("data1"), NotifyChan: nil},
+				{EntryId: 12, Data: []byte("data2"), NotifyChan: nil},
+			},
+			int64(10), true, false, true),
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(1), "woodpecker/1/1/m_1.frag",
+			[]*cache.BufferEntry{
+				{EntryId: 13, Data: []byte("data3"), NotifyChan: nil},
+				{EntryId: 14, Data: []byte("data4"), NotifyChan: nil},
+				{EntryId: 15, Data: []byte("data5"), NotifyChan: nil},
+			},
+			int64(13), true, false, true),
 	}, []int32{10, 13}, []int32{1, 5}, nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -136,10 +156,16 @@ func TestSegmentProcessor_Compact(t *testing.T) {
 func TestSegmentProcessor_Recover(t *testing.T) {
 	ctx := context.Background()
 	mockMinio := mocks_minio.NewMinioHandler(t)
-	mockLogFile := mocks_storage.NewLogFile(t)
+	mockLogFile := mocks_storage.NewSegment(t)
 	mockLogFile.EXPECT().Load(mock.Anything).Return(
 		int64(0),
-		objectstorage.NewFragmentObject(mockMinio, "test-bucket", 1, 0, uint64(1), "woodpecker/1/1/0/1.frag", [][]byte{[]byte("data3"), []byte("data4"), []byte("data5")}, int64(13), true, false, true),
+		objectstorage.NewFragmentObject(context.TODO(), mockMinio, "test-bucket", 1, 0, int64(1), "woodpecker/1/1/1.frag",
+			[]*cache.BufferEntry{
+				{EntryId: 13, Data: []byte("data3"), NotifyChan: nil},
+				{EntryId: 14, Data: []byte("data4"), NotifyChan: nil},
+				{EntryId: 15, Data: []byte("data5"), NotifyChan: nil},
+			},
+			int64(13), true, false, true),
 		nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
@@ -166,12 +192,17 @@ func (m *mockLogFileReader) Close() error {
 	return args.Error(0)
 }
 
-func (m *mockLogFileReader) ReadNext() (*proto.LogEntry, error) {
+func (m *mockLogFileReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
 	args := m.Called()
 	return args.Get(0).(*proto.LogEntry), args.Error(1)
 }
 
-func (m *mockLogFileReader) HasNext() (bool, error) {
+func (m *mockLogFileReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.LogEntry, error) {
+	args := m.Called()
+	return args.Get(0).([]*proto.LogEntry), args.Error(1)
+}
+
+func (m *mockLogFileReader) HasNext(ctx context.Context) (bool, error) {
 	args := m.Called()
 	return args.Bool(0), nil
 }

@@ -70,7 +70,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_test_log_" + time.Now().Format("20060102150405")
+			logName := "truncate_test_log_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -177,7 +177,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_test_concurrent_" + time.Now().Format("20060102150405")
+			logName := "truncate_test_concurrent_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -398,7 +398,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_test_multi_segment_" + time.Now().Format("20060102150405")
+			logName := "truncate_test_multi_segment_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -542,7 +542,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_read_before_truncation_" + time.Now().Format("20060102150405")
+			logName := "truncate_read_before_truncation_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -707,7 +707,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "segment_cleanup_after_truncation_" + time.Now().Format("20060102150405")
+			logName := "segment_cleanup_after_truncation_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -962,7 +962,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_continuity_test_" + time.Now().Format("20060102150405")
+			logName := "truncate_continuity_test_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -1157,7 +1157,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create log
-			logName := "truncate_reopen_client_test_" + time.Now().Format("20060102150405")
+			logName := "truncate_reopen_client_test_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 

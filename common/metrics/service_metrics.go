@@ -274,7 +274,7 @@ var (
 		[]string{"log_id", "segment_id", "operation", "status"},
 	)
 
-	// LogFile metrics
+	// Segment File Impl metrics
 	WpFileOperationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: wp_namespace,
@@ -299,18 +299,38 @@ var (
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
 			Name:      "file_writer",
-			Help:      "Number of log file writer",
+			Help:      "Number of fragment file writer for this segment",
+		},
+		[]string{"log_id", "segment_id"},
+	)
+
+	WpFileCompactLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "file_compaction_latency",
+			Help:      "Latency of compaction operations",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
+		},
+		[]string{"log_id", "segment_id"},
+	)
+	WpFileCompactBytesWritten = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: wp_namespace,
+			Subsystem: server_namespace,
+			Name:      "compact_bytes_written",
+			Help:      "Total bytes written by compaction",
 		},
 		[]string{"log_id", "segment_id"},
 	)
 
 	// Fragment metrics
-	WpFragmentLoadTotal = prometheus.NewCounterVec( // fragment read
-		prometheus.CounterOpts{
+	WpFragmentLoadTotal = prometheus.NewGaugeVec( // fragment read
+		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
 			Name:      "fragment_load_total",
-			Help:      "Total number of load fragment requests",
+			Help:      "Total number of loaded fragments",
 		},
 		[]string{"log_id", "segment_id"},
 	)
@@ -324,12 +344,12 @@ var (
 		},
 		[]string{"log_id", "segment_id"},
 	)
-	WpFragmentLoadBytes = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	WpFragmentLoadBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Namespace: wp_namespace,
 			Subsystem: server_namespace,
 			Name:      "fragment_load_bytes",
-			Help:      "Size of fragment cache in bytes",
+			Help:      "Size of loaded fragment in bytes",
 		},
 		[]string{"log_id", "segment_id"},
 	)
@@ -362,6 +382,7 @@ var (
 		[]string{"log_id", "segment_id"},
 	)
 
+	// Deprecated
 	// fragment manager metrics
 	WpFragmentManagerCachedFragmentsTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -470,10 +491,12 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		// SegmentProcessor metrics
 		registerer.MustRegister(WpSegmentProcessorOperationsTotal)
 		registerer.MustRegister(WpSegmentProcessorOperationLatency)
-		// Log File metrics
+		// Segment File Impl metrics
 		registerer.MustRegister(WpFileOperationsTotal)
 		registerer.MustRegister(WpFileOperationLatency)
 		registerer.MustRegister(WpFileWriters)
+		registerer.MustRegister(WpFileCompactLatency)
+		registerer.MustRegister(WpFileCompactBytesWritten)
 		// Fragment metrics
 		registerer.MustRegister(WpFragmentLoadTotal)
 		registerer.MustRegister(WpFragmentLoadLatency)

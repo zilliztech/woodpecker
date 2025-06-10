@@ -20,10 +20,15 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
@@ -41,14 +46,14 @@ func TestNewLogger(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		logger := Ctx(context.WithValue(context.Background(), "__LogLevel__", test.level))
+		logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, test.level))
 		assert.True(t, logger.Core().Enabled(test.expected.Level()), fmt.Sprintf("level:%s should enable:%v", test.level, test.expected.Level()))
 	}
 }
 
 // TestLoggerMethods tests the Logger methods
 func TestLoggerMethods(t *testing.T) {
-	logger := Ctx(context.WithValue(context.Background(), "__LogLevel__", "debug"))
+	logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, "debug"))
 
 	// Verify log recording using testify's assert
 	assert.NotPanics(t, func() {
@@ -61,7 +66,7 @@ func TestLoggerMethods(t *testing.T) {
 
 func TestLoggerMethodsWithContext(t *testing.T) {
 	// Set the level explicitly
-	logger := Ctx(context.WithValue(context.Background(), "__LogLevel__", "info"))
+	logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, "info"))
 	assert.False(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.DebugLevel).Level()))
 	assert.True(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.InfoLevel).Level()))
 	assert.True(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.WarnLevel).Level()))
@@ -73,4 +78,60 @@ func TestLoggerMethodsWithContext(t *testing.T) {
 	assert.False(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.InfoLevel).Level()))
 	assert.True(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.WarnLevel).Level()))
 	assert.True(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.ErrorLevel).Level()))
+}
+
+func TestTraceLogger(t *testing.T) {
+	// create cfg
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	assert.NoError(t, err)
+
+	// init log
+	cfg.Log.Level = "debug"
+	InitLogger(cfg)
+
+	// init tracer
+	cfg.Trace.Exporter = "otlp" // for integration test, set up jaeger/otlp before this exporter enable
+	initTraceErr := tracer.InitTracer(cfg, "TextTraceLogger", 1001)
+	assert.NoError(t, initTraceErr)
+
+	// start a span
+	newCtx, span := NewIntentCtx("wpTrace", "testIntent")
+	Ctx(newCtx).Info("start a test intent")
+	testPrintSomething(newCtx)
+	span.End()
+
+	// wait for tracer to flush
+	time.Sleep(10 * time.Second)
+}
+
+func TestTraceLoggerWithParentCtx(t *testing.T) {
+	// create cfg
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	assert.NoError(t, err)
+
+	// init log
+	cfg.Log.Level = "debug"
+	InitLogger(cfg)
+
+	// init tracer
+	//cfg.Trace.Exporter = "otlp" // for integration test, set up jaeger/otlp before this exporter enable
+	initTraceErr := tracer.InitTracer(cfg, "TextTraceLogger", 1001)
+	assert.NoError(t, initTraceErr)
+
+	// start a span
+	parentCtx := context.WithValue(context.Background(), "testkey", "123")
+	ctx, span := NewIntentCtxWithParent(parentCtx, "testScope", "testIntent")
+	assert.Equal(t, "123", parentCtx.Value("testkey"))
+	assert.Equal(t, "123", ctx.Value("testkey"))
+	Ctx(ctx).Info("start a test intent")
+	testPrintSomething(ctx)
+	span.End()
+}
+
+func testPrintSomething(ctx context.Context) {
+	ctx, span := NewIntentCtxWithParent(ctx, "subRole", "subIntent")
+	defer span.End()
+	span.AddEvent("event01", trace.WithAttributes(attribute.Int64("timestamp", 123), attribute.Bool("isOK", true)))
+	span.AddEvent("event02", trace.WithAttributes(attribute.Int64("timestamp", 456), attribute.Bool("isOK", false)))
+	Ctx(ctx).Debug("test print trace", zap.String("testField", "123"))
 }

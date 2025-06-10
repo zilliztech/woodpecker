@@ -32,6 +32,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
+// Deprecated
 // FragmentManager is responsible for managing memory usage of fragments.
 type FragmentManager interface {
 	// GetMaxMemory returns the maximum memory limit.
@@ -59,6 +60,7 @@ var (
 	interval  int   = 1_000
 )
 
+// Deprecated
 func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 	once.Do(func() {
 		maxMemory = maxMemoryBytes
@@ -74,15 +76,18 @@ func GetInstance(maxMemoryBytes int64, intervalMs int) FragmentManager {
 	return instance
 }
 
+// Deprecated
 func GetCachedFragment(ctx context.Context, key string) (storage.Fragment, bool) {
 	return GetInstance(maxMemory, interval).GetFragment(ctx, key)
 }
 
+// Deprecated
 func AddCacheFragment(ctx context.Context, fragment storage.Fragment) error {
 	logger.Ctx(ctx).Debug("add cache fragment", zap.String("key", fragment.GetFragmentKey()), zap.Any("fragInst", fmt.Sprintf("%p", fragment)))
 	return GetInstance(maxMemory, interval).AddFragment(ctx, fragment)
 }
 
+// Deprecated
 func RemoveCachedFragment(ctx context.Context, frag storage.Fragment) error {
 	return GetInstance(maxMemory, interval).RemoveFragment(ctx, frag)
 }
@@ -124,6 +129,7 @@ func newFragmentManager(maxMemory int64) FragmentManager {
 	fm := &fragmentManagerImpl{
 		maxMemory:      maxMemory,
 		usedMemory:     0,
+		dataMemory:     0,
 		cache:          make(map[string]*CacheItem),
 		order:          list.New(),
 		requestChan:    make(chan fragmentRequest, 100), // Buffer to prevent blocking
@@ -203,9 +209,9 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
 		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
 
-		m.usedMemory -= fragmentSize
-		m.dataMemory -= rawFragmentBufSize
-		item.fragment.Release()
+		m.dataMemory -= fragmentSize
+		m.usedMemory -= rawFragmentBufSize
+		item.fragment.Release(context.TODO())
 		logger.Ctx(req.ctx).Debug("released fragment during shutdown",
 			zap.String("key", key),
 			zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -248,8 +254,8 @@ func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
 
 	// Update memory usage statistics
 	fragmentSize, rawFragmentBufSize := calculateSize(fragment)
-	m.usedMemory += fragmentSize
-	m.dataMemory += rawFragmentBufSize
+	m.dataMemory += fragmentSize
+	m.usedMemory += rawFragmentBufSize
 
 	// Update metrics for this fragment
 	logId := fmt.Sprintf("%d", fragment.GetLogId())
@@ -298,9 +304,9 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 	// Perform deletion
 	delete(m.cache, key)
 	m.order.Remove(item.element)
-	m.usedMemory -= fragmentSize
-	m.dataMemory -= rawFragmentBufSize
-	item.fragment.Release()
+	m.dataMemory -= fragmentSize
+	m.usedMemory -= rawFragmentBufSize
+	item.fragment.Release(context.TODO())
 	logger.Ctx(req.ctx).Debug("remove fragment finish",
 		zap.String("key", key),
 		zap.String("fragInst", fmt.Sprintf("%p", item.fragment)),
@@ -366,9 +372,9 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 
 		// Perform eviction
 		delete(m.cache, keyToEvict)
-		m.usedMemory -= fragmentSize
-		m.dataMemory -= rawFragmentBufSize
-		item.fragment.Release()
+		m.dataMemory -= fragmentSize
+		m.usedMemory -= rawFragmentBufSize
+		item.fragment.Release(context.TODO())
 		m.order.Remove(evictElement)
 		logger.Ctx(req.ctx).Debug("evict fragment automatically",
 			zap.String("key", keyToEvict),

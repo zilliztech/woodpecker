@@ -17,46 +17,106 @@
 package segment
 
 import (
+	"context"
+	"fmt"
 	"sync"
+
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 )
 
 // SequentialExecutor is a sequential append executor
 type SequentialExecutor struct {
-	appendOpsQueue chan *AppendOp
+	operationQueue chan Operation
 	wg             sync.WaitGroup
-	closeOnce      sync.Once
+	mu             sync.RWMutex
+	closed         bool
+	started        bool
 }
 
 // NewSequentialExecutor initializes a SequentialExecutor
 func NewSequentialExecutor(bufferSize int) *SequentialExecutor {
 	return &SequentialExecutor{
-		appendOpsQueue: make(chan *AppendOp, bufferSize),
+		operationQueue: make(chan Operation, bufferSize),
+		closed:         false,
+		started:        false,
 	}
 }
 
 // Start starts the sequential append executor
-func (se *SequentialExecutor) Start() {
+func (se *SequentialExecutor) Start(ctx context.Context) {
+	se.mu.Lock()
+	defer se.mu.Unlock()
+
+	if se.started {
+		logger.Ctx(ctx).Debug("sequential executor already started, skip", zap.String("inst", fmt.Sprintf("%p", se)))
+		return
+	}
+
+	se.started = true
+	logger.Ctx(ctx).Debug("start sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 	go se.worker()
 }
 
 // worker executes the logic for each order
 func (se *SequentialExecutor) worker() {
-	for appendOp := range se.appendOpsQueue {
-		appendOp.Execute()
-		se.wg.Done()
+	for op := range se.operationQueue {
+		// Use defer to ensure Done() is called even if Execute() panics
+		func() {
+			defer se.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					// Use context.Background() since we don't have access to the original context here
+					logger.Ctx(context.Background()).Error("Operation execution panicked",
+						zap.String("OpId", op.Identifier()),
+						zap.Any("panic", r))
+				}
+			}()
+			op.Execute()
+		}()
 	}
 }
 
 // Submit an op to the queue
-func (se *SequentialExecutor) Submit(op *AppendOp) {
+func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
+	logger.Ctx(ctx).Debug("try to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+
+	se.mu.Lock()
+	if se.closed {
+		logger.Ctx(ctx).Debug("submit failed, executor already closed", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+		se.mu.Unlock()
+		return false
+	}
+
 	se.wg.Add(1)
-	se.appendOpsQueue <- op
+
+	// Get a reference to the channel while holding the lock
+	queue := se.operationQueue
+	se.mu.Unlock()
+
+	// Now send to the channel outside the lock to avoid deadlock
+	// This is safe because once we've incremented wg, the Stop method will wait for us
+	queue <- op
+	logger.Ctx(ctx).Debug("finish to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+	return true
 }
 
 // Stop stops the sequential append executor
-func (se *SequentialExecutor) Stop() {
-	se.closeOnce.Do(func() {
-		close(se.appendOpsQueue)
-	})
+func (se *SequentialExecutor) Stop(ctx context.Context) {
+	logger.Ctx(ctx).Debug("try to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
+
+	se.mu.Lock()
+	if se.closed {
+		logger.Ctx(ctx).Debug("sequential executor already stopped, skip", zap.String("inst", fmt.Sprintf("%p", se)))
+		se.mu.Unlock()
+		return
+	}
+	se.closed = true
+	close(se.operationQueue)
+	se.mu.Unlock()
+
+	// Wait for all operations to complete
 	se.wg.Wait()
+	logger.Ctx(ctx).Debug("finish to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 }

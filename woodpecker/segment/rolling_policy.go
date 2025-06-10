@@ -27,10 +27,22 @@ import (
 
 type RollingPolicy interface {
 	// ShouldRollover returns true if the current segment should be rolled over.
-	ShouldRollover(currentSegmentSize int64, lastRolloverTimeMs int64) bool
+	ShouldRollover(ctx context.Context, currentSegmentSize int64, lastRolloverTimeMs int64) bool
 }
 
 func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64) RollingPolicy {
+	// Validate parameters
+	if rolloverIntervalMs <= 0 {
+		logger.Ctx(context.Background()).Warn("Invalid rolloverIntervalMs, using default 10 minutes",
+			zap.Int64("provided", rolloverIntervalMs))
+		rolloverIntervalMs = 10 * 60 * 1000 // 10 minutes default
+	}
+	if rolloverSizeBytes <= 0 {
+		logger.Ctx(context.Background()).Warn("Invalid rolloverSizeBytes, using default 64MB",
+			zap.Int64("provided", rolloverSizeBytes))
+		rolloverSizeBytes = 64 * 1024 * 1024 // 64MB default
+	}
+
 	return &DefaultRollingPolicy{
 		rolloverIntervalMs: rolloverIntervalMs,
 		rolloverSizeBytes:  rolloverSizeBytes,
@@ -44,22 +56,48 @@ type DefaultRollingPolicy struct {
 	rolloverSizeBytes  int64
 }
 
-func (p *DefaultRollingPolicy) ShouldRollover(currentSegmentSize int64, lastRolloverTimeMs int64) bool {
-	// If the current segment is already larger than the rollover size, or if the last rollover time is more than the rollover interval, roll over.
+func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, lastRolloverTimeMs int64) bool {
+	// Validate input parameters
+	if currentSegmentSize < 0 {
+		logger.Ctx(ctx).Warn("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
+		return false
+	}
+
+	// Get current time once for consistency
+	currentTimeMs := time.Now().UnixMilli()
+
+	// Check size-based rollover
 	if currentSegmentSize >= p.rolloverSizeBytes {
-		logger.Ctx(context.TODO()).Debug("Rolling by size",
+		logger.Ctx(ctx).Debug("Rolling by size",
 			zap.Int64("rolloverSizeBytes", p.rolloverSizeBytes),
 			zap.Int64("actualSize", currentSegmentSize))
 		return true
 	}
-	// If the current segment is not empty, and the last rollover time is more than the rollover interval, roll over.
-	if currentSegmentSize > 0 && (time.Now().UnixMilli()-lastRolloverTimeMs) >= p.rolloverIntervalMs {
-		logger.Ctx(context.TODO()).Debug("Rolling by time interval",
-			zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
-			zap.Int64("actualIntervalMs", time.Now().UnixMilli()-lastRolloverTimeMs),
-			zap.Int64("actualSize", currentSegmentSize))
-		return true
+
+	// Check time-based rollover
+	// Only consider time-based rollover if segment is not empty and lastRolloverTimeMs is valid
+	if currentSegmentSize > 0 && lastRolloverTimeMs > 0 {
+		timeSinceLastRollover := currentTimeMs - lastRolloverTimeMs
+
+		// Handle potential clock skew or time going backwards
+		if timeSinceLastRollover < 0 {
+			logger.Ctx(ctx).Warn("Clock skew detected, time went backwards",
+				zap.Int64("currentTimeMs", currentTimeMs),
+				zap.Int64("lastRolloverTimeMs", lastRolloverTimeMs),
+				zap.Int64("timeDiff", timeSinceLastRollover))
+			// Don't rollover on clock skew, wait for time to stabilize
+			return false
+		}
+
+		if timeSinceLastRollover >= p.rolloverIntervalMs {
+			logger.Ctx(ctx).Debug("Rolling by time interval",
+				zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
+				zap.Int64("actualIntervalMs", timeSinceLastRollover),
+				zap.Int64("actualSize", currentSegmentSize))
+			return true
+		}
 	}
-	// Otherwise, do not roll over.
+
+	// Otherwise, do not roll over
 	return false
 }

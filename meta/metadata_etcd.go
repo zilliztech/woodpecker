@@ -27,6 +27,9 @@ import (
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	pb "google.golang.org/protobuf/proto"
 
@@ -34,6 +37,10 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
+)
+
+const (
+	CurrentScopeName = "Meta"
 )
 
 var _ MetadataProvider = (*metadataProviderEtcd)(nil)
@@ -59,6 +66,8 @@ func NewMetadataProvider(ctx context.Context, client *clientv3.Client) MetadataP
 // It checks if there is logIdGen,instance,quorumIdGen keys in etcd.
 // If not, it creates them.
 func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "InitIfNecessary")
+	defer sp.End()
 	startTime := time.Now()
 	keys := []string{
 		ServiceInstanceKey,
@@ -82,6 +91,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
+	sp.AddEvent("GetServiceMetaCompleted", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	initOps := make([]clientv3.Op, 0, 4)
 	for index, rp := range resp.Responses {
 		if rp.GetResponseRange().Kvs == nil || len(rp.GetResponseRange().Kvs) == 0 {
@@ -131,6 +141,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
 	}
+	sp.AddEvent("InitServiceMetaCompleted", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	// cluster initialized successfully
 	log.Info("cluster initialized successfully")
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "success").Inc()
@@ -164,6 +175,8 @@ func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Versi
 }
 
 func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateLog")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -172,6 +185,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 
 	// Get the current id value from logIdGenerator
 	resp, err := e.client.Get(ctx, LogIdGeneratorKey)
+	sp.AddEvent("GetIdGen", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -186,6 +200,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 
 	// check if logName exists
 	exists, err := e.CheckExists(ctx, logName)
+	sp.AddEvent("CheckExists", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -237,7 +252,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		// Update logs/idgen to nextID
 		clientv3.OpPut(LogIdGeneratorKey, fmt.Sprintf("%d", nextID)),
 	).Commit()
-
+	sp.AddEvent("Committed", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -265,6 +280,8 @@ func atoi(s string) (int, error) {
 }
 
 func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetLogMeta")
+	defer sp.End()
 	startTime := time.Now()
 
 	// Get log meta for the path = logs/<logName>
@@ -291,6 +308,8 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 }
 
 func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateLogMeta")
+	defer sp.End()
 	startTime := time.Now()
 	logKey := BuildLogKey(logName)
 	logMetaValue, err := pb.Marshal(logMeta)
@@ -330,10 +349,13 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 }
 
 func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "OpenLog")
+	defer sp.End()
 	startTime := time.Now()
 
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.GetLogMeta(ctx, logName)
+	sp.AddEvent("GetLogMeta", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("open_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("open_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -342,6 +364,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 
 	// Get segments meta with prefix = logs/<logName>/segments/<segmentId>
 	segmentMetaList, err := e.GetAllSegmentMetadata(ctx, logName)
+	sp.AddEvent("GetAllSegmentMetadata", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("open_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("open_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -355,6 +378,8 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 }
 
 func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) (bool, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckExists")
+	defer sp.End()
 	startTime := time.Now()
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
@@ -372,6 +397,8 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 }
 
 func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListLogs")
+	defer sp.End()
 	startTime := time.Now()
 
 	list, err := e.ListLogsWithPrefix(ctx, "")
@@ -386,6 +413,8 @@ func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 }
 
 func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListLogsWithPrefix")
+	defer sp.End()
 	startTime := time.Now()
 	logResp, err := e.client.Get(ctx, BuildLogKey(logNamePrefix), clientv3.WithPrefix())
 	if err != nil {
@@ -432,6 +461,8 @@ func extractLogName(path string) (string, error) {
 }
 
 func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "AcquireLogWriterLock")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -494,6 +525,8 @@ func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName
 }
 
 func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName string) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ReleaseLogWriterLock")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -534,6 +567,8 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 }
 
 func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreSegmentMetadata")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -575,6 +610,8 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 }
 
 func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentMetadata")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -615,6 +652,8 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 }
 
 func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*proto.SegmentMetadata, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetSegmentMetadata")
+	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
 	getResp, getErr := e.client.Get(ctx, segmentKey)
@@ -624,8 +663,6 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 		return nil, getErr
 	}
 	if len(getResp.Kvs) == 0 {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}
@@ -641,6 +678,8 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 }
 
 func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*proto.SegmentMetadata, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetAllSegmentMetadata")
+	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, "")
 	getResp, getErr := e.client.Get(ctx, segmentKey, clientv3.WithPrefix())
@@ -675,6 +714,8 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 }
 
 func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName string, segmentId int64) (bool, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckSegmentExists")
+	defer sp.End()
 	startTime := time.Now()
 	segmentResp, err := e.client.Get(ctx, BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId)))
 	if err != nil {
@@ -693,6 +734,8 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 // DeleteSegmentMetadata deletes a segment metadata entry.
 // It returns an error if the segment does not exist or if the deletion fails.
 func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteSegmentMetadata")
+	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
@@ -734,6 +777,8 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 }
 
 func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.QuorumInfo) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreQuorumInfo")
+	defer sp.End()
 	startTime := time.Now()
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", info.Id))
 	quorumInfoValue, err := pb.Marshal(info)
@@ -774,6 +819,8 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 }
 
 func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64) (*proto.QuorumInfo, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetQuorumInfo")
+	defer sp.End()
 	startTime := time.Now()
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", quorumId))
 	getResp, getErr := e.client.Get(ctx, quorumKey)
@@ -800,6 +847,8 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 }
 
 func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerName string, logId int64, fromSegmentId int64, fromEntryId int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateReaderTempInfo")
+	defer sp.End()
 	startTime := time.Now()
 	// Create a key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
@@ -856,6 +905,8 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 
 // GetReaderTempInfo returns the temporary information for a specific reader
 func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int64, readerName string) (*proto.ReaderTempInfo, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetReaderTempInfo")
+	defer sp.End()
 	startTime := time.Now()
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
@@ -890,6 +941,8 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 
 // GetAllReaderTempInfoForLog returns all reader temporary information for a given log
 func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, logId int64) ([]*proto.ReaderTempInfo, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetAllReaderTempInfoForLog")
+	defer sp.End()
 	startTime := time.Now()
 	// Create the prefix for all readers of this log
 	readerPrefix := BuildLogAllReaderTempInfosKey(logId)
@@ -924,6 +977,8 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 
 // UpdateReaderTempInfo updates the reader's recent read position
 func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId int64, readerName string, recentReadSegmentId int64, recentReadEntryId int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateReaderTempInfo")
+	defer sp.End()
 	startTime := time.Now()
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
@@ -992,6 +1047,8 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 
 // DeleteReaderTempInfo deletes the temporary information for a reader when it closes
 func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId int64, readerName string) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteReaderTempInfo")
+	defer sp.End()
 	startTime := time.Now()
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
@@ -1074,6 +1131,8 @@ func (e *metadataProviderEtcd) Close() error {
 
 // CreateSegmentCleanupStatus creates a new segment cleanup status record
 func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CreateSegmentCleanupStatus")
+	defer sp.End()
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(status.LogId, status.SegmentId)
 	bytes, err := proto.MarshalSegmentCleanupStatus(status)
@@ -1110,6 +1169,8 @@ func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, s
 
 // UpdateSegmentCleanupStatus updates an existing segment cleanup status
 func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, status *proto.SegmentCleanupStatus) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentCleanupStatus")
+	defer sp.End()
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(status.LogId, status.SegmentId)
 	bytes, err := proto.MarshalSegmentCleanupStatus(status)
@@ -1146,6 +1207,8 @@ func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, s
 
 // GetSegmentCleanupStatus retrieves the cleanup status for a segment
 func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) (*proto.SegmentCleanupStatus, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetSegmentCleanupStatus")
+	defer sp.End()
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
@@ -1177,6 +1240,8 @@ func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logI
 
 // DeleteSegmentCleanupStatus deletes the cleanup status for a segment
 func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) error {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteSegmentCleanupStatus")
+	defer sp.End()
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
@@ -1194,6 +1259,8 @@ func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, l
 
 // ListSegmentCleanupStatus lists all cleanup statuses for a log
 func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListSegmentCleanupStatus")
+	defer sp.End()
 	startTime := time.Now()
 	// Create a prefix key for the log to retrieve all segments
 	prefix := BuildAllSegmentsCleanupStatusKey(logId)

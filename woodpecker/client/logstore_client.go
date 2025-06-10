@@ -21,25 +21,26 @@ import (
 
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
-	"github.com/zilliztech/woodpecker/server/segment"
+	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 //go:generate mockery --dir=./woodpecker/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_woodpecker/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
+	// TODO use ResultChannel abstract instead of chan
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
-	AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error)
+	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error)
 	// ReadEntry reads an entry from the specified log segment by entry ID and returns the entry and an error if any.
-	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error)
-	// ReadBatchEntries reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
-	ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error)
+	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error)
+	// ReadEntriesInRange reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
+	ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error)
+	// ReadEntriesBatch reads a batch of entries from the specified log segment and returns the entries and an error if any.
+	ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
-	FenceSegment(ctx context.Context, logId int64, segmentId int64) error
+	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	// IsSegmentFenced checks if the specified log segment is fenced and returns a boolean value and an error if any.
 	IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
 	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
-	// SegmentRecoveryFromInRecovery recovers the specified log segment from the InRecovery state and returns the updated metadata and an error if any.
-	SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentRecoveryFromInProgress recovers the specified log segment from the InProgress state and returns the updated metadata and an error if any.
 	SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
@@ -56,19 +57,23 @@ type logStoreClientLocal struct {
 	store server.LogStore
 }
 
-func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
-	return l.store.AddEntry(ctx, logId, entry)
+// TODO use ResultChannel abstract instead of chan
+func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
+	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
 }
 
-func (l *logStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStoreClientLocal) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error) {
 	return l.store.GetEntry(ctx, logId, segmentId, entryId)
 }
 
-func (l *logStoreClientLocal) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+func (l *logStoreClientLocal) ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
 }
+func (l *logStoreClientLocal) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+	return l.store.GetBatchEntries(ctx, logId, segmentId, fromEntryId, size)
+}
 
-func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	return l.store.FenceSegment(ctx, logId, segmentId)
 }
 
@@ -82,10 +87,6 @@ func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int
 
 func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	return l.store.CompactSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.RecoverySegmentFromInRecovery(ctx, logId, segmentId)
 }
 
 func (l *logStoreClientLocal) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
@@ -104,21 +105,26 @@ type logStoreClientRemote struct {
 	innerClient proto.LogStoreClient
 }
 
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *segment.SegmentEntry) (int64, <-chan int64, error) {
+// TODO use ResultChannel abstract instead of chan
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*segment.SegmentEntry, error) {
+func (l *logStoreClientRemote) ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) ReadBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*segment.SegmentEntry, error) {
+func (l *logStoreClientRemote) ReadEntriesInRange(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, toEntryId int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) error {
+func (l *logStoreClientRemote) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+	panic("implement me")
+}
+
+func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -134,11 +140,6 @@ func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId in
 }
 
 func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) SegmentRecoveryFromInRecovery(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	//TODO implement me
 	panic("implement me")
 }

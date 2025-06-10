@@ -18,73 +18,94 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"go.uber.org/zap"
+
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
+// BufferEntry represents a single entry in the buffer with its data and notification channel
+type BufferEntry struct {
+	EntryId    int64        // The entry ID for this buffer entry
+	Data       []byte       // The actual data
+	NotifyChan chan<- int64 // Channel to notify when this entry is synced
+}
+
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
 type SequentialBuffer struct {
-	Mu        sync.Mutex
+	mu        sync.Mutex
 	logId     int64
 	segmentId int64
 
-	Values   [][]byte     // values of entries
-	MaxSize  int64        // max amount of entries
-	DataSize atomic.Int64 // data bytes size of entries
+	Entries    []*BufferEntry // entries with data and notification channels
+	MaxEntries int64          // max amount of entries
+	DataSize   atomic.Int64   // data bytes size of entries
 
 	FirstEntryId        int64
 	ExpectedNextEntryId atomic.Int64
 }
 
-func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxSize int64) *SequentialBuffer {
+func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEntries int64) *SequentialBuffer {
 	b := &SequentialBuffer{
-		Values:       make([][]byte, maxSize),
-		MaxSize:      maxSize,
+		Entries:      make([]*BufferEntry, maxEntries),
+		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxSize))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxEntries))
 	return b
 }
 
-func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int64, maxSize int64, restData [][]byte) *SequentialBuffer {
-	v := make([][]byte, maxSize)
-	copy(v, restData)
+func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int64, maxEntries int64, restData []*BufferEntry) *SequentialBuffer {
+	entries := make([]*BufferEntry, maxEntries)
+	// copy restData refs
+	if len(restData) > 0 {
+		copyLen := len(restData)
+		copy(entries, restData[:copyLen])
+	}
 	b := &SequentialBuffer{
-		Values:       v,
-		MaxSize:      maxSize,
+		Entries:      entries,
+		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxSize))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxEntries))
 	return b
 }
 
-// WriteEntry writes a new entry into the buffer.
-func (b *SequentialBuffer) WriteEntry(entryId int64, value []byte) (int64, error) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
+// WriteEntryWithNotify writes a new entry into the buffer with notification channel.
+func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, notifyChan chan<- int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
+	// Validate if entryId is outside the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId < b.FirstEntryId {
 		return -1, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
 	}
 
-	if entryId >= b.FirstEntryId+b.MaxSize {
-		return -1, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxSize))
+	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
+	if entryId >= b.FirstEntryId+b.MaxEntries {
+		return -1, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	relatedIdx := entryId - b.FirstEntryId
-	b.Values[relatedIdx] = value
+	b.Entries[relatedIdx] = &BufferEntry{
+		EntryId:    entryId,
+		Data:       value,
+		NotifyChan: notifyChan,
+	}
 	b.DataSize.Add(int64(len(value)))
 
 	// increase the ExpectedNextEntryId if necessary
-	for addedId := entryId; addedId < b.FirstEntryId+b.MaxSize; addedId++ {
-		if b.Values[addedId-b.FirstEntryId] != nil && addedId == b.ExpectedNextEntryId.Load() {
+	for addedId := entryId; addedId < b.FirstEntryId+b.MaxEntries; addedId++ {
+		if b.Entries[addedId-b.FirstEntryId] != nil && addedId == b.ExpectedNextEntryId.Load() {
 			b.ExpectedNextEntryId.Add(1)
 			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId), fmt.Sprintf("%d", b.segmentId)).Dec()
 		} else {
@@ -95,25 +116,27 @@ func (b *SequentialBuffer) WriteEntry(entryId int64, value []byte) (int64, error
 	return entryId, nil
 }
 
-func (b *SequentialBuffer) ReadEntry(entryId int64) ([]byte, error) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
+func (b *SequentialBuffer) ReadEntry(entryId int64) (*BufferEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
+	// Validate if entryId is outside the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId < b.FirstEntryId {
 		return nil, errors.New(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
 	}
 
-	if entryId >= b.FirstEntryId+b.MaxSize {
-		return nil, errors.New(fmt.Sprintf("invalid entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxSize))
+	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
+	if entryId >= b.FirstEntryId+b.MaxEntries {
+		return nil, errors.New(fmt.Sprintf("invalid entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	relatedIdx := entryId - b.FirstEntryId
-	value := b.Values[relatedIdx]
-	if value == nil {
-		return nil, errors.New(fmt.Sprintf("entry not found for entryId: %d", entryId))
+	entry := b.Entries[relatedIdx]
+	if entry == nil {
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg(fmt.Sprintf("entry not found for entryId: %d", entryId))
 	}
 
-	return value, nil
+	return entry, nil
 }
 
 func (b *SequentialBuffer) GetFirstEntryId() int64 {
@@ -124,50 +147,234 @@ func (b *SequentialBuffer) GetExpectedNextEntryId() int64 {
 	return b.ExpectedNextEntryId.Load()
 }
 
-func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([][]byte, error) {
-	if len(b.Values) == 0 {
+// NotifyEntriesInRange notifies all entries in the given range with the specified result
+// For successful entries (result >= 0), each entry receives its own EntryId
+// For failed entries (result < 0), all entries receive the error result
+func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryId int64, endEntryId int64, result int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	notifiedCount := 0
+	var notifiedEntryIds []int64
+
+	for entryId := startEntryId; entryId < endEntryId; entryId++ {
+		if entryId < b.FirstEntryId || entryId >= b.FirstEntryId+b.MaxEntries {
+			continue
+		}
+
+		relatedIdx := entryId - b.FirstEntryId
+		entry := b.Entries[relatedIdx]
+		if entry != nil && entry.NotifyChan != nil {
+			// Verify EntryId consistency for debugging
+			if entry.EntryId != entryId {
+				// This should not happen, but log it for debugging
+				logger.Ctx(ctx).Warn("EntryId mismatch in buffer", zap.Int64("expected", entryId), zap.Int64("actual", entry.EntryId))
+			}
+
+			// For successful writes, send the entry's own ID
+			// For failed writes, send the error result
+			notifyValue := result
+			if result >= 0 {
+				notifyValue = entry.EntryId
+			}
+
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
+			entry.NotifyChan = nil // Clear the channel reference
+		}
+	}
+
+	// Log notification summary for debugging
+	if notifiedCount > 0 {
+		if result >= 0 {
+			logger.Ctx(ctx).Debug("Notified range entries with their own EntryIds (success)", zap.Int("count", notifiedCount), zap.Int64s("entries", notifiedEntryIds), zap.Int64("startEntryId", startEntryId), zap.Int64("endEntryId", endEntryId))
+		} else {
+			logger.Ctx(ctx).Debug("Notified range entries with error result", zap.Int("count", notifiedCount), zap.Int64s("entries", notifiedEntryIds), zap.Int64("result", result), zap.Int64("startEntryId", startEntryId), zap.Int64("endEntryId", endEntryId))
+		}
+	}
+}
+
+// NotifyAllPendingEntries notifies all entries with notification channels
+// For successful entries (result >= 0), each entry receives its own EntryId
+// For failed entries (result < 0), all entries receive the error result
+func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	notifiedCount := 0
+	var notifiedEntryIds []int64
+
+	for _, entry := range b.Entries {
+		if entry != nil && entry.NotifyChan != nil {
+			// For successful writes, send the entry's own ID
+			// For failed writes, send the error result
+			notifyValue := result
+			if result >= 0 {
+				notifyValue = entry.EntryId
+			}
+
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
+			entry.NotifyChan = nil // Clear the channel reference
+		}
+	}
+
+	// Log notification summary for debugging
+	if notifiedCount > 0 {
+		if result >= 0 {
+			logger.Ctx(ctx).Debug("Notified all pending entries with their own EntryIds (success)", zap.Int("count", notifiedCount), zap.Int64s("entryIds", notifiedEntryIds))
+		} else {
+			logger.Ctx(ctx).Debug("Notified all pending entries with error result", zap.Int("count", notifiedCount), zap.Int64s("entryIds", notifiedEntryIds), zap.Int64("result", result))
+		}
+	}
+}
+
+func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([]*BufferEntry, error) {
+	if len(b.Entries) == 0 {
 		return nil, werr.ErrBufferIsEmpty
 	}
 
-	if fromEntryId < b.FirstEntryId || fromEntryId > b.FirstEntryId+b.MaxSize {
+	// the valid range [firstEntryId, firstEntryId + maxEntries)
+	if fromEntryId < b.FirstEntryId || fromEntryId > b.FirstEntryId+b.MaxEntries {
 		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
-			fmt.Sprintf("fromId:%d not in [%d,%d)", fromEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxSize))
+			fmt.Sprintf("fromId:%d not in [%d,%d)", fromEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 
-	if fromEntryId == b.FirstEntryId+b.MaxSize {
-		return make([][]byte, 0), nil
+	if fromEntryId == b.FirstEntryId+b.MaxEntries {
+		return make([]*BufferEntry, 0), nil
 	}
 
-	return b.ReadEntriesRange(fromEntryId, b.FirstEntryId+b.MaxSize)
+	return b.ReadEntriesRange(fromEntryId, b.FirstEntryId+b.MaxEntries)
 }
 
-// ReadEntriesRange reads bytes from the buffer starting from the startEntryId to the endEntryId (Exclusive).
-func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64) ([][]byte, error) {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
+// ReadEntriesRange reads entries from the buffer starting from the startEntryId to the endEntryId (Exclusive).
+func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64) ([]*BufferEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	if startEntryId >= b.FirstEntryId+b.MaxSize || startEntryId < b.FirstEntryId {
+	if startEntryId >= b.FirstEntryId+b.MaxEntries || startEntryId < b.FirstEntryId {
 		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
-			fmt.Sprintf("startEntryId:%d not in [%d,%d)", startEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxSize))
+			fmt.Sprintf("startEntryId:%d not in [%d,%d)", startEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 
-	if endEntryId > b.FirstEntryId+b.MaxSize || endEntryId < startEntryId {
+	if endEntryId > b.FirstEntryId+b.MaxEntries || endEntryId <= startEntryId {
 		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
-			fmt.Sprintf("endEntryId:%d not in [%d,%d)", endEntryId, startEntryId, b.FirstEntryId+b.MaxSize))
+			fmt.Sprintf("endEntryId:%d not in [%d,%d)", endEntryId, startEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 
-	// Extract the bytes from the buffer
-	ret := make([][]byte, endEntryId-startEntryId)
-	copy(ret, b.Values[startEntryId-b.FirstEntryId:endEntryId-b.FirstEntryId])
+	// Extract the entries from the buffer
+	ret := make([]*BufferEntry, endEntryId-startEntryId)
+	for i := startEntryId; i < endEntryId; i++ {
+		relatedIdx := i - b.FirstEntryId
+		ret[i-startEntryId] = b.Entries[relatedIdx] // This can be nil
+	}
 	return ret, nil
 }
 
 // Reset clears the buffer and resets the sequence number.
-func (b *SequentialBuffer) Reset() {
-	b.Mu.Lock()
-	defer b.Mu.Unlock()
+func (b *SequentialBuffer) Reset(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	b.Values = make([][]byte, b.MaxSize)
+	// Notify all pending entries with error before reset
+	b.notifyAllPendingEntriesUnsafe(ctx, -1)
+
+	b.Entries = make([]*BufferEntry, b.MaxEntries)
 	b.DataSize.Store(0)
 	b.ExpectedNextEntryId.Store(b.FirstEntryId)
+}
+
+// notifyAllPendingEntriesUnsafe is an internal method that assumes the mutex is already held
+// For successful entries (result >= 0), each entry receives its own EntryId
+// For failed entries (result < 0), all entries receive the error result
+func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, result int64) {
+	notifiedCount := 0
+	var notifiedEntryIds []int64
+
+	for _, entry := range b.Entries {
+		if entry != nil && entry.NotifyChan != nil {
+			// For successful writes, send the entry's own ID
+			// For failed writes, send the error result
+			notifyValue := result
+			if result >= 0 {
+				notifyValue = entry.EntryId
+			}
+
+			// Safely send to channel with panic recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+							zap.Int64("entryId", entry.EntryId),
+							zap.Int64("notifyValue", notifyValue),
+							zap.Any("panic", r))
+					}
+				}()
+
+				select {
+				case entry.NotifyChan <- notifyValue:
+					notifiedCount++
+					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+				default:
+					// Channel might be closed or full, ignore
+					logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+						zap.Int64("entryId", entry.EntryId),
+						zap.Int64("notifyValue", notifyValue))
+				}
+			}()
+
+			entry.NotifyChan = nil // Clear the channel reference
+		}
+	}
+
+	// Log notification summary for debugging
+	if notifiedCount > 0 {
+		if result >= 0 {
+			logger.Ctx(ctx).Debug("Reset - Notified pending entries with their own EntryIds (success)", zap.Int("count", notifiedCount), zap.Int64s("entryIds", notifiedEntryIds))
+		} else {
+			logger.Ctx(ctx).Debug("Reset - Notified pending entries with error result", zap.Int("count", notifiedCount), zap.Int64s("entryIds", notifiedEntryIds), zap.Int64("result", result))
+		}
+	}
 }

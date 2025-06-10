@@ -113,6 +113,8 @@ const (
 	// use this error to indicate that this segment is now permanently
 	// fenced.
 	SegmentFenced
+	// SegmentNoWritingFragment when a segment is not writing a fragment, this error
+	SegmentNoWritingFragment
 	// SegmentStateInvalid indicates that the segment is in an invalid state for current Operation.
 	SegmentStateInvalid
 	// SegmentClosed indicates that the segment is closed.
@@ -121,10 +123,18 @@ const (
 	SegmentReadException
 	// SegmentWriteException indicates that an exception occurred while writing a segment.
 	SegmentWriteException
+	// SegmentWriteError indicates that an error occurred while writing a segment.
+	SegmentWriteError
+	// LogFileClosed indicates that the log file is closed.
+	LogFileClosed
 	// FragmentEmpty indicates that the fragment is empty.
 	FragmentEmpty
 	// FragmentNotFound indicates that the fragment is not found.
 	FragmentNotFound
+	// FragmentInfoNotFetched indicates that the fragment info is not fetched.
+	FragmentInfoNotFetched
+	// FragmentNotLoaded indicates that the fragment is not loaded.
+	FragmentNotLoaded
 	// FragmentNotUploaded indicates that the fragment is not uploaded.
 	FragmentNotUploaded
 	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
@@ -162,18 +172,23 @@ var (
 	ErrClientClosed     = newWoodpeckerError("Client is closed", ClientClosedError, false)
 
 	// log&segment related
-	ErrLogAlreadyExists      = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
-	ErrSegmentNotFound       = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
-	ErrSegmentReadException  = newWoodpeckerError("failed to read segment", SegmentReadException, true)
-	ErrSegmentWriteException = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
-	ErrSegmentClosed         = newWoodpeckerError("Segment is closed", SegmentClosed, true)
-	ErrSegmentFenced         = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
-	ErrSegmentStateInvalid   = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
+	ErrLogAlreadyExists         = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
+	ErrSegmentNotFound          = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
+	ErrSegmentReadException     = newWoodpeckerError("failed to read segment", SegmentReadException, true)
+	ErrSegmentWriteException    = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
+	ErrSegmentWriteError        = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
+	ErrSegmentClosed            = newWoodpeckerError("Segment is closed", SegmentClosed, true)
+	ErrSegmentFenced            = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
+	ErrSegmentStateInvalid      = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
+	ErrSegmentNoWritingFragment = newWoodpeckerError("Segment is not writing", SegmentNoWritingFragment, false)
 
-	// LogFile related
-	ErrFragmentEmpty       = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
-	ErrFragmentNotFound    = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
-	ErrFragmentNotUploaded = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
+	// LogFile & Fragment related
+	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, true)
+	ErrFragmentEmpty          = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
+	ErrFragmentNotFound       = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
+	ErrFragmentInfoNotFetched = newWoodpeckerError("Fragment info is not fetched", FragmentInfoNotFetched, false)
+	ErrFragmentNotLoaded      = newWoodpeckerError("Fragment is not loaded", FragmentNotLoaded, false)
+	ErrFragmentNotUploaded    = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
 
 	// Reader&Writer related
 	ErrInvalidEntryId      = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)

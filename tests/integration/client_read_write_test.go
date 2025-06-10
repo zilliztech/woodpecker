@@ -19,6 +19,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"github.com/cockroachdb/errors"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -78,7 +79,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			}
 
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestReadTheWrittenDataSequentially_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// OpenLog
@@ -256,7 +257,7 @@ func TestReadWriteLoop(t *testing.T) {
 				fmt.Println(err)
 			}
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestReadWriteLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// write/read loop test
@@ -398,7 +399,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 				fmt.Println(err)
 			}
 			// CreateLog if not exists
-			logName := "test_log" + time.Now().Format("20060102150405")
+			logName := "TestMultiAppendSyncLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
 
 			// sync write loop test
@@ -542,7 +543,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			logName := "TestTailReadBlockingBehavior_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -623,14 +624,12 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			}
 
 			// Verify that the timeout goroutine completes, confirming blocking behavior
-			more := false
-			go func() {
-				m, e := logReader.ReadNext(context.Background())
-				t.Logf("Reader did not exhibit expected blocking behavior, but got m: %v e:%v", m, e)
-				more = true
-			}()
-			time.Sleep(3 * time.Second)
-			assert.False(t, more, "Reader did not exhibit expected blocking behavior")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			newMessage, newErr := logReader.ReadNext(ctx)
+			cancel()
+			assert.Error(t, newErr)
+			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			assert.Nil(t, newMessage)
 
 			// Verify the messages we read match what we wrote
 			assert.Equal(t, totalMessages, len(readMessages))
@@ -692,7 +691,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_log_tail_read_" + time.Now().Format("20060102150405")
+			logName := "TestTailReadBlockingAfterWriting_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -731,14 +730,12 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			latest := log.LatestLogMessageID()
 			logReader, err := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader-async")
 			assert.NoError(t, err)
-			more := false
-			go func() {
-				m, e := logReader.ReadNext(context.Background())
-				t.Logf("Reader did not exhibit expected blocking behavior, but got m: %v e:%v", m, e)
-				more = true
-			}()
-			time.Sleep(3 * time.Second)
-			assert.False(t, more, "Reader did not exhibit expected blocking behavior")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			newMessage, newErr := logReader.ReadNext(ctx)
+			cancel()
+			assert.Error(t, newErr)
+			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			assert.Nil(t, newMessage)
 
 			// Clean up
 			err = logReader.Close(context.Background())
@@ -778,7 +775,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration()
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -788,13 +785,13 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			}
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 60s
 
 			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 
 			// CreateLog if not exists
-			logName := "test_concurrent_write_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithClose_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -984,10 +981,10 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Create initial configuration
 			cfg, err := config.NewConfiguration()
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1001,7 +998,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create a unique log name for this test run
-			logName := "test_client_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithClientClose_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 
@@ -1177,7 +1174,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 
 func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
+	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown")
 	testCases := []struct {
 		name        string
 		storageType string
@@ -1203,7 +1200,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.LogFileSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1217,7 +1214,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Create a unique log name for this test run
-			logName := "test_client_close_" + time.Now().Format("20060102150405")
+			logName := "TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			err = client.CreateLog(context.Background(), logName)
 			assert.NoError(t, err)
 

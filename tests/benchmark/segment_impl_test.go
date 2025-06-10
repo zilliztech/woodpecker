@@ -35,7 +35,7 @@ import (
 func TestAppendAsync(t *testing.T) {
 	segmentPrefixKey := "test-segment"
 	bucket := "test-bucket"
-	logFileId := int64(1)
+	segmentId := int64(1)
 
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
@@ -43,13 +43,14 @@ func TestAppendAsync(t *testing.T) {
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 
 	assert.NoError(t, err)
-	logFile := objectstorage.NewLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client, cfg)
-	assert.NotNil(t, logFile)
-	objectLogFile := logFile.(*objectstorage.LogFile)
-	assert.NotNil(t, objectLogFile)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	assert.NotNil(t, segmentImpl)
+	objectSegmentImpl := segmentImpl.(*objectstorage.SegmentImpl)
+	assert.NotNil(t, objectSegmentImpl)
 
 	// Test appending a valid entry
-	entryId, ch, _ := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
+	ch := make(chan int64, 1)
+	entryId, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch)
 	assert.Equal(t, int64(0), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -60,23 +61,25 @@ func TestAppendAsync(t *testing.T) {
 	}
 
 	// Test appending another valid entry
-	entryId, ch, _ = logFile.AppendAsync(context.Background(), 1, []byte("data1"))
+	ch2 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
 	assert.Equal(t, int64(1), entryId)
-	assert.NotNil(t, ch)
+	assert.NotNil(t, ch2)
 	select {
-	case result := <-ch:
+	case result := <-ch2:
 		assert.Equal(t, int64(1), result)
 	case <-time.After(2000 * time.Millisecond):
 		t.Error("Timeout waiting for channel")
 	}
 
 	// Test appending an entry with an invalid ID
-	entryId, ch, _ = logFile.AppendAsync(context.Background(), 3, []byte("data3"))
+	ch3 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 3, []byte("data3"), ch3)
 	assert.Equal(t, int64(3), entryId)
-	assert.NotNil(t, ch)
+	assert.NotNil(t, ch3)
 	var timeoutErr error
 	select {
-	case result := <-ch:
+	case result := <-ch3:
 		assert.Equal(t, int64(-1), result)
 	case <-time.After(2000 * time.Millisecond):
 		timeoutErr = errors.New("timeout")
@@ -84,11 +87,14 @@ func TestAppendAsync(t *testing.T) {
 	assert.Error(t, timeoutErr)
 
 	// Test appending an entry that exceeds the buffer size
-	entryId, ch, _ = logFile.AppendAsync(context.Background(), 2, []byte("data2"))
+	ch4 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch4)
 	for i := 4; i < 100_000; i++ {
-		logFile.AppendAsync(context.Background(), int64(i), []byte("data"))
+		ch000 := make(chan int64, 1)
+		segmentImpl.AppendAsync(context.Background(), int64(i), []byte("data"), ch000)
 	}
-	entryId, ch, _ = logFile.AppendAsync(context.Background(), 100_000, []byte("data"))
+	ch5 := make(chan int64, 1)
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 100_000, []byte("data"), ch5)
 	assert.Equal(t, int64(100_000), entryId)
 	assert.NotNil(t, ch)
 	select {
@@ -102,20 +108,23 @@ func TestAppendAsync(t *testing.T) {
 func TestNewReader(t *testing.T) {
 	segmentPrefixKey := "test-segment-reader"
 	bucket := "test-bucket"
-	logFileId := int64(1)
+	segmentId := int64(1)
 
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
 	cfg.Minio.BucketName = bucket
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	logFile := objectstorage.NewLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client, cfg)
-	assert.NotNil(t, logFile)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
-	_, ch1, _ := logFile.AppendAsync(context.Background(), 0, []byte("data0"))
-	_, ch2, _ := logFile.AppendAsync(context.Background(), 1, []byte("data1"))
-	_, ch3, _ := logFile.AppendAsync(context.Background(), 2, []byte("data2"))
+	ch1 := make(chan int64, 1)
+	ch2 := make(chan int64, 1)
+	ch3 := make(chan int64, 1)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch1)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch3)
 
 	// Wait for the data to be appended
 	select {
@@ -135,20 +144,20 @@ func TestNewReader(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roLogFile := objectstorage.NewROLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client)
-	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
+	roSegmentImpl := objectstorage.NewROSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: 3})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
 	for {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		if !hasNext {
 			break
 		}
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		entries = append(entries, entry)
 	}
@@ -166,19 +175,20 @@ func TestNewReader(t *testing.T) {
 func TestNewReaderForManyFragments(t *testing.T) {
 	segmentPrefixKey := "test-segment-reader-many-fragments"
 	bucket := "test-bucket"
-	logFileId := int64(1)
+	segmentId := int64(1)
 
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
 	cfg.Minio.BucketName = bucket
 	client, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	logFile := objectstorage.NewLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client, cfg)
-	assert.NotNil(t, logFile)
+	segmentImpl := objectstorage.NewSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
 	for i := 0; i < 5; i++ {
-		_, ch, _ := logFile.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)))
+		ch := make(chan int64, 1)
+		_, _ = segmentImpl.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)), ch)
 		select {
 		case <-ch:
 		case <-time.After(2000 * time.Millisecond):
@@ -187,21 +197,21 @@ func TestNewReaderForManyFragments(t *testing.T) {
 	}
 
 	// Create a reader for the log file
-	roLogFile := objectstorage.NewROLogFile(1, 0, logFileId, segmentPrefixKey, bucket, client)
-	reader, err := roLogFile.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
+	roSegmentImpl := objectstorage.NewROSegmentImpl(context.TODO(), 1, segmentId, segmentPrefixKey, bucket, client, cfg)
+	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{StartSequenceNum: 0, EndSequenceNum: -1})
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
 	// Read all data from the reader
 	entries := make([]*proto.LogEntry, 0)
 	for {
-		hasNext, err := reader.HasNext()
+		hasNext, err := reader.HasNext(context.TODO())
 		assert.NoError(t, err)
 		if !hasNext {
 			break
 		}
 		fmt.Printf("read one ... ")
-		entry, err := reader.ReadNext()
+		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		entries = append(entries, entry)
 	}

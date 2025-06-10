@@ -19,16 +19,16 @@ package benchmark
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
 )
@@ -41,9 +41,9 @@ func min(a, b int) int {
 	return b
 }
 
-// TestDiskLogFileWritePerformance tests DiskLogFile write performance
+// TestDiskSegmentImplWritePerformance tests DiskSegmentImpl write performance
 // Focus: impact of buffer size, flush frequency, and file size on write performance
-func TestDiskLogFileWritePerformance(t *testing.T) {
+func TestDiskSegmentImplWritePerformance(t *testing.T) {
 	startGopsAgent()
 	startMetrics()
 	cfg, _ := config.NewConfiguration()
@@ -89,7 +89,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			tempDir := filepath.Join(tmpDir, fmt.Sprintf("disklogfile_test_%d", time.Now().UnixNano()))
+			tempDir := filepath.Join(tmpDir, fmt.Sprintf("diskSegmentImpl_test_%d", time.Now().UnixNano()))
 
 			var options []disk.Option
 			options = append(options, disk.WithWriteFragmentSize(tc.fragmentSize))
@@ -100,12 +100,12 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 				options = append(options, disk.WithWriteDisableAutoSync())
 			}
 
-			// Create DiskLogFile instance
-			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
+			// Create DiskSegmentImpl instance
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
-				t.Fatalf("Failed to create DiskLogFile: %v", err)
+				t.Fatalf("Failed to create DiskSegmentImpl: %v", err)
 			}
-			defer logFile.Close()
+			defer segmentImpl.Close(context.TODO())
 
 			// Prepare test data and context
 			ctx := context.Background()
@@ -143,7 +143,8 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 					entryId := int64(i + j)
 					entryIds[j] = entryId
 
-					_, ch, err := logFile.AppendAsync(ctx, entryId, dataSet[i+j])
+					ch := make(chan int64, 1)
+					_, err := segmentImpl.AppendAsync(ctx, entryId, dataSet[i+j], ch)
 					if err != nil {
 						t.Fatalf("Write failed: %v", err)
 					}
@@ -156,7 +157,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 				// Check if manual flush is needed (for no auto-flush case)
 				if tc.flushRate == 0 {
 					flushStart := time.Now()
-					err := logFile.Sync(ctx)
+					err := segmentImpl.Sync(ctx)
 					flushDuration := time.Since(flushStart)
 					totalManualFlushTime += flushDuration
 
@@ -168,7 +169,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 				// For auto-flush cases, record time since last flush
 				if tc.flushRate > 0 && time.Since(lastFlushTime) >= tc.flushRate {
 					flushStart := time.Now()
-					err := logFile.Sync(ctx)
+					err := segmentImpl.Sync(ctx)
 					flushDuration := time.Since(flushStart)
 					flushTime += flushDuration
 
@@ -196,7 +197,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 
 			// Final sync to ensure all data is written to disk
 			finalFlushStart := time.Now()
-			if err := logFile.Sync(ctx); err != nil {
+			if err := segmentImpl.Sync(ctx); err != nil {
 				t.Fatalf("Final sync failed: %v", err)
 			}
 			finalFlushTime := time.Since(finalFlushStart)
@@ -221,7 +222,7 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 			}
 
 			// Output results
-			t.Logf("DiskLogFile Write Test Results - %s:", tc.name)
+			t.Logf("DisksegmentImpl Write Test Results - %s:", tc.name)
 			t.Logf("  Fragment size: %d MB", tc.fragmentSize/(1024*1024))
 			t.Logf("  Buffer size: %d MB", tc.bufferSize/(1024*1024))
 			t.Logf("  Total data written: %.2f MB", float64(totalBytesWritten)/(1024*1024))
@@ -247,9 +248,9 @@ func TestDiskLogFileWritePerformance(t *testing.T) {
 	}
 }
 
-// TestDiskLogFileReadPerformance tests DiskLogFile read performance
+// TestDiskSegmentImplReadPerformance tests DiskSegmentImpl read performance
 // Focus: impact of read mode and data block size on read performance
-func TestDiskLogFileReadPerformance(t *testing.T) {
+func TestDiskSegmentImplReadPerformance(t *testing.T) {
 	// Test parameters
 	testCases := []struct {
 		name       string
@@ -266,7 +267,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 	}
 
 	// Create temporary directory
-	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("disklogfile_read_test_%d", time.Now().UnixNano()))
+	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("diskSegmentImpl_read_test_%d", time.Now().UnixNano()))
 	err := os.MkdirAll(tempDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create temporary directory: %v", err)
@@ -277,14 +278,14 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			// Step 1: First create and populate DiskLogFile
+			// Step 1: First create and populate DiskSegmentImpl
 			t.Logf("Preparing test file, writing %d entries...", tc.entryCount)
 			options := []disk.Option{
 				disk.WithWriteFragmentSize(128 * 1024 * 1024), // 128MB
 			}
-			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
-				t.Fatalf("Failed to create DiskLogFile: %v", err)
+				t.Fatalf("Failed to create DisksegmentImpl: %v", err)
 			}
 
 			// Generate random test data and store references for later validation
@@ -306,9 +307,10 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 				end := min(i+batchSize, tc.entryCount)
 				// Submit a batch of data
 				for j := i; j < end; j++ {
-					_, ch, err := logFile.AppendAsync(ctx, entryIds[j], testData[j])
+					ch := make(chan int64, 1)
+					_, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j], ch)
 					if err != nil {
-						logFile.Close()
+						segmentImpl.Close(context.TODO())
 						t.Fatalf("Failed to write data: %v", err)
 					}
 					resultChannels[j] = ch
@@ -319,11 +321,11 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 					select {
 					case result := <-resultChannels[j]:
 						if result < 0 {
-							logFile.Close()
+							segmentImpl.Close(context.TODO())
 							t.Fatalf("Write did not complete successfully: %d", j)
 						}
 					case <-time.After(5 * time.Second):
-						logFile.Close()
+						segmentImpl.Close(context.TODO())
 						t.Fatalf("Write timeout: %d", j)
 					}
 				}
@@ -332,21 +334,21 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			}
 
 			// Ensure all data is written to disk
-			if err := logFile.Sync(ctx); err != nil {
-				logFile.Close()
+			if err := segmentImpl.Sync(ctx); err != nil {
+				segmentImpl.Close(context.TODO())
 				t.Fatalf("Failed to sync data: %v", err)
 			}
 
 			t.Logf("Preparation complete, starting read test...")
 
 			// Step 2: Create Reader and test read performance
-			roLogFile, err := disk.NewRODiskLogFile(1, 0, 1, tempDir)
-			reader, err := roLogFile.NewReader(ctx, storage.ReaderOpt{
+			roSegmentImpl, err := disk.NewRODiskSegmentImpl(context.TODO(), 1, 0, tempDir)
+			reader, err := roSegmentImpl.NewReader(ctx, storage.ReaderOpt{
 				StartSequenceNum: 1, // Start from the first entry
 				EndSequenceNum:   0, // 0 means read to the end
 			})
 			if err != nil {
-				roLogFile.Close()
+				roSegmentImpl.Close(context.TODO())
 				t.Fatalf("Failed to create Reader: %v", err)
 			}
 
@@ -373,12 +375,12 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			if tc.sequential {
 				// Sequential read
 				for {
-					hasNext, err := reader.HasNext()
+					hasNext, err := reader.HasNext(context.TODO())
 					assert.NoError(t, err)
 					if !hasNext {
 						break
 					}
-					entry, err := reader.ReadNext()
+					entry, err := reader.ReadNext(context.TODO())
 					if err != nil {
 						readErrors++
 						continue
@@ -395,7 +397,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 					// Create a separate Reader for each ID
 					entryId := entryIds[idx]
 
-					singleReader, err := logFile.NewReader(ctx, storage.ReaderOpt{
+					singleReader, err := segmentImpl.NewReader(ctx, storage.ReaderOpt{
 						StartSequenceNum: entryId,     // Start from specific ID
 						EndSequenceNum:   entryId + 1, // Read only one entry
 					})
@@ -405,10 +407,10 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 						continue
 					}
 
-					hasNext, err := singleReader.HasNext()
+					hasNext, err := singleReader.HasNext(context.TODO())
 					assert.NoError(t, err)
 					if hasNext {
-						entry, err := singleReader.ReadNext()
+						entry, err := singleReader.ReadNext(context.TODO())
 						if err != nil {
 							readErrors++
 							singleReader.Close()
@@ -427,7 +429,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 
 			// Close file
 			reader.Close()
-			logFile.Close()
+			segmentImpl.Close(context.TODO())
 
 			// Calculate performance metrics
 			throughput := float64(totalBytesRead) / (1024 * 1024) / duration.Seconds()
@@ -435,7 +437,7 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 			avgReadSize := float64(totalBytesRead) / float64(readCount) / 1024 // KB
 
 			// Output results
-			t.Logf("DiskLogFile Read Test Results - %s:", tc.name)
+			t.Logf("DiskSegmentImpl Read Test Results - %s:", tc.name)
 			t.Logf("  Total data read: %.2f MB", float64(totalBytesRead)/(1024*1024))
 			t.Logf("  Total entries: %d", tc.entryCount)
 			t.Logf("  Successfully read entries: %d", readCount)
@@ -455,8 +457,8 @@ func TestDiskLogFileReadPerformance(t *testing.T) {
 	}
 }
 
-// TestDiskLogFileMixedPerformance tests DiskLogFile performance in mixed read/write scenarios
-func TestDiskLogFileMixedPerformance(t *testing.T) {
+// TestDiskSegmentImplMixedPerformance tests DiskSegmentImpl performance in mixed read/write scenarios
+func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 	// Test parameters
 	testCases := []struct {
 		name           string
@@ -475,7 +477,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 	}
 
 	// Create temporary directory
-	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("disklogfile_mixed_test_%d", time.Now().UnixNano()))
+	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("DiskSegmentImpl_mixed_test_%d", time.Now().UnixNano()))
 	err := os.MkdirAll(tempDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create temporary directory: %v", err)
@@ -486,17 +488,17 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			// Create DiskLogFile instance
+			// Create DiskSegmentImpl instance
 			options := []disk.Option{
 				disk.WithWriteFragmentSize(tc.fragmentSize),
 				disk.WithWriteMaxBufferSize(tc.bufferSize),
 			}
 
-			logFile, err := disk.NewDiskLogFile(1, 0, 1, tempDir, options...)
+			segmentImpl, err := disk.NewDiskSegmentImpl(context.TODO(), 1, 0, tempDir, options...)
 			if err != nil {
-				t.Fatalf("Failed to create DiskLogFile: %v", err)
+				t.Fatalf("Failed to create DiskSegmentImpl: %v", err)
 			}
-			defer logFile.Close()
+			defer segmentImpl.Close(context.TODO())
 
 			// Prepare parameters
 			readOps := tc.totalOps * tc.readPercentage / 100
@@ -567,7 +569,8 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 						maxEntryId++
 
 						writeStart := time.Now()
-						_, ch, err := logFile.AppendAsync(ctx, entryId, writeData[writeOpsCount])
+						ch := make(chan int64, 1)
+						_, err := segmentImpl.AppendAsync(ctx, entryId, writeData[writeOpsCount], ch)
 						if err != nil {
 							t.Fatalf("Write failed: %v", err)
 						}
@@ -593,7 +596,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 
 					// Execute Sync after every 10 writes
 					syncStart := time.Now()
-					err := logFile.Sync(ctx)
+					err := segmentImpl.Sync(ctx)
 					syncTime += time.Since(syncStart)
 
 					if err != nil {
@@ -624,8 +627,8 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 
 						// Create Reader to read specific entry
 						readStart := time.Now()
-						roLogFile, err := disk.NewRODiskLogFile(1, 0, 1, tempDir)
-						reader, err := roLogFile.NewReader(ctx, storage.ReaderOpt{
+						roSegmentImpl, err := disk.NewRODiskSegmentImpl(context.TODO(), 1, 0, tempDir)
+						reader, err := roSegmentImpl.NewReader(ctx, storage.ReaderOpt{
 							StartSequenceNum: entryId,
 							EndSequenceNum:   entryId + 1,
 						})
@@ -634,10 +637,10 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 							t.Fatalf("Failed to create Reader: %v", err)
 						}
 
-						hasNext, err := reader.HasNext()
+						hasNext, err := reader.HasNext(context.TODO())
 						assert.NoError(t, err)
 						if hasNext {
-							entry, err := reader.ReadNext()
+							entry, err := reader.ReadNext(context.TODO())
 							if err == nil {
 								totalBytesRead += len(entry.Values)
 								readOpsCount++
@@ -659,7 +662,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 
 			// Final sync
 			finalSyncStart := time.Now()
-			if err := logFile.Sync(ctx); err != nil {
+			if err := segmentImpl.Sync(ctx); err != nil {
 				t.Fatalf("Final sync failed: %v", err)
 			}
 			syncTime += time.Since(finalSyncStart)
@@ -691,7 +694,7 @@ func TestDiskLogFileMixedPerformance(t *testing.T) {
 			}
 
 			// Output results
-			t.Logf("DiskLogFile Mixed Test Results - %s:", tc.name)
+			t.Logf("DiskSegmentImpl Mixed Test Results - %s:", tc.name)
 			t.Logf("  Fragment size: %d MB", tc.fragmentSize/(1024*1024))
 			t.Logf("  Buffer size: %d MB", tc.bufferSize/(1024*1024))
 			t.Logf("  Data block size: %d KB", tc.dataSize/1024)
