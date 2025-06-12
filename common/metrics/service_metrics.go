@@ -31,6 +31,17 @@ const (
 var (
 	WpRegisterOnce sync.Once
 
+	// Log name-id mapping
+	WpLogNameIdMapping = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: wp_namespace,
+			Subsystem: client_namespace,
+			Name:      "log_name_id_mapping",
+			Help:      "Mapping between log name and id",
+		},
+		[]string{"log_name"},
+	)
+
 	// client metrics
 	WpClientOperationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -456,6 +467,9 @@ var (
 
 func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 	WpRegisterOnce.Do(func() {
+		// -------------- log name-id mapping metrics -----------------
+		registerer.MustRegister(WpLogNameIdMapping)
+
 		// -------------- Client metrics -----------------
 		// Client metrics
 		registerer.MustRegister(WpClientOperationsTotal)
