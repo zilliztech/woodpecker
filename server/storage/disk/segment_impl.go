@@ -143,7 +143,7 @@ func (s *DiskSegmentImpl) run() {
 			}
 
 			// Check last sync time to avoid too frequent syncs
-			if time.Now().UnixMilli()-s.lastSync.Load() < 200 {
+			if time.Now().UnixMilli()-s.lastSync.Load() < int64(s.maxIntervalMs) {
 				continue
 			}
 
@@ -155,7 +155,7 @@ func (s *DiskSegmentImpl) run() {
 					zap.Error(err))
 			}
 			sp.End()
-			ticker.Reset(time.Duration(500 * int(time.Millisecond)))
+			ticker.Reset(time.Duration(s.maxIntervalMs * int(time.Millisecond)))
 		case <-s.closeCh:
 			logger.Ctx(context.Background()).Info("DiskSegmentImpl successfully closed",
 				zap.String("logFileDir", s.logFileDir))
