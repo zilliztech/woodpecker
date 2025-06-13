@@ -175,6 +175,14 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	}
 
 	f.mu.Lock()
+	if entryId <= f.lastEntryID.Load() {
+		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to object storage. Return immediately.
+		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastEntryID, already stored", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("lastEntryID", f.lastEntryID.Load()))
+		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, entryId, resultCh, entryId)
+		f.mu.Unlock()
+		return entryId, nil
+	}
+
 	currentBuffer = f.buffer.Load()
 	// write buffer with notification channel
 	id, err := currentBuffer.WriteEntryWithNotify(entryId, data, resultCh)
@@ -864,6 +872,9 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	mergedFragId := int64(0)
 	entryOffset := make([]int32, 0)
 	fragmentIdOffset := make([]int32, 0)
+	if len(f.fragments) == 0 {
+		return mergedFrags, entryOffset, fragmentIdOffset, nil
+	}
 
 	totalMergeSize := int64(0)
 	pendingMergeSize := int64(0)
@@ -884,7 +895,10 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
-			mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
+			mergedFragFirstEntryId, getFirstEntryIdErr := getFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
+			if getFirstEntryIdErr != nil {
+				return nil, nil, nil, getFirstEntryIdErr
+			}
 			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
 			pendingMergeFrags = make([]*FragmentObject, 0)
@@ -900,7 +914,10 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
-		mergedFragFirstEntryId, _ := mergedFrag.GetFirstEntryId(ctx)
+		mergedFragFirstEntryId, getFirstEntryIdErr := getFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
+		if getFirstEntryIdErr != nil {
+			return nil, nil, nil, getFirstEntryIdErr
+		}
 		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
 		pendingMergeFrags = make([]*FragmentObject, 0)
@@ -908,15 +925,21 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		pendingMergeSize = 0
 	}
 
+	lastMergedFragment := mergedFrags[len(mergedFrags)-1]
+	lastMergedFragmentLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastMergedFragment.(*FragmentObject))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "merge", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "merge", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	metrics.WpFileCompactLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(startTime).Milliseconds()))
 	metrics.WpFileCompactBytesWritten.WithLabelValues(logId, segmentId).Add(float64(totalMergeSize))
-	logger.Ctx(ctx).Info("merge fragments finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("mergedFrags", len(mergedFrags)), zap.Int("fragments", len(f.fragments)), zap.Int64("totalMergeSize", totalMergeSize), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	logger.Ctx(ctx).Info("merge fragments finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("mergedFrags", len(mergedFrags)), zap.Int64("lastMergedFragmentLastEntryId", lastMergedFragmentLastEntryId), zap.Int("fragments", len(f.fragments)), zap.Int64("totalMergeSize", totalMergeSize), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
 }
 
-func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId int64, fragments []*FragmentObject, pendingMergeSize int64, releaseImmediately bool) (storage.Fragment, error) {
+func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId int64, fragments []*FragmentObject, pendingMergeSize int64, releaseImmediately bool) (*FragmentObject, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "mergeFragmentsAndReleaseAfterCompleted")
 	defer sp.End()
 	// Check args
@@ -1016,7 +1039,7 @@ func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKe
 	return mergeTarget, nil
 }
 
-func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId int64, fragment *FragmentObject) (storage.Fragment, error) {
+func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId int64, fragment *FragmentObject) (*FragmentObject, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "fastMergeSingleFragment")
 	defer sp.End()
 	startTime := time.Now()

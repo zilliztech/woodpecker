@@ -175,14 +175,16 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	}
 
 	bufferedSeqNo, err := segmentWriter.AppendAsync(ctx, entry.EntryId, entry.Data, resultCh)
-	if bufferedSeqNo == -1 {
-		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Inc()
-		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Observe(float64(time.Since(start).Milliseconds()))
-		return -1, fmt.Errorf("failed to append to log file")
-	} else if err != nil {
+	if err != nil {
 		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Inc()
 		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("failed to append to log file", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
 		return -1, err
+	} else if bufferedSeqNo == -1 {
+		metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Inc()
+		metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "add_entry", "append_error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("failed to append to log file", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId))
+		return -1, fmt.Errorf("failed to append to log file")
 	}
 
 	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "add_entry", "success").Inc()
@@ -411,7 +413,8 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context, entryId
 			s.logId,
 			s.segId,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
-			disk.WithReadFragmentSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes))
+			disk.WithReadFragmentSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes),
+			disk.WithReadBatchSize(s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize))
 		s.currentSegmentReader = readerFile
 		logger.Ctx(ctx).Info("create RODiskSegmentImpl for read", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entryId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.Int64("entryId", entryId), zap.String("logFileInst", fmt.Sprintf("%p", readerFile)))
 		return s.currentSegmentReader, err

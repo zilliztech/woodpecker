@@ -150,7 +150,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		select {
 		case syncedId, ok := <-syncedCh:
 			if op.fastCalled.Load() {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("received ack for log:%d seg:%d entry:%d, but already fast completed", op.logId, op.segmentId, op.entryId))
+				logger.Ctx(ctx).Debug(fmt.Sprintf("received ack:%d for log:%d seg:%d entry:%d, but already fast completed", syncedId, op.logId, op.segmentId, op.entryId))
 				return
 			}
 			if !ok {
