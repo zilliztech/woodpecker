@@ -378,3 +378,50 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 		}
 	}
 }
+
+// NotifyPendingEntryDirectly notifies a single entry directly with the specified result
+// For successful entries (result >= 0), the entry receives the entryId
+// For failed entries (result < 0), the entry receives the error result
+func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan chan<- int64, result int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
+				zap.Int64("logId", logId),
+				zap.Int64("segId", segId),
+				zap.Int64("entryId", entryId),
+				zap.Int64("result", result),
+				zap.Any("panic", r))
+		}
+	}()
+
+	// For successful writes, send the entry's own ID
+	// For failed writes, send the error result
+	notifyValue := result
+	if result >= 0 {
+		notifyValue = entryId
+	}
+
+	select {
+	case notifyChan <- notifyValue:
+		if result >= 0 {
+			logger.Ctx(ctx).Debug("Notified pending entry directly with success",
+				zap.Int64("logId", logId),
+				zap.Int64("segId", segId),
+				zap.Int64("entryId", entryId),
+				zap.Int64("notifyValue", notifyValue))
+		} else {
+			logger.Ctx(ctx).Debug("Notified pending entry directly with error",
+				zap.Int64("logId", logId),
+				zap.Int64("segId", segId),
+				zap.Int64("entryId", entryId),
+				zap.Int64("result", result))
+		}
+	default:
+		// Channel might be closed or full, ignore
+		logger.Ctx(ctx).Debug("Channel full or closed, skipping notification",
+			zap.Int64("logId", logId),
+			zap.Int64("segId", segId),
+			zap.Int64("entryId", entryId),
+			zap.Int64("notifyValue", notifyValue))
+	}
+}

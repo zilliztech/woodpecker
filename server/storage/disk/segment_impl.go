@@ -771,7 +771,8 @@ type RODiskSegmentImpl struct {
 	logFileDir string
 
 	// Configuration parameters
-	fragmentSize int64 // Maximum size of each fragment
+	fragmentSize  int64 // Maximum size of each fragment
+	readBatchSize int64 // Batch size for reading
 
 	// State
 	fragments []*FragmentFileReader // LogFile cached fragments in order
@@ -831,8 +832,9 @@ func (rs *RODiskSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOp
 	defer sp.End()
 	// Create new DiskReader
 	reader := &DiskReader{
-		ctx:     ctx,
-		logFile: rs,
+		ctx:       ctx,
+		logFile:   rs,
+		batchSize: rs.readBatchSize,
 		//fragments:       fragments,
 		currFragmentIdx: 0,
 		currFragment:    nil,
@@ -1177,6 +1179,7 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 type DiskReader struct {
 	ctx             context.Context
 	logFile         *RODiskSegmentImpl
+	batchSize       int64               // Max batch size
 	currFragmentIdx int                 // Current fragment index
 	currFragment    *FragmentFileReader // Current fragment reader
 	currEntryID     int64               // Current entry ID being read
@@ -1271,6 +1274,8 @@ func (dr *DiskReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.L
 	}
 	defer dr.currFragment.Release(ctx)
 	entries := make([]*proto.LogEntry, 0, 32)
+	maxSize := dr.batchSize
+	readSize := int64(0)
 	for {
 		// Read data from current fragment
 		data, err := dr.currFragment.GetEntry(ctx, dr.currEntryID)
@@ -1319,6 +1324,11 @@ func (dr *DiskReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.L
 
 		// If beyond current fragment range, prepare to move to next fragment
 		if dr.currEntryID > lastID {
+			break
+		}
+		// If read size exceeds max size, stop reading
+		readSize += int64(len(data))
+		if readSize >= maxSize {
 			break
 		}
 	}
@@ -1464,6 +1474,13 @@ type ROption func(*RODiskSegmentImpl)
 
 // WithReadFragmentSize sets the fragment size
 func WithReadFragmentSize(size int64) ROption {
+	return func(rs *RODiskSegmentImpl) {
+		rs.fragmentSize = size
+	}
+}
+
+// WithReadBatchSize sets the max read batch size
+func WithReadBatchSize(size int64) ROption {
 	return func(rs *RODiskSegmentImpl) {
 		rs.fragmentSize = size
 	}

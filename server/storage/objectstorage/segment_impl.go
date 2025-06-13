@@ -175,6 +175,14 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	}
 
 	f.mu.Lock()
+	if entryId <= f.lastEntryID.Load() {
+		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to object storage. Return immediately.
+		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastEntryID, already stored", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("lastEntryID", f.lastEntryID.Load()))
+		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, entryId, resultCh, entryId)
+		f.mu.Unlock()
+		return entryId, nil
+	}
+
 	currentBuffer = f.buffer.Load()
 	// write buffer with notification channel
 	id, err := currentBuffer.WriteEntryWithNotify(entryId, data, resultCh)
