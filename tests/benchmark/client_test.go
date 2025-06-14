@@ -235,7 +235,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 					for idx, ch := range writingResultChan {
 						writeResult := <-ch
 						if writeResult.Err != nil {
-							fmt.Printf(writeResult.Err.Error())
+							fmt.Println(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
 							//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
@@ -260,7 +260,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 				for idx, ch := range writingResultChan {
 					writeResult := <-ch
 					if writeResult.Err != nil {
-						fmt.Printf(writeResult.Err.Error())
+						fmt.Println(writeResult.Err.Error())
 						failMessages = append(failMessages, writingMessages[idx])
 					} else {
 						successCount++
@@ -282,7 +282,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 					for idx, ch := range writingResultChan {
 						writeResult := <-ch
 						if writeResult.Err != nil {
-							fmt.Printf(writeResult.Err.Error())
+							fmt.Println(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
 							successCount++

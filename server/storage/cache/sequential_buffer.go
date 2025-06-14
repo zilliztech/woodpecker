@@ -410,7 +410,7 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 				zap.Int64("entryId", entryId),
 				zap.Int64("notifyValue", notifyValue))
 		} else {
-			logger.Ctx(ctx).Debug("Notified pending entry directly with error",
+			logger.Ctx(ctx).Debug("Notified pending entry directly with fail",
 				zap.Int64("logId", logId),
 				zap.Int64("segId", segId),
 				zap.Int64("entryId", entryId),

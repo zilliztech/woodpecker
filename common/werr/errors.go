@@ -145,6 +145,8 @@ const (
 	ConfigError
 	// DiskFragmentNoSpace indicates that the disk fragment is full.
 	DiskFragmentNoSpace
+	// StorageNotWritable indicates that the storage is not writable
+	StorageNotWritable
 	// TruncateLogError indicates an error occurred during log truncation
 	TruncateLogError
 	// GetTruncationPointError indicates an error occurred when retrieving truncation point
@@ -183,7 +185,7 @@ var (
 	ErrSegmentNoWritingFragment = newWoodpeckerError("Segment is not writing", SegmentNoWritingFragment, false)
 
 	// LogFile & Fragment related
-	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, true)
+	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, false)
 	ErrFragmentEmpty          = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
 	ErrFragmentNotFound       = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
 	ErrFragmentInfoNotFetched = newWoodpeckerError("Fragment info is not fetched", FragmentInfoNotFetched, false)
@@ -202,6 +204,7 @@ var (
 
 	// Storage Related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
+	ErrStorageNotWritable  = newWoodpeckerError("storage is not writable", StorageNotWritable, false)
 
 	// Truncation related
 	ErrTruncateLog        = newWoodpeckerError("failed to truncate log", TruncateLogError, true)

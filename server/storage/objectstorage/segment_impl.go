@@ -32,6 +32,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -58,6 +59,8 @@ type SegmentImpl struct {
 	bucket            string // The bucket name
 	logId             int64
 	segmentId         int64
+	logIdStr          string // for metrics label only
+	segmentIdStr      string // for metrics label only
 
 	// write buffer
 	buffer           atomic.Pointer[cache.SequentialBuffer] // Write buffer
@@ -73,6 +76,11 @@ type SegmentImpl struct {
 	firstEntryID   atomic.Int64 // The first entryId of this Segment which already written to object storage
 	lastEntryID    atomic.Int64 // The last entryId of this Segment which already written to object storage
 	lastFragmentID atomic.Int64 // The last fragmentId of this Segment which already written to object storage
+
+	// task pool
+	pool            *conc.Pool[*flushResult]
+	storageWritable atomic.Bool
+	syncMu          sync.Mutex
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
@@ -84,6 +92,8 @@ func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefix
 	objFile := &SegmentImpl{
 		logId:            logId,
 		segmentId:        segId,
+		logIdStr:         fmt.Sprintf("%d", logId),
+		segmentIdStr:     fmt.Sprintf("%d", segId),
 		client:           objectCli,
 		segmentPrefixKey: segmentPrefixKey,
 		bucket:           bucket,
@@ -93,12 +103,15 @@ func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefix
 		maxIntervalMs:    syncPolicyConfig.MaxInterval,
 		syncPolicyConfig: syncPolicyConfig,
 		fileClose:        make(chan struct{}, 1),
+
+		pool: conc.NewPool[*flushResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 	}
 	objFile.buffer.Store(newBuffer)
 	objFile.firstEntryID.Store(-1)
 	objFile.lastEntryID.Store(-1)
 	objFile.lastFragmentID.Store(-1)
 	objFile.closed.Store(false)
+	objFile.storageWritable.Store(true)
 	go objFile.run()
 	return objFile
 }
@@ -147,9 +160,16 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
 	defer sp.End()
 	if f.closed.Load() {
+		// quick fail and return a close Err, which indicate than it is also not retriable
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrLogFileClosed
 	}
+	if !f.storageWritable.Load() {
+		// quick fail and return a Storage Err, which indicate that it is also not retriable
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return -1, werr.ErrStorageNotWritable
+	}
+
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 
 	startTime := time.Now()
@@ -240,66 +260,165 @@ type flushResult struct {
 	err    error
 }
 
+// Sync Implement sync logic, e.g., flush to persistent storage
 func (f *SegmentImpl) Sync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Sync")
 	defer sp.End()
-	// Implement sync logic, e.g., flush to persistent storage
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	startTime := time.Now()
+	logId := fmt.Sprintf("%d", f.logId)
+	segmentId := fmt.Sprintf("%d", f.segmentId)
+	f.syncMu.Lock() // ensure only one sync operation is running at a time
+	defer f.syncMu.Unlock()
 	defer func() {
 		f.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	}()
 
-	startTime := time.Now()
-	logId := fmt.Sprintf("%d", f.logId)
-	segmentId := fmt.Sprintf("%d", f.segmentId)
-
-	currentBuffer := f.buffer.Load()
-
-	entryCount := len(currentBuffer.Entries)
-	if entryCount == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-		return nil
+	if !f.storageWritable.Load() {
+		logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentPrefixKey", f.segmentPrefixKey))
+		return f.quickSyncFailUnsafe(ctx)
 	}
 
-	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
-
-	// get flush point to flush
-	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-		return nil
-	}
-
-	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
+	// roll buff with lock
+	f.mu.Lock()
+	currentBuffer, toFlushData, toFlushDataFirstEntryId, err := f.rollBufferUnsafe(ctx)
+	f.mu.Unlock()
 	if err != nil {
 		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
 	}
+	if len(toFlushData) == 0 {
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		return nil
+	}
+
+	// submit async flush task
+	flushResultFutures := f.submitFragmentFlushTask(ctx, toFlushData, toFlushDataFirstEntryId)
+	logger.Ctx(ctx).Debug("submitted fragment flush tasks", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("fragments", len(flushResultFutures)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+
+	// wait and get successful flush tasks
+	successFrags, flushedFirstEntryId, flushedLastEntryId, flushedLastFragmentId := f.awaitSuccessfulFlushes(ctx, flushResultFutures)
+
+	// Update the first and last entry IDs after successful flush
+	if flushedLastEntryId >= 0 {
+		f.lastEntryID.Store(flushedLastEntryId)
+		f.lastFragmentID.Store(flushedLastFragmentId)
+		if f.firstEntryID.Load() == -1 {
+			// Initialize firstEntryId on first successful flush
+			// This should always be 0 for the initial flush
+			f.firstEntryID.Store(flushedFirstEntryId)
+		}
+	}
+
+	// notify ack to all waiting append request channels
+	if len(successFrags) == len(flushResultFutures) {
+		// Notify all successfully flushed entries
+		for _, item := range toFlushData {
+			cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId)
+		}
+		logger.Ctx(ctx).Debug("Sync to object storage success",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int("fragments", len(successFrags)),
+			zap.Int64("successFirstEntryId", toFlushDataFirstEntryId),
+			zap.Int64("restDataFirstEntryId", currentBuffer.GetExpectedNextEntryId()),
+			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+	} else {
+		// means encounter storage error when writing, and partial or none flush success
+		// 1. quick mark some storage error exists, later should not accept any append
+		f.storageWritable.Store(false)
+
+		// 2. ack all success or fail append
+		for _, item := range toFlushData {
+			if flushedLastEntryId != -1 && item.EntryId <= flushedLastEntryId {
+				// flush success
+				cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId)
+			} else {
+				// flush fail
+				cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, -1)
+			}
+		}
+		logger.Ctx(ctx).Debug("Sync to object storage encounter some error",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int("fragments", len(flushResultFutures)),
+			zap.Int("successFragments", len(successFrags)),
+			zap.Int64("flushedFirstEntryId", flushedFirstEntryId),
+			zap.Int64("flushedLastEntryId", flushedLastEntryId),
+			zap.Int64("restDataFirstEntryId", currentBuffer.GetExpectedNextEntryId()),
+			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		// reset buffer as empty
+		currentBuffer.Reset(ctx)
+	}
+
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	return nil
+}
+
+// Get data that is sequentially ready to be flushed
+// For example, in a sequence like 1,2,x,3,x,5,6, "1,2" is ready, while "x,3,x,5,6" still needs to wait for missing entries to arrive before it can be flushed
+// Therefore, the toFlush data is "1,2", and the remaining data stays in the buffer for further append operations
+func (f *SegmentImpl) rollBufferUnsafe(ctx context.Context) (*cache.SequentialBuffer, []*cache.BufferEntry, int64, error) {
+	startTime := time.Now()
+
+	// get current buffer
+	currentBuffer := f.buffer.Load()
+
+	logger.Ctx(ctx).Debug("start roll buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+
+	// check if there are any entries to be written
+	entryCount := len(currentBuffer.Entries)
+	if entryCount == 0 {
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
+	}
+	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
+	// get flush point to flush
+	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
+		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
+	}
+	// get flush data
+	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, f.segmentIdStr, "sync", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, f.segmentIdStr, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		return currentBuffer, nil, -1, err
+	}
 	toFlushDataFirstEntryId := currentBuffer.FirstEntryId
 
+	// roll new buffer with rest data
+	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
+		return currentBuffer, nil, -1, err
+	}
+	restDataFirstEntryId := expectedNextEntryId
+	newBuffer := cache.NewSequentialBufferWithData(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
+	f.buffer.Store(newBuffer)
+	logger.Ctx(ctx).Debug("start roll buffer", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("toFlushDataFirstEntryId", toFlushDataFirstEntryId), zap.Int("count", len(toFlushData)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)), zap.String("newBufInst", fmt.Sprintf("%p", newBuffer)))
+	return currentBuffer, toFlushData, toFlushDataFirstEntryId, nil
+}
+
+func (f *SegmentImpl) submitFragmentFlushTask(ctx context.Context, toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) []*conc.Future[*flushResult] {
 	fragmentDataList, fragmentFirstEntryIdList := f.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
-	concurrentCh := make(chan int, f.syncPolicyConfig.MaxFlushThreads)
-	flushResultCh := make(chan *flushResult, len(fragmentDataList))
-	var concurrentWg sync.WaitGroup
-	logger.Ctx(ctx).Debug("get flush partitions finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("fragments", len(fragmentDataList)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+	flushResultFutures := make([]*conc.Future[*flushResult], 0, len(toFlushData))
 	lastFragmentId := f.LastFragmentId()
 	for i, fragmentData := range fragmentDataList {
-		concurrentWg.Add(1)
-		go func() {
-			concurrentCh <- i                       // take one flush goroutine to start
-			fragId := lastFragmentId + 1 + int64(i) // fragment id
+		fragId := lastFragmentId + 1 + int64(i) // fragment id
+		part := fragmentData
+		resultFuture := f.pool.Submit(func() (*flushResult, error) {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId))
 			key := getFragmentObjectKey(f.segmentPrefixKey, fragId)
-			part := fragmentData
 			fragment := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryIdList[i], true, false, true)
 			flushErr := retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
-				retry.Sleep(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
+				retry.Sleep(100*time.Millisecond),
+				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
 			)
 			if flushErr != nil {
 				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId), zap.Error(flushErr))
@@ -309,31 +428,33 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 			if releaseErr != nil {
 				logger.Ctx(ctx).Warn("release fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId), zap.Error(releaseErr))
 			}
-			flushResultCh <- &flushResult{
+			result := &flushResult{
 				target: fragment,
 				err:    flushErr,
 			}
-			concurrentWg.Done() // finish a flush goroutine
-			<-concurrentCh      // release a flush goroutine
 			logger.Ctx(ctx).Debug("complete flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId))
-		}()
+			return result, flushErr
+		})
+		flushResultFutures = append(flushResultFutures, resultFuture)
 	}
 
+	return flushResultFutures
+}
+
+func (f *SegmentImpl) awaitSuccessfulFlushes(ctx context.Context, flushResultFutures []*conc.Future[*flushResult]) ([]*FragmentObject, int64, int64, int64) {
 	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey))
-	concurrentWg.Wait() // Wait for all tasks to complete
-	close(flushResultCh)
-	logger.Ctx(ctx).Debug("all parts of buffer have been flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey))
-	resultFrags := make([]*flushResult, 0)
-	for r := range flushResultCh {
-		resultFrags = append(resultFrags, r)
+	firstFLushErr := conc.BlockOnAll(flushResultFutures...)
+	if firstFLushErr != nil {
+		logger.Ctx(ctx).Warn("all parts of buffer flush task finish, but found some fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(firstFLushErr))
+	} else {
+		logger.Ctx(ctx).Info("all parts of buffer have been flushed success", zap.String("segmentPrefixKey", f.segmentPrefixKey))
 	}
-	sort.Slice(resultFrags, func(i, j int) bool {
-		return resultFrags[i].target.GetFragmentId() < resultFrags[j].target.GetFragmentId()
-	})
 	successFrags := make([]*FragmentObject, 0)
-	flushedLastEntryId := int64(-1) // last entry id of the last fragment that was successfully flushed in sequence
-	flushedLastFragmentId := int64(-1)
-	for _, r := range resultFrags {
+	flushedFirstEntryId := int64(-1)   // first entry id of the first fragment that was successfully flushed in sequence
+	flushedLastEntryId := int64(-1)    // last entry id of the last fragment that was successfully flushed in sequence
+	flushedLastFragmentId := int64(-1) // last fragment id that was successfully flushed in sequence
+	for _, singleFlushResult := range flushResultFutures {
+		r := singleFlushResult.Value()
 		first, _ := r.target.GetFirstEntryId(ctx)
 		last, _ := r.target.GetLastEntryId(ctx)
 		fragId := r.target.GetFragmentId()
@@ -346,77 +467,20 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 			successFrags = append(successFrags, r.target)
 			flushedLastEntryId = last
 			flushedLastFragmentId = fragId
+			if flushedFirstEntryId == -1 {
+				flushedFirstEntryId = first
+			}
 		}
 	}
-	// Update the first and last entry IDs after successful flush
-	if flushedLastEntryId >= 0 {
-		f.lastEntryID.Store(flushedLastEntryId)
-		f.lastFragmentID.Store(flushedLastFragmentId)
-		if f.firstEntryID.Load() == -1 {
-			// Initialize firstEntryId on first successful flush
-			// This should always be 0 for the initial flush
-			f.firstEntryID.Store(toFlushDataFirstEntryId)
-		}
-	}
+	return successFrags, flushedFirstEntryId, flushedLastEntryId, flushedLastFragmentId
+}
 
-	// callback to notify all waiting append request channels
-	if len(successFrags) == len(resultFrags) {
-
-		restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
-		if err != nil {
-			logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
-			return err
-		}
-		if len(restData) == 0 {
-			fmt.Sprintf("")
-		}
-		restDataFirstEntryId := expectedNextEntryId
-		newBuffer := cache.NewSequentialBufferWithData(f.logId, f.segmentId, restDataFirstEntryId, int64(f.syncPolicyConfig.MaxEntries), restData)
-		f.buffer.Store(newBuffer)
-
-		// Notify all successfully flushed entries
-		currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, expectedNextEntryId, flushedLastEntryId)
-
-		logger.Ctx(ctx).Debug("Sync to object storage success",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("fragments", len(fragmentDataList)),
-			zap.Int64("successFirstEntryId", toFlushDataFirstEntryId),
-			zap.Int64("restDataFirstEntryId", restDataFirstEntryId),
-			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)),
-			zap.String("newBufInst", fmt.Sprintf("%p", newBuffer)))
-	} else if len(successFrags) > 0 {
-		lastSuccessFrag := successFrags[len(successFrags)-1]
-		last, _ := lastSuccessFrag.GetLastEntryId(ctx)
-		restDataFirstEntryId := last + 1
-
-		// Notify successful entries with success and failed entries with error
-		currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, restDataFirstEntryId, last)
-		currentBuffer.NotifyEntriesInRange(ctx, restDataFirstEntryId, expectedNextEntryId, -1)
-
-		// new a empty buffer
-		newBuffer := cache.NewSequentialBuffer(f.logId, f.segmentId, restDataFirstEntryId, f.maxBufferEntries)
-		f.buffer.Store(newBuffer)
-		logger.Ctx(ctx).Debug("Sync to object storage partial success",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("fragments", len(fragmentDataList)),
-			zap.Int64("successFirstEntryId", toFlushDataFirstEntryId),
-			zap.Int64("restDataFirstEntryId", restDataFirstEntryId),
-			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)),
-			zap.String("newBufInst", fmt.Sprintf("%p", newBuffer)))
-	} else {
-		// no flush success, notify all entries with error
-		currentBuffer.NotifyAllPendingEntries(ctx, -1)
-		// reset buffer as empty
-		currentBuffer.Reset(ctx)
-		logger.Ctx(ctx).Debug("Sync to object storage all failed,reset buffer",
-			zap.String("segmentPrefixKey", f.segmentPrefixKey),
-			zap.Int("fragments", len(fragmentDataList)),
-			zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-	}
-
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return nil
+func (f *SegmentImpl) quickSyncFailUnsafe(ctx context.Context) error {
+	logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentPrefixKey", f.segmentPrefixKey))
+	currentBuffer := f.buffer.Load()
+	currentBuffer.NotifyAllPendingEntries(ctx, -1)
+	currentBuffer.Reset(ctx)
+	return errors.New("storage is not writable")
 }
 
 func (f *SegmentImpl) Close(ctx context.Context) error {
