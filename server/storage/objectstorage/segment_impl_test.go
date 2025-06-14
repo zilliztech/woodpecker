@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -508,7 +509,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 					MaxBytes:        1000,
 					MaxInterval:     1000,
 					MaxFlushThreads: 5,
-					MaxFlushSize:    1024 * 1024,
+					MaxFlushSize:    1000, // Set to 1000 to trigger sync when buffer reaches 1000 bytes
 					MaxFlushRetries: 3,
 					RetryInterval:   100,
 				},
@@ -1426,12 +1427,13 @@ func TestPrepareMultiFragmentDataIfNecessary_EmptyData(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return empty partitions
 	assert.Equal(t, 0, len(partitions))
@@ -1443,6 +1445,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleSmallEntry(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1450,7 +1453,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleSmallEntry(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(5)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return single partition with one entry
 	assert.Equal(t, 1, len(partitions))
@@ -1465,6 +1468,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultipleSmallEntries(t *testing.T) 
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1474,7 +1478,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultipleSmallEntries(t *testing.T) 
 	}
 	toFlushDataFirstEntryId := int64(10)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return single partition with all entries
 	assert.Equal(t, 1, len(partitions))
@@ -1491,6 +1495,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) 
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Very small max size to force partitioning
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1500,7 +1505,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) 
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return two partitions
 	assert.Equal(t, 2, len(partitions))
@@ -1520,6 +1525,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Smaller than the entry
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1527,7 +1533,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(100)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should still return single partition (large entries are not split)
 	assert.Equal(t, 1, len(partitions))
@@ -1542,6 +1548,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1553,7 +1560,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(50)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return four partitions
 	assert.Equal(t, 4, len(partitions))
@@ -1581,6 +1588,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 0, // Edge case
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1589,7 +1597,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Each entry should be in its own partition
 	assert.Equal(t, 2, len(partitions))
@@ -1605,6 +1613,7 @@ func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	toFlushData := []*cache.BufferEntry{
@@ -1617,7 +1626,7 @@ func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(1000)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return three partitions
 	assert.Equal(t, 3, len(partitions))
@@ -1647,6 +1656,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 2, // Very small size to force multiple partitions
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test entry ID calculation with different starting entry ID
@@ -1657,7 +1667,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(42) // Start from entry ID 42
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should create multiple partitions due to small max flush size
 	assert.Equal(t, 3, len(partitions))
@@ -1679,6 +1689,7 @@ func TestPrepareMultiFragmentDataIfNecessary_LargeMaxFlushSize(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 1024 * 1024, // 1MB max flush size (very large)
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with many small entries that should all fit in one partition
@@ -1692,7 +1703,7 @@ func TestPrepareMultiFragmentDataIfNecessary_LargeMaxFlushSize(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return single partition with all entries
 	assert.Equal(t, 1, len(partitions))
@@ -1711,6 +1722,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ExactSizeMatch(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10, // Exactly 10 bytes max flush size
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with entries that exactly match the max flush size
@@ -1720,7 +1732,7 @@ func TestPrepareMultiFragmentDataIfNecessary_ExactSizeMatch(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return two partitions, each with one entry
 	assert.Equal(t, 2, len(partitions))
@@ -1740,6 +1752,7 @@ func TestPrepareMultiFragmentDataIfNecessary_NegativeEntryId(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 20,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with negative starting entry ID
@@ -1749,7 +1762,7 @@ func TestPrepareMultiFragmentDataIfNecessary_NegativeEntryId(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(-10) // Negative starting entry ID
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should work correctly with negative entry IDs
 	assert.Equal(t, 1, len(partitions))
@@ -1763,6 +1776,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleByteEntries(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 3, // 3 bytes max flush size
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with single byte entries
@@ -1775,7 +1789,7 @@ func TestPrepareMultiFragmentDataIfNecessary_SingleByteEntries(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return two partitions
 	assert.Equal(t, 2, len(partitions))
@@ -1800,6 +1814,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MaxInt64EntryId(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 100,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with very large entry ID
@@ -1809,7 +1824,7 @@ func TestPrepareMultiFragmentDataIfNecessary_MaxInt64EntryId(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(9223372036854775800) // Near max int64
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should work correctly with large entry IDs
 	assert.Equal(t, 1, len(partitions))
@@ -1822,6 +1837,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EmptyEntries(t *testing.T) {
 		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
 			MaxFlushSize: 10,
 		},
+		fileClose: make(chan struct{}, 1),
 	}
 
 	// Test with empty byte slices
@@ -1834,7 +1850,7 @@ func TestPrepareMultiFragmentDataIfNecessary_EmptyEntries(t *testing.T) {
 	}
 	toFlushDataFirstEntryId := int64(0)
 
-	partitions, partitionFirstEntryIds := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return single partition with all entries (total 8 bytes)
 	assert.Equal(t, 1, len(partitions))
@@ -1848,4 +1864,136 @@ func TestPrepareMultiFragmentDataIfNecessary_EmptyEntries(t *testing.T) {
 	assert.Equal(t, []byte{}, partitions[0][2].Data)
 	assert.Equal(t, []byte("more"), partitions[0][3].Data)
 	assert.Equal(t, []byte{}, partitions[0][4].Data)
+}
+
+// TestWaitIfFlushingBufferSizeExceeded tests the waitIfFlushingBufferSizeExceeded method
+func TestWaitIfFlushingBufferSizeExceeded(t *testing.T) {
+	// Create a mock SegmentImpl with test configuration
+	segment := &SegmentImpl{
+		maxBufferSize: 1000,                   // Set max buffer size to 1000 bytes
+		fileClose:     make(chan struct{}, 1), // Initialize the channel
+	}
+	segment.flushingBufferSize.Store(0)
+	segment.closed.Store(false)
+
+	ctx := context.Background()
+
+	// Test case 1: flushingBufferSize is less than maxBufferSize, should return immediately
+	t.Run("FlushingBufferSizeWithinLimit", func(t *testing.T) {
+		segment.flushingBufferSize.Store(500) // Set to 500, which is less than 1000
+
+		start := time.Now()
+		segment.waitIfFlushingBufferSizeExceeded(ctx)
+		duration := time.Since(start)
+
+		// Should return immediately, so duration should be very small
+		assert.Less(t, duration, 50*time.Millisecond, "Should return immediately when buffer size is within limit")
+	})
+
+	// Test case 2: flushingBufferSize exceeds maxBufferSize, should wait until it's reduced
+	t.Run("FlushingBufferSizeExceedsLimit", func(t *testing.T) {
+		segment.flushingBufferSize.Store(1500) // Set to 1500, which exceeds 1000
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		start := time.Now()
+		go func() {
+			defer wg.Done()
+			segment.waitIfFlushingBufferSizeExceeded(ctx)
+		}()
+
+		// Wait a bit to ensure the method is waiting
+		time.Sleep(50 * time.Millisecond)
+
+		// Reduce the flushing buffer size to below the limit
+		segment.flushingBufferSize.Store(800)
+
+		wg.Wait()
+		duration := time.Since(start)
+
+		// Should have waited for at least 50ms
+		assert.GreaterOrEqual(t, duration, 50*time.Millisecond, "Should wait when buffer size exceeds limit")
+		assert.Less(t, duration, 200*time.Millisecond, "Should not wait too long after buffer size is reduced")
+	})
+
+	// Test case 3: context cancellation should cause immediate return
+	t.Run("ContextCancellation", func(t *testing.T) {
+		segment.flushingBufferSize.Store(1500) // Set to exceed limit
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		start := time.Now()
+		go func() {
+			defer wg.Done()
+			segment.waitIfFlushingBufferSizeExceeded(ctx)
+		}()
+
+		// Wait a bit then cancel the context
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+
+		wg.Wait()
+		duration := time.Since(start)
+
+		// Should return quickly after context cancellation
+		assert.Less(t, duration, 100*time.Millisecond, "Should return quickly when context is cancelled")
+	})
+
+	// Test case 4: segment close should cause immediate return
+	t.Run("SegmentClose", func(t *testing.T) {
+		segment.flushingBufferSize.Store(1500) // Set to exceed limit
+		close(segment.fileClose)               // Ensure it starts as not closed
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		start := time.Now()
+		go func() {
+			defer wg.Done()
+			segment.waitIfFlushingBufferSizeExceeded(ctx)
+		}()
+
+		// Wait a bit then close the segment
+		time.Sleep(30 * time.Millisecond)
+		segment.closed.Store(true)
+
+		wg.Wait()
+		duration := time.Since(start)
+
+		// Should return quickly after segment is closed
+		assert.Less(t, duration, 100*time.Millisecond, "Should return quickly when segment is closed")
+
+		// Reset for other tests
+		segment.closed.Store(false)
+	})
+}
+
+// TestFlushingBufferSizeManagement tests that flushingBufferSize is properly managed
+func TestFlushingBufferSizeManagement(t *testing.T) {
+	// Create a mock SegmentImpl
+	segment := &SegmentImpl{
+		maxBufferSize: 1000,
+		syncPolicyConfig: &config.SegmentSyncPolicyConfig{
+			MaxFlushSize: 500,
+		},
+		fileClose: make(chan struct{}, 1),
+	}
+	segment.flushingBufferSize.Store(0)
+
+	// Test that flushingBufferSize is properly incremented and decremented
+	t.Run("FlushingBufferSizeIncrement", func(t *testing.T) {
+		initialSize := segment.flushingBufferSize.Load()
+
+		// Simulate adding flush size
+		segment.flushingBufferSize.Add(300)
+		assert.Equal(t, initialSize+300, segment.flushingBufferSize.Load(), "Flushing buffer size should be incremented")
+
+		// Simulate completing flush
+		segment.flushingBufferSize.Add(-300)
+		assert.Equal(t, initialSize, segment.flushingBufferSize.Load(), "Flushing buffer size should be decremented after flush completion")
+	})
 }
