@@ -272,7 +272,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
@@ -364,7 +364,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 		restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 		if err != nil {
-			logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
+			logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
 			return err
 		}
 		if len(restData) == 0 {

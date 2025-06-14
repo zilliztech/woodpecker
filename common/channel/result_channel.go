@@ -150,7 +150,7 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result int64) erro
 
 	// Call the send function.
 	if err := r.sendFunc(ctx, r.identifier, result); err != nil {
-		logger.Ctx(ctx).Error("failed to send result to remote channel",
+		logger.Ctx(ctx).Warn("failed to send result to remote channel",
 			zap.String("identifier", r.identifier),
 			zap.Int64("result", result),
 			zap.Error(err))

@@ -226,7 +226,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Error("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+		logger.Ctx(ctx).Warn("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		callback(-1, -1, err)
 		return ch
 	}
@@ -417,7 +417,7 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 		start := time.Now()
 		err := l.cleanupManager.CleanupSegment(ctx, logName, logId, segmentId)
 		if err != nil {
-			logger.Ctx(ctx).Error("Failed to start segment cleanup",
+			logger.Ctx(ctx).Warn("Failed to start segment cleanup",
 				zap.String("logName", logName),
 				zap.Int64("logId", logId),
 				zap.Int64("segmentId", segmentId),

@@ -82,7 +82,7 @@ func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName 
 	// 1. Check if segment already has cleanup status
 	existingStatus, err := s.metadata.GetSegmentCleanupStatus(ctx, logId, segmentId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to get segment cleanup status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("Failed to get segment cleanup status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return err
 	}
 
@@ -158,7 +158,7 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 	// Update status
 	err := s.metadata.UpdateSegmentCleanupStatus(ctx, status)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to update segment cleanup status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("Failed to update segment cleanup status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return err
 	}
 
@@ -312,7 +312,7 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 	// Get node client
 	logStoreCli, err := s.clientPool.GetLogStoreClient(nodeAddress)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to get logstore client", zap.String("node", nodeAddress), zap.Error(err))
+		logger.Ctx(ctx).Warn("Failed to get logstore client", zap.String("node", nodeAddress), zap.Error(err))
 		// Use mutex to protect status updates
 		statusUpdateMutex.Lock()
 		defer statusUpdateMutex.Unlock()
@@ -325,7 +325,7 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 	// Different flag values can be defined for different cleanup modes based on requirements
 	err = logStoreCli.SegmentClean(ctx, logId, segmentId, 0)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to cleanup segment", zap.String("node", nodeAddress), zap.Error(err))
+		logger.Ctx(ctx).Warn("Failed to cleanup segment", zap.String("node", nodeAddress), zap.Error(err))
 		// Use mutex to protect status updates
 		statusUpdateMutex.Lock()
 		defer statusUpdateMutex.Unlock()
@@ -346,13 +346,13 @@ func (s *segmentCleanupManagerImpl) processCleanupResult(ctx context.Context, lo
 	// 1. Get current cleanup status
 	status, err := s.metadata.GetSegmentCleanupStatus(ctx, logId, segmentId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to get segment cleanup status", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("Failed to get segment cleanup status", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return err
 	}
 
 	// Check if status object is nil
 	if status == nil {
-		logger.Ctx(ctx).Error("Segment cleanup status is nil", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
+		logger.Ctx(ctx).Warn("Segment cleanup status is nil", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
 		return fmt.Errorf("segment cleanup status is nil for logId: %d, segmentId: %d", logId, segmentId)
 	}
 
@@ -413,7 +413,7 @@ func (s *segmentCleanupManagerImpl) updateFinalCleanupStatus(ctx context.Context
 	// 1. Get current cleanup status
 	status, err := s.metadata.GetSegmentCleanupStatus(ctx, logId, segmentId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to get segment cleanup status for final update",
+		logger.Ctx(ctx).Warn("Failed to get segment cleanup status for final update",
 			zap.Int64("logId", logId),
 			zap.Int64("segmentId", segmentId),
 			zap.Error(err))
@@ -422,7 +422,7 @@ func (s *segmentCleanupManagerImpl) updateFinalCleanupStatus(ctx context.Context
 
 	// Check if status object is nil
 	if status == nil {
-		logger.Ctx(ctx).Error("Segment cleanup status is nil during final update", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
+		logger.Ctx(ctx).Warn("Segment cleanup status is nil during final update", zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
 		return nil, fmt.Errorf("segment cleanup status is nil for logId: %d, segmentId: %d during final update", logId, segmentId)
 	}
 
@@ -468,7 +468,7 @@ func (s *segmentCleanupManagerImpl) updateFinalCleanupStatus(ctx context.Context
 	// 6. Store updated cleanup status
 	err = s.metadata.UpdateSegmentCleanupStatus(ctx, status)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to update final segment cleanup status",
+		logger.Ctx(ctx).Warn("Failed to update final segment cleanup status",
 			zap.Int64("logId", logId),
 			zap.Int64("segmentId", segmentId),
 			zap.Error(err))

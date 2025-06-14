@@ -68,7 +68,7 @@ func (se *SequentialExecutor) worker() {
 			defer func() {
 				if r := recover(); r != nil {
 					// Use context.Background() since we don't have access to the original context here
-					logger.Ctx(context.Background()).Error("Operation execution panicked",
+					logger.Ctx(context.Background()).Warn("Operation execution panicked",
 						zap.String("OpId", op.Identifier()),
 						zap.Any("panic", r))
 				}

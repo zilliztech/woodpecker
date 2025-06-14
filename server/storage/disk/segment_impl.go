@@ -319,7 +319,7 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 			restDataFirstEntryId := currentBuffer.ExpectedNextEntryId.Load()
 			restData, err := currentBuffer.ReadEntriesToLast(restDataFirstEntryId)
 			if err != nil {
-				logger.Ctx(ctx).Error("Call Sync, but ReadEntriesToLastData failed", zap.String("logFileDir", s.logFileDir), zap.Error(err))
+				logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("logFileDir", s.logFileDir), zap.Error(err))
 				metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
 				metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 				return err
@@ -388,7 +388,7 @@ func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cac
 		zap.Int64("expectedNextEntryId", expectedNextEntryId))
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Error("Call Sync, but ReadEntriesRangeData failed",
+		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Error(err))
 		return nil, -1

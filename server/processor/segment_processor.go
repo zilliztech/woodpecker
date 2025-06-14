@@ -57,6 +57,7 @@ type SegmentProcessor interface {
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
+	GetLastAccessTime() int64
 	Clean(ctx context.Context, flag int) error
 	Close(ctx context.Context) error
 }
@@ -71,6 +72,7 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId i
 		minioClient: minioCli,
 		createTime:  ctime,
 	}
+	s.lastAccessTime.Store(ctime)
 	s.fenced.Store(false)
 	return s
 }
@@ -86,6 +88,7 @@ func NewSegmentProcessorWithLogFile(ctx context.Context, cfg *config.Configurati
 		currentSegmentWriter: currentLogFile,
 		currentSegmentReader: currentLogFile,
 	}
+	s.lastAccessTime.Store(time.Now().UnixMilli())
 	s.fenced.Store(false)
 	return s
 }
@@ -99,7 +102,8 @@ type segmentProcessor struct {
 	segId       int64
 	minioClient minioHandler.MinioHandler
 
-	createTime int64
+	createTime     int64
+	lastAccessTime atomic.Int64
 
 	// for segment writer
 	currentSegmentWriter storage.Segment
@@ -120,12 +124,14 @@ func (s *segmentProcessor) GetSegmentId() int64 {
 func (s *segmentProcessor) IsFenced(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "IsFenced")
 	defer sp.End()
+	s.updateAccessTime()
 	return s.fenced.Load()
 }
 
 func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "SetFenced")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -136,13 +142,13 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 		// Close&sync segment writer
 		closeSegmentWriterErr := s.currentSegmentWriter.Close(ctx)
 		if closeSegmentWriterErr != nil {
-			logger.Ctx(context.TODO()).Error("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(closeSegmentWriterErr))
+			logger.Ctx(ctx).Warn("close log file writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(closeSegmentWriterErr))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "close_error").Observe(float64(time.Since(start).Milliseconds()))
 		}
 		lastEntryId, getLastEntryIdErr := s.currentSegmentWriter.GetLastEntryId(ctx)
 		if getLastEntryIdErr != nil {
-			logger.Ctx(context.TODO()).Error("get log file last entry id failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(getLastEntryIdErr))
+			logger.Ctx(ctx).Warn("get log file last entry id failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(getLastEntryIdErr))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "set_fenced", "get_last_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "set_fenced", "get_last_error").Observe(float64(time.Since(start).Milliseconds()))
 		}
@@ -156,6 +162,7 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh chan<- int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -195,6 +202,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadEntry")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -251,6 +259,7 @@ func (s *segmentProcessor) ReadEntry(ctx context.Context, entryId int64) (*Segme
 func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, size int64) ([]*SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -314,6 +323,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -443,6 +453,7 @@ func (s *segmentProcessor) getSegmentKeyPrefix() string {
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Compact")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -500,9 +511,14 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	}, nil
 }
 
+func (s *segmentProcessor) GetLastAccessTime() int64 {
+	return s.lastAccessTime.Load()
+}
+
 func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Recover")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -558,6 +574,7 @@ func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata,
 func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Clean")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segIdStr := fmt.Sprintf("%d", s.segId)
@@ -591,7 +608,7 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 	if s.currentSegmentWriter != nil {
 		err := s.currentSegmentWriter.Close(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Error("close segment writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+			logger.Ctx(ctx).Warn("close segment writer failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Observe(float64(time.Since(start).Milliseconds()))
 			return err
@@ -601,7 +618,7 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 	if s.currentSegmentReader != nil {
 		err := s.currentSegmentReader.Close(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Error("close segment reader failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
+			logger.Ctx(ctx).Warn("close segment reader failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
 			metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Inc()
 			metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "close_error").Observe(float64(time.Since(start).Milliseconds()))
 			return err
@@ -611,4 +628,9 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 	metrics.WpSegmentProcessorOperationsTotal.WithLabelValues(logIdStr, segIdStr, "close", "success").Inc()
 	metrics.WpSegmentProcessorOperationLatency.WithLabelValues(logIdStr, segIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
+}
+
+// updateAccessTime updates the last access time to current time
+func (s *segmentProcessor) updateAccessTime() {
+	s.lastAccessTime.Store(time.Now().UnixMilli())
 }

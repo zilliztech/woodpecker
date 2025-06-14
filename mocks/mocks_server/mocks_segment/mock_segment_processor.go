@@ -233,6 +233,51 @@ func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
+// GetLastAccessTime provides a mock function with no fields
+func (_m *SegmentProcessor) GetLastAccessTime() int64 {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetLastAccessTime")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func() int64); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// SegmentProcessor_GetLastAccessTime_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLastAccessTime'
+type SegmentProcessor_GetLastAccessTime_Call struct {
+	*mock.Call
+}
+
+// GetLastAccessTime is a helper method to define mock.On call
+func (_e *SegmentProcessor_Expecter) GetLastAccessTime() *SegmentProcessor_GetLastAccessTime_Call {
+	return &SegmentProcessor_GetLastAccessTime_Call{Call: _e.mock.On("GetLastAccessTime")}
+}
+
+func (_c *SegmentProcessor_GetLastAccessTime_Call) Run(run func()) *SegmentProcessor_GetLastAccessTime_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_GetLastAccessTime_Call) Return(_a0 int64) *SegmentProcessor_GetLastAccessTime_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *SegmentProcessor_GetLastAccessTime_Call) RunAndReturn(run func() int64) *SegmentProcessor_GetLastAccessTime_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetLogId provides a mock function with no fields
 func (_m *SegmentProcessor) GetLogId() int64 {
 	ret := _m.Called()
