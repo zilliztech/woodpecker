@@ -757,7 +757,7 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 				zap.Error(parseErr))
 			return 0, 0, parseErr
 		}
-		logger.Ctx(ctx).Debug("Found fragment object",
+		logger.Ctx(ctx).Info("Found fragment object",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.String("objectKey", objInfo.Key),
 			zap.Int64("objectSize", objInfo.Size),
@@ -845,7 +845,7 @@ func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, *Fragm
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true
 			fragId++
-			logger.Ctx(ctx).Debug("prefetch fragment info", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("lastFragId", fragId-1))
+			logger.Ctx(ctx).Info("prefetch fragment info", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("lastFragId", fragId-1))
 		} else {
 			// no more fragment exists, cause the id sequence is broken
 			break
@@ -1110,7 +1110,7 @@ func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, erro
 		return -1, nil, err
 	}
 	fragId := lastFragment.GetFragmentId()
-	logger.Ctx(ctx).Debug("Load fragments", zap.String("segmentPrefixKey", f.segmentPrefixKey),
+	logger.Ctx(ctx).Info("Load fragments", zap.String("segmentPrefixKey", f.segmentPrefixKey),
 		zap.Int("fragments", len(f.fragments)),
 		zap.Int64("totalSize", totalSize),
 		zap.Int64("lastFragId", fragId),
@@ -1171,12 +1171,12 @@ func (f *ROSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
 
 		// Count deleted fragment types
 		if strings.Contains(objInfo.Key, "/m_") {
-			logger.Ctx(ctx).Debug("Successfully deleted merged fragment object",
+			logger.Ctx(ctx).Info("Successfully deleted merged fragment object",
 				zap.String("segmentPrefixKey", f.segmentPrefixKey),
 				zap.String("objectKey", objInfo.Key))
 			mergedFragmentCount++
 		} else {
-			logger.Ctx(ctx).Debug("Successfully deleted normal fragment object",
+			logger.Ctx(ctx).Info("Successfully deleted normal fragment object",
 				zap.String("segmentPrefixKey", f.segmentPrefixKey),
 				zap.String("objectKey", objInfo.Key))
 			normalFragmentCount++

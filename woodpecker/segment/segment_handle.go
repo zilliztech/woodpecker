@@ -643,11 +643,21 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
 
+	logger.Ctx(ctx).Info("Starting segment fence operation",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId))
+
 	// Acquire lock to ensure mutual exclusion with AppendAsync
 	s.Lock()
 	defer s.Unlock()
 
 	if s.fencedState.Load() {
+		logger.Ctx(ctx).Info("Segment already fenced, returning cached result",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()))
 		return s.lastAddConfirmed.Load(), nil
 	}
 
@@ -657,27 +667,63 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 
 	// Set fenced state to prevent new append operations
 	s.fencedState.Store(true)
+	logger.Ctx(ctx).Info("Set local fenced state to prevent new append operations",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId))
 
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		// Revert fenced state on error
 		s.fencedState.Store(false)
+		logger.Ctx(ctx).Warn("Failed to get quorum info during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
 		return -1, err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		// Revert fenced state on error
 		s.fencedState.Store(false)
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("quorumId", quorumInfo.Id),
+			zap.Int("nodeCount", len(quorumInfo.Nodes)))
 		return -1, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		// Revert fenced state on error
 		s.fencedState.Store(false)
+		logger.Ctx(ctx).Warn("Failed to get logstore client during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("node", quorumInfo.Nodes[0]),
+			zap.Error(err))
 		return -1, err
 	}
+
+	logger.Ctx(ctx).Info("Sending fence request to logstore",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("targetNode", quorumInfo.Nodes[0]))
+
 	// fence and get last entry
 	lastEntryId, fencedErr := cli.FenceSegment(ctx, s.logId, s.segmentId)
+
+	logger.Ctx(ctx).Info("Received fence response from logstore",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lastEntryId", lastEntryId),
+		zap.Error(fencedErr))
+
 	if lastEntryId == -1 && fencedErr != nil && (werr.ErrSegmentFenced.Is(fencedErr) || werr.ErrSegmentNotFound.Is(fencedErr) || werr.ErrSegmentNoWritingFragment.Is(fencedErr)) {
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -688,7 +734,12 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 		return lastEntryId, fencedErr
 	} else {
 		if lastEntryId != -1 && s.lastAddConfirmed.Load() < lastEntryId {
-			logger.Ctx(ctx).Debug("fence segment update lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", lastEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()))
+			logger.Ctx(ctx).Info("Updating last add confirmed from fence result",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.Int64("previousLastAddConfirmed", s.lastAddConfirmed.Load()),
+				zap.Int64("newLastAddConfirmed", lastEntryId))
 			s.lastAddConfirmed.Store(lastEntryId)
 		}
 		// Use the actual lastEntryId returned from FenceSegment, even in error cases
@@ -699,7 +750,12 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 			metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "warn").Inc()
 			metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "warn").Observe(float64(time.Since(start).Milliseconds()))
 		} else {
-			logger.Ctx(ctx).Debug("segment fence finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", lastEntryId))
+			logger.Ctx(ctx).Info("Segment fence completed successfully",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.Int64("lastEntryId", lastEntryId),
+				zap.Duration("duration", time.Since(start)))
 			metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Inc()
 			metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 		}
@@ -759,16 +815,50 @@ func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RecoveryOrCompact")
 	defer sp.End()
+
+	logger.Ctx(ctx).Info("Starting segment recovery or compact operation",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId))
+
 	err := s.RefreshAndGetMetadata(ctx)
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to refresh segment metadata",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
 		return err
 	}
 	currentSegmentMeta := s.GetMetadata(ctx)
+
+	logger.Ctx(ctx).Info("Segment metadata refreshed, determining operation type",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("currentState", currentSegmentMeta.State.String()),
+		zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId),
+		zap.Int64("size", currentSegmentMeta.Size))
+
 	if currentSegmentMeta.State == proto.SegmentState_Active {
+		logger.Ctx(ctx).Info("Segment is in Active state, starting recovery operation",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 		return s.recoveryFromInProgress(ctx)
 	} else if currentSegmentMeta.State == proto.SegmentState_Completed {
+		logger.Ctx(ctx).Info("Segment is in Completed state, starting compaction operation",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 		return s.compactToSealed(ctx)
 	}
+
+	logger.Ctx(ctx).Info("Segment state does not require maintenance",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("currentState", currentSegmentMeta.State.String()))
 	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
 }
 
@@ -779,34 +869,92 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
 	currentSegmentMeta := s.GetMetadata(ctx)
+
+	logger.Ctx(ctx).Info("Starting segment recovery from Active state",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("currentState", currentSegmentMeta.State.String()),
+		zap.Int64("currentLastEntryId", currentSegmentMeta.LastEntryId),
+		zap.Int64("currentSize", currentSegmentMeta.Size))
+
 	if currentSegmentMeta.State != proto.SegmentState_Active {
+		logger.Ctx(ctx).Warn("Segment state is not Active, cannot perform recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("actualState", currentSegmentMeta.State.String()))
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	// only one recovery operation at the same time
 	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
-		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+		logger.Ctx(ctx).Info("Recovery or compact operation already in progress, skipping",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 		return nil
 	}
-	defer s.doingRecoveryOrCompact.Store(false)
+	defer func() {
+		s.doingRecoveryOrCompact.Store(false)
+		logger.Ctx(ctx).Info("Recovery operation completed, released operation lock",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+	}()
+
 	// select one node to compact segment asynchronously
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get quorum info during recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
 		return err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration for recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("quorumId", quorumInfo.Id),
+			zap.Int("nodeCount", len(quorumInfo.Nodes)))
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get logstore client for recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("targetNode", quorumInfo.Nodes[0]),
+			zap.Error(err))
 		return err
 	}
+
 	logger.Ctx(ctx).Info("start recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("state", fmt.Sprintf("%s", currentSegmentMeta.State)))
 	recoverySegMetaInfo, recoveryErr := cli.SegmentRecoveryFromInProgress(ctx, s.logId, s.segmentId)
 	if recoveryErr != nil {
+		logger.Ctx(ctx).Warn("Segment recovery operation failed",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(recoveryErr))
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "recover_from_in_progress", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "recover_from_in_progress", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return recoveryErr
 	}
+
+	logger.Ctx(ctx).Info("Segment recovery completed, updating metadata",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("newState", recoverySegMetaInfo.State.String()),
+		zap.Int64("recoveredLastEntryId", recoverySegMetaInfo.LastEntryId),
+		zap.Int64("recoveredSize", recoverySegMetaInfo.Size),
+		zap.Int64("completionTime", recoverySegMetaInfo.CompletionTime))
+
 	// update meta
 	newSegmentMeta := currentSegmentMeta.CloneVT()
 	newSegmentMeta.State = recoverySegMetaInfo.State
@@ -814,11 +962,41 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 	newSegmentMeta.CompletionTime = recoverySegMetaInfo.CompletionTime
 	newSegmentMeta.Size = recoverySegMetaInfo.Size
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	if updateMetaErr != nil {
+		logger.Ctx(ctx).Warn("Failed to update segment metadata after recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(updateMetaErr))
+	} else {
+		logger.Ctx(ctx).Info("Successfully updated segment metadata after recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+	}
+
 	logger.Ctx(ctx).Info("finish recover segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", recoverySegMetaInfo.LastEntryId))
 	// update segmentHandle meta cache
-	_ = s.RefreshAndGetMetadata(ctx)
+	refreshErr := s.RefreshAndGetMetadata(ctx)
+	if refreshErr != nil {
+		logger.Ctx(ctx).Warn("Failed to refresh segment metadata cache after recovery",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(refreshErr))
+	}
+
+	recoveryDuration := time.Since(start)
+	logger.Ctx(ctx).Info("Segment recovery operation completed successfully",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Duration("totalDuration", recoveryDuration),
+		zap.Int64("finalLastEntryId", recoverySegMetaInfo.LastEntryId),
+		zap.Int64("finalSize", recoverySegMetaInfo.Size))
+
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "recover_from_in_progress", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "recover_from_in_progress", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "recover_from_in_progress", "success").Observe(float64(recoveryDuration.Milliseconds()))
 	return updateMetaErr
 }
 
@@ -832,41 +1010,104 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	segmentIdStr := fmt.Sprintf("%d", s.segmentId)
+
+	logger.Ctx(ctx).Info("Starting segment compaction from Completed to Sealed",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId))
+
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
+		logger.Ctx(ctx).Info("Local storage detected, skipping compaction (not yet implemented)",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 		// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
 		return nil
 	}
 	currentSegmentMeta := s.GetMetadata(ctx)
+
+	logger.Ctx(ctx).Info("Validating segment state for compaction",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("currentState", currentSegmentMeta.State.String()),
+		zap.Int64("currentLastEntryId", currentSegmentMeta.LastEntryId),
+		zap.Int64("currentSize", currentSegmentMeta.Size))
+
 	if currentSegmentMeta.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
-	if s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
+	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
+		logger.Ctx(ctx).Info("Recovery or compact operation already in progress, skipping compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 		return nil
 	}
-	defer s.doingRecoveryOrCompact.Store(false)
+	defer func() {
+		s.doingRecoveryOrCompact.Store(false)
+		logger.Ctx(ctx).Info("Compaction operation completed, released operation lock",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+	}()
 
 	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get quorum info during compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
 		return err
 	}
 	// choose on LogStore to compaction
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration for compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("quorumId", quorumInfo.Id),
+			zap.Int("nodeCount", len(quorumInfo.Nodes)))
 		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("targetNode", quorumInfo.Nodes[0]),
+			zap.Error(err))
 		return err
 	}
 	// wait compaction success
 	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId))
 	compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
 	if compactErr != nil {
+		logger.Ctx(ctx).Warn("Segment compaction operation failed",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(compactErr))
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return compactErr
 	}
+
+	logger.Ctx(ctx).Info("Segment compaction completed, updating metadata",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("compactedLastEntryId", compactSegMetaInfo.LastEntryId),
+		zap.Int64("compactedSize", compactSegMetaInfo.Size),
+		zap.Int64("completionTime", compactSegMetaInfo.CompletionTime),
+		zap.Int("entryOffsetCount", len(compactSegMetaInfo.EntryOffset)),
+		zap.Int("fragmentOffsetCount", len(compactSegMetaInfo.FragmentOffset)))
+
 	// update segment state and meta
 	newSegmentMeta := currentSegmentMeta.CloneVT()
 	newSegmentMeta.State = proto.SegmentState_Sealed
@@ -876,10 +1117,41 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	newSegmentMeta.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
 	newSegmentMeta.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	if updateMetaErr != nil {
+		logger.Ctx(ctx).Warn("Failed to update segment metadata after compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(updateMetaErr))
+	} else {
+		logger.Ctx(ctx).Info("Successfully updated segment metadata after compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+	}
+
 	logger.Ctx(ctx).Info("finish compact segment to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
 	// update segmentHandle meta cache
-	_ = s.RefreshAndGetMetadata(ctx)
+	refreshErr := s.RefreshAndGetMetadata(ctx)
+	if refreshErr != nil {
+		logger.Ctx(ctx).Warn("Failed to refresh segment metadata cache after compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(refreshErr))
+	}
+
+	compactionDuration := time.Since(start)
+	logger.Ctx(ctx).Info("Segment compaction operation completed successfully",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Duration("totalDuration", compactionDuration),
+		zap.Int64("finalLastEntryId", compactSegMetaInfo.LastEntryId),
+		zap.Int64("finalSize", compactSegMetaInfo.Size),
+		zap.String("finalState", "Sealed"))
+
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, segmentIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
 	return updateMetaErr
 }

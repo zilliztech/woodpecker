@@ -55,6 +55,11 @@ func NewSegmentCleanupManager(metadata meta.MetadataProvider, clientPool client.
 
 // CleanupSegment sends cleanup requests to all nodes in the quorum
 func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName string, logId int64, segmentId int64) error {
+	logger.Ctx(ctx).Info("Starting segment cleanup operation",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId))
+
 	// Generate cleanup task ID
 	cleanupKey := fmt.Sprintf("%d-%d", logId, segmentId)
 
@@ -72,11 +77,22 @@ func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName 
 	s.inProgressCleanups[cleanupKey] = true
 	s.cleanupMutex.Unlock()
 
+	logger.Ctx(ctx).Info("Segment cleanup task registered and started",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("cleanupKey", cleanupKey))
+
 	// Ensure cleanup in-progress flag is removed after completion
 	defer func() {
 		s.cleanupMutex.Lock()
 		delete(s.inProgressCleanups, cleanupKey)
 		s.cleanupMutex.Unlock()
+		logger.Ctx(ctx).Info("Segment cleanup task deregistered",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId),
+			zap.String("cleanupKey", cleanupKey))
 	}()
 
 	// 1. Check if segment already has cleanup status
@@ -99,6 +115,14 @@ func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName 
 			"127.0.0.1",
 		},
 	}
+
+	logger.Ctx(ctx).Info("Quorum configuration loaded for segment cleanup",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int64("quorumId", quorum.Id),
+		zap.Strings("nodes", quorum.Nodes),
+		zap.Bool("hasExistingStatus", existingStatus != nil))
 
 	// Handle different logic based on whether cleanup status exists
 	if existingStatus != nil {
@@ -124,10 +148,20 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 		deleteSegMetaErr := s.metadata.DeleteSegmentMetadata(ctx, logName, segmentId)
 		if deleteSegMetaErr != nil && !werr.ErrSegmentNotFound.Is(deleteSegMetaErr) {
 			logger.Ctx(ctx).Warn("failed to clean truncated segment metadata", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteSegMetaErr))
+		} else {
+			logger.Ctx(ctx).Info("Successfully deleted segment metadata after cleanup completion",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segmentId))
 		}
 		deleteCleanSegStatusErr := s.metadata.DeleteSegmentCleanupStatus(ctx, logId, segmentId)
 		if deleteCleanSegStatusErr != nil {
 			logger.Ctx(ctx).Warn("failed to clean truncated segment clean status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteCleanSegStatusErr))
+		} else {
+			logger.Ctx(ctx).Info("Successfully deleted segment cleanup status after completion",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segmentId))
 		}
 		return nil
 	}
@@ -148,12 +182,29 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 	status.State = proto.SegmentCleanupState_CLEANUP_IN_PROGRESS
 	status.LastUpdateTime = uint64(time.Now().UnixMilli())
 
+	// Count nodes that need cleanup
+	nodesToCleanup := 0
+	nodesCompleted := 0
 	// Ensure status includes all required nodes (in case quorum node configuration has changed)
 	for _, nodeAddress := range quorum.Nodes {
 		if _, exists := status.QuorumCleanupStatus[nodeAddress]; !exists {
 			status.QuorumCleanupStatus[nodeAddress] = false
+			nodesToCleanup++
+		} else if status.QuorumCleanupStatus[nodeAddress] {
+			nodesCompleted++
+		} else {
+			nodesToCleanup++
 		}
 	}
+
+	logger.Ctx(ctx).Info("Resuming segment cleanup with existing status",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int("totalNodes", len(quorum.Nodes)),
+		zap.Int("nodesCompleted", nodesCompleted),
+		zap.Int("nodesToCleanup", nodesToCleanup),
+		zap.String("previousState", status.State.String()))
 
 	// Update status
 	err := s.metadata.UpdateSegmentCleanupStatus(ctx, status)
@@ -161,6 +212,11 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 		logger.Ctx(ctx).Warn("Failed to update segment cleanup status", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return err
 	}
+
+	logger.Ctx(ctx).Info("Successfully updated segment cleanup status to IN_PROGRESS",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId))
 
 	// Continue processing remaining nodes
 	return s.continueCleanupForRemainingNodes(ctx, logName, logId, segmentId, quorum, status)
@@ -175,7 +231,7 @@ func (s *segmentCleanupManagerImpl) createNewCleanupTask(
 	quorum *proto.QuorumInfo,
 ) error {
 	// For cases where no cleanup status is found, create a new cleanup task
-	logger.Ctx(ctx).Debug("No existing cleanup status found, start creating new cleanup task", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
+	logger.Ctx(ctx).Info("No existing cleanup status found, start creating new cleanup task", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId))
 
 	// Create cleanup status record
 	cleanupStatus := &proto.SegmentCleanupStatus{
@@ -193,11 +249,30 @@ func (s *segmentCleanupManagerImpl) createNewCleanupTask(
 		cleanupStatus.QuorumCleanupStatus[nodeAddress] = false
 	}
 
+	logger.Ctx(ctx).Info("Created new segment cleanup status record",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int64("quorumId", quorum.Id),
+		zap.Int("totalNodes", len(quorum.Nodes)),
+		zap.Strings("nodes", quorum.Nodes),
+		zap.Uint64("startTime", cleanupStatus.StartTime))
+
 	// Store initial cleanup status
 	err := s.metadata.CreateSegmentCleanupStatus(ctx, cleanupStatus)
 	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to create segment cleanup status in metadata",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId),
+			zap.Error(err))
 		return werr.ErrTruncateLog.WithCauseErr(err)
 	}
+
+	logger.Ctx(ctx).Info("Successfully created segment cleanup status in metadata",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId))
 
 	// Send cleanup requests to all nodes in quorum and wait for completion
 	return s.sendCleanupRequestsToQuorumNodes(ctx, logName, logId, segmentId, quorum)
@@ -258,13 +333,25 @@ func (s *segmentCleanupManagerImpl) continueCleanupForRemainingNodes(ctx context
 	var errorsMutex sync.Mutex
 	errors := make([]error, 0)
 
+	// Count nodes to process
+	nodesToProcess := 0
+	nodesAlreadyCompleted := 0
+
 	// Only send cleanup requests to nodes that haven't completed yet
 	for _, nodeAddress := range quorum.Nodes {
 		// Check if node has already completed cleanup
 		if completed, exists := status.QuorumCleanupStatus[nodeAddress]; exists && completed {
-			logger.Ctx(ctx).Debug("Skipping node that already completed cleanup", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.String("node", nodeAddress))
+			logger.Ctx(ctx).Info("Skipping node that already completed cleanup", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.String("node", nodeAddress))
+			nodesAlreadyCompleted++
 			continue
 		}
+
+		nodesToProcess++
+		logger.Ctx(ctx).Info("Scheduling cleanup for remaining node",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId),
+			zap.String("node", nodeAddress))
 
 		wg.Add(1)
 		go func(nodeAddress string) {
@@ -279,8 +366,23 @@ func (s *segmentCleanupManagerImpl) continueCleanupForRemainingNodes(ctx context
 		}(nodeAddress)
 	}
 
+	logger.Ctx(ctx).Info("Cleanup continuation summary",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int("totalNodes", len(quorum.Nodes)),
+		zap.Int("nodesAlreadyCompleted", nodesAlreadyCompleted),
+		zap.Int("nodesToProcess", nodesToProcess))
+
 	// Wait for all cleanup requests to complete
 	wg.Wait()
+
+	logger.Ctx(ctx).Info("All remaining node cleanup requests completed",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int("processedNodes", nodesToProcess),
+		zap.Int("errorCount", len(errors)))
 
 	// Check cleanup status and update final state
 	finalStatus, err := s.updateFinalCleanupStatus(ctx, logId, segmentId)
@@ -307,7 +409,12 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 	nodeAddress string,
 	statusUpdateMutex *sync.Mutex,
 ) error {
-	logger.Ctx(ctx).Debug("Sending cleanup request to node", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.String("node", nodeAddress))
+	logger.Ctx(ctx).Info("Starting cleanup request to node",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("node", nodeAddress),
+		zap.Int64("quorumId", quorumId))
 
 	// Get node client
 	logStoreCli, err := s.clientPool.GetLogStoreClient(nodeAddress)
@@ -319,6 +426,12 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 		s.processCleanupResult(ctx, logId, segmentId, quorumId, nodeAddress, false, err.Error())
 		return err
 	}
+
+	logger.Ctx(ctx).Info("Successfully obtained logstore client, sending cleanup request",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("node", nodeAddress))
 
 	// Use the dedicated SegmentClean interface to clean up the truncated segment
 	// The flag parameter specifies the type of cleanup operation, using 0 here to clean truncated segments
@@ -333,6 +446,13 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 		return err
 	}
 
+	logger.Ctx(ctx).Info("Successfully completed segment cleanup on node",
+		zap.String("logName", logName),
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("node", nodeAddress),
+		zap.Int("cleanupFlag", 0))
+
 	// Process successful result, using mutex to protect status updates
 	statusUpdateMutex.Lock()
 	defer statusUpdateMutex.Unlock()
@@ -343,6 +463,13 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 // processCleanupResult processes the cleanup result from a single node
 // Note: Before calling this method, the caller should have acquired the status update mutex
 func (s *segmentCleanupManagerImpl) processCleanupResult(ctx context.Context, logId int64, segmentId int64, quorumId int64, nodeAddress string, success bool, errorMsg string) error {
+	logger.Ctx(ctx).Info("Processing cleanup result from node",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("node", nodeAddress),
+		zap.Bool("success", success),
+		zap.String("errorMsg", errorMsg))
+
 	// 1. Get current cleanup status
 	status, err := s.metadata.GetSegmentCleanupStatus(ctx, logId, segmentId)
 	if err != nil {
@@ -362,8 +489,16 @@ func (s *segmentCleanupManagerImpl) processCleanupResult(ctx context.Context, lo
 	}
 
 	// 2. Update node cleanup status
+	previousStatus := status.QuorumCleanupStatus[nodeAddress]
 	status.QuorumCleanupStatus[nodeAddress] = success
 	status.LastUpdateTime = uint64(time.Now().UnixMilli())
+
+	logger.Ctx(ctx).Info("Updated node cleanup status",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("node", nodeAddress),
+		zap.Bool("previousStatus", previousStatus),
+		zap.Bool("newStatus", success))
 
 	// 3. If cleanup failed, record error message
 	if !success && (status.ErrorMessage == "" || len(status.ErrorMessage) < 100) {
@@ -378,11 +513,23 @@ func (s *segmentCleanupManagerImpl) processCleanupResult(ctx context.Context, lo
 	// 4. Check if all nodes have completed cleanup
 	allNodesResponded := true
 	allSuccess := true
+	successCount := 0
+	totalNodes := len(status.QuorumCleanupStatus)
 	for _, nodeSuccess := range status.QuorumCleanupStatus {
-		if !nodeSuccess {
+		if nodeSuccess {
+			successCount++
+		} else {
 			allSuccess = false
 		}
 	}
+
+	logger.Ctx(ctx).Info("Cleanup progress summary",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.Int("successCount", successCount),
+		zap.Int("totalNodes", totalNodes),
+		zap.Bool("allSuccess", allSuccess),
+		zap.Bool("allNodesResponded", allNodesResponded))
 
 	// 5. Update status
 	// Only set state to CLEANUP_COMPLETED when all nodes have successfully completed cleanup
@@ -405,7 +552,21 @@ func (s *segmentCleanupManagerImpl) processCleanupResult(ctx context.Context, lo
 	}
 
 	// 6. Store updated cleanup status
-	return s.metadata.UpdateSegmentCleanupStatus(ctx, status)
+	err = s.metadata.UpdateSegmentCleanupStatus(ctx, status)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to update segment cleanup status in metadata",
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId),
+			zap.Error(err))
+		return err
+	}
+
+	logger.Ctx(ctx).Info("Successfully updated segment cleanup status in metadata",
+		zap.Int64("logId", logId),
+		zap.Int64("segmentId", segmentId),
+		zap.String("currentState", status.State.String()))
+
+	return nil
 }
 
 // updateFinalCleanupStatus updates the final cleanup status and returns the final state

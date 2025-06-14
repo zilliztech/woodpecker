@@ -19,10 +19,11 @@ package segment
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -131,6 +132,8 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	op.resultChannels[serverIndex] = syncedResultCh
 	// order request
 	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), syncedResultCh)
+
+	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
 	go op.receivedAckCallback(ctx, startRequestTime, entryId, syncedResultCh, err, serverIndex)
 }

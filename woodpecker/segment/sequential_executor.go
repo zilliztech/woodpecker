@@ -55,7 +55,7 @@ func (se *SequentialExecutor) Start(ctx context.Context) {
 	}
 
 	se.started = true
-	logger.Ctx(ctx).Debug("start sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
+	logger.Ctx(ctx).Info("start sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 	go se.worker()
 }
 
@@ -104,11 +104,11 @@ func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
 
 // Stop stops the sequential append executor
 func (se *SequentialExecutor) Stop(ctx context.Context) {
-	logger.Ctx(ctx).Debug("try to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
+	logger.Ctx(ctx).Info("try to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 
 	se.mu.Lock()
 	if se.closed {
-		logger.Ctx(ctx).Debug("sequential executor already stopped, skip", zap.String("inst", fmt.Sprintf("%p", se)))
+		logger.Ctx(ctx).Info("sequential executor already stopped, skip", zap.String("inst", fmt.Sprintf("%p", se)))
 		se.mu.Unlock()
 		return
 	}
@@ -118,5 +118,5 @@ func (se *SequentialExecutor) Stop(ctx context.Context) {
 
 	// Wait for all operations to complete
 	se.wg.Wait()
-	logger.Ctx(ctx).Debug("finish to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
+	logger.Ctx(ctx).Info("finish to stop sequential executor", zap.String("inst", fmt.Sprintf("%p", se)))
 }

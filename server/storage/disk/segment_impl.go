@@ -1145,7 +1145,7 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
-				logger.Ctx(ctx).Debug("Successfully deleted fragment file",
+				logger.Ctx(ctx).Info("Successfully deleted fragment file",
 					zap.String("fragmentPath", fragmentPath))
 				deletedCount++
 			}
