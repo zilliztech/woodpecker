@@ -398,6 +398,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int64) ([]*processor.SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
+	logger.Ctx(ctx).Info("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("size", size))
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -421,6 +422,7 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int6
 	if err != nil {
 		return nil, err
 	}
+	logger.Ctx(ctx).Info("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("size", size), zap.Int("count", len(segmentEntryList)))
 	return segmentEntryList, nil
 }
 

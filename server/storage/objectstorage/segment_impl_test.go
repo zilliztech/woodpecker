@@ -1512,12 +1512,12 @@ func TestPrepareMultiFragmentDataIfNecessary_EntriesExceedMaxSize(t *testing.T) 
 	assert.Equal(t, 2, len(partitionFirstEntryIds))
 
 	// First partition should have first entry only
-	assert.Equal(t, 1, len(partitions[0]))
+	assert.Equal(t, 2, len(partitions[0]))
 	assert.Equal(t, int64(0), partitionFirstEntryIds[0])
 
 	// Second partition should have remaining entries
-	assert.Equal(t, 2, len(partitions[1]))
-	assert.Equal(t, int64(1), partitionFirstEntryIds[1])
+	assert.Equal(t, 1, len(partitions[1]))
+	assert.Equal(t, int64(2), partitionFirstEntryIds[1])
 }
 
 func TestPrepareMultiFragmentDataIfNecessary_SingleLargeEntry(t *testing.T) {
@@ -1563,24 +1563,16 @@ func TestPrepareMultiFragmentDataIfNecessary_MultiplePartitions(t *testing.T) {
 	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return four partitions
-	assert.Equal(t, 4, len(partitions))
-	assert.Equal(t, 4, len(partitionFirstEntryIds))
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
 
-	// First partition: 60 bytes
-	assert.Equal(t, 1, len(partitions[0]))
+	// First partition: 110 bytes
+	assert.Equal(t, 2, len(partitions[0]))
 	assert.Equal(t, int64(50), partitionFirstEntryIds[0])
 
-	// Second partition: 50 + 30 = 80 bytes
-	assert.Equal(t, 2, len(partitions[1]))
-	assert.Equal(t, int64(51), partitionFirstEntryIds[1])
-
-	// Third partition: 40 bytes
-	assert.Equal(t, 1, len(partitions[2]))
-	assert.Equal(t, int64(53), partitionFirstEntryIds[2])
-
-	// Fourth partition: 80 bytes
-	assert.Equal(t, 1, len(partitions[3]))
-	assert.Equal(t, int64(54), partitionFirstEntryIds[3])
+	// Second partition: 30 + 40 + 80 = 150 bytes
+	assert.Equal(t, 3, len(partitions[1]))
+	assert.Equal(t, int64(52), partitionFirstEntryIds[1])
 }
 
 func TestPrepareMultiFragmentDataIfNecessary_ZeroMaxFlushSize(t *testing.T) {
@@ -1620,35 +1612,32 @@ func TestPrepareMultiFragmentDataIfNecessary_VaryingSizes(t *testing.T) {
 		{EntryId: 1000, Data: make([]byte, 30), NotifyChan: nil}, // 30 bytes
 		{EntryId: 1001, Data: make([]byte, 40), NotifyChan: nil}, // 40 bytes, total 70
 		{EntryId: 1002, Data: make([]byte, 50), NotifyChan: nil}, // 50 bytes, total 120 > 100
+
 		{EntryId: 1003, Data: make([]byte, 20), NotifyChan: nil}, // 20 bytes
-		{EntryId: 1004, Data: make([]byte, 25), NotifyChan: nil}, // 25 bytes, total 95
-		{EntryId: 1005, Data: make([]byte, 10), NotifyChan: nil}, // 10 bytes, total 105 > 100
+		{EntryId: 1004, Data: make([]byte, 25), NotifyChan: nil}, // 25 bytes, total 45
+		{EntryId: 1005, Data: make([]byte, 10), NotifyChan: nil}, // 10 bytes, total 15 < 100, but still needs to be in a separate partition for these rest entries
 	}
 	toFlushDataFirstEntryId := int64(1000)
 
 	partitions, partitionFirstEntryIds, _ := segment.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 
 	// Should return three partitions
-	assert.Equal(t, 3, len(partitions))
-	assert.Equal(t, 3, len(partitionFirstEntryIds))
+	assert.Equal(t, 2, len(partitions))
+	assert.Equal(t, 2, len(partitionFirstEntryIds))
 
-	// First partition: 30 + 40 = 70 bytes
-	assert.Equal(t, 2, len(partitions[0]))
+	// First partition: 30 + 40 + 50 = 120 bytes
+	assert.Equal(t, 3, len(partitions[0]))
 	assert.Equal(t, 30, len(partitions[0][0].Data))
 	assert.Equal(t, 40, len(partitions[0][1].Data))
+	assert.Equal(t, 50, len(partitions[0][2].Data))
 	assert.Equal(t, int64(1000), partitionFirstEntryIds[0])
 
-	// Second partition: 50 + 20 + 25 = 95 bytes
+	// Second partition:  20 + 25 + 10 = 55 bytes
 	assert.Equal(t, 3, len(partitions[1]))
-	assert.Equal(t, 50, len(partitions[1][0].Data))
-	assert.Equal(t, 20, len(partitions[1][1].Data))
-	assert.Equal(t, 25, len(partitions[1][2].Data))
-	assert.Equal(t, int64(1002), partitionFirstEntryIds[1])
-
-	// Third partition: 10 bytes
-	assert.Equal(t, 1, len(partitions[2]))
-	assert.Equal(t, 10, len(partitions[2][0].Data))
-	assert.Equal(t, int64(1005), partitionFirstEntryIds[2])
+	assert.Equal(t, 20, len(partitions[1][0].Data))
+	assert.Equal(t, 25, len(partitions[1][1].Data))
+	assert.Equal(t, 10, len(partitions[1][2].Data))
+	assert.Equal(t, int64(1003), partitionFirstEntryIds[1])
 }
 
 func TestPrepareMultiFragmentDataIfNecessary_EntryIdCalculation(t *testing.T) {

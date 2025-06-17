@@ -27,7 +27,7 @@ woodpecker:
       queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
       maxRetries: 3 # Maximum number of retries for segment append operations
     segmentRollingPolicy:
-      maxSize: 128000000 # Maximum entries count of a segment, default is 128M
+      maxSize: 2000000000 # Maximum entries count of a segment, default is 128M
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
@@ -37,11 +37,11 @@ woodpecker:
       maxInterval: 200 # Maximum interval between two sync operations in milliseconds
       maxIntervalForLocalStorage: 10 # Maximum interval between sync operations for local storage backend, in milliseconds
       maxEntries: 10000 # Maximum entries number of write buffer
-      maxBytes: 32000000 # Maximum size of write buffer in bytes
+      maxBytes: 128000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 8000000 # Maximum size of a fragment in bytes to flush, default is 8M
-      maxFlushThreads: 4 # Maximum number of threads to flush data
+      maxFlushThreads: 32 # Maximum number of threads to flush data
     segmentCompactionPolicy:
       maxBytes: 8000000 # Maximum size of a merged file in bytes after compact, default is 8M
   storage:

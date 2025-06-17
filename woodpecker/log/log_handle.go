@@ -160,6 +160,7 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.Segme
 	return result, err
 }
 
+// TODO fence last two segment if necessary
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogWriter")
 	defer sp.End()

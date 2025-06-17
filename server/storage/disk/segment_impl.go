@@ -372,12 +372,14 @@ func (s *DiskSegmentImpl) getToFlushData(ctx context.Context, currentBuffer *cac
 
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	dataSize := currentBuffer.DataSize.Load()
+	sequentialReadyDataSize := currentBuffer.SequentialReadyDataSize.Load()
 
 	// Check if there is data that needs to be flushed
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
 		logger.Ctx(ctx).Debug("Call Sync, expected id not received yet, skip ... ",
 			zap.String("logFileDir", s.logFileDir),
 			zap.Int64("bufferSize", dataSize),
+			zap.Int64("sequentialReadyDataSize", sequentialReadyDataSize),
 			zap.Int64("expectedNextEntryId", expectedNextEntryId))
 		return nil, -1
 	}

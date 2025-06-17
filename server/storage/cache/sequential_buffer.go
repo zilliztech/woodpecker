@@ -44,9 +44,10 @@ type SequentialBuffer struct {
 	logId     int64
 	segmentId int64
 
-	Entries    []*BufferEntry // entries with data and notification channels
-	MaxEntries int64          // max amount of entries
-	DataSize   atomic.Int64   // data bytes size of entries
+	Entries                 []*BufferEntry // entries with data and notification channels
+	MaxEntries              int64          // max amount of entries
+	DataSize                atomic.Int64   // total data bytes size of entries
+	SequentialReadyDataSize atomic.Int64   // The size of contiguous entries from the beginning, indicating the size of entries that can be flushed
 
 	FirstEntryId        int64
 	ExpectedNextEntryId atomic.Int64
@@ -107,6 +108,8 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 	for addedId := entryId; addedId < b.FirstEntryId+b.MaxEntries; addedId++ {
 		if b.Entries[addedId-b.FirstEntryId] != nil && addedId == b.ExpectedNextEntryId.Load() {
 			b.ExpectedNextEntryId.Add(1)
+			bufferEntry := b.Entries[addedId-b.FirstEntryId]
+			b.SequentialReadyDataSize.Add(int64(len(bufferEntry.Data)))
 			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId), fmt.Sprintf("%d", b.segmentId)).Dec()
 		} else {
 			break
@@ -323,6 +326,7 @@ func (b *SequentialBuffer) Reset(ctx context.Context) {
 
 	b.Entries = make([]*BufferEntry, b.MaxEntries)
 	b.DataSize.Store(0)
+	b.SequentialReadyDataSize.Store(0)
 	b.ExpectedNextEntryId.Store(b.FirstEntryId)
 }
 
