@@ -144,25 +144,40 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	logId := fmt.Sprintf("%d", f.logId)
 	segId := fmt.Sprintf("%d", f.segmentId)
 	if !f.dataLoaded {
-		return werr.ErrFragmentEmpty
+		logger.Ctx(ctx).Warn("should not flush a fragment without data", zap.String("fragmentKey", f.fragmentKey))
+		return werr.ErrFragmentNotLoaded.WithCauseErrMsg("should not flush a fragment without data")
 	}
 
 	if len(f.entriesData) == 0 {
-		return werr.ErrFragmentEmpty
+		logger.Ctx(ctx).Warn("should not flush an empty fragment", zap.String("fragmentKey", f.fragmentKey))
+		return werr.ErrFragmentEmpty.WithCauseErrMsg("should not flush an empty fragment")
 	}
 
 	fullDataReader, fullDataSize := serializeFragmentToReader(ctx, f)
 
-	// Upload
-	_, err := f.client.PutObject(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize), minio.PutObjectOptions{})
+	// Upload TODO minio must v20240510 or later
+	_, err := f.client.PutObjectIfNotMatch(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize))
 	if err != nil {
-		return fmt.Errorf("failed to put object: %w", err)
+		if werr.ErrSegmentFenced.Is(err) {
+			logger.Ctx(ctx).Info("fragment already fenced", zap.String("fragmentKey", f.fragmentKey))
+			return werr.ErrSegmentFenced.WithCauseErrMsg("fragment already fenced")
+		}
+		if werr.ErrFragmentAlreadyExists.Is(err) {
+			logger.Ctx(ctx).Info("fragment already uploaded", zap.String("fragmentKey", f.fragmentKey))
+			f.dataUploaded = true
+			return nil
+		}
+		logger.Ctx(ctx).Warn("failed to upload fragment", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
+		return err
 	}
+
 	cost := time.Now().Sub(start)
 	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
 	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
 	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(fullDataSize))
 	f.dataUploaded = true
+
+	// flush success
 	return nil
 }
 
@@ -179,7 +194,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return nil
 	}
 	if !f.dataUploaded {
-		return werr.ErrFragmentNotUploaded
+		logger.Ctx(ctx).Warn("should not load a fragment that has not been uploaded", zap.String("fragmentKey", f.fragmentKey))
+		return werr.ErrFragmentNotUploaded.WithCauseErrMsg("should not load a fragment that has not been uploaded")
 	}
 
 	start := time.Now()
@@ -187,7 +203,8 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	segId := fmt.Sprintf("%d", f.segmentId)
 	fragObjectReader, objDataSize, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get object: %w", err)
+		logger.Ctx(ctx).Warn("failed to get object", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
+		return err
 	}
 	defer fragObjectReader.Close()
 	f.lastModified = objLastModified
@@ -195,11 +212,13 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	// Read the entire object into memory
 	data, err := minioHandler.ReadObjectFull(ctx, fragObjectReader, objDataSize)
 	if err != nil || len(data) != int(objDataSize) {
-		return fmt.Errorf("failed to read object: %v", err)
+		logger.Ctx(ctx).Warn("failed to read object", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
+		return err
 	}
 
 	tmpFrag, deserializeErr := deserializeFragment(ctx, data, objDataSize)
 	if deserializeErr != nil {
+		logger.Ctx(ctx).Warn("failed to deserialize fragment", zap.String("fragmentKey", f.fragmentKey), zap.Error(deserializeErr))
 		return deserializeErr
 	}
 
@@ -233,7 +252,8 @@ func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
 	}
 	objInfo, err := f.client.StatObject(ctx, f.bucket, f.fragmentKey, minio.StatObjectOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("failed to get object: %w", err)
+		logger.Ctx(ctx).Warn("failed to get object stat", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
+		return 0, err
 	}
 	return objInfo.Size, nil
 }
@@ -275,10 +295,12 @@ func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, e
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if !f.dataLoaded {
+		logger.Ctx(ctx).Warn("fail to get entry from a fragment that is not loaded", zap.String("fragmentKey", f.fragmentKey), zap.Int64("entryId", entryId))
 		return nil, werr.ErrFragmentNotLoaded.WithCauseErrMsg(fmt.Sprintf("%s not loaded", f.fragmentKey))
 	}
 	relatedIdx := (entryId - f.firstEntryId) * 8
 	if relatedIdx+8 > int64(len(f.indexes)) {
+		logger.Ctx(ctx).Warn("entry not found", zap.String("fragmentKey", f.fragmentKey), zap.Int64("entryId", entryId))
 		return nil, werr.ErrEntryNotFound
 	}
 	// get entry offset and length
@@ -286,7 +308,7 @@ func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, e
 	entryLength := binary.BigEndian.Uint32(f.indexes[relatedIdx+4 : relatedIdx+8])
 	// copy entry data
 	if entryOffset+entryLength > uint32(len(f.entriesData)) {
-		logger.Ctx(ctx).Debug("Entry offset out of bounds, maybe file corrupted",
+		logger.Ctx(ctx).Warn("Entry offset out of bounds, maybe file corrupted",
 			zap.Uint32("entryOffset", entryOffset),
 			zap.Uint32("entryLength", entryLength),
 			zap.Int64("fragmentSize", int64(len(f.entriesData))))
@@ -387,21 +409,25 @@ func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64
 	// Read version (4 bytes)
 	var version uint64
 	if err := binary.Read(buf, binary.BigEndian, &version); err != nil {
+		logger.Ctx(ctx).Warn("failed to read version", zap.Error(err))
 		return nil, fmt.Errorf("failed to read version: %v", err)
 	}
 	if version != FragmentVersion {
-		return nil, fmt.Errorf("unsupported version: %d", version)
+		logger.Ctx(ctx).Warn("unsupported version", zap.Uint64("version", version))
+		return nil, werr.ErrFragmentVersion.WithCauseErrMsg(fmt.Sprintf("unsupported version: %d", version))
 	}
 
 	// Read firstEntryID (8 bytes)
 	var firstEntryID uint64
 	if err := binary.Read(buf, binary.BigEndian, &firstEntryID); err != nil {
+		logger.Ctx(ctx).Warn("failed to read firstEntryID", zap.Error(err))
 		return nil, fmt.Errorf("failed to read firstEntryID: %v", err)
 	}
 
 	// Read lastEntryId (8 bytes)
 	var lastEntryId uint64
 	if err := binary.Read(buf, binary.BigEndian, &lastEntryId); err != nil {
+		logger.Ctx(ctx).Warn("failed to read lastEntryID", zap.Error(err))
 		return nil, fmt.Errorf("failed to read lastEntryId: %v", err)
 	}
 
@@ -410,6 +436,7 @@ func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64
 	indexesTmp := make([]byte, numIndexes*8)
 	// Read indexes (each index is 8 bytes)
 	if err := binary.Read(buf, binary.BigEndian, &indexesTmp); err != nil {
+		logger.Ctx(ctx).Warn("failed to read index", zap.Error(err))
 		return nil, fmt.Errorf("failed to read index %v", err)
 	}
 	// Read entriesData (remaining data)

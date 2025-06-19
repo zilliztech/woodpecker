@@ -88,7 +88,8 @@ func TestNewROSegmentImpl(t *testing.T) {
 // TestAppendAsyncReachBufferSize tests the AppendAsync function when the buffer size is reached.
 func TestAppendAsyncReachBufferSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	//client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -137,7 +138,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 
 func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -185,7 +186,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -314,7 +315,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -390,7 +391,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 // TestAppendAsyncDisorderWithinBounds test appends entries out of order, but within bounds.
 func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -438,7 +439,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 
 func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -468,7 +469,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 			// 10-12 should async write buffer fail
 			assert.Equal(t, int64(-1), assignId)
 			assert.Error(t, err)
-			assert.True(t, werr.ErrInvalidEntryId.Is(err))
+			assert.True(t, werr.ErrWriteBufferFull.Is(err))
 			assert.NotNil(t, ch)
 		} else {
 			// 0-7 should async write buffer success
@@ -500,7 +501,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -668,7 +669,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 // TestSync tests the Sync function.
 func TestSync(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -724,7 +725,7 @@ func TestSync(t *testing.T) {
 // TestClose tests the Close function.
 func TestClose(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -830,7 +831,7 @@ func TestMerge(t *testing.T) {
 	listChan := make(chan minio.ObjectInfo)
 	close(listChan)
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
-	client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test fragments
@@ -1872,7 +1873,7 @@ func TestWaitIfFlushingBufferSizeExceeded(t *testing.T) {
 		segment.flushingBufferSize.Store(500) // Set to 500, which is less than 1000
 
 		start := time.Now()
-		segment.waitIfFlushingBufferSizeExceeded(ctx)
+		segment.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		duration := time.Since(start)
 
 		// Should return immediately, so duration should be very small
@@ -1889,7 +1890,7 @@ func TestWaitIfFlushingBufferSizeExceeded(t *testing.T) {
 		start := time.Now()
 		go func() {
 			defer wg.Done()
-			segment.waitIfFlushingBufferSizeExceeded(ctx)
+			segment.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		}()
 
 		// Wait a bit to ensure the method is waiting
@@ -1918,7 +1919,7 @@ func TestWaitIfFlushingBufferSizeExceeded(t *testing.T) {
 		start := time.Now()
 		go func() {
 			defer wg.Done()
-			segment.waitIfFlushingBufferSizeExceeded(ctx)
+			segment.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		}()
 
 		// Wait a bit then cancel the context
@@ -1943,7 +1944,7 @@ func TestWaitIfFlushingBufferSizeExceeded(t *testing.T) {
 		start := time.Now()
 		go func() {
 			defer wg.Done()
-			segment.waitIfFlushingBufferSizeExceeded(ctx)
+			segment.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		}()
 
 		// Wait a bit then close the segment

@@ -33,23 +33,28 @@ type ResultChannel interface {
 	// GetIdentifier returns the unique identifier of this result channel.
 	GetIdentifier() string
 	// SendResult sends a result to the channel.
-	SendResult(ctx context.Context, result int64) error
+	SendResult(ctx context.Context, result *AppendResult) error
 	// Close closes the channel.
 	Close(ctx context.Context) error
 	// IsClosed checks if the channel is closed.
 	IsClosed() bool
 }
 
+type AppendResult struct {
+	syncedId int64
+	err      error
+}
+
 // LocalResultChannel is the local implementation that directly wraps a Go channel.
 type LocalResultChannel struct {
 	identifier string
-	ch         chan<- int64
+	ch         chan<- *AppendResult
 	closed     bool
 	mu         sync.RWMutex
 }
 
 // NewLocalResultChannel creates a local result channel.
-func NewLocalResultChannel(identifier string, ch chan<- int64) *LocalResultChannel {
+func NewLocalResultChannel(identifier string, ch chan<- *AppendResult) *LocalResultChannel {
 	return &LocalResultChannel{
 		identifier: identifier,
 		ch:         ch,
@@ -61,7 +66,7 @@ func (l *LocalResultChannel) GetIdentifier() string {
 	return l.identifier
 }
 
-func (l *LocalResultChannel) SendResult(ctx context.Context, result int64) error {
+func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -73,13 +78,16 @@ func (l *LocalResultChannel) SendResult(ctx context.Context, result int64) error
 	case l.ch <- result:
 		logger.Ctx(ctx).Debug("sent result to local channel",
 			zap.String("identifier", l.identifier),
-			zap.Int64("result", result))
+			zap.Int64("syncedId", result.syncedId),
+			zap.Error(result.err))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 		logger.Ctx(ctx).Warn("local channel is full or closed",
-			zap.String("identifier", l.identifier))
+			zap.String("identifier", l.identifier),
+			zap.Int64("syncedId", result.syncedId),
+			zap.Error(result.err))
 		return fmt.Errorf("local channel %s is full or closed", l.identifier)
 	}
 }
@@ -107,8 +115,8 @@ func (l *LocalResultChannel) IsClosed() bool {
 // This design is more flexible and can adapt to different remote communication methods (gRPC stream, HTTP, message queue, etc.).
 type RemoteResultChannel struct {
 	identifier   string
-	sendFunc     func(ctx context.Context, identifier string, result int64) error // Callback function to send results.
-	closeFunc    func(ctx context.Context, identifier string) error               // Callback function to close the channel.
+	sendFunc     func(ctx context.Context, identifier string, result *AppendResult) error // Callback function to send results.
+	closeFunc    func(ctx context.Context, identifier string) error                       // Callback function to close the channel.
 	closed       bool
 	mu           sync.RWMutex
 	lastActivity time.Time
@@ -117,7 +125,7 @@ type RemoteResultChannel struct {
 // RemoteResultChannelConfig is the configuration for a remote result channel.
 type RemoteResultChannelConfig struct {
 	Identifier string
-	SendFunc   func(ctx context.Context, identifier string, result int64) error
+	SendFunc   func(ctx context.Context, identifier string, result *AppendResult) error
 	CloseFunc  func(ctx context.Context, identifier string) error
 }
 
@@ -136,7 +144,7 @@ func (r *RemoteResultChannel) GetIdentifier() string {
 	return r.identifier
 }
 
-func (r *RemoteResultChannel) SendResult(ctx context.Context, result int64) error {
+func (r *RemoteResultChannel) SendResult(ctx context.Context, result *AppendResult) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -152,7 +160,7 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result int64) erro
 	if err := r.sendFunc(ctx, r.identifier, result); err != nil {
 		logger.Ctx(ctx).Warn("failed to send result to remote channel",
 			zap.String("identifier", r.identifier),
-			zap.Int64("result", result),
+			zap.Int64("syncedID", result.syncedId),
 			zap.Error(err))
 		return err
 	}
@@ -160,7 +168,8 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result int64) erro
 	r.lastActivity = time.Now()
 	logger.Ctx(ctx).Debug("sent result to remote channel",
 		zap.String("identifier", r.identifier),
-		zap.Int64("result", result))
+		zap.Int64("syncedID", result.syncedId),
+		zap.Error(result.err))
 
 	return nil
 }

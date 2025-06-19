@@ -93,7 +93,7 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 
 	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId >= b.FirstEntryId+b.MaxEntries {
-		return -1, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
+		return -1, werr.ErrWriteBufferFull.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	relatedIdx := entryId - b.FirstEntryId

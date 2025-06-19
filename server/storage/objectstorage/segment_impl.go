@@ -175,8 +175,8 @@ func (f *SegmentImpl) ack() {
 			} else {
 				// update flush state
 				result := task.flushFuture.Value()
-				flushedFirst, _ := result.target.GetFirstEntryId(context.TODO())
-				flushedLast, _ := result.target.GetLastEntryId(context.TODO())
+				flushedFirst, _ := result.target.GetFirstEntryId(context.TODO()) // always no error, because it's just created
+				flushedLast, _ := result.target.GetLastEntryId(context.TODO())   // always no error, because it's just created
 				flushedFragId := result.target.GetFragmentId()
 				if flushedLast >= 0 {
 					f.lastEntryID.Store(flushedLast)
@@ -245,6 +245,7 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 			// sync does not success
 			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
 			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("AppendAsync: found buffer full, but sync failed before append", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Error(err))
 			return entryId, err
 		}
 	}
@@ -324,7 +325,7 @@ type flushResult struct {
 	fragmentSize int64 // Size of the fragment for tracking flushing buffer size
 }
 
-func (f *SegmentImpl) waitIfFlushingBufferSizeExceeded(ctx context.Context) error {
+func (f *SegmentImpl) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
 	// Check if current flushing buffer size exceeds the maximum allowed buffer size
 	for {
 		currentFlushingSize := f.flushingBufferSize.Load()
@@ -414,6 +415,12 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 func (f *SegmentImpl) rollBufferUnsafe(ctx context.Context) (*cache.SequentialBuffer, []*cache.BufferEntry, int64, error) {
 	startTime := time.Now()
 
+	// wait available buffer size
+	waitBuffErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
+	if waitBuffErr != nil {
+		return nil, nil, -1, waitBuffErr
+	}
+
 	// get current buffer
 	currentBuffer := f.buffer.Load()
 
@@ -491,7 +498,7 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 		}
 
 		// first wait available space
-		waitErr := f.waitIfFlushingBufferSizeExceeded(ctx)
+		waitErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		if waitErr != nil {
 			// sync interrupted, fast fail and notify all pending append entries
 			f.fastFlushFailUnsafe(ctx, fragmentData)
@@ -519,6 +526,10 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
 				retry.Sleep(100*time.Millisecond),
 				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
+				retry.RetryErr(func(err error) bool {
+					// if it is not fenced error, retry
+					return !werr.ErrSegmentFenced.Is(err)
+				}),
 			)
 			if flushErr != nil {
 				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId), zap.Error(flushErr))
@@ -852,11 +863,16 @@ func searchFragment(entryId int64, list []*FragmentObject) (*FragmentObject, err
 
 // objectExists checks if an object exists in the MinIO bucket
 func (f *ROSegmentImpl) objectExists(ctx context.Context, objectKey string) (bool, error) {
-	_, err := f.client.StatObject(ctx, f.bucket, objectKey, minio.StatObjectOptions{})
+	info, err := f.client.StatObject(ctx, f.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil && minioHandler.IsObjectNotExists(err) {
+		return false, nil
+	}
+	if minioHandler.IsFencedObject(info) {
+		// it means the object is fenced out, no more fragment data
+		logger.Ctx(ctx).Debug("object is fenced out", zap.String("objectKey", objectKey))
+		return false, nil
+	}
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return false, nil
-		}
 		return false, err
 	}
 	return true, nil
@@ -930,6 +946,13 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 		if !strings.HasSuffix(objInfo.Key, ".frag") {
 			continue
 		}
+
+		if minioHandler.IsFencedObject(objInfo) {
+			// it means the object is fenced out, no more fragment data
+			logger.Ctx(ctx).Info("object is fenced out", zap.String("objectKey", objInfo.Key))
+			break
+		}
+
 		fragmentId, isMerged, parseErr := parseFragmentFilename(objInfo.Key)
 		if parseErr != nil {
 			logger.Ctx(ctx).Warn("Error parsing fragment filename",
