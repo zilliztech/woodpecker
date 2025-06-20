@@ -27,6 +27,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -134,7 +135,7 @@ func TestDiskSegmentImplWritePerformance(t *testing.T) {
 				batchSize := min(1, tc.writeCount-i)
 
 				// Save channel for each write operation
-				resultChannels := make([]<-chan int64, batchSize)
+				resultChannels := make([]channel.ResultChannel, batchSize)
 				entryIds := make([]int64, batchSize)
 
 				// Batch submit write requests
@@ -143,12 +144,12 @@ func TestDiskSegmentImplWritePerformance(t *testing.T) {
 					entryId := int64(i + j)
 					entryIds[j] = entryId
 
-					ch := make(chan int64, 1)
-					_, err := segmentImpl.AppendAsync(ctx, entryId, dataSet[i+j], ch)
+					rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+					_, err := segmentImpl.AppendAsync(ctx, entryId, dataSet[i+j], rc)
 					if err != nil {
 						t.Fatalf("Write failed: %v", err)
 					}
-					resultChannels[j] = ch
+					resultChannels[j] = rc
 
 					writeTime += time.Since(writeStart)
 					totalBytesWritten += len(dataSet[i+j])
@@ -180,15 +181,12 @@ func TestDiskSegmentImplWritePerformance(t *testing.T) {
 				}
 
 				// Wait for all writes to complete
-				for j, ch := range resultChannels {
-					select {
-					case result := <-ch:
-						if result < 0 {
-							t.Fatalf("Write did not complete successfully: id=%d", entryIds[j])
-						}
-					case <-time.After(5 * time.Second):
-						t.Fatalf("Write timeout: id=%d", entryIds[j])
-					}
+				for _, rc := range resultChannels {
+					subCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					result, readErr := rc.ReadResult(subCtx)
+					cancel()
+					assert.NoError(t, readErr)
+					assert.True(t, result.SyncedId >= 0)
 				}
 
 				// Report progress
@@ -291,7 +289,7 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 			// Generate random test data and store references for later validation
 			testData := make([][]byte, tc.entryCount)
 			entryIds := make([]int64, tc.entryCount)
-			resultChannels := make([]<-chan int64, tc.entryCount)
+			resultChannels := make([]channel.ResultChannel, tc.entryCount)
 
 			// Batch generate test data
 			for i := 0; i < tc.entryCount; i++ {
@@ -307,27 +305,22 @@ func TestDiskSegmentImplReadPerformance(t *testing.T) {
 				end := min(i+batchSize, tc.entryCount)
 				// Submit a batch of data
 				for j := i; j < end; j++ {
-					ch := make(chan int64, 1)
-					_, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j], ch)
+					rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryIds[j]))
+					_, err := segmentImpl.AppendAsync(ctx, entryIds[j], testData[j], rc)
 					if err != nil {
 						segmentImpl.Close(context.TODO())
 						t.Fatalf("Failed to write data: %v", err)
 					}
-					resultChannels[j] = ch
+					resultChannels[j] = rc
 				}
 
 				// Wait for this batch to complete
 				for j := i; j < end; j++ {
-					select {
-					case result := <-resultChannels[j]:
-						if result < 0 {
-							segmentImpl.Close(context.TODO())
-							t.Fatalf("Write did not complete successfully: %d", j)
-						}
-					case <-time.After(5 * time.Second):
-						segmentImpl.Close(context.TODO())
-						t.Fatalf("Write timeout: %d", j)
-					}
+					subCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					result, readErr := resultChannels[j].ReadResult(subCtx)
+					cancel()
+					assert.NoError(t, readErr)
+					assert.True(t, result.SyncedId >= 0)
 				}
 
 				t.Logf("Batch write progress: %d/%d data entries written", end, tc.entryCount)
@@ -544,7 +537,7 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 			// Process write operations
 			{
 				var pendingWrites []int
-				resultChannels := make([]<-chan int64, 0, writeOps)
+				resultChannels := make([]channel.ResultChannel, 0, writeOps)
 				entryIds := make([]int64, 0, writeOps)
 
 				// Find all write operation indices
@@ -569,13 +562,13 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 						maxEntryId++
 
 						writeStart := time.Now()
-						ch := make(chan int64, 1)
-						_, err := segmentImpl.AppendAsync(ctx, entryId, writeData[writeOpsCount], ch)
+						rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+						_, err := segmentImpl.AppendAsync(ctx, entryId, writeData[writeOpsCount], rc)
 						if err != nil {
 							t.Fatalf("Write failed: %v", err)
 						}
 
-						resultChannels = append(resultChannels, ch)
+						resultChannels = append(resultChannels, rc)
 						entryIds = append(entryIds, entryId)
 						writeOpsCount++
 						writeTime += time.Since(writeStart)
@@ -583,15 +576,12 @@ func TestDiskSegmentImplMixedPerformance(t *testing.T) {
 					}
 
 					// Wait for this batch of write operations to complete
-					for j, ch := range resultChannels[len(resultChannels)-batchSize:] {
-						select {
-						case result := <-ch:
-							if result < 0 {
-								t.Fatalf("Write did not complete successfully: %d", entryIds[len(entryIds)-batchSize+j])
-							}
-						case <-time.After(5 * time.Second):
-							t.Fatalf("Write timeout: %d", entryIds[len(entryIds)-batchSize+j])
-						}
+					for _, rc := range resultChannels[len(resultChannels)-batchSize:] {
+						subCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						result, readErr := rc.ReadResult(subCtx)
+						cancel()
+						assert.NoError(t, readErr)
+						assert.True(t, result.SyncedId >= 0)
 					}
 
 					// Execute Sync after every 10 writes

@@ -300,7 +300,7 @@ func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, e
 	}
 	relatedIdx := (entryId - f.firstEntryId) * 8
 	if relatedIdx+8 > int64(len(f.indexes)) {
-		logger.Ctx(ctx).Warn("entry not found", zap.String("fragmentKey", f.fragmentKey), zap.Int64("entryId", entryId))
+		logger.Ctx(ctx).Debug("entry not found", zap.String("fragmentKey", f.fragmentKey), zap.Int64("entryId", entryId))
 		return nil, werr.ErrEntryNotFound
 	}
 	// get entry offset and length

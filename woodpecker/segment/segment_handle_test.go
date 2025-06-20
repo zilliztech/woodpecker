@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/tracer"
@@ -96,8 +97,11 @@ func TestAppendAsync_Success(t *testing.T) {
 	go func(op2 *AppendOp) {
 		for i := 0; i < 5; i++ {
 			if len(appendOp.resultChannels) > 0 {
-				appendOp.resultChannels[0] <- 0
-				close(appendOp.resultChannels[0])
+				_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+					SyncedId: 0,
+					Err:      nil,
+				})
+				_ = appendOp.resultChannels[0].Close(context.Background())
 				return
 			}
 			time.Sleep(200 * time.Millisecond)
@@ -118,7 +122,7 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			SegmentId: 1,
 			EntryId:   int64(i),
 			Data:      []byte(fmt.Sprintf("test_%d", i)),
-		}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
+		}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -165,8 +169,11 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
 				appendOp := e.Value.(*AppendOp)
 				if len(appendOp.resultChannels) > 0 {
-					appendOp.resultChannels[0] <- appendOp.entryId
-					close(appendOp.resultChannels[0])
+					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						SyncedId: appendOp.entryId,
+						Err:      nil,
+					})
+					_ = appendOp.resultChannels[0].Close(context.Background())
 					processedCount++
 				}
 			}
@@ -193,14 +200,14 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
+			}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 		} else {
 			// 2 fail, and retry 3 times
 			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
 				SegmentId: 1,
 				EntryId:   int64(i),
 				Data:      []byte(fmt.Sprintf("test_%d", i)),
-			}, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), errors.New("test error"))
+			}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), errors.New("test error"))
 		}
 	}
 	cfg := &config.Configuration{
@@ -258,8 +265,11 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
 				appendOp := e.Value.(*AppendOp)
 				if len(appendOp.resultChannels) > 0 {
-					appendOp.resultChannels[0] <- appendOp.entryId
-					close(appendOp.resultChannels[0])
+					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						SyncedId: appendOp.entryId,
+						Err:      nil,
+					})
+					_ = appendOp.resultChannels[0].Close(context.Background())
 					processedCount++
 				}
 			}
@@ -278,7 +288,7 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -329,8 +339,11 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
 				appendOp := e.Value.(*AppendOp)
 				if len(appendOp.resultChannels) > 0 {
-					appendOp.resultChannels[0] <- appendOp.entryId
-					close(appendOp.resultChannels[0])
+					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						SyncedId: appendOp.entryId,
+						Err:      nil,
+					})
+					_ = appendOp.resultChannels[0].Close(context.Background())
 					processedCount++
 				}
 			}
@@ -349,7 +362,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch chan<- int64) bool { return ch != nil })).Return(int64(i), nil)
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Client.SegmentAppend.QueueSize = 10
@@ -395,12 +408,18 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 					if appendOp.entryId%2 == 0 && appendOp.attempt <= 1 {
 						// if attempt=1 and entryId is even, mock fail in this attempt
 						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
-						appendOp.resultChannels[0] <- -1
+						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+							SyncedId: -1,
+							Err:      nil,
+						})
 						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
 					} else {
 						// otherwise, mock success
 						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
-						appendOp.resultChannels[0] <- appendOp.entryId
+						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+							SyncedId: appendOp.entryId,
+							Err:      nil,
+						})
 						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
 						processedCount++
 					}

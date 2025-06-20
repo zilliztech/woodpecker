@@ -19,6 +19,7 @@ package segment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -153,13 +155,16 @@ func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo, 1)
 
 	// Create a channel and send success signal
-	syncedCh := make(chan int64, 1)
-	syncedCh <- 3 // Send the entryId
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: 3,
+		Err:      nil,
+	})
 
 	mockHandle.On("SendAppendSuccessCallbacks", mock.Anything, int64(3)).Return()
 
 	// Execute callback
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// Verify
 	assert.True(t, op.completed.Load())
@@ -187,13 +192,16 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, nil, 1)
 
 	// Create a channel and send failure signal
-	syncedCh := make(chan int64, 1)
-	syncedCh <- -1 // Send failure signal
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: -1,
+		Err:      nil,
+	})
 
 	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), mock.Anything).Return()
 
 	// Execute callback
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// No additional assertions needed, just verify it doesn't panic
 }
@@ -202,11 +210,11 @@ func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Create a channel and close it
-	syncedCh := make(chan int64)
-	close(syncedCh)
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.Close(context.TODO())
 
 	// Execute callback - should return without error when channel is closed
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// No assertions needed, just ensure it doesn't panic or hang
 }
@@ -215,22 +223,29 @@ func TestAppendOp_FastFail(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add some result channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch1, ch2}
+	rc1 := channel.NewLocalResultChannel("1/2/3-1")
+	rc2 := channel.NewLocalResultChannel("1/2/3-2")
+	op.resultChannels = []channel.ResultChannel{rc1, rc2}
 
 	// Execute FastFail
 	op.FastFail(context.Background(), errors.New("test error"))
 
 	// Verify channels received failure signal
-	assert.Equal(t, int64(-1), <-ch1)
-	assert.Equal(t, int64(-1), <-ch2)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	result1, err1 := rc1.ReadResult(ctx1)
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(-1), result1.SyncedId)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	result2, err2 := rc2.ReadResult(ctx2)
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(-1), result2.SyncedId)
 
 	// Verify channels are closed
-	_, ok1 := <-ch1
-	_, ok2 := <-ch2
-	assert.False(t, ok1)
-	assert.False(t, ok2)
+	assert.True(t, rc1.IsClosed())
+	assert.True(t, rc2.IsClosed())
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
@@ -239,41 +254,51 @@ func TestAppendOp_FastFail(t *testing.T) {
 func TestAppendOp_FastFail_Idempotent(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Call FastFail twice
 	op.FastFail(context.Background(), errors.New("test error"))
 	op.FastFail(context.Background(), errors.New("test error")) // Should be no-op
 
 	// Verify only one signal was sent
-	assert.Equal(t, int64(-1), <-ch)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), result.SyncedId)
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_FastSuccess(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add some result channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch1, ch2}
+	rc1 := channel.NewLocalResultChannel("1/2/3-1")
+	rc2 := channel.NewLocalResultChannel("1/2/3-2")
+	op.resultChannels = []channel.ResultChannel{rc1, rc2}
 
 	// Execute FastSuccess
 	op.FastSuccess(context.Background())
 
 	// Verify channels received success signal
-	assert.Equal(t, int64(3), <-ch1)
-	assert.Equal(t, int64(3), <-ch2)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	result1, err1 := rc1.ReadResult(ctx1)
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(3), result1.SyncedId)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	result2, err2 := rc2.ReadResult(ctx2)
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(3), result2.SyncedId)
 
 	// Verify channels are closed
-	_, ok1 := <-ch1
-	_, ok2 := <-ch2
-	assert.False(t, ok1)
-	assert.False(t, ok2)
+	assert.True(t, rc1.IsClosed())
+	assert.True(t, rc2.IsClosed())
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
@@ -282,28 +307,31 @@ func TestAppendOp_FastSuccess(t *testing.T) {
 func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Call FastSuccess twice
 	op.FastSuccess(context.Background())
 	op.FastSuccess(context.Background()) // Should be no-op
 
 	// Verify only one signal was sent
-	assert.Equal(t, int64(3), <-ch)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), result.SyncedId)
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add a closed channel
-	ch := make(chan int64, 1)
-	close(ch)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	_ = rc.Close(context.TODO()) // Close the result channel
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Execute FastFail - should not panic
 	assert.NotPanics(t, func() {
@@ -318,9 +346,9 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add a closed channel
-	ch := make(chan int64, 1)
-	close(ch)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	_ = rc.Close(context.TODO()) // Close the result channel
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Execute FastSuccess - should not panic
 	assert.NotPanics(t, func() {
@@ -334,8 +362,8 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	var wg sync.WaitGroup
 	callCount := 0
@@ -364,16 +392,14 @@ func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	assert.Equal(t, 10, callCount) // All calls completed
 
 	// Verify channel received exactly one signal
-	select {
-	case val := <-ch:
-		assert.True(t, val == -1 || val == 3) // Either success or failure
-	default:
-		t.Fatal("Expected one signal in channel")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.True(t, result.SyncedId == -1 || result.SyncedId == 3) // Either success or failure
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_toSegmentEntry(t *testing.T) {

@@ -19,13 +19,13 @@ package integration
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"

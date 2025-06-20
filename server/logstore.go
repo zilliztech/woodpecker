@@ -20,6 +20,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"sync"
 	"time"
 
@@ -48,8 +49,7 @@ type LogStore interface {
 	GetAddress() string
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
-	// TODO use ResultChannel abstract instead of chan
-	AddEntry(context.Context, int64, *processor.SegmentEntry, chan<- int64) (int64, error)
+	AddEntry(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)
 	GetEntry(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)
 	GetBatchEntries(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)
 	FenceSegment(context.Context, int64, int64) (int64, error)
@@ -184,7 +184,7 @@ func (l *logStore) Register(ctx context.Context) error {
 	return nil
 }
 
-func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
+func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()

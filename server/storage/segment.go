@@ -19,6 +19,7 @@ package storage
 
 import (
 	"context"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"io"
 
 	"github.com/zilliztech/woodpecker/proto"
@@ -55,7 +56,7 @@ type Segment interface {
 	// Deprecated: Use AppendAsync instead, entryID is pass by client segmentHandle
 	Append(ctx context.Context, data []byte) error
 	// AppendAsync adds an entry to the log file asynchronously
-	AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error)
+	AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error)
 	// NewReader creates a reader with options for sequential reads.
 	NewReader(ctx context.Context, opt ReaderOpt) (Reader, error)
 	// LastFragmentId returns the last fragment id of this logFile.

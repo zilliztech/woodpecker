@@ -19,6 +19,7 @@ package client
 import (
 	"context"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/server/processor"
@@ -26,9 +27,8 @@ import (
 
 //go:generate mockery --dir=./woodpecker/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_woodpecker/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
-	// TODO use ResultChannel abstract instead of chan
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
-	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error)
+	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	// ReadEntry reads an entry from the specified log segment by entry ID and returns the entry and an error if any.
 	ReadEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error)
 	// ReadEntriesInRange reads a batch of entries from the specified log segment within a range and returns the entries and an error if any.
@@ -57,8 +57,7 @@ type logStoreClientLocal struct {
 	store server.LogStore
 }
 
-// TODO use ResultChannel abstract instead of chan
-func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
+func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
 }
 
@@ -106,7 +105,7 @@ type logStoreClientRemote struct {
 }
 
 // TODO use ResultChannel abstract instead of chan
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh chan<- int64) (int64, error) {
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }

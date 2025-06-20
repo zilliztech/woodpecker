@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -171,7 +172,7 @@ func (f *SegmentImpl) ack() {
 				logger.Ctx(context.TODO()).Info("flush success but error exists before, trigger fast flush fail",
 					zap.String("firstFlushErrFragment", firstFlushErrTask.flushFuture.Value().target.GetFragmentKey()),
 					zap.String("flushSuccessFragment", task.flushFuture.Value().target.GetFragmentKey()))
-				f.fastFlushFailUnsafe(context.TODO(), task.flushData)
+				f.fastFlushFailUnsafe(context.TODO(), task.flushData, firstFlushErrTask.flushFuture.Value().err)
 			} else {
 				// update flush state
 				result := task.flushFuture.Value()
@@ -201,7 +202,7 @@ func (f *SegmentImpl) ack() {
 			}
 			logger.Ctx(context.TODO()).Info("flush error first encountered, trigger fast flush fail",
 				zap.String("firstFlushErrFragment", firstFlushErrTask.flushFuture.Value().target.GetFragmentKey()))
-			f.fastFlushFailUnsafe(context.TODO(), task.flushData)
+			f.fastFlushFailUnsafe(context.TODO(), task.flushData, task.flushFuture.Value().err)
 		}
 		f.flushingBufferSize.Add(-task.flushFuture.Value().fragmentSize)
 	}
@@ -211,7 +212,7 @@ func (f *SegmentImpl) GetId() int64 {
 	return f.segmentId
 }
 
-func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error) {
+func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "AppendAsync")
 	defer sp.End()
 	if f.closed.Load() {
@@ -254,7 +255,7 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	if entryId <= f.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to object storage. Return immediately.
 		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastEntryID, already stored", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int64("lastEntryID", f.lastEntryID.Load()))
-		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, entryId, resultCh, entryId)
+		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, entryId, resultCh, entryId, nil)
 		f.mu.Unlock()
 		return entryId, nil
 	}
@@ -378,7 +379,7 @@ func (f *SegmentImpl) Sync(ctx context.Context) error {
 
 	if !f.storageWritable.Load() {
 		logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentPrefixKey", f.segmentPrefixKey))
-		return f.quickSyncFailUnsafe(ctx)
+		return f.quickSyncFailUnsafe(ctx, werr.ErrStorageNotWritable)
 	}
 
 	// roll buff with lock
@@ -461,15 +462,15 @@ func (f *SegmentImpl) rollBufferUnsafe(ctx context.Context) (*cache.SequentialBu
 	return currentBuffer, toFlushData, toFlushDataFirstEntryId, nil
 }
 
-func (f *SegmentImpl) fastFlushFailUnsafe(ctx context.Context, fragmentData []*cache.BufferEntry) {
+func (f *SegmentImpl) fastFlushFailUnsafe(ctx context.Context, fragmentData []*cache.BufferEntry, resultErr error) {
 	for _, item := range fragmentData {
-		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, -1)
+		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, -1, resultErr)
 	}
 }
 
 func (f *SegmentImpl) fastFlushSuccessUnsafe(ctx context.Context, fragmentData []*cache.BufferEntry) {
 	for _, item := range fragmentData {
-		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId)
+		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId, nil)
 	}
 }
 
@@ -486,7 +487,7 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 
 		if waitBuffErr != nil {
 			// if error exist, fast fail subsequent parts
-			f.fastFlushFailUnsafe(ctx, fragmentData)
+			f.fastFlushFailUnsafe(ctx, fragmentData, waitBuffErr)
 			logger.Ctx(ctx).Warn("fast fail the flush task before submit",
 				zap.Int64("logId", f.logId),
 				zap.Int64("segmentId", f.segmentId),
@@ -501,7 +502,7 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 		waitErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		if waitErr != nil {
 			// sync interrupted, fast fail and notify all pending append entries
-			f.fastFlushFailUnsafe(ctx, fragmentData)
+			f.fastFlushFailUnsafe(ctx, fragmentData, waitErr)
 			logger.Ctx(ctx).Warn("fast fail the flush task before submit",
 				zap.Int64("logId", f.logId),
 				zap.Int64("segmentId", f.segmentId),
@@ -601,10 +602,10 @@ func (f *SegmentImpl) awaitSuccessfulFlushes(ctx context.Context, flushResultFut
 	return successFrags, flushedFirstEntryId, flushedLastEntryId, flushedLastFragmentId
 }
 
-func (f *SegmentImpl) quickSyncFailUnsafe(ctx context.Context) error {
+func (f *SegmentImpl) quickSyncFailUnsafe(ctx context.Context, resultErr error) error {
 	logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentPrefixKey", f.segmentPrefixKey))
 	currentBuffer := f.buffer.Load()
-	currentBuffer.NotifyAllPendingEntries(ctx, -1)
+	currentBuffer.NotifyAllPendingEntries(ctx, -1, resultErr)
 	currentBuffer.Reset(ctx)
 	return errors.New("storage is not writable")
 }
@@ -742,7 +743,7 @@ func (f *ROSegmentImpl) GetId() int64 {
 	return f.segmentId
 }
 
-func (f *ROSegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh chan<- int64) (int64, error) {
+func (f *ROSegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	return entryId, werr.ErrNotSupport.WithCauseErrMsg("read only SegmentImpl reader cannot support append")
 }
 

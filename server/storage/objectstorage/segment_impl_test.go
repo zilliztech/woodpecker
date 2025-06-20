@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"sync"
 	"testing"
 	"time"
@@ -111,22 +112,21 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 
 	// Test write entries
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
-	for idx, ch := range chList {
-		select {
-		case syncedId := <-ch:
-			fmt.Printf("%d synced %d\n", idx, syncedId)
-		case <-time.After(5 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for idx, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be positive %d:%d", idx, result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -160,21 +160,21 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 
 	// Test write entries
 	incomeEntryIds := []int64{0, 1, 2, 3, 4, 5, 6}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for idx, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be positive %d:%d", idx, result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -208,21 +208,21 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 
 	// Test write entries
 	incomeEntryIds := []int64{0}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for idx, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be positive %d:%d", idx, result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -287,21 +287,24 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
 	timeoutErrs := 0
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			timeoutErrs++
+	for _, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		fmt.Println(result)
+		if readErr != nil {
+			if errors.IsAny(readErr, context.Canceled, context.DeadlineExceeded) {
+				timeoutErrs++
+			}
 		}
 	}
 	assert.Equal(t, len(incomeEntryIds), timeoutErrs)
@@ -337,21 +340,23 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 3, 4, 8, 9}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
 	timeoutErrs := 0
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			timeoutErrs++
+	for _, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		_, readErr := rc.ReadResult(subCtx)
+		cancel()
+		if readErr != nil {
+			if errors.IsAny(readErr, context.Canceled, context.DeadlineExceeded) {
+				timeoutErrs++
+			}
 		}
 	}
 	assert.Equal(t, len(incomeEntryIds), timeoutErrs)
@@ -365,20 +370,20 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	// fill finally
 	newIncomeEntryIds := []int64{0, 2, 5, 6, 7} // rest of the entries
 	for _, entryId := range newIncomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 	assert.Equal(t, 10, len(chList))
 
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for idx, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be positive %d:%d", idx, result.SyncedId))
 	}
 
 	flushedFirstId = segmentImpl.getFirstEntryId()
@@ -413,21 +418,21 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 8, 9, 7, 2, 3, 4, 5}
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		_, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
-	for _, ch := range chList {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for idx, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be positive %d:%d", idx, result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -461,34 +466,31 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 
 	// Test out of order
 	incomeEntryIds := []int64{1, 0, 6, 11, 12, 10, 7, 2, 3, 4, 5} // 0-7,10-12
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for _, entryId := range incomeEntryIds {
-		ch := make(chan int64, 1)
-		assignId, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", entryId))
+		assignId, err := segmentImpl.AppendAsync(context.Background(), entryId, []byte("test_data"), rc)
 		if entryId >= 10 {
 			// 10-12 should async write buffer fail
 			assert.Equal(t, int64(-1), assignId)
 			assert.Error(t, err)
 			assert.True(t, werr.ErrWriteBufferFull.Is(err))
-			assert.NotNil(t, ch)
 		} else {
 			// 0-7 should async write buffer success
 			assert.Equal(t, entryId, assignId)
 			assert.NoError(t, err)
-			assert.NotNil(t, ch)
-			chList = append(chList, ch)
+			chList = append(chList, rc)
 		}
 	}
 
-	for _, ch := range chList {
-		select {
-		case syncedId := <-ch:
-			// 0-7 should be flush success
-			assert.True(t, syncedId >= 0)
-			assert.True(t, syncedId <= 7)
-		case <-time.After(2 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for _, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be in [0,7], but it is: %d", result.SyncedId))
+		assert.True(t, result.SyncedId <= 7, fmt.Sprintf("syncedId should be in [0,7], but it is: %d", result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -526,19 +528,25 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 800 + 200 = buffer max data size, sync immediately
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize1/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		ch0 := make(chan int64, 1)
-		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, ch0)
+		rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, rc0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		ch1 := make(chan int64, 1)
-		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
+		rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, rc1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// reach the max size, should be immediate flush
 		// show check response immediately
 		start := time.Now()
-		assert.Equal(t, int64(0), <-ch0)
-		assert.Equal(t, int64(1), <-ch1)
+		result0, readErr0 := rc0.ReadResult(context.Background())
+		assert.NoError(t, readErr0)
+		assert.NotNil(t, result0)
+		assert.Equal(t, int64(0), result0.SyncedId)
+		result1, readErr1 := rc1.ReadResult(context.Background())
+		assert.NoError(t, readErr1)
+		assert.NotNil(t, result1)
+		assert.Equal(t, int64(1), result1.SyncedId)
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should be immediate flush, but cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -550,18 +558,25 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 200 + 300, wait for flush
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize2/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		ch0 := make(chan int64, 1)
-		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, ch0)
+		rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, rc0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		ch1 := make(chan int64, 1)
-		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, ch1)
+		rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, rc1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// wait for flush
 		start := time.Now()
-		assert.Equal(t, int64(0), <-ch0)
-		assert.Equal(t, int64(1), <-ch1)
+		result0, readErr0 := rc0.ReadResult(context.Background())
+		assert.NoError(t, readErr0)
+		assert.NotNil(t, result0)
+		assert.Equal(t, int64(0), result0.SyncedId)
+		result1, readErr1 := rc1.ReadResult(context.Background())
+		assert.NoError(t, readErr1)
+		assert.NotNil(t, result1)
+		assert.Equal(t, int64(1), result1.SyncedId)
+
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -573,18 +588,26 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test async append 200 + 300, wait for flush
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize3/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		ch0 := make(chan int64, 1)
-		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, ch0)
+		rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data200, rc0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		ch1 := make(chan int64, 1)
-		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, ch1)
+		rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data300, rc1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
+
 		// wait for flush
 		start := time.Now()
-		assert.Equal(t, int64(0), <-ch0)
-		assert.Equal(t, int64(1), <-ch1)
+		result0, readErr0 := rc0.ReadResult(context.Background())
+		assert.NoError(t, readErr0)
+		assert.NotNil(t, result0)
+		assert.Equal(t, int64(0), result0.SyncedId)
+		result1, readErr1 := rc1.ReadResult(context.Background())
+		assert.NoError(t, readErr1)
+		assert.NotNil(t, result1)
+		assert.Equal(t, int64(1), result1.SyncedId)
+
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -598,13 +621,17 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// the second append 200 should be wait for flush.
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize4/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		ch0 := make(chan int64, 1)
-		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data1k, ch0)
+		rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data1k, rc0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
 		// flush immediately
 		start := time.Now()
-		assert.Equal(t, int64(0), <-ch0)
+		result0, readErr0 := rc0.ReadResult(context.Background())
+		assert.NoError(t, readErr0)
+		assert.NotNil(t, result0)
+		assert.Equal(t, int64(0), result0.SyncedId)
+
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should wait less then 100 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -612,13 +639,17 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		ch1 := make(chan int64, 1)
-		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
+		rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, rc1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 		// wait for flush
 		start = time.Now()
-		assert.Equal(t, int64(1), <-ch1)
+		result1, readErr1 := rc1.ReadResult(context.Background())
+		assert.NoError(t, readErr1)
+		assert.NotNil(t, result1)
+		assert.Equal(t, int64(1), result1.SyncedId)
+
 		cost = time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000, fmt.Sprintf("should wait 1000 ms to auto flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -630,17 +661,21 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	// test append 1(800),3(300), trigger flush 1(800). then append 2(200), wait for flush  2(200) + 3(300)
 	{
 		segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestAppendAsyncReachBufferDataSize5/1/0", "test-bucket", client, cfg).(*SegmentImpl)
-		ch0 := make(chan int64, 1)
-		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, ch0)
+		rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+		assignId0, err := segmentImpl.AppendAsync(context.Background(), 0, data800, rc0)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), assignId0)
-		ch2 := make(chan int64, 1)
-		assignId2, err := segmentImpl.AppendAsync(context.Background(), 2, data300, ch2)
+		rc2 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 2))
+		assignId2, err := segmentImpl.AppendAsync(context.Background(), 2, data300, rc2)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(2), assignId2)
 		// flush 1(800) immediately
 		start := time.Now()
-		assert.Equal(t, int64(0), <-ch0)
+		result0, readErr0 := rc0.ReadResult(context.Background())
+		assert.NoError(t, readErr0)
+		assert.NotNil(t, result0)
+		assert.Equal(t, int64(0), result0.SyncedId)
+
 		cost := time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost < 100, fmt.Sprintf("should wait less then 100 ms to flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -648,15 +683,22 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), flushedLastId)
 
-		ch1 := make(chan int64, 1)
-		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, ch1)
+		rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+		assignId1, err := segmentImpl.AppendAsync(context.Background(), 1, data200, rc1)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), assignId1)
 
 		// wait for flush
 		start = time.Now()
-		assert.Equal(t, int64(1), <-ch1)
-		assert.Equal(t, int64(2), <-ch2)
+		result1, readErr1 := rc1.ReadResult(context.Background())
+		assert.NoError(t, readErr1)
+		assert.NotNil(t, result1)
+		assert.Equal(t, int64(1), result1.SyncedId)
+		result2, readErr2 := rc2.ReadResult(context.Background())
+		assert.NoError(t, readErr2)
+		assert.NotNil(t, result2)
+		assert.Equal(t, int64(2), result2.SyncedId)
+
 		cost = time.Now().Sub(start).Milliseconds()
 		assert.True(t, cost >= 1000*0.8, fmt.Sprintf("should wait 1000 ms to auto flush, but only cost %d ms", cost))
 		assert.Equal(t, int64(0), segmentImpl.getFirstEntryId())
@@ -690,28 +732,26 @@ func TestSync(t *testing.T) {
 	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestSync/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Write some data to buffer
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for i := 0; i < 100; i++ {
-		ch := make(chan int64, 1)
-		assignId, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", i))
+		assignId, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), rc)
 		assert.Equal(t, int64(i), assignId)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 
 	err := segmentImpl.Sync(context.Background())
 	assert.NoError(t, err)
 
-	for _, ch := range chList {
-		select {
-		case syncedId := <-ch:
-			// success
-			assert.True(t, syncedId >= 0)
-			assert.True(t, syncedId < 100)
-		case <-time.After(1 * time.Second):
-			t.Errorf("Timeout waiting for sync")
-		}
+	for _, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Nil(t, result.Err)
+		assert.True(t, result.SyncedId >= 0, fmt.Sprintf("syncedId should be in [0,100), but it is: %d", result.SyncedId))
+		assert.True(t, result.SyncedId < 100, fmt.Sprintf("syncedId should be in [0,100), but it is: %d", result.SyncedId))
 	}
 
 	flushedFirstId := segmentImpl.getFirstEntryId()
@@ -745,13 +785,12 @@ func TestClose(t *testing.T) {
 	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "TestClose/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
 	// Write some data to buffer
-	chList := make([]<-chan int64, 0)
+	chList := make([]channel.ResultChannel, 0)
 	for i := 0; i < 100; i++ {
-		ch := make(chan int64, 1)
-		_, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), ch)
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", i))
+		_, err := segmentImpl.AppendAsync(context.Background(), int64(i), []byte("test_data"), rc)
 		assert.NoError(t, err)
-		assert.NotNil(t, ch)
-		chList = append(chList, ch)
+		chList = append(chList, rc)
 	}
 	assert.Equal(t, 100, len(chList))
 
@@ -762,14 +801,15 @@ func TestClose(t *testing.T) {
 	// final flush immediately
 	start := time.Now()
 	successCount := 0
-	for _, ch := range chList {
-		select {
-		case syncedId := <-ch:
-			if syncedId >= 0 {
-				successCount++
-			}
-		case <-time.After(1 * time.Second):
-			t.Errorf("Timeout waiting for sync")
+	for _, rc := range chList {
+		subCtx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		if readErr != nil {
+			continue
+		}
+		if result != nil && result.SyncedId >= 0 {
+			successCount++
 		}
 	}
 	cost := time.Now().Sub(start).Milliseconds()

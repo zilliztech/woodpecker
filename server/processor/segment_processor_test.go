@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
@@ -51,29 +52,30 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	}
 	segProc := NewSegmentProcessorWithLogFile(context.TODO(), cfg, 1, 1, mockMinio, mockLogFile)
 
-	syncedCh := make(chan int64, 1)
-	syncedCh <- int64(0)
-	close(syncedCh)
+	rc := channel.NewLocalResultChannel("1/0/0")
+	_ = rc.SendResult(context.TODO(), &channel.AppendResult{
+		Err:      nil,
+		SyncedId: 0,
+	})
 	seqNo, err := segProc.AddEntry(ctx, &SegmentEntry{
 		EntryId: 0,
 		Data:    []byte("data"),
-	}, syncedCh)
+	}, rc)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), seqNo)
-	assert.NotNil(t, syncedCh)
-	assert.Equal(t, int64(0), <-syncedCh)
 
 	// set fence
 	lastEntryId, fencedErr := segProc.SetFenced(context.TODO())
 	assert.NoError(t, fencedErr)
 	assert.Equal(t, int64(0), lastEntryId)
-	syncedCh2 := make(chan int64, 1)
-	close(syncedCh2)
+
+	rc2 := channel.NewLocalResultChannel("1/0/1")
+	_ = rc2.Close(context.TODO())
 	seqNo, err = segProc.AddEntry(ctx, &SegmentEntry{
 		EntryId: 1,
 		Data:    []byte("data"),
-	}, syncedCh2)
+	}, rc2)
 	assert.Error(t, err)
 	assert.True(t, werr.ErrSegmentFenced.Is(err))
 	assert.Equal(t, int64(-1), seqNo)

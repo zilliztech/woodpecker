@@ -23,12 +23,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
@@ -60,7 +61,7 @@ type AppendOp struct {
 	handle         SegmentHandle
 	ackSet         *bitset.BitSet
 	quorumInfo     *proto.QuorumInfo
-	resultChannels []chan int64 // TODO use ResultChannel abstract instead
+	resultChannels []channel.ResultChannel
 
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
@@ -82,7 +83,7 @@ func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, call
 		handle:         handle,
 		ackSet:         &bitset.BitSet{},
 		quorumInfo:     quorumInfo,
-		resultChannels: make([]chan int64, 0),
+		resultChannels: make([]channel.ResultChannel, 0),
 
 		attempt: attempt,
 	}
@@ -111,7 +112,7 @@ func (op *AppendOp) Execute() {
 	op.quorumInfo = quorumInfo
 
 	// current only 1
-	op.resultChannels = make([]chan int64, len(quorumInfo.Nodes))
+	op.resultChannels = make([]channel.ResultChannel, len(quorumInfo.Nodes))
 
 	for i := 0; i < len(quorumInfo.Nodes); i++ {
 		// get client from clientPool according node addr
@@ -128,17 +129,20 @@ func (op *AppendOp) Execute() {
 
 func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int) {
 	startRequestTime := time.Now()
-	syncedResultCh := make(chan int64, 1)
-	op.resultChannels[serverIndex] = syncedResultCh
+
+	// TODO currently only support Local ResultChannel
+	resultChannel := channel.NewLocalResultChannel(op.Identifier())
+	op.resultChannels[serverIndex] = resultChannel
+
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), syncedResultCh)
+	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), resultChannel)
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
-	go op.receivedAckCallback(ctx, startRequestTime, entryId, syncedResultCh, err, serverIndex)
+	go op.receivedAckCallback(ctx, startRequestTime, entryId, resultChannel, err, serverIndex)
 }
 
-func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, syncedCh <-chan int64, err error, serverIndex int) {
+func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int) {
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
@@ -146,51 +150,48 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		return
 	}
 	// async call error, wait until syncedCh closed
-	ticker := time.NewTicker(30 * time.Second) // Log slow append warning every 30s, TODO should be configurable
-	defer ticker.Stop()
-
-	for {
-		select {
-		case syncedId, ok := <-syncedCh:
-			if op.fastCalled.Load() {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("received ack:%d for log:%d seg:%d entry:%d, but already fast completed", syncedId, op.logId, op.segmentId, op.entryId))
-				return
-			}
-			if !ok {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("synced chan for log:%d seg:%d entry:%d closed", op.logId, op.segmentId, op.entryId))
-				return
-			}
-			if syncedId == -1 {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("synced failed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-				op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteException)
-				return
-			}
-			if syncedId != -1 && syncedId >= op.entryId {
-				op.ackSet.Set(serverIndex)
-				if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
-					// Use atomic operation to ensure SendAppendSuccessCallbacks is called only once
-					if op.completed.CompareAndSwap(false, true) {
-						op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
-						cost := time.Now().Sub(startRequestTime)
-						metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
-						metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
-					}
-				}
-				logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedId, op.logId, op.segmentId, op.entryId))
-				return
-			}
-			logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedId, op.logId, op.segmentId, op.entryId))
-		case <-ticker.C:
-			elapsed := time.Now().Sub(startRequestTime)
-			logger.Ctx(ctx).Warn(fmt.Sprintf("slow append detected for log:%d seg:%d entry:%d, elapsed: %v, failed and retry", op.logId, op.segmentId, op.entryId, elapsed))
-			if op.fastCalled.Load() {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("append fast completed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-				return
-			}
-			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, werr.ErrSegmentWriteError.WithCauseErrMsg("slow append error"))
+	subCtx, cancel := context.WithTimeout(context.TODO(), 30*time.Second) // TODO configurable
+	defer cancel()
+	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
+	if readChanErr != nil {
+		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
+			// read chan timeout, retry
+			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+			op.err = err
+			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
 			return
 		}
+		// chan already close, just return
+		logger.Ctx(ctx).Warn(fmt.Sprintf("chan already close for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+		return
 	}
+
+	if op.fastCalled.Load() {
+		logger.Ctx(ctx).Debug(fmt.Sprintf("received ack:%d for log:%d seg:%d entry:%d, but already fast completed", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
+		return
+	}
+
+	if syncedResult.SyncedId == -1 {
+		op.err = syncedResult.Err
+		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, syncedResult.Err)
+		return
+	}
+	if syncedResult.SyncedId != -1 && syncedResult.SyncedId >= op.entryId {
+		op.ackSet.Set(serverIndex)
+		if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
+			// Use atomic operation to ensure SendAppendSuccessCallbacks is called only once
+			if op.completed.CompareAndSwap(false, true) {
+				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
+				cost := time.Now().Sub(startRequestTime)
+				metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
+				metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
+			}
+		}
+		logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
+		return
+	}
+
+	logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
 }
 
 func (op *AppendOp) FastFail(ctx context.Context, err error) {
@@ -206,20 +207,28 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 
 	for i, ch := range op.resultChannels {
 		// Safely handle channel operations
-		func(ch chan int64, index int) {
+		func(ch channel.ResultChannel, index int) {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail recovered from panic on channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, r))
 				}
 			}()
 
-			select {
-			case ch <- -1:
-				logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail sent failure signal to channel %d for log:%d seg:%d entry:%d", index, op.logId, op.segmentId, op.entryId))
-			default:
-				logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail channel %d full or closed for log:%d seg:%d entry:%d", index, op.logId, op.segmentId, op.entryId))
+			sendErr := ch.SendResult(ctx, &channel.AppendResult{
+				SyncedId: -1,
+				Err:      err,
+			})
+			if sendErr != nil {
+				logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastFail result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
+			} else {
+				logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastFail result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
 			}
-			close(ch)
+			closeErr := ch.Close(ctx)
+			if closeErr != nil {
+				logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
+			} else {
+				logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+			}
 		}(ch, i)
 	}
 
@@ -240,20 +249,28 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 
 	for i, ch := range op.resultChannels {
 		// Safely handle channel operations
-		func(ch chan int64, index int) {
+		func(ch channel.ResultChannel, index int) {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess recovered from panic on channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, r))
 				}
 			}()
 
-			select {
-			case ch <- op.entryId:
-				logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess sent success signal (%d) to channel %d for log:%d seg:%d entry:%d", op.entryId, index, op.logId, op.segmentId, op.entryId))
-			default:
-				logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess channel %d full or closed for log:%d seg:%d entry:%d", index, op.logId, op.segmentId, op.entryId))
+			sendErr := ch.SendResult(ctx, &channel.AppendResult{
+				SyncedId: op.entryId,
+				Err:      nil,
+			})
+			if sendErr != nil {
+				logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastSuccess result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
+			} else {
+				logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastSuccess result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
 			}
-			close(ch)
+			closeErr := ch.Close(ctx)
+			if closeErr != nil {
+				logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
+			} else {
+				logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+			}
 		}(ch, i)
 	}
 

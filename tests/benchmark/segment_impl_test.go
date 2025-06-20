@@ -18,13 +18,14 @@ package benchmark
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/proto"
@@ -49,60 +50,53 @@ func TestAppendAsync(t *testing.T) {
 	assert.NotNil(t, objectSegmentImpl)
 
 	// Test appending a valid entry
-	ch := make(chan int64, 1)
-	entryId, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch)
+	rc0 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	entryId, _ := segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), rc0)
 	assert.Equal(t, int64(0), entryId)
-	assert.NotNil(t, ch)
-	select {
-	case result := <-ch:
-		assert.Equal(t, int64(0), result)
-	case <-time.After(2000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
-	}
+
+	subCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	result, readErr := rc0.ReadResult(subCtx)
+	cancel()
+	assert.NoError(t, readErr, "Timeout waiting for channel")
+	assert.Equal(t, int64(0), result.SyncedId)
 
 	// Test appending another valid entry
-	ch2 := make(chan int64, 1)
-	entryId, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
+	rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), rc1)
 	assert.Equal(t, int64(1), entryId)
-	assert.NotNil(t, ch2)
-	select {
-	case result := <-ch2:
-		assert.Equal(t, int64(1), result)
-	case <-time.After(2000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
-	}
+	subCtx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	result1, readErr1 := rc1.ReadResult(subCtx1)
+	cancel1()
+	assert.NoError(t, readErr1, "Timeout waiting for channel")
+	assert.Equal(t, int64(1), result1.SyncedId)
 
 	// Test appending an entry with an invalid ID
-	ch3 := make(chan int64, 1)
-	entryId, _ = segmentImpl.AppendAsync(context.Background(), 3, []byte("data3"), ch3)
+	rc3 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 3))
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 3, []byte("data3"), rc3)
 	assert.Equal(t, int64(3), entryId)
-	assert.NotNil(t, ch3)
-	var timeoutErr error
-	select {
-	case result := <-ch3:
-		assert.Equal(t, int64(-1), result)
-	case <-time.After(2000 * time.Millisecond):
-		timeoutErr = errors.New("timeout")
-	}
-	assert.Error(t, timeoutErr)
+	subCtx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+	result3, readErr3 := rc3.ReadResult(subCtx3)
+	cancel3()
+	assert.Error(t, readErr3)
+	assert.Nil(t, result3)
+	assert.True(t, errors.IsAny(readErr3, context.Canceled, context.DeadlineExceeded))
 
 	// Test appending an entry that exceeds the buffer size
-	ch4 := make(chan int64, 1)
-	entryId, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch4)
+	rc4 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 2))
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), rc4)
 	for i := 4; i < 100_000; i++ {
-		ch000 := make(chan int64, 1)
-		segmentImpl.AppendAsync(context.Background(), int64(i), []byte("data"), ch000)
+		rc000 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", i))
+		segmentImpl.AppendAsync(context.Background(), int64(i), []byte("data"), rc000)
 	}
-	ch5 := make(chan int64, 1)
-	entryId, _ = segmentImpl.AppendAsync(context.Background(), 100_000, []byte("data"), ch5)
+	rc5 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 100_000))
+	entryId, _ = segmentImpl.AppendAsync(context.Background(), 100_000, []byte("data"), rc5)
 	assert.Equal(t, int64(100_000), entryId)
-	assert.NotNil(t, ch)
-	select {
-	case result := <-ch:
-		assert.Equal(t, int64(100_000), result)
-	case <-time.After(5000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
-	}
+
+	subCtx5, cancel5 := context.WithTimeout(context.Background(), 5*time.Second)
+	result5, readErr5 := rc5.ReadResult(subCtx5)
+	cancel5()
+	assert.NoError(t, readErr5)
+	assert.Equal(t, int64(100_000), result5.SyncedId)
 }
 
 func TestNewReader(t *testing.T) {
@@ -119,28 +113,34 @@ func TestNewReader(t *testing.T) {
 	assert.NotNil(t, segmentImpl)
 
 	// Append some data to the log file
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
-	_, _ = segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), ch1)
-	_, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), ch2)
-	_, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), ch3)
+	rc1 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	rc2 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 1))
+	rc3 := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 2))
+	_, _ = segmentImpl.AppendAsync(context.Background(), 0, []byte("data0"), rc1)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 1, []byte("data1"), rc2)
+	_, _ = segmentImpl.AppendAsync(context.Background(), 2, []byte("data2"), rc3)
 
 	// Wait for the data to be appended
-	select {
-	case <-ch1:
-	case <-time.After(2000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
+	{
+		subCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := rc1.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr, "Timeout waiting for channel")
+		assert.Equal(t, int64(0), result.SyncedId)
 	}
-	select {
-	case <-ch2:
-	case <-time.After(2000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
+	{
+		subCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := rc2.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr, "Timeout waiting for channel")
+		assert.Equal(t, int64(1), result.SyncedId)
 	}
-	select {
-	case <-ch3:
-	case <-time.After(2000 * time.Millisecond):
-		t.Error("Timeout waiting for channel")
+	{
+		subCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := rc3.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr, "Timeout waiting for channel")
+		assert.Equal(t, int64(2), result.SyncedId)
 	}
 
 	// Create a reader for the log file
@@ -187,13 +187,14 @@ func TestNewReaderForManyFragments(t *testing.T) {
 
 	// Append some data to the log file
 	for i := 0; i < 5; i++ {
-		ch := make(chan int64, 1)
-		_, _ = segmentImpl.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)), ch)
-		select {
-		case <-ch:
-		case <-time.After(2000 * time.Millisecond):
-			t.Error("Timeout waiting for channel")
-		}
+		rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", i))
+		_, _ = segmentImpl.AppendAsync(context.Background(), int64(i), []byte(fmt.Sprintf("data%d", i)), rc)
+
+		subCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := rc.ReadResult(subCtx)
+		cancel()
+		assert.NoError(t, readErr)
+		assert.Equal(t, int64(i), result.SyncedId)
 	}
 
 	// Create a reader for the log file

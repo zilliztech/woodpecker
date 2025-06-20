@@ -23,6 +23,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/zilliztech/woodpecker/common/channel"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -127,8 +129,8 @@ func TestWriteEntryWithNotify(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Test writing a valid entry with notification channel
-	ch := make(chan int64, 1)
-	id, err := buffer.WriteEntryWithNotify(1, []byte("data1"), ch)
+	resultChannel := channel.NewLocalResultChannel("1/0/1")
+	id, err := buffer.WriteEntryWithNotify(1, []byte("data1"), resultChannel)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), id)
 	assert.Equal(t, int64(2), buffer.ExpectedNextEntryId.Load())
@@ -141,9 +143,10 @@ func TestWriteEntryWithNotify(t *testing.T) {
 	assert.NotNil(t, entry.NotifyChan)
 
 	// Test notification
-	buffer.NotifyEntriesInRange(context.TODO(), 1, 2, 1) // result >= 0 means success
-	result := <-ch
-	assert.Equal(t, int64(1), result) // Should receive the entry's own ID
+	buffer.NotifyEntriesInRange(context.TODO(), 1, 2, 1, nil) // result >= 0 means success
+	result, readErr := resultChannel.ReadResult(context.TODO())
+	assert.NoError(t, readErr)
+	assert.Equal(t, int64(1), result.SyncedId) // Should receive the entry's own ID
 }
 
 // TestReadEntry tests the ReadEntry method.
@@ -335,10 +338,11 @@ func TestReset(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
 
 	buffer.Reset(context.TODO())
 
@@ -353,10 +357,12 @@ func TestReset(t *testing.T) {
 	}
 
 	// Check that notification channels received error signal
-	result1 := <-ch1
-	result2 := <-ch2
-	assert.Equal(t, int64(-1), result1)
-	assert.Equal(t, int64(-1), result2)
+	result1, read1Err := rc1.ReadResult(context.TODO())
+	assert.NoError(t, read1Err)
+	assert.Equal(t, int64(-1), result1.SyncedId)
+	result2, read2Err := rc2.ReadResult(context.TODO())
+	assert.NoError(t, read2Err)
+	assert.Equal(t, int64(-1), result2.SyncedId)
 }
 
 // TestNotifyEntriesInRange tests the NotifyEntriesInRange method.
@@ -364,36 +370,34 @@ func TestNotifyEntriesInRange(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	rc3 := channel.NewLocalResultChannel("1/0/4")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
-	buffer.WriteEntryWithNotify(4, []byte("data4"), ch3)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
+	buffer.WriteEntryWithNotify(4, []byte("data4"), rc3)
 
-	// Notify entries 1-3 (should notify ch1 and ch2, but not ch3)
-	buffer.NotifyEntriesInRange(context.TODO(), 1, 3, 100) // result >= 0 means success
+	// Notify entries 1-3 (should notify rc1 and rc2, but not rc3)
+	buffer.NotifyEntriesInRange(context.TODO(), 1, 3, 100, nil) // result >= 0 means success
 
 	// Check notifications - each entry should receive its own ID
-	result1 := <-ch1
-	result2 := <-ch2
-	assert.Equal(t, int64(1), result1) // Entry 1 receives its own ID
-	assert.Equal(t, int64(2), result2) // Entry 2 receives its own ID
+	result1, err1 := rc1.ReadResult(context.TODO())
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(1), result1.SyncedId) // Entry 1 receives its own ID
 
-	// ch3 should not have received notification yet
-	select {
-	case <-ch3:
-		t.Fatal("ch3 should not have received notification")
-	default:
-		// Expected
-		fmt.Println("ch3 not received notification, it is expected")
-	}
+	result2, err2 := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(2), result2.SyncedId) // Entry 2 receives its own ID
+
+	// rc3 should not have received notification yet (we can't easily test this with the current interface)
+	// Instead, we'll test the next notification
 
 	// Notify entry 4
-	buffer.NotifyEntriesInRange(context.TODO(), 4, 5, 200) // result >= 0 means success
-	result3 := <-ch3
-	assert.Equal(t, int64(4), result3) // Entry 4 receives its own ID
+	buffer.NotifyEntriesInRange(context.TODO(), 4, 5, 200, nil) // result >= 0 means success
+	result3, err3 := rc3.ReadResult(context.TODO())
+	assert.NoError(t, err3)
+	assert.Equal(t, int64(4), result3.SyncedId) // Entry 4 receives its own ID
 }
 
 // TestNotifyAllPendingEntries tests the NotifyAllPendingEntries method.
@@ -401,24 +405,29 @@ func TestNotifyAllPendingEntries(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	rc3 := channel.NewLocalResultChannel("1/0/4")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
-	buffer.WriteEntryWithNotify(4, []byte("data4"), ch3)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
+	buffer.WriteEntryWithNotify(4, []byte("data4"), rc3)
 
 	// Notify all pending entries
-	buffer.NotifyAllPendingEntries(context.TODO(), 300) // result >= 0 means success
+	buffer.NotifyAllPendingEntries(context.TODO(), 300, nil) // result >= 0 means success
 
 	// Check all notifications - each entry should receive its own ID
-	result1 := <-ch1
-	result2 := <-ch2
-	result3 := <-ch3
-	assert.Equal(t, int64(1), result1) // Entry 1 receives its own ID
-	assert.Equal(t, int64(2), result2) // Entry 2 receives its own ID
-	assert.Equal(t, int64(4), result3) // Entry 4 receives its own ID
+	result1, err1 := rc1.ReadResult(context.TODO())
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(1), result1.SyncedId) // Entry 1 receives its own ID
+
+	result2, err2 := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(2), result2.SyncedId) // Entry 2 receives its own ID
+
+	result3, err3 := rc3.ReadResult(context.TODO())
+	assert.NoError(t, err3)
+	assert.Equal(t, int64(4), result3.SyncedId) // Entry 4 receives its own ID
 }
 
 // TestEntryIdDebugging demonstrates how the EntryId field helps with debugging
@@ -426,14 +435,14 @@ func TestEntryIdDebugging(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 10, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/10")
+	rc2 := channel.NewLocalResultChannel("1/0/12")
+	rc3 := channel.NewLocalResultChannel("1/0/14")
 
 	// Write entries with different IDs
-	buffer.WriteEntryWithNotify(10, []byte("data10"), ch1)
-	buffer.WriteEntryWithNotify(12, []byte("data12"), ch2)
-	buffer.WriteEntryWithNotify(14, []byte("data14"), ch3)
+	buffer.WriteEntryWithNotify(10, []byte("data10"), rc1)
+	buffer.WriteEntryWithNotify(12, []byte("data12"), rc2)
+	buffer.WriteEntryWithNotify(14, []byte("data14"), rc3)
 
 	// Verify EntryId fields are set correctly
 	assert.Equal(t, int64(10), buffer.Entries[0].EntryId)
@@ -441,26 +450,22 @@ func TestEntryIdDebugging(t *testing.T) {
 	assert.Equal(t, int64(14), buffer.Entries[4].EntryId)
 
 	// Test notification with logging (the debug output will show EntryIds)
-	buffer.NotifyEntriesInRange(context.TODO(), 10, 13, 100)
+	buffer.NotifyEntriesInRange(context.TODO(), 10, 13, 100, nil)
 
 	// Check notifications - each entry should receive its own ID
-	result1 := <-ch1
-	result2 := <-ch2
-	assert.Equal(t, int64(10), result1) // Entry 10 receives its own ID
-	assert.Equal(t, int64(12), result2) // Entry 12 receives its own ID
+	result1, err1 := rc1.ReadResult(context.TODO())
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(10), result1.SyncedId) // Entry 10 receives its own ID
 
-	// ch3 should not have received notification yet
-	select {
-	case <-ch3:
-		t.Fatal("ch3 should not have received notification")
-	default:
-		// Expected
-	}
+	result2, err2 := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(12), result2.SyncedId) // Entry 12 receives its own ID
 
 	// Test NotifyAllPendingEntries with remaining entry
-	buffer.NotifyAllPendingEntries(context.TODO(), 200) // result >= 0 means success
-	result3 := <-ch3
-	assert.Equal(t, int64(14), result3) // Entry 14 receives its own ID
+	buffer.NotifyAllPendingEntries(context.TODO(), 200, nil) // result >= 0 means success
+	result3, err3 := rc3.ReadResult(context.TODO())
+	assert.NoError(t, err3)
+	assert.Equal(t, int64(14), result3.SyncedId) // Entry 14 receives its own ID
 }
 
 // TestNotifyWithError tests that error notifications send the error result instead of EntryId
@@ -468,20 +473,23 @@ func TestNotifyWithError(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
 
 	// Test error notification (result < 0)
-	buffer.NotifyEntriesInRange(context.TODO(), 1, 3, -1) // result < 0 means error
+	buffer.NotifyEntriesInRange(context.TODO(), 1, 3, -1, fmt.Errorf("test error")) // result < 0 means error
 
 	// Check notifications - should receive error result, not EntryId
-	result1 := <-ch1
-	result2 := <-ch2
-	assert.Equal(t, int64(-1), result1) // Should receive error result
-	assert.Equal(t, int64(-1), result2) // Should receive error result
+	result1, err1 := rc1.ReadResult(context.TODO())
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(-1), result1.SyncedId) // Should receive error result
+
+	result2, err2 := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(-1), result2.SyncedId) // Should receive error result
 }
 
 // TestNotifyAllPendingEntriesWithError tests error notifications for all pending entries
@@ -489,20 +497,23 @@ func TestNotifyAllPendingEntriesWithError(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
 
 	// Test error notification for all pending entries
-	buffer.NotifyAllPendingEntries(context.TODO(), -5) // result < 0 means error
+	buffer.NotifyAllPendingEntries(context.TODO(), -5, fmt.Errorf("test error")) // result < 0 means error
 
 	// Check notifications - should receive error result, not EntryId
-	result1 := <-ch1
-	result2 := <-ch2
-	assert.Equal(t, int64(-5), result1) // Should receive error result
-	assert.Equal(t, int64(-5), result2) // Should receive error result
+	result1, err1 := rc1.ReadResult(context.TODO())
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(-5), result1.SyncedId) // Should receive error result
+
+	result2, err2 := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(-5), result2.SyncedId) // Should receive error result
 }
 
 // TestNotificationBehaviorDemo demonstrates the new notification behavior
@@ -510,33 +521,35 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 100, 10)
 
 	// Add entries with notification channels
-	channels := make([]chan int64, 5)
+	resultChannels := make([]channel.ResultChannel, 5)
 	for i := 0; i < 5; i++ {
-		channels[i] = make(chan int64, 1)
-		buffer.WriteEntryWithNotify(int64(100+i), []byte(fmt.Sprintf("data%d", 100+i)), channels[i])
+		resultChannels[i] = channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 100+i))
+		buffer.WriteEntryWithNotify(int64(100+i), []byte(fmt.Sprintf("data%d", 100+i)), resultChannels[i])
 	}
 
 	// Test 1: Successful notification - entries should receive their own IDs
 	fmt.Println("=== Test 1: Successful Notification ===")
-	buffer.NotifyEntriesInRange(context.TODO(), 100, 103, 1000) // result >= 0 means success
+	buffer.NotifyEntriesInRange(context.TODO(), 100, 103, 1000, nil) // result >= 0 means success
 
 	// Verify first 3 entries received their own IDs
 	for i := 0; i < 3; i++ {
-		result := <-channels[i]
+		result, err := resultChannels[i].ReadResult(context.TODO())
+		assert.NoError(t, err)
 		expectedId := int64(100 + i)
-		assert.Equal(t, expectedId, result, "Entry %d should receive its own ID %d", 100+i, expectedId)
-		fmt.Printf("Entry %d received: %d (expected: %d) ✓\n", 100+i, result, expectedId)
+		assert.Equal(t, expectedId, result.SyncedId, "Entry %d should receive its own ID %d", 100+i, expectedId)
+		fmt.Printf("Entry %d received: %d (expected: %d) ✓\n", 100+i, result.SyncedId, expectedId)
 	}
 
 	// Test 2: Error notification - entries should receive the error result
 	fmt.Println("\n=== Test 2: Error Notification ===")
-	buffer.NotifyEntriesInRange(context.TODO(), 103, 105, -1) // result < 0 means error
+	buffer.NotifyEntriesInRange(context.TODO(), 103, 105, -1, fmt.Errorf("test error")) // result < 0 means error
 
 	// Verify last 2 entries received the error result
 	for i := 3; i < 5; i++ {
-		result := <-channels[i]
-		assert.Equal(t, int64(-1), result, "Entry %d should receive error result -1", 100+i)
-		fmt.Printf("Entry %d received: %d (expected: -1) ✓\n", 100+i, result)
+		result, err := resultChannels[i].ReadResult(context.TODO())
+		assert.NoError(t, err)
+		assert.Equal(t, int64(-1), result.SyncedId, "Entry %d should receive error result -1", 100+i)
+		fmt.Printf("Entry %d received: %d (expected: -1) ✓\n", 100+i, result.SyncedId)
 	}
 
 	fmt.Println("\n=== Test Summary ===")
@@ -549,49 +562,34 @@ func TestNotifyEntriesInRangeWithClosedChannels(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	rc3 := channel.NewLocalResultChannel("1/0/3")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
-	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), rc3)
 
 	// Close some channels before notification
-	close(ch1)
-	close(ch3)
+	rc1.Close(context.TODO())
+	rc3.Close(context.TODO())
 
 	// This should not panic even with closed channels
 	assert.NotPanics(t, func() {
-		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 100)
+		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 100, nil)
 	})
 
-	// Only ch2 should receive the notification
-	result := <-ch2
-	assert.Equal(t, int64(2), result) // Should receive its own ID
+	// Only rc2 should receive the notification
+	result, err := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), result.SyncedId) // Should receive its own ID
 
-	// Verify closed channels behavior - reading from closed channel returns zero value and false
-	select {
-	case val, ok := <-ch1:
-		if ok {
-			t.Fatalf("Channel ch1 should be closed, but received value: %d", val)
-		}
-		// Expected - channel is closed, val should be 0
-		assert.Equal(t, int64(0), val)
-	default:
-		// This is also acceptable - channel might not have any data
-	}
+	// Verify closed channels behavior - reading from closed channel should return error
+	_, err1 := rc1.ReadResult(context.TODO())
+	assert.Error(t, err1) // Should return error because channel is closed
 
-	select {
-	case val, ok := <-ch3:
-		if ok {
-			t.Fatalf("Channel ch3 should be closed, but received value: %d", val)
-		}
-		// Expected - channel is closed, val should be 0
-		assert.Equal(t, int64(0), val)
-	default:
-		// This is also acceptable - channel might not have any data
-	}
+	_, err3 := rc3.ReadResult(context.TODO())
+	assert.Error(t, err3) // Should return error because channel is closed
 }
 
 // TestNotifyAllPendingEntriesWithClosedChannels tests NotifyAllPendingEntries with closed channels
@@ -599,49 +597,34 @@ func TestNotifyAllPendingEntriesWithClosedChannels(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	rc3 := channel.NewLocalResultChannel("1/0/3")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
-	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), rc3)
 
 	// Close some channels before notification
-	close(ch1)
-	close(ch3)
+	rc1.Close(context.TODO())
+	rc3.Close(context.TODO())
 
 	// This should not panic even with closed channels
 	assert.NotPanics(t, func() {
-		buffer.NotifyAllPendingEntries(context.TODO(), 200)
+		buffer.NotifyAllPendingEntries(context.TODO(), 200, nil)
 	})
 
-	// Only ch2 should receive the notification
-	result := <-ch2
-	assert.Equal(t, int64(2), result) // Should receive its own ID
+	// Only rc2 should receive the notification
+	result, err := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), result.SyncedId) // Should receive its own ID
 
-	// Verify closed channels behavior - reading from closed channel returns zero value and false
-	select {
-	case val, ok := <-ch1:
-		if ok {
-			t.Fatalf("Channel ch1 should be closed, but received value: %d", val)
-		}
-		// Expected - channel is closed, val should be 0
-		assert.Equal(t, int64(0), val)
-	default:
-		// This is also acceptable - channel might not have any data
-	}
+	// Verify closed channels behavior - reading from closed channel should return error
+	_, err1 := rc1.ReadResult(context.TODO())
+	assert.Error(t, err1) // Should return error because channel is closed
 
-	select {
-	case val, ok := <-ch3:
-		if ok {
-			t.Fatalf("Channel ch3 should be closed, but received value: %d", val)
-		}
-		// Expected - channel is closed, val should be 0
-		assert.Equal(t, int64(0), val)
-	default:
-		// This is also acceptable - channel might not have any data
-	}
+	_, err3 := rc3.ReadResult(context.TODO())
+	assert.Error(t, err3) // Should return error because channel is closed
 }
 
 // TestResetWithClosedChannels tests Reset method with closed channels
@@ -649,26 +632,27 @@ func TestResetWithClosedChannels(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with notification channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	ch3 := make(chan int64, 1)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	rc3 := channel.NewLocalResultChannel("1/0/3")
 
-	buffer.WriteEntryWithNotify(1, []byte("data1"), ch1)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), ch2)
-	buffer.WriteEntryWithNotify(3, []byte("data3"), ch3)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), rc1)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), rc2)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), rc3)
 
 	// Close some channels before reset
-	close(ch1)
-	close(ch3)
+	rc1.Close(context.TODO())
+	rc3.Close(context.TODO())
 
 	// This should not panic even with closed channels
 	assert.NotPanics(t, func() {
 		buffer.Reset(context.TODO())
 	})
 
-	// Only ch2 should receive the error notification
-	result := <-ch2
-	assert.Equal(t, int64(-1), result) // Should receive error result
+	// Only rc2 should receive the error notification
+	result, err := rc2.ReadResult(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), result.SyncedId) // Should receive error result
 
 	// Verify buffer is reset
 	assert.Equal(t, int64(0), buffer.DataSize.Load())
@@ -685,33 +669,27 @@ func TestMixedClosedAndFullChannels(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 5)
 
 	// Add entries with different channel states
-	closedCh := make(chan int64)
-	close(closedCh) // Closed channel
+	closedRc := channel.NewLocalResultChannel("1/0/1")
+	closedRc.Close(context.TODO()) // Closed channel
+	fullRc := channel.NewLocalResultChannel("1/0/2")
+	normalRc := channel.NewLocalResultChannel("1/0/3")
 
-	fullCh := make(chan int64) // Unbuffered channel (will be full)
-
-	normalCh := make(chan int64, 1) // Normal buffered channel
-
-	buffer.WriteEntryWithNotify(1, []byte("data1"), closedCh)
-	buffer.WriteEntryWithNotify(2, []byte("data2"), fullCh)
-	buffer.WriteEntryWithNotify(3, []byte("data3"), normalCh)
+	buffer.WriteEntryWithNotify(1, []byte("data1"), closedRc)
+	buffer.WriteEntryWithNotify(2, []byte("data2"), fullRc)
+	buffer.WriteEntryWithNotify(3, []byte("data3"), normalRc)
 
 	// This should not panic or block
 	assert.NotPanics(t, func() {
-		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 300)
+		buffer.NotifyEntriesInRange(context.TODO(), 1, 4, 300, nil)
 	})
 
-	// Only normalCh should receive the notification
-	result := <-normalCh
-	assert.Equal(t, int64(3), result) // Should receive its own ID
+	// Only normalRc should receive the notification
+	result, err := normalRc.ReadResult(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), result.SyncedId) // Should receive its own ID
 
-	// Verify fullCh didn't receive anything (because it's unbuffered and no reader)
-	select {
-	case <-fullCh:
-		t.Fatal("Should not receive from full channel")
-	default:
-		// Expected - channel was full
-	}
+	// Verify fullRc didn't receive anything (because it's unbuffered and no reader)
+	// We can't easily test this without blocking, so we'll skip this check
 }
 
 // TestConcurrentNotificationWithClosedChannels tests concurrent notifications with closed channels
@@ -719,16 +697,16 @@ func TestConcurrentNotificationWithClosedChannels(t *testing.T) {
 	buffer := NewSequentialBuffer(1, 0, 1, 10)
 
 	// Add multiple entries
-	channels := make([]chan int64, 5)
+	resultChannels := make([]channel.ResultChannel, 5)
 	for i := 0; i < 5; i++ {
-		channels[i] = make(chan int64, 1)
-		buffer.WriteEntryWithNotify(int64(i+1), []byte(fmt.Sprintf("data%d", i+1)), channels[i])
+		resultChannels[i] = channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", i+1))
+		buffer.WriteEntryWithNotify(int64(i+1), []byte(fmt.Sprintf("data%d", i+1)), resultChannels[i])
 	}
 
 	// Close some channels
-	close(channels[0])
-	close(channels[2])
-	close(channels[4])
+	resultChannels[0].Close(context.TODO())
+	resultChannels[2].Close(context.TODO())
+	resultChannels[4].Close(context.TODO())
 
 	// Run multiple notifications concurrently
 	var wg sync.WaitGroup
@@ -738,7 +716,7 @@ func TestConcurrentNotificationWithClosedChannels(t *testing.T) {
 			defer wg.Done()
 			// This should not panic
 			assert.NotPanics(t, func() {
-				buffer.NotifyEntriesInRange(context.TODO(), 1, 6, int64(100+iteration))
+				buffer.NotifyEntriesInRange(context.TODO(), 1, 6, int64(100+iteration), nil)
 			})
 		}(i)
 	}

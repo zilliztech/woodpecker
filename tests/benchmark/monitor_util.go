@@ -19,16 +19,15 @@ package benchmark
 import (
 	"crypto/rand"
 	"fmt"
-	"github.com/google/gops/agent"
 	"io"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
-
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/gops/agent"
 	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

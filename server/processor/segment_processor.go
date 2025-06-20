@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/channel"
 	"path"
 	"sync"
 	"sync/atomic"
@@ -49,7 +50,7 @@ const (
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
-	AddEntry(context.Context, *SegmentEntry, chan<- int64) (int64, error)
+	AddEntry(context.Context, *SegmentEntry, channel.ResultChannel) (int64, error)
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	IsFenced(ctx context.Context) bool
@@ -193,7 +194,7 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 	return -1, werr.ErrSegmentNoWritingFragment
 }
 
-func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh chan<- int64) (int64, error) {
+func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
 	defer sp.End()
 	s.updateAccessTime()
