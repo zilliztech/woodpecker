@@ -215,8 +215,8 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 	if !writableExists {
 		handle, err := l.createAndCacheWritableSegmentHandle(ctx)
 		if err != nil {
-			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "create_error").Inc()
-			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "create_error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "error").Inc()
+			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
@@ -230,8 +230,8 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 		// close old writable segment handle
 		newSeg, err := l.doCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle)
 		if err != nil {
-			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "rollover_error").Inc()
-			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "rollover_error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "error").Inc()
+			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
@@ -261,8 +261,8 @@ func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segment
 		return nil, err
 	}
 	if s == nil {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_recoverable_segment", "not_found").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_recoverable_segment", "not_found").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_recoverable_segment", "error").Inc()
+		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_recoverable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		errMsg := fmt.Sprintf("segment not found for logName:%s segmentId:%d,it may have been deleted", l.Name, segmentId)
 		getSegErr := werr.ErrSegmentNotFound.WithCauseErrMsg(errMsg)
 		logger.Ctx(ctx).Warn("get exists read only segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", segmentId), zap.Error(getSegErr))
@@ -572,7 +572,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	// 1. Get current LogMeta
 	logMeta, err := l.Metadata.GetLogMeta(ctx, l.Name)
 	if err != nil {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "meta_error").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("check segment truncated state failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 		return werr.ErrTruncateLog.WithCauseErr(err)
@@ -580,7 +580,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 
 	// 2. Check if the requested truncation point is set
 	if logMeta.TruncatedSegmentId <= 0 {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "no_truncation").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil
 	}
@@ -589,7 +589,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	// Get all segments that are before the truncation point
 	segments, err := l.GetSegments(ctx)
 	if err != nil {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "segments_error").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return werr.ErrTruncateLog.WithCauseErr(err)
 	}
@@ -629,11 +629,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			zap.Int64("segmentId", segId))
 	}
 
-	if segmentsTruncated > 0 {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "segments_truncated").Inc()
-	} else {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "no_segments_truncated").Inc()
-	}
+	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
@@ -734,7 +730,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
 	if !writableExists {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "not_exists").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil
 	}
@@ -747,7 +743,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
 			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "fence_error").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
@@ -759,7 +755,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
 			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "close_error").Inc()
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}

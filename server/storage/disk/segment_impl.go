@@ -133,8 +133,7 @@ func (s *DiskSegmentImpl) run() {
 	ticker := time.NewTicker(time.Duration(s.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	logIdStr := fmt.Sprintf("%d", s.logId)
-	segIdStr := fmt.Sprintf("%d", s.segmentId)
-	metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Inc()
+	metrics.WpFileWriters.WithLabelValues(logIdStr).Inc()
 	for {
 		select {
 		case <-ticker.C:
@@ -160,7 +159,7 @@ func (s *DiskSegmentImpl) run() {
 		case <-s.closeCh:
 			logger.Ctx(context.Background()).Info("DiskSegmentImpl successfully closed",
 				zap.String("logFileDir", s.logFileDir))
-			metrics.WpFileWriters.WithLabelValues(logIdStr, segIdStr).Dec()
+			metrics.WpFileWriters.WithLabelValues(logIdStr).Dec()
 			return
 		}
 	}
@@ -212,15 +211,9 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 	defer sp.End()
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
 
-	startTime := time.Now()
-	logId := fmt.Sprintf("%d", s.logId)
-	segmentId := fmt.Sprintf("%d", s.segmentId)
-
 	// Handle closed file
 	if s.closed.Load() {
 		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return -1, errors.New("DiskSegmentImpl closed")
 	}
 
@@ -236,8 +229,6 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 		if sendResultErr != nil {
 			logger.Ctx(ctx).Warn("AppendAsync: failed to send result to channel", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Error(sendResultErr))
 		}
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return entryId, nil
 	}
 
@@ -248,8 +239,6 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 	if err != nil {
 		logger.Ctx(ctx).Debug("AppendAsync: writing to buffer failed", zap.Error(err))
 		s.mu.Unlock()
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return -1, err
 	}
 	logger.Ctx(ctx).Debug("AppendAsync: successfully written to buffer", zap.Int64("id", id), zap.Int64("expectedNextEntryId", currentBuffer.ExpectedNextEntryId.Load()))
@@ -272,8 +261,6 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 		}
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "append", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "append", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return id, nil
 }
 
@@ -289,7 +276,6 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", s.logId)
-	segmentId := fmt.Sprintf("%d", s.segmentId)
 
 	currentBuffer := s.buffer.Load()
 
@@ -318,16 +304,16 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 		// reset buffer as empty
 		currentBuffer.Reset(ctx)
 
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "sync", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else if originWrittenEntryID < afterFlushEntryID {
 		if writeError == nil { // Indicates all successful
 			restDataFirstEntryId := currentBuffer.ExpectedNextEntryId.Load()
 			restData, err := currentBuffer.ReadEntriesToLast(restDataFirstEntryId)
 			if err != nil {
 				logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("logFileDir", s.logFileDir), zap.Error(err))
-				metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "error").Inc()
-				metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+				metrics.WpFileOperationsTotal.WithLabelValues(logId, "sync", "error").Inc()
+				metrics.WpFileOperationLatency.WithLabelValues(logId, "sync", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 				return err
 			}
 			newBuffer := cache.NewSequentialBufferWithData(s.logId, s.segmentId, restDataFirstEntryId, 10000, restData)
@@ -336,8 +322,8 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 			// notify all successfully flushed entries
 			currentBuffer.NotifyEntriesInRange(ctx, toFlushDataFirstEntryId, restDataFirstEntryId, afterFlushEntryID, nil)
 
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "success").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+			metrics.WpFileOperationsTotal.WithLabelValues(logId, "sync", "success").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(logId, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		} else { // Indicates partial success
 			restDataFirstEntryId := afterFlushEntryID + 1
 
@@ -350,8 +336,8 @@ func (s *DiskSegmentImpl) Sync(ctx context.Context) error {
 			newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, restDataFirstEntryId, s.maxBufferEntries)
 			s.buffer.Store(newBuffer)
 
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "sync", "partial").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "sync", "partial").Observe(float64(time.Since(startTime).Milliseconds()))
+			metrics.WpFileOperationsTotal.WithLabelValues(logId, "sync", "partial").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(logId, "sync", "partial").Observe(float64(time.Since(startTime).Milliseconds()))
 		}
 	}
 
@@ -415,15 +401,14 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData []*cache.Bu
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", s.logId)
-	segmentId := fmt.Sprintf("%d", s.segmentId)
 
 	// Ensure fragment is created
 	if s.currFragment == nil {
 		logger.Ctx(ctx).Debug("Sync needs to create a new fragment")
 		if rotateErr := s.rotateFragment(ctx, s.lastEntryID.Load()+1); rotateErr != nil {
 			logger.Ctx(ctx).Debug("Sync failed to create new fragment", zap.Error(rotateErr))
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "flush", "rotate_error").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "flush", "rotate_error").Observe(float64(time.Since(startTime).Milliseconds()))
+			metrics.WpFileOperationsTotal.WithLabelValues(logId, "flush", "rotate_error").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(logId, "flush", "rotate_error").Observe(float64(time.Since(startTime).Milliseconds()))
 			return rotateErr
 		}
 	}
@@ -452,7 +437,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData []*cache.Bu
 				writeError = err
 				break
 			}
-			metrics.WpFragmentFlushBytes.WithLabelValues(logId, segmentId).Add(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushBytes.WithLabelValues(logId).Add(float64(pendingFlushBytes))
 			s.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
@@ -487,7 +472,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData []*cache.Bu
 				writeError = flushErr
 				break
 			}
-			metrics.WpFragmentFlushBytes.WithLabelValues(logId, segmentId).Add(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushBytes.WithLabelValues(logId).Add(float64(pendingFlushBytes))
 			s.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 
@@ -525,7 +510,7 @@ func (s *DiskSegmentImpl) flushData(ctx context.Context, toFlushData []*cache.Bu
 			logger.Ctx(ctx).Warn("Sync failed to flush current fragment", zap.Error(flushErr))
 			writeError = flushErr
 		} else {
-			metrics.WpFragmentFlushBytes.WithLabelValues(logId, segmentId).Add(float64(pendingFlushBytes))
+			metrics.WpFragmentFlushBytes.WithLabelValues(logId).Add(float64(pendingFlushBytes))
 			s.lastEntryID.Store(lastWrittenToBuffEntryID)
 			pendingFlushBytes = 0
 		}
@@ -866,7 +851,6 @@ func (rs *RODiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment,
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", rs.logId)
-	segmentId := fmt.Sprintf("%d", rs.segmentId)
 
 	// Calculate total size and return the last fragment
 	totalSize := int64(0)
@@ -879,8 +863,8 @@ func (rs *RODiskSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment,
 	}
 
 	// Update metrics
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "load", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "load", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, "load", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, "load", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// FragmentManager is responsible for managing fragment lifecycle, no need to release manually
 	return totalSize, lastFragment, nil
@@ -967,7 +951,6 @@ func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *Fragm
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", rs.logId)
-	segmentId := fmt.Sprintf("%d", rs.segmentId)
 
 	var fetchedLastFragment *FragmentFileReader = nil
 	fragId := int64(0)
@@ -990,14 +973,10 @@ func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *Fragm
 		// Create FragmentFile instance and load
 		fragment, err := NewFragmentFileReader(ctx, fragmentPath, fileInfo.Size(), rs.logId, rs.segmentId, fragId)
 		if err != nil {
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			break
 		}
 		if !fragment.IsMMapReadable(context.TODO()) {
 			logger.Ctx(ctx).Warn("found a new fragment unreadable", zap.String("logFileDir", rs.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
-			metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Inc()
-			metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			break
 		}
 
@@ -1009,8 +988,8 @@ func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *Fragm
 	}
 
 	// Update metrics
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "fetch_fragments", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "fetch_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, "fetch_fragments", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, "fetch_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Update file bytes metric
 	totalSize := int64(0)
@@ -1119,7 +1098,6 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", rs.logId)
-	segmentId := fmt.Sprintf("%d", rs.segmentId)
 
 	logger.Ctx(ctx).Info("Starting to delete fragments",
 		zap.String("logFileDir", rs.logFileDir),
@@ -1133,8 +1111,8 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 				zap.String("logFileDir", rs.logFileDir))
 			return nil
 		}
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "delete_fragments", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_fragments", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return err
 	}
 
@@ -1165,11 +1143,11 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 
 	// Update metrics
 	if len(deleteErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "delete_fragments", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_fragments", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "delete_fragments", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "delete_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_fragments", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed fragment deletion",
@@ -1201,7 +1179,6 @@ func (dr *DiskReader) HasNext(ctx context.Context) (bool, error) {
 	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", dr.logFile.logId)
-	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
 
 	if dr.closed {
 		logger.Ctx(ctx).Debug("No more entries to read, current reader is closed", zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID))
@@ -1243,8 +1220,8 @@ func (dr *DiskReader) HasNext(ctx context.Context) (bool, error) {
 	dr.currFragmentIdx = idx
 	dr.currFragment = f
 	dr.currEntryID = pendingReadEntryID
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "has_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "has_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, "has_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, "has_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return true, nil
 }
 
@@ -1258,7 +1235,6 @@ func (dr *DiskReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.L
 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", dr.logFile.logId)
-	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
 	if dr.closed {
 		return nil, errors.New("reader is closed")
 	}
@@ -1341,8 +1317,8 @@ func (dr *DiskReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.L
 		}
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "read_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, "read_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return entries, nil
 }
 
@@ -1352,7 +1328,6 @@ func (dr *DiskReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
 	defer sp.End()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", dr.logFile.logId)
-	segmentId := fmt.Sprintf("%d", dr.logFile.segmentId)
 	if dr.closed {
 		return nil, errors.New("reader is closed")
 	}
@@ -1420,8 +1395,8 @@ func (dr *DiskReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
 		dr.currFragmentIdx++
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, segmentId, "read_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, segmentId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(logId, "read_next", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(logId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return entry, nil
 }
 

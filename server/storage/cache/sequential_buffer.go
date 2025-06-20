@@ -61,7 +61,7 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxEntries))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId)).Set(float64(maxEntries))
 	return b
 }
 
@@ -78,7 +78,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId), fmt.Sprintf("%d", segmentId)).Set(float64(maxEntries))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId)).Set(float64(maxEntries))
 	return b
 }
 
@@ -111,7 +111,7 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 			b.ExpectedNextEntryId.Add(1)
 			bufferEntry := b.Entries[addedId-b.FirstEntryId]
 			b.SequentialReadyDataSize.Add(int64(len(bufferEntry.Data)))
-			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId), fmt.Sprintf("%d", b.segmentId)).Dec()
+			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId)).Dec()
 		} else {
 			break
 		}

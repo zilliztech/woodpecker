@@ -182,7 +182,7 @@ var (
 			Name:      "segment_handle_operations_total",
 			Help:      "Total number of segment handle operations",
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpSegmentHandleOperationLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -192,7 +192,7 @@ var (
 			Help:      "Latency of segment handle operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpSegmentHandlePendingAppendOps = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -201,7 +201,7 @@ var (
 			Name:      "segment_handle_pending_append_ops",
 			Help:      "Number of pending append operations in segment handles",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	// Etcd Meta metrics
@@ -242,7 +242,7 @@ var (
 			Name:      "logstore_operations_total",
 			Help:      "Total number of log store operations",
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpLogStoreOperationLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -252,7 +252,7 @@ var (
 			Help:      "Latency of log store operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpLogStoreActiveSegmentProcessors = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -264,27 +264,6 @@ var (
 		[]string{"log_id"},
 	)
 
-	// SegmentProcessor metrics
-	WpSegmentProcessorOperationsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: wp_namespace,
-			Subsystem: server_namespace,
-			Name:      "segment_processor_operations_total",
-			Help:      "Total number of segment processor operations",
-		},
-		[]string{"log_id", "segment_id", "operation", "status"},
-	)
-	WpSegmentProcessorOperationLatency = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: wp_namespace,
-			Subsystem: server_namespace,
-			Name:      "segment_processor_operation_latency",
-			Help:      "Latency of segment processor operations",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		},
-		[]string{"log_id", "segment_id", "operation", "status"},
-	)
-
 	// Segment File Impl metrics
 	WpFileOperationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -293,7 +272,7 @@ var (
 			Name:      "file_operations_total",
 			Help:      "Total number of file operations",
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpFileOperationLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -303,7 +282,7 @@ var (
 			Help:      "Latency of file operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id", "operation", "status"},
+		[]string{"log_id", "operation", "status"},
 	)
 	WpFileWriters = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -312,7 +291,7 @@ var (
 			Name:      "file_writer",
 			Help:      "Number of fragment file writer for this segment",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	WpFileCompactLatency = prometheus.NewHistogramVec(
@@ -323,7 +302,7 @@ var (
 			Help:      "Latency of compaction operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFileCompactBytesWritten = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -332,7 +311,7 @@ var (
 			Name:      "compact_bytes_written",
 			Help:      "Total bytes written by compaction",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	// Fragment metrics
@@ -343,7 +322,7 @@ var (
 			Name:      "fragment_load_total",
 			Help:      "Total number of loaded fragments",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentLoadLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -353,7 +332,7 @@ var (
 			Help:      "Latency of fragment load operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentLoadBytes = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -362,7 +341,7 @@ var (
 			Name:      "fragment_load_bytes",
 			Help:      "Size of loaded fragment in bytes",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentFlushTotal = prometheus.NewCounterVec( // fragment write
 		prometheus.CounterOpts{
@@ -371,7 +350,7 @@ var (
 			Name:      "fragment_flush_total",
 			Help:      "Total number of load fragment requests",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentFlushLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -381,7 +360,7 @@ var (
 			Help:      "Latency of fragment flush operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentFlushBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -390,7 +369,7 @@ var (
 			Name:      "fragment_flush_bytes",
 			Help:      "Size of fragment flush operations in bytes",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	// Deprecated
@@ -402,7 +381,7 @@ var (
 			Name:      "fragment_cache_total",
 			Help:      "Total number of cached fragments",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentManagerDataCacheBytes = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -411,7 +390,7 @@ var (
 			Name:      "fragment_data_cache_bytes",
 			Help:      "Total data bytes of cached fragments",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 	WpFragmentManagerBufferCacheBytes = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -420,7 +399,7 @@ var (
 			Name:      "fragment_buffer_cache_bytes",
 			Help:      "Total buffer bytes of cached fragments",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	// Buffer metrics
@@ -431,7 +410,7 @@ var (
 			Name:      "write_buffer_slots_total",
 			Help:      "Total number of write buffer slots",
 		},
-		[]string{"log_id", "segment_id"},
+		[]string{"log_id"},
 	)
 
 	// Object storage metrics
@@ -502,9 +481,6 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogStoreOperationsTotal)
 		registerer.MustRegister(WpLogStoreOperationLatency)
 		registerer.MustRegister(WpLogStoreActiveSegmentProcessors)
-		// SegmentProcessor metrics
-		registerer.MustRegister(WpSegmentProcessorOperationsTotal)
-		registerer.MustRegister(WpSegmentProcessorOperationLatency)
 		// Segment File Impl metrics
 		registerer.MustRegister(WpFileOperationsTotal)
 		registerer.MustRegister(WpFileOperationLatency)

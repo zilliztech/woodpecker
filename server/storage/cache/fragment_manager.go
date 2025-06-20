@@ -204,10 +204,9 @@ func (m *fragmentManagerImpl) handleShutdown(req fragmentRequest) {
 
 		// Reset metrics for this fragment before releasing
 		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
-		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
-		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
-		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
-		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId).Sub(float64(rawFragmentBufSize))
 
 		m.dataMemory -= fragmentSize
 		m.usedMemory -= rawFragmentBufSize
@@ -259,10 +258,9 @@ func (m *fragmentManagerImpl) handleAddFragment(req fragmentRequest) {
 
 	// Update metrics for this fragment
 	logId := fmt.Sprintf("%d", fragment.GetLogId())
-	segmentId := fmt.Sprintf("%d", fragment.GetSegmentId())
-	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Inc()
-	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Add(float64(fragmentSize))
-	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Add(float64(rawFragmentBufSize))
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId).Inc()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId).Add(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId).Add(float64(rawFragmentBufSize))
 
 	logger.Ctx(req.ctx).Debug("add fragment finish", zap.String("key", key),
 		zap.String("fragInst", fmt.Sprintf("%p", fragment)),
@@ -296,10 +294,9 @@ func (m *fragmentManagerImpl) handleRemoveFragment(req fragmentRequest) {
 
 	// Update metrics before removing
 	logId := fmt.Sprintf("%d", item.fragment.GetLogId())
-	segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
-	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
-	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
-	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+	metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId).Dec()
+	metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId).Sub(float64(fragmentSize))
+	metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId).Sub(float64(rawFragmentBufSize))
 
 	// Perform deletion
 	delete(m.cache, key)
@@ -365,10 +362,9 @@ func (m *fragmentManagerImpl) handleEvictFragments(req fragmentRequest) {
 		// Update metrics before evicting
 		fragmentSize, rawFragmentBufSize := calculateSize(item.fragment)
 		logId := fmt.Sprintf("%d", item.fragment.GetLogId())
-		segmentId := fmt.Sprintf("%d", item.fragment.GetSegmentId())
-		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId, segmentId).Dec()
-		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(fragmentSize))
-		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId, segmentId).Sub(float64(rawFragmentBufSize))
+		metrics.WpFragmentManagerCachedFragmentsTotal.WithLabelValues(logId).Dec()
+		metrics.WpFragmentManagerDataCacheBytes.WithLabelValues(logId).Sub(float64(fragmentSize))
+		metrics.WpFragmentManagerBufferCacheBytes.WithLabelValues(logId).Sub(float64(rawFragmentBufSize))
 
 		// Perform eviction
 		delete(m.cache, keyToEvict)

@@ -142,7 +142,6 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	defer f.mu.Unlock()
 	start := time.Now()
 	logId := fmt.Sprintf("%d", f.logId)
-	segId := fmt.Sprintf("%d", f.segmentId)
 	if !f.dataLoaded {
 		logger.Ctx(ctx).Warn("should not flush a fragment without data", zap.String("fragmentKey", f.fragmentKey))
 		return werr.ErrFragmentNotLoaded.WithCauseErrMsg("should not flush a fragment without data")
@@ -172,9 +171,9 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	}
 
 	cost := time.Now().Sub(start)
-	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segId).Inc()
-	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segId).Observe(float64(cost.Milliseconds()))
-	metrics.WpFragmentFlushBytes.WithLabelValues(logId, segId).Add(float64(fullDataSize))
+	metrics.WpFragmentFlushTotal.WithLabelValues(logId).Inc()
+	metrics.WpFragmentFlushLatency.WithLabelValues(logId).Observe(float64(cost.Milliseconds()))
+	metrics.WpFragmentFlushBytes.WithLabelValues(logId).Add(float64(fullDataSize))
 	f.dataUploaded = true
 
 	// flush success
@@ -200,7 +199,6 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 
 	start := time.Now()
 	logId := fmt.Sprintf("%d", f.logId)
-	segId := fmt.Sprintf("%d", f.segmentId)
 	fragObjectReader, objDataSize, objLastModified, err := f.client.GetObjectDataAndInfo(ctx, f.bucket, f.fragmentKey, minio.GetObjectOptions{})
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to get object", zap.String("fragmentKey", f.fragmentKey), zap.Error(err))
@@ -235,9 +233,9 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	f.dataRefCnt += 1 // Increase the reference count
 
 	// update metrics
-	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Inc()
-	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Add(float64(f.GetSize()))
-	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segId).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId).Inc()
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId).Add(float64(f.GetSize()))
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId).Observe(float64(time.Since(start).Milliseconds()))
 
 	return nil
 }
@@ -345,9 +343,8 @@ func (f *FragmentObject) Release(ctx context.Context) error {
 
 	// update metrics
 	logId := fmt.Sprintf("%d", f.logId)
-	segId := fmt.Sprintf("%d", f.segmentId)
-	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segId).Dec()
-	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segId).Sub(float64(f.GetSize()))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId).Dec()
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId).Sub(float64(f.GetSize()))
 
 	return nil
 }

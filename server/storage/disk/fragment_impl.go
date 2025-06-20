@@ -94,34 +94,33 @@ func NewFragmentFileWriter(ctx context.Context, filePath string, fileSize int64,
 
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
-	segmentIdStr := fmt.Sprintf("%d", segmentId)
 
-	// 创建或打开文件
+	// Create or open the file
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open new fragment file %s", filePath)
 	}
 
-	// 设置文件大小
+	// Set the file size
 	if err := file.Truncate(fileSize); err != nil {
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to truncate the new fragment file:%s to size:%d", filePath, fileSize)
 	}
 	fw.fd = file
 
-	// 映射文件到内存
+	// Map the file to memory
 	fw.mappedFile, err = mmap.MapRegion(file, -1, mmap.RDWR, 0, 0)
 	if err != nil {
 		file.Close()
 		return nil, errors.Wrapf(err, "failed to map fragment file %s", filePath)
 	}
 
-	// 写入footer
+	// Write the footer
 	if err := fw.writeFooter(ctx); err != nil {
 		fw.Release(ctx)
 		return nil, err
 	}
-	// 写入header
+	// Write the header
 	if err := fw.writeHeader(ctx); err != nil {
 		fw.Release(ctx)
 		return nil, err
@@ -130,9 +129,9 @@ func NewFragmentFileWriter(ctx context.Context, filePath string, fileSize int64,
 	logger.Ctx(ctx).Debug("FragmentFile created", zap.String("filePath", filePath), zap.Int64("fragmentId", fragmentId), zap.String("fragmentInst", fmt.Sprintf("%p", fw)))
 
 	// update metrics
-	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Add(float64(fileSize))
-	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Inc()
-	metrics.WpFragmentLoadLatency.WithLabelValues(logIdStr, segmentIdStr).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr).Add(float64(fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 	return fw, nil
 }
 
@@ -175,7 +174,6 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 	defer fw.mu.Unlock()
 	start := time.Now()
 	logId := fmt.Sprintf("%d", fw.logId)
-	segmentId := fmt.Sprintf("%d", fw.segmentId)
 
 	if fw.closed {
 		return errors.New("fragment file is closed")
@@ -196,8 +194,8 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 		return errors.Wrap(err, "failed to sync fragment file")
 	}
 
-	metrics.WpFragmentFlushTotal.WithLabelValues(logId, segmentId).Inc()
-	metrics.WpFragmentFlushLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentFlushTotal.WithLabelValues(logId).Inc()
+	metrics.WpFragmentFlushLatency.WithLabelValues(logId).Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -402,9 +400,8 @@ func (fw *FragmentFileWriter) Release(ctx context.Context) error {
 
 	// update metrics
 	logIdStr := fmt.Sprintf("%d", fw.logId)
-	segmentIdStr := fmt.Sprintf("%d", fw.segmentId)
-	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Sub(float64(fw.fileSize))
-	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Dec()
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr).Sub(float64(fw.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr).Dec()
 
 	return nil
 }
@@ -629,7 +626,6 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 
 	start := time.Now()
 	logId := fmt.Sprintf("%d", fr.logId)
-	segmentId := fmt.Sprintf("%d", fr.segmentId)
 	if fr.closed {
 		return errors.New("fragment file is closed")
 	}
@@ -674,9 +670,9 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 
 	logger.Ctx(ctx).Debug("fragment file load finish", zap.Int64("fragmentId", fr.fragmentId), zap.String("filePath", fr.filePath), zap.Int("ref", fr.dataRefCnt), zap.String("fragInst", fmt.Sprintf("%p", fr)))
 	// update metrics
-	metrics.WpFragmentLoadBytes.WithLabelValues(logId, segmentId).Add(float64(fr.fileSize))
-	metrics.WpFragmentLoadTotal.WithLabelValues(logId, segmentId).Inc()
-	metrics.WpFragmentLoadLatency.WithLabelValues(logId, segmentId).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpFragmentLoadBytes.WithLabelValues(logId).Add(float64(fr.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logId).Inc()
+	metrics.WpFragmentLoadLatency.WithLabelValues(logId).Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -1181,9 +1177,8 @@ func (fr *FragmentFileReader) Release(ctx context.Context) error {
 
 	// update metrics
 	logIdStr := fmt.Sprintf("%d", fr.logId)
-	segmentIdStr := fmt.Sprintf("%d", fr.segmentId)
-	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr, segmentIdStr).Sub(float64(fr.fileSize))
-	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr, segmentIdStr).Dec()
+	metrics.WpFragmentLoadBytes.WithLabelValues(logIdStr).Sub(float64(fr.fileSize))
+	metrics.WpFragmentLoadTotal.WithLabelValues(logIdStr).Dec()
 
 	return nil
 }
