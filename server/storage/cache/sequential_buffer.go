@@ -182,31 +182,19 @@ func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryI
 				notifyValue = entry.EntryId
 			}
 
-			// Safely send to channel with panic recovery
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
-							zap.Int64("entryId", entry.EntryId),
-							zap.Int64("notifyValue", notifyValue),
-							zap.Any("panic", r))
-					}
-				}()
-
-				sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
-					SyncedId: notifyValue,
-					Err:      resultErr,
-				})
-				if sendErr != nil {
-					logger.Ctx(ctx).Warn("Send result to channel failed",
-						zap.Int64("entryId", entry.EntryId),
-						zap.Int64("notifyValue", notifyValue),
-						zap.Error(sendErr))
-				} else {
-					notifiedCount++
-					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-				}
-			}()
+			sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
+				SyncedId: notifyValue,
+				Err:      resultErr,
+			})
+			if sendErr != nil {
+				logger.Ctx(ctx).Warn("Send result to channel failed",
+					zap.Int64("entryId", entry.EntryId),
+					zap.Int64("notifyValue", notifyValue),
+					zap.Error(sendErr))
+			} else {
+				notifiedCount++
+				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+			}
 			entry.NotifyChan = nil // Clear the channel reference
 		}
 	}
@@ -240,32 +228,20 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 				notifyValue = entry.EntryId
 			}
 
-			// Safely send to channel with panic recovery
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
-							zap.Int64("entryId", entry.EntryId),
-							zap.Int64("notifyValue", notifyValue),
-							zap.Any("panic", r))
-					}
-				}()
-
-				sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
-					SyncedId: notifyValue,
-					Err:      resultErr,
-				})
-				if sendErr != nil {
-					logger.Ctx(ctx).Warn("Send result to channel failed",
-						zap.Int64("entryId", entry.EntryId),
-						zap.Int64("notifyValue", notifyValue),
-						zap.Error(sendErr),
-					)
-				} else {
-					notifiedCount++
-					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-				}
-			}()
+			sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
+				SyncedId: notifyValue,
+				Err:      resultErr,
+			})
+			if sendErr != nil {
+				logger.Ctx(ctx).Warn("Send result to channel failed",
+					zap.Int64("entryId", entry.EntryId),
+					zap.Int64("notifyValue", notifyValue),
+					zap.Error(sendErr),
+				)
+			} else {
+				notifiedCount++
+				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+			}
 			entry.NotifyChan = nil // Clear the channel reference
 		}
 	}
@@ -352,32 +328,19 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 				notifyValue = entry.EntryId
 			}
 
-			// Safely send to channel with panic recovery
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
-							zap.Int64("entryId", entry.EntryId),
-							zap.Int64("notifyValue", notifyValue),
-							zap.Any("panic", r))
-					}
-				}()
-
-				sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
-					SyncedId: notifyValue,
-					Err:      resultErr,
-				})
-				if sendErr != nil {
-					logger.Ctx(ctx).Warn("Send result to channel failed",
-						zap.Int64("entryId", entry.EntryId),
-						zap.Int64("notifyValue", notifyValue),
-						zap.Error(sendErr),
-					)
-				} else {
-					notifiedCount++
-					notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
-				}
-			}()
+			sendErr := entry.NotifyChan.SendResult(ctx, &channel.AppendResult{
+				SyncedId: notifyValue,
+				Err:      resultErr,
+			})
+			if sendErr != nil {
+				logger.Ctx(ctx).Warn("Send result to channel failed",
+					zap.Int64("entryId", entry.EntryId),
+					zap.Int64("notifyValue", notifyValue),
+					zap.Error(sendErr))
+			} else {
+				notifiedCount++
+				notifiedEntryIds = append(notifiedEntryIds, entry.EntryId)
+			}
 
 			entry.NotifyChan = nil // Clear the channel reference
 		}
@@ -397,17 +360,6 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 // For successful entries (result >= 0), the entry receives the entryId
 // For failed entries (result < 0), the entry receives the error result
 func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Ctx(ctx).Debug("Recovered from panic when sending to closed channel",
-				zap.Int64("logId", logId),
-				zap.Int64("segId", segId),
-				zap.Int64("entryId", entryId),
-				zap.Int64("result", result),
-				zap.Any("panic", r))
-		}
-	}()
-
 	// For successful writes, send the entry's own ID
 	// For failed writes, send the error result
 	notifyValue := result

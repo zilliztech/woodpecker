@@ -199,8 +199,6 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetOrCreateWritableSegmentHandle")
 	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
 
 	l.Lock()
 	defer l.Unlock()
@@ -215,34 +213,24 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 	if !writableExists {
 		handle, err := l.createAndCacheWritableSegmentHandle(ctx)
 		if err != nil {
-			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "error").Inc()
-			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "success").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return handle, nil
 	}
 
 	// check if writable segment handle should be closed and create new segment handle
 	if l.shouldCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle) {
 		// close old writable segment handle
-		newSeg, err := l.doCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle)
+		newSeg, err := l.doCloseAndCreateWritableSegmentHandleUnsafe(ctx, writeableSegmentHandle)
 		if err != nil {
-			metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "error").Inc()
-			metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "success").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return newSeg, nil
 	}
 
 	// return existing writable segment handle
-	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_writable_segment", "success").Inc()
-	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return writeableSegmentHandle, nil
 }
 
@@ -277,8 +265,6 @@ func (l *logHandleImpl) GetRecoverableSegmentHandle(ctx context.Context, segment
 func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetExistsReadonlySegmentHandle")
 	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
 
 	l.Lock()
 	defer l.Unlock()
@@ -292,21 +278,15 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	if exists {
 		// Update last access time
 		l.SegmentHandleLastAccess[segmentId] = time.Now()
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "cache_hit").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "cache_hit").Observe(float64(time.Since(start).Milliseconds()))
 		return readableSegmentHandle, nil
 	}
 	// get segment meta and create handle
 	segMeta, err := l.Metadata.GetSegmentMetadata(ctx, l.Name, segmentId)
 	if err != nil && werr.ErrSegmentNotFound.Is(err) {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "not_found").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "not_found").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get exists read only segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return nil, err
 	}
 	if err != nil {
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "error").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get exists read only segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", segmentId), zap.Error(err))
 		return nil, err
 	}
@@ -314,12 +294,8 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false)
 		l.SegmentHandles[segmentId] = handle
 		l.SegmentHandleLastAccess[segmentId] = time.Now()
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "created").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "created").Observe(float64(time.Since(start).Milliseconds()))
 		return handle, nil
 	}
-	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_readonly_segment", "null_meta").Inc()
-	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_readonly_segment", "null_meta").Observe(float64(time.Since(start).Milliseconds()))
 	return nil, nil
 }
 
@@ -338,13 +314,17 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context)
 }
 
 func (l *logHandleImpl) shouldCloseAndCreateWritableSegmentHandle(ctx context.Context, segmentHandle segment.SegmentHandle) bool {
+	if segmentHandle.IsForceRollingReady(ctx) {
+		// force rolling is set
+		return true
+	}
 	size := segmentHandle.GetSize(ctx)
 	last := l.lastRolloverTimeMs
 	return l.rollingPolicy.ShouldRollover(ctx, size, last)
 }
 
 // doCloseAndCreateWritableSegmentHandle fast close segment and create new segment, no need to wait for segment async compaction
-func (l *logHandleImpl) doCloseAndCreateWritableSegmentHandle(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) doCloseAndCreateWritableSegmentHandleUnsafe(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
 	logger.Ctx(ctx).Debug("start to close segment",
 		zap.String("logName", l.Name),
 		zap.Int64("logId", l.GetId()),

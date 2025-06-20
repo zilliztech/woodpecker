@@ -113,6 +113,8 @@ const (
 	// use this error to indicate that this segment is now permanently
 	// fenced.
 	SegmentFenced
+	// SegmentRolling indicates that the segment is rolling.
+	SegmentRolling
 	// SegmentNoWritingFragment when a segment is not writing a fragment, this error
 	SegmentNoWritingFragment
 	// SegmentStateInvalid indicates that the segment is in an invalid state for current Operation.
@@ -125,6 +127,8 @@ const (
 	SegmentWriteException
 	// SegmentWriteError indicates that an error occurred while writing a segment.
 	SegmentWriteError
+	// ResultChannelClosed indicates that the result channel is closed.
+	ResultChannelClosed
 	// LogFileClosed indicates that the log file is closed.
 	LogFileClosed
 	// FragmentEmpty indicates that the fragment is empty.
@@ -178,8 +182,12 @@ var (
 	ErrSegmentWriteError        = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
 	ErrSegmentClosed            = newWoodpeckerError("Segment is closed", SegmentClosed, true)
 	ErrSegmentFenced            = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
+	ErrSegmentRolling           = newWoodpeckerError("Segment is rolling", SegmentRolling, true)
 	ErrSegmentStateInvalid      = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
 	ErrSegmentNoWritingFragment = newWoodpeckerError("Segment is not writing", SegmentNoWritingFragment, false)
+	// AppendOp
+	ErrResultChannelClosed = newWoodpeckerError("Result channel is closed", ResultChannelClosed, false)
+
 	// Reader&Writer related
 	ErrInvalidEntryId      = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
 	ErrBufferIsEmpty       = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)

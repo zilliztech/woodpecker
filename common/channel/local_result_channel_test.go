@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"strings"
 	"sync"
 	"testing"
@@ -243,7 +244,7 @@ func TestLocalResultChannel_ReadResultDeadlock(t *testing.T) {
 
 	// Should timeout, not deadlock
 	assert.Error(t, readError)
-	assert.Equal(t, context.DeadlineExceeded, readError)
+	assert.True(t, werr.ErrResultChannelClosed.Is(readError))
 }
 
 // Test to expose race condition in SendResult

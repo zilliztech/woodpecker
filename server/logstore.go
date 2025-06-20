@@ -321,12 +321,15 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 
-	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-		lastEntryId, err := processor.SetFenced(ctx)
+	if segmentProcessor := l.getExistsSegmentProcessor(logId, segmentId); segmentProcessor != nil {
+		// TODO close&sync, than fence
+		lastEntryId, err := segmentProcessor.SetFenced(ctx)
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence_segment", "success").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return lastEntryId, err
 	}
+	// TODO just fence
+
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence_segment", "segment_not_found").Inc()
 	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence_segment", "segment_not_found").Observe(float64(time.Since(start).Milliseconds()))
 	fenceErr := werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("processor of log:%d segment:%d not exists", logId, segmentId))

@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 var _ ResultChannel = (*LocalResultChannel)(nil)
@@ -49,14 +50,13 @@ func (l *LocalResultChannel) GetIdentifier() string {
 	return l.identifier
 }
 
-func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	if l.closed {
-		return fmt.Errorf("local result channel %s is closed", l.identifier)
-	}
-
+func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = werr.ErrResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
+			return
+		}
+	}()
 	select {
 	case l.ch <- result:
 		logger.Ctx(ctx).Debug("sent result to local channel",
@@ -76,14 +76,11 @@ func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResul
 }
 
 func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, error) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
 	select {
 	case r, ok := <-l.ch:
 		if !ok {
 			// Channel was closed externally
-			return nil, fmt.Errorf("local result channel %s underlying channel is closed", l.identifier)
+			return nil, werr.ErrResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
 		}
 		logger.Ctx(ctx).Debug("read result from local channel",
 			zap.String("identifier", l.identifier),
@@ -91,39 +88,18 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 		return r, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	default:
-		// If no data is available and channel is closed, return error
-		if l.closed {
-			return nil, fmt.Errorf("local result channel %s is closed", l.identifier)
-		}
-		// If channel is not closed but no data, block on select again
-		select {
-		case r, ok := <-l.ch:
-			if !ok {
-				// Channel was closed externally
-				return nil, fmt.Errorf("local result channel %s underlying channel is closed", l.identifier)
-			}
-			logger.Ctx(ctx).Debug("read result from local channel",
-				zap.String("identifier", l.identifier),
-			)
-			return r, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
 	}
 }
 
 func (l *LocalResultChannel) Close(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
 	if !l.closed {
 		l.closed = true
-		// Close the underlying channel for resource cleanup
 		close(l.ch)
-		logger.Ctx(ctx).Debug("closed local result channel and underlying channel",
-			zap.String("identifier", l.identifier))
 	}
+	logger.Ctx(ctx).Debug("closed local result channel and underlying channel",
+		zap.String("identifier", l.identifier))
 	return nil
 }
 

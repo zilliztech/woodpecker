@@ -77,9 +77,14 @@ type SegmentHandle interface {
 	RequestCompactionAsync(context.Context) error
 	// Fence the segment in all nodes
 	Fence(context.Context) (int64, error)
+	// IsFence check if the segment is fenced
 	IsFence(context.Context) (bool, error)
 	// RecoveryOrCompact is a recovery or compaction operation
-	RecoveryOrCompact(todo context.Context) error
+	RecoveryOrCompact(context.Context) error
+	// SetRollingReady set the segment as ready for rolling
+	SetRollingReady(context.Context)
+	// IsForceRollingReady check if the segment is ready for rolling
+	IsForceRollingReady(context.Context) bool
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
@@ -108,6 +113,8 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.commitedSize.Store(segmentMeta.Size)
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
+	segmentHandle.rollingState.Store(false)
+	segmentHandle.rollingReadyState.Store(false)
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
 		segmentHandle.executor.Start(ctx)
@@ -143,6 +150,7 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
 	segmentHandle.canWriteState.Store(false)
+	segmentHandle.rollingState.Store(false)
 	return segmentHandle
 }
 
@@ -165,8 +173,10 @@ type segmentHandleImpl struct {
 	commitedSize     atomic.Int64
 	pendingSize      atomic.Int64
 
-	fencedState   atomic.Bool
-	canWriteState atomic.Bool
+	fencedState       atomic.Bool
+	canWriteState     atomic.Bool
+	rollingState      atomic.Bool
+	rollingReadyState atomic.Bool
 
 	executor *SequentialExecutor
 
@@ -188,6 +198,11 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	// Check fenced state first without lock to avoid deadlock
 	if s.fencedState.Load() {
 		callback(s.segmentId, -1, werr.ErrSegmentFenced)
+		return
+	}
+
+	if s.rollingState.Load() {
+		callback(s.segmentId, -1, werr.ErrSegmentRolling)
 		return
 	}
 
@@ -355,6 +370,16 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
 	}
+
+	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
+	if len(elementsToRemove) > 0 && minRemoveId < int64(math.MaxInt64) {
+		// trigger rolling segment
+		// mark rolling
+		s.rollingState.Store(true)
+		// submit rolling task to queue
+		s.executor.Submit(ctx, NewRollingSegmentOp(ctx, fmt.Sprintf("rolling_%d/%d_trigger_%d", s.logId, s.segmentId, minRemoveId), s))
+	}
+
 }
 
 func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*processor.SegmentEntry, error) {
@@ -651,6 +676,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	s.Lock()
 	defer s.Unlock()
 
+	// check cached fenced flag to return fast
 	if s.fencedState.Load() {
 		logger.Ctx(ctx).Info("Segment already fenced, returning cached result",
 			zap.String("logName", s.logName),
@@ -663,18 +689,10 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 
-	// Set fenced state to prevent new append operations
-	s.fencedState.Store(true)
-	logger.Ctx(ctx).Info("Set local fenced state to prevent new append operations",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segmentId", s.segmentId))
-
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		// Revert fenced state on error
-		s.fencedState.Store(false)
 		logger.Ctx(ctx).Warn("Failed to get quorum info during fence, reverting fenced state",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -684,7 +702,6 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		// Revert fenced state on error
-		s.fencedState.Store(false)
 		logger.Ctx(ctx).Warn("Unsupported quorum configuration during fence, reverting fenced state",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -696,7 +713,6 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		// Revert fenced state on error
-		s.fencedState.Store(false)
 		logger.Ctx(ctx).Warn("Failed to get logstore client during fence, reverting fenced state",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -722,6 +738,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("lastEntryId", lastEntryId),
 		zap.Error(fencedErr))
 
+	// TODO simplify err condition
 	if lastEntryId == -1 && fencedErr != nil && (werr.ErrSegmentFenced.Is(fencedErr) || werr.ErrSegmentNotFound.Is(fencedErr) || werr.ErrSegmentNoWritingFragment.Is(fencedErr)) {
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -754,6 +771,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 				zap.Int64("segmentId", s.segmentId),
 				zap.Int64("lastEntryId", lastEntryId),
 				zap.Duration("duration", time.Since(start)))
+			s.fencedState.Store(true) // Set fenced state to prevent new append operations
 			metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
 			metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 		}
@@ -1149,4 +1167,18 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "compact_to_sealed", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "compact_to_sealed", "success").Observe(float64(compactionDuration.Milliseconds()))
 	return updateMetaErr
+}
+
+// SetRollingReady set the segment as ready for rolling
+func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
+	s.Lock()
+	defer s.Unlock()
+	s.rollingReadyState.Store(true)
+}
+
+// IsRollingReady check if the segment is ready for rolling
+func (s *segmentHandleImpl) IsForceRollingReady(ctx context.Context) bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.rollingReadyState.Load()
 }

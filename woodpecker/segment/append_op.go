@@ -205,31 +205,22 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 
 	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail called for log:%d seg:%d entry:%d, processing %d channels", op.logId, op.segmentId, op.entryId, len(op.resultChannels)), zap.Error(err))
 
-	for i, ch := range op.resultChannels {
-		// Safely handle channel operations
-		func(ch channel.ResultChannel, index int) {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail recovered from panic on channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, r))
-				}
-			}()
-
-			sendErr := ch.SendResult(ctx, &channel.AppendResult{
-				SyncedId: -1,
-				Err:      err,
-			})
-			if sendErr != nil {
-				logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastFail result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
-			} else {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastFail result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
-			}
-			closeErr := ch.Close(ctx)
-			if closeErr != nil {
-				logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
-			} else {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
-			}
-		}(ch, i)
+	for index, ch := range op.resultChannels {
+		sendErr := ch.SendResult(ctx, &channel.AppendResult{
+			SyncedId: -1,
+			Err:      err,
+		})
+		if sendErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastFail result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
+		} else {
+			logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastFail result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+		}
+		closeErr := ch.Close(ctx)
+		if closeErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
+		} else {
+			logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+		}
 	}
 
 	op.callback(op.segmentId, op.entryId, err)
@@ -247,31 +238,22 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 
 	logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess called for log:%d seg:%d entry:%d, processing %d channels", op.logId, op.segmentId, op.entryId, len(op.resultChannels)))
 
-	for i, ch := range op.resultChannels {
-		// Safely handle channel operations
-		func(ch channel.ResultChannel, index int) {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess recovered from panic on channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, r))
-				}
-			}()
-
-			sendErr := ch.SendResult(ctx, &channel.AppendResult{
-				SyncedId: op.entryId,
-				Err:      nil,
-			})
-			if sendErr != nil {
-				logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastSuccess result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
-			} else {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastSuccess result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
-			}
-			closeErr := ch.Close(ctx)
-			if closeErr != nil {
-				logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
-			} else {
-				logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
-			}
-		}(ch, i)
+	for index, ch := range op.resultChannels {
+		sendErr := ch.SendResult(ctx, &channel.AppendResult{
+			SyncedId: op.entryId,
+			Err:      nil,
+		})
+		if sendErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("Send FastSuccess result to channel failed %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, sendErr))
+		} else {
+			logger.Ctx(ctx).Debug(fmt.Sprintf("Send FastSuccess result to to channel finish %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+		}
+		closeErr := ch.Close(ctx)
+		if closeErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close channel %d for log:%d seg:%d entry:%d: %v", index, op.logId, op.segmentId, op.entryId, closeErr))
+		} else {
+			logger.Ctx(ctx).Debug(fmt.Sprintf("finish to close channel %d for log:%d seg:%d entry:%d: ", index, op.logId, op.segmentId, op.entryId))
+		}
 	}
 
 	op.callback(op.segmentId, op.entryId, nil)
