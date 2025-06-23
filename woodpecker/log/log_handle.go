@@ -85,10 +85,6 @@ type logHandleImpl struct {
 	Id             int64
 	LastSegmentId  atomic.Int64 // Holds the last segment ID for cache only; only used to fetch the next New segment ID.
 	SegmentHandles map[int64]segment.SegmentHandle
-	// Track last access time for segment handles to enable cleanup
-	SegmentHandleLastAccess map[int64]time.Time
-	// Track last cleanup time to avoid too frequent cleanup
-	lastCleanupTime time.Time
 	// active writable segment handle index
 	WritableSegmentId int64
 	Metadata          meta.MetadataProvider
@@ -98,6 +94,12 @@ type logHandleImpl struct {
 	lastRolloverTimeMs int64
 	rollingPolicy      segment.RollingPolicy
 	cfg                *config.Configuration
+
+	// Background cleanup goroutine management
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cleanupWg   sync.WaitGroup
+	cleanupDone chan struct{}
 }
 
 func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMetadata, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) LogHandle {
@@ -110,20 +112,24 @@ func NewLogHandle(name string, logId int64, segments map[int64]*proto.SegmentMet
 			lastSegmentNo = segmentMeta.SegNo
 		}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	l := &logHandleImpl{
-		Name:                    name,
-		Id:                      logId,
-		SegmentHandles:          make(map[int64]segment.SegmentHandle),
-		SegmentHandleLastAccess: make(map[int64]time.Time),
-		lastCleanupTime:         time.Now(),
-		WritableSegmentId:       -1,
-		Metadata:                meta,
-		ClientPool:              clientPool,
-		lastRolloverTimeMs:      -1,
-		rollingPolicy:           defaultRollingPolicy,
-		cfg:                     cfg,
+		Name:               name,
+		Id:                 logId,
+		SegmentHandles:     make(map[int64]segment.SegmentHandle),
+		WritableSegmentId:  -1,
+		Metadata:           meta,
+		ClientPool:         clientPool,
+		lastRolloverTimeMs: -1,
+		rollingPolicy:      defaultRollingPolicy,
+		cfg:                cfg,
+		ctx:                ctx,
+		cancel:             cancel,
+		cleanupDone:        make(chan struct{}),
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
+	l.startBackgroundCleanup()
 	return l
 }
 
@@ -355,10 +361,6 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 	l.Lock()
 	defer l.Unlock()
 
-	// Clean up idle segment handles periodically, same as in GetExistsReadonlySegmentHandle
-	// This ensures cleanup happens even in write-only scenarios
-	l.tryCleanupIdleSegmentHandles(ctx)
-
 	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
 
 	// create new segment handle if not exists
@@ -421,15 +423,10 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	l.Lock()
 	defer l.Unlock()
 
-	// Clean up idle segment handles periodically based on time, not access count
-	// This ensures cleanup happens even if we don't hit exact multiples
-	l.tryCleanupIdleSegmentHandles(ctx)
-
 	// get from cache directly
 	readableSegmentHandle, exists := l.SegmentHandles[segmentId]
 	if exists {
 		// Update last access time
-		l.SegmentHandleLastAccess[segmentId] = time.Now()
 		return readableSegmentHandle, nil
 	}
 	// get segment meta and create handle
@@ -445,7 +442,6 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	if segMeta != nil {
 		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false)
 		l.SegmentHandles[segmentId] = handle
-		l.SegmentHandleLastAccess[segmentId] = time.Now()
 		return handle, nil
 	}
 	return nil, nil
@@ -458,7 +454,6 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context)
 	}
 	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
 	l.SegmentHandles[newSegMeta.SegNo] = newSegHandle
-	l.SegmentHandleLastAccess[newSegMeta.SegNo] = time.Now()
 	l.WritableSegmentId = newSegMeta.SegNo
 	l.lastRolloverTimeMs = newSegMeta.CreateTime
 	logger.Ctx(ctx).Debug("create and cache new SegmentHandle success", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.SegNo))
@@ -901,6 +896,12 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
 	defer sp.End()
 
+	// Stop background cleanup first
+	l.stopBackgroundCleanup()
+
+	// Cancel the context to signal shutdown
+	l.cancel()
+
 	var lastError error
 	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
@@ -932,65 +933,177 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 
 	// Clear the segment handles map to prevent memory leaks
 	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
-	l.SegmentHandleLastAccess = make(map[int64]time.Time)
 	l.WritableSegmentId = -1
 
 	return lastError
 }
 
-// tryCleanupIdleSegmentHandles attempts to clean up idle segment handles if conditions are met
-// This method should be called while holding the write lock
-func (l *logHandleImpl) tryCleanupIdleSegmentHandles(ctx context.Context) {
-	// Cleanup configuration - centralized for easy modification
+// startBackgroundCleanup starts the background cleanup goroutine
+func (l *logHandleImpl) startBackgroundCleanup() {
+	logger.Ctx(l.ctx).Info("Starting background segment handle cleanup goroutine",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id))
+
+	l.cleanupWg.Add(1)
+	go l.backgroundCleanupLoop()
+}
+
+// stopBackgroundCleanup stops the background cleanup goroutine and waits for it to finish
+func (l *logHandleImpl) stopBackgroundCleanup() {
+	// Check if cleanup is already stopped
+	select {
+	case <-l.cleanupDone:
+		// Already closed, just return
+		logger.Ctx(l.ctx).Debug("Background segment handle cleanup already stopped",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id))
+		return
+	default:
+		// Channel is still open, proceed with shutdown
+	}
+
+	logger.Ctx(l.ctx).Info("Stopping background segment handle cleanup goroutine",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id))
+
+	close(l.cleanupDone)
+	l.cleanupWg.Wait()
+
+	logger.Ctx(l.ctx).Info("Background segment handle cleanup goroutine stopped",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id))
+}
+
+// backgroundCleanupLoop runs the background cleanup logic
+func (l *logHandleImpl) backgroundCleanupLoop() {
+	defer l.cleanupWg.Done()
+
+	// Cleanup configuration
 	const cleanupInterval = 30 * time.Second // How often to check for cleanup
 	const maxIdleTime = 1 * time.Minute      // How long a segment can be idle before cleanup
-	const minSegmentThreshold = 5            // Minimum segments before cleanup is considered
 
-	now := time.Now()
-	if len(l.SegmentHandles) > minSegmentThreshold && now.Sub(l.lastCleanupTime) > cleanupInterval {
-		l.cleanupIdleSegmentHandles(ctx, maxIdleTime)
-		l.lastCleanupTime = now
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+
+	logger.Ctx(l.ctx).Info("Background segment handle cleanup goroutine started",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Duration("cleanupInterval", cleanupInterval),
+		zap.Duration("maxIdleTime", maxIdleTime))
+
+	for {
+		select {
+		case <-l.cleanupDone:
+			logger.Ctx(l.ctx).Info("Background segment handle cleanup goroutine received shutdown signal",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id))
+			return
+		case <-l.ctx.Done():
+			logger.Ctx(l.ctx).Info("Background segment handle cleanup goroutine context cancelled",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id))
+			return
+		case <-ticker.C:
+			l.performBackgroundCleanup(maxIdleTime)
+		}
 	}
 }
 
-// cleanupIdleSegmentHandles removes segment handles that haven't been accessed for the specified duration
+// performBackgroundCleanup performs the actual cleanup logic
+func (l *logHandleImpl) performBackgroundCleanup(maxIdleTime time.Duration) {
+	l.Lock()
+	defer l.Unlock()
+
+	totalHandles := len(l.SegmentHandles)
+
+	logger.Ctx(l.ctx).Debug("Starting background segment handle cleanup cycle",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Int("totalHandles", totalHandles),
+		zap.Duration("maxIdleTime", maxIdleTime))
+
+	l.cleanupIdleSegmentHandlesUnsafe(l.ctx, maxIdleTime)
+}
+
+// cleanupIdleSegmentHandlesUnsafe removes segment handles that haven't been accessed for the specified duration
 // This method should be called while holding the write lock
-func (l *logHandleImpl) cleanupIdleSegmentHandles(ctx context.Context, maxIdleTime time.Duration) {
+func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, maxIdleTime time.Duration) {
 	now := time.Now()
 	var toRemove []int64
 
-	for segmentId, lastAccess := range l.SegmentHandleLastAccess {
-		// Don't cleanup the current writable segment
+	logger.Ctx(ctx).Debug("Scanning for idle segment handles to cleanup",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Duration("maxIdleTime", maxIdleTime),
+		zap.Int("totalHandles", len(l.SegmentHandles)))
+
+	// Check each segment for cleanup eligibility
+	for segmentId, handle := range l.SegmentHandles {
+		// Always protect the current writable segment
 		if segmentId == l.WritableSegmentId {
 			continue
 		}
 
-		if now.Sub(lastAccess) > maxIdleTime {
+		// Get last access time from segment handle
+		lastAccessTimeMs := handle.GetLastAccessTime()
+		lastAccessTime := time.UnixMilli(lastAccessTimeMs)
+
+		// Check if idle time exceeds threshold
+		if now.Sub(lastAccessTime) > maxIdleTime {
 			toRemove = append(toRemove, segmentId)
 		}
 	}
 
+	// Perform cleanup
 	for _, segmentId := range toRemove {
 		if handle, exists := l.SegmentHandles[segmentId]; exists {
-			// Try to close the handle gracefully
-			if err := handle.CloseWritingAndUpdateMetaIfNecessary(ctx, -1); err != nil {
-				logger.Ctx(ctx).Warn("failed to close segment handle during cleanup",
-					zap.String("logName", l.Name),
-					zap.Int64("segmentId", segmentId),
-					zap.Error(err))
-			}
+			// Close the segment handle
+			l.closeSegmentHandleUnsafe(ctx, segmentId, handle)
+
+			// Remove from map
 			delete(l.SegmentHandles, segmentId)
-			delete(l.SegmentHandleLastAccess, segmentId)
+
 			logger.Ctx(ctx).Debug("cleaned up idle segment handle",
 				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id),
 				zap.Int64("segmentId", segmentId))
 		}
 	}
 
 	if len(toRemove) > 0 {
-		logger.Ctx(ctx).Info("cleaned up idle segment handles",
+		logger.Ctx(ctx).Info("Idle segment handle cleanup completed",
 			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
 			zap.Int("cleanedCount", len(toRemove)),
-			zap.Int("remainingCount", len(l.SegmentHandles)))
+			zap.Int("remainingHandles", len(l.SegmentHandles)))
+	} else {
+		logger.Ctx(ctx).Debug("Idle segment handle cleanup completed - no handles cleaned",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int("totalHandles", len(l.SegmentHandles)))
+	}
+}
+
+// closeSegmentHandleUnsafe closes a segment handle gracefully
+// This method should be called while holding the write lock
+func (l *logHandleImpl) closeSegmentHandleUnsafe(ctx context.Context, segmentId int64, handle segment.SegmentHandle) {
+	logger.Ctx(ctx).Debug("Closing segment handle",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Int64("segmentId", segmentId))
+
+	// Try to close the handle gracefully
+	err := handle.CloseWritingAndUpdateMetaIfNecessary(ctx, -1)
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to close segment handle during cleanup",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int64("segmentId", segmentId),
+			zap.Error(err))
+	} else {
+		logger.Ctx(ctx).Debug("Segment handle closed successfully",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int64("segmentId", segmentId))
 	}
 }

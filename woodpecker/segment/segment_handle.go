@@ -85,6 +85,8 @@ type SegmentHandle interface {
 	SetRollingReady(context.Context)
 	// IsForceRollingReady check if the segment is ready for rolling
 	IsForceRollingReady(context.Context) bool
+	// GetLastAccessTime get the last access time of the segment
+	GetLastAccessTime() int64
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
@@ -151,6 +153,7 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 	segmentHandle.fencedState.Store(false)
 	segmentHandle.canWriteState.Store(false)
 	segmentHandle.rollingState.Store(false)
+	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	return segmentHandle
 }
 
@@ -181,6 +184,8 @@ type segmentHandleImpl struct {
 	executor *SequentialExecutor
 
 	doingRecoveryOrCompact atomic.Bool
+
+	lastAccessTime atomic.Int64
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -194,6 +199,7 @@ func (s *segmentHandleImpl) GetId(ctx context.Context) int64 {
 func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "AppendAsync")
 	defer sp.End()
+	s.updateAccessTime()
 
 	// Check fenced state first without lock to avoid deadlock
 	if s.fencedState.Load() {
@@ -258,6 +264,8 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks trigger", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("triggerEntryId", triggerEntryId))
 	s.Lock()
 	defer s.Unlock()
+	s.updateAccessTime()
+
 	// success executed one by one in sequence
 	elementsToRemove := make([]*list.Element, 0)
 	if s.appendOpsQueue.Len() <= 0 {
@@ -305,6 +313,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()
+	s.updateAccessTime()
 	logger.Ctx(ctx).Info("SendAppendFailedCallbacks", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Error(err))
 
 	// all after triggerEntryId will be removed
@@ -385,6 +394,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*processor.SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Read")
 	defer sp.End()
+	s.updateAccessTime()
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -423,6 +433,7 @@ func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*
 func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int64) ([]*processor.SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
+	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("size", size))
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
@@ -455,6 +466,7 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int6
 func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "GetLastAddConfirmed")
 	defer sp.End()
+	s.updateAccessTime()
 	currentSegmentMeta := s.segmentMetaCache.Load()
 	// should get from meta if seg completed, other wise get from data
 	if currentSegmentMeta.State != proto.SegmentState_Active {
@@ -498,6 +510,7 @@ func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetad
 func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RefreshAndGetMetadata")
 	defer sp.End()
+	s.updateAccessTime()
 	s.Lock()
 	defer s.Unlock()
 	start := time.Now()
@@ -522,6 +535,7 @@ func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
 func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "GetQuorumInfo")
 	defer sp.End()
+	s.updateAccessTime()
 	if s.quorumInfo != nil {
 		return s.quorumInfo, nil
 	}
@@ -548,6 +562,7 @@ func (s *segmentHandleImpl) IsWritable(ctx context.Context) (bool, error) {
 func (s *segmentHandleImpl) CloseWritingAndUpdateMetaIfNecessary(ctx context.Context, lastFlushedEntryId int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
 	defer sp.End()
+	s.updateAccessTime()
 	if !s.canWriteState.CompareAndSwap(true, false) {
 		return nil
 	}
@@ -635,6 +650,7 @@ func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
 func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RequestCompactionAsync")
 	defer sp.End()
+	s.updateAccessTime()
 	// select one node to compact segment asynchronously
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -666,7 +682,7 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
-
+	s.updateAccessTime()
 	logger.Ctx(ctx).Info("Starting segment fence operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
@@ -772,6 +788,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "IsFence")
 	defer sp.End()
+	s.updateAccessTime()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	if s.fencedState.Load() {
@@ -820,7 +837,7 @@ func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
 func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RecoveryOrCompact")
 	defer sp.End()
-
+	s.updateAccessTime()
 	logger.Ctx(ctx).Info("Starting segment recovery or compact operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
@@ -1171,4 +1188,12 @@ func (s *segmentHandleImpl) IsForceRollingReady(ctx context.Context) bool {
 	s.RLock()
 	defer s.RUnlock()
 	return s.rollingReadyState.Load()
+}
+
+func (s *segmentHandleImpl) updateAccessTime() {
+	s.lastAccessTime.Store(time.Now().UnixMilli())
+}
+
+func (s *segmentHandleImpl) GetLastAccessTime() int64 {
+	return s.lastAccessTime.Load()
 }
