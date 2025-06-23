@@ -43,8 +43,10 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	ch <- int64(0)
 	close(ch)
 	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(0), mock.Anything, mock.Anything).Return(int64(0), nil)
+	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(-1, werr.ErrLogFileClosed.WithCauseErrMsg("test close"))
 	mockLogFile.EXPECT().GetLastEntryId(mock.Anything).Return(int64(0), nil)
 	mockLogFile.EXPECT().Close(mock.Anything).Return(nil)
+	mockLogFile.EXPECT().IsFenced(mock.Anything).Return(false, nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
 			BucketName: "test-bucket",
@@ -66,7 +68,7 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	assert.Equal(t, int64(0), seqNo)
 
 	// set fence
-	lastEntryId, fencedErr := segProc.SetFenced(context.TODO())
+	lastEntryId, fencedErr := segProc.Fence(context.TODO())
 	assert.NoError(t, fencedErr)
 	assert.Equal(t, int64(0), lastEntryId)
 
@@ -77,7 +79,7 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 		Data:    []byte("data"),
 	}, rc2)
 	assert.Error(t, err)
-	assert.True(t, werr.ErrSegmentFenced.Is(err))
+	assert.True(t, werr.ErrLogFileClosed.Is(err))
 	assert.Equal(t, int64(-1), seqNo)
 }
 

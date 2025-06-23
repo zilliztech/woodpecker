@@ -21,7 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/channel"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -29,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/channel"
 
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
@@ -86,6 +88,11 @@ type SegmentImpl struct {
 	flushingBufferSize              atomic.Int64 // The size of pending flush, it must be less than maxBufferSize
 	flushingTaskList                chan *flushTask
 	lastSubmittedFlushingFragmentID atomic.Int64
+
+	// Object storage lock for segment exclusivity
+	lockObjectKey string // Key for the lock object in object storage
+	// For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
+	fenced atomic.Bool
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
@@ -122,6 +129,16 @@ func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPrefix
 	objFile.closed.Store(false)
 	objFile.storageWritable.Store(true)
 	objFile.flushingBufferSize.Store(0)
+	objFile.fenced.Store(false)
+
+	// Create segment lock object
+	if err := objFile.createSegmentLock(ctx); err != nil {
+		logger.Ctx(ctx).Error("Failed to create segment lock",
+			zap.String("segmentPrefixKey", segmentPrefixKey),
+			zap.Error(err))
+		return nil // Return nil to indicate creation failure
+	}
+
 	go objFile.run()
 	go objFile.ack()
 	return objFile
@@ -196,8 +213,13 @@ func (f *SegmentImpl) ack() {
 		} else {
 			// flush fail, trigger mark storage not writable
 			if firstFlushErrTask == nil {
+				// after many retry flush fail, mark storage not writable
 				firstFlushErrTask = task
 				f.storageWritable.Store(false)
+			}
+			if werr.ErrSegmentFenced.Is(task.flushFuture.Err()) {
+				// when put object fail cause by fence object exists, mark storage not writable
+				f.fenced.Store(true)
 			}
 			logger.Ctx(context.TODO()).Info("flush error first encountered, trigger fast flush fail",
 				zap.String("firstFlushErrFragment", firstFlushErrTask.flushFuture.Value().target.GetFragmentKey()))
@@ -216,12 +238,17 @@ func (f *SegmentImpl) AppendAsync(ctx context.Context, entryId int64, data []byt
 	defer sp.End()
 	if f.closed.Load() {
 		// quick fail and return a close Err, which indicate than it is also not retriable
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment writer is closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrLogFileClosed
+	}
+	if f.fenced.Load() {
+		// quick fail and return a fenced Err
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is fenced", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return -1, werr.ErrSegmentFenced
 	}
 	if !f.storageWritable.Load() {
 		// quick fail and return a Storage Err, which indicate that it is also not retriable
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, file closed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrStorageNotWritable
 	}
 
@@ -611,6 +638,13 @@ func (f *SegmentImpl) Close(ctx context.Context) error {
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Error(err))
 	}
+	// Release segment lock
+	if err := f.releaseSegmentLock(ctx); err != nil {
+		logger.Ctx(ctx).Warn("Failed to release segment lock during close",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Error(err))
+	}
+
 	// close file
 	f.closeOnce.Do(func() {
 		f.fileClose <- struct{}{}
@@ -618,6 +652,92 @@ func (f *SegmentImpl) Close(ctx context.Context) error {
 		close(f.flushingTaskList)
 	})
 	return nil
+}
+
+func (f *SegmentImpl) IsFenced(ctx context.Context) (bool, error) {
+	return f.fenced.Load(), nil
+}
+
+func (f *SegmentImpl) Fence(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Fence")
+	defer sp.End()
+
+	// If already fenced, return idempotently
+	if f.fenced.Load() {
+		logger.Ctx(ctx).Debug("Segment already fenced, returning idempotently",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logId", f.logId),
+			zap.Int64("segmentId", f.segmentId))
+		return f.lastEntryID.Load(), nil
+	}
+
+	var lastEntryId int64
+	var fenceObjectKey string
+
+	// Use retry.Do to handle the fence object creation with retries
+	err := retry.Do(ctx,
+		func() error {
+			// Get current last fragment ID and create fence object key
+			currentLastFragmentId := f.lastFragmentID.Load()
+			fenceFragmentId := currentLastFragmentId + 1
+			fenceObjectKey = getFragmentObjectKey(f.segmentPrefixKey, fenceFragmentId)
+
+			// Try to create fence object
+			_, putErr := f.client.PutFencedObject(ctx, f.bucket, fenceObjectKey)
+			if putErr != nil {
+				if werr.ErrFragmentAlreadyExists.Is(putErr) {
+					// Fragment already exists, this might be normal during concurrent operations
+					logger.Ctx(ctx).Debug("Fence object already exists, retrying with next fragment ID",
+						zap.String("segmentPrefixKey", f.segmentPrefixKey),
+						zap.String("fenceObjectKey", fenceObjectKey),
+						zap.Int64("fenceFragmentId", fenceFragmentId))
+					return putErr // This will trigger a retry
+				}
+				// Other errors are not retryable
+				logger.Ctx(ctx).Error("Failed to create fence object",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.String("fenceObjectKey", fenceObjectKey),
+					zap.Error(putErr))
+				return putErr
+			}
+
+			// Successfully created fence object
+			lastEntryId = f.lastEntryID.Load()
+			logger.Ctx(ctx).Info("Successfully created fence object",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.String("fenceObjectKey", fenceObjectKey),
+				zap.Int64("fenceFragmentId", fenceFragmentId),
+				zap.Int64("lastEntryId", lastEntryId))
+			return nil
+		},
+		retry.Attempts(5),                 // Retry up to 5 times
+		retry.Sleep(100*time.Millisecond), // Initial sleep between retries
+		retry.MaxSleepTime(1*time.Second), // Max sleep time between retries
+		retry.RetryErr(func(err error) bool {
+			// Only retry on fragment already exists error
+			return werr.ErrFragmentAlreadyExists.Is(err)
+		}),
+	)
+
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to create fence object after retries",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.String("fenceObjectKey", fenceObjectKey),
+			zap.Error(err))
+		return -1, fmt.Errorf("failed to create fence object %s: %w", fenceObjectKey, err)
+	}
+
+	// Mark as fenced
+	f.fenced.Store(true)
+
+	logger.Ctx(ctx).Info("Successfully fenced segment",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.String("fenceObjectKey", fenceObjectKey),
+		zap.Int64("logId", f.logId),
+		zap.Int64("segmentId", f.segmentId),
+		zap.Int64("lastEntryId", lastEntryId))
+
+	return lastEntryId, nil
 }
 
 func (f *SegmentImpl) prepareMultiFragmentDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64, []int64) {
@@ -699,6 +819,9 @@ type ROSegmentImpl struct {
 	segmentId       int64
 	fragments       []*FragmentObject // Segment cached fragments in order
 	mergedFragments []*FragmentObject // Segment cached merged fragments in order
+
+	// For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
+	fenced atomic.Bool
 }
 
 // NewROSegmentImpl is used to read only segment
@@ -712,6 +835,7 @@ func NewROSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPref
 		bucket:              bucket,
 		fragments:           make([]*FragmentObject, 0),
 	}
+	objFile.fenced.Store(false)
 	existsFragments, existsMergedFragments, err := objFile.prefetchAllFragmentInfosOnce(context.TODO())
 	if err != nil {
 		logger.Ctx(ctx).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
@@ -858,6 +982,7 @@ func (f *ROSegmentImpl) objectExists(ctx context.Context, objectKey string) (boo
 	if minioHandler.IsFencedObject(info) {
 		// it means the object is fenced out, no more fragment data
 		logger.Ctx(ctx).Debug("object is fenced out", zap.String("objectKey", objectKey))
+		f.fenced.Store(true)
 		return false, nil
 	}
 	if err != nil {
@@ -889,11 +1014,20 @@ func (f *ROSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 	// prefetch fragmentInfos if any new fragment created
 	_, lastFragment, err := f.prefetchFragmentInfos(context.TODO())
 	if err != nil {
-		logger.Ctx(ctx).Warn("get last entryId failed when fetch the last fragment",
+		logger.Ctx(ctx).Debug("get last entryId failed when fetch the last fragment, treating as empty segment",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
 			zap.Error(err))
-		return -1, err
+		// For empty segments, return -1 as the last entry ID
+		return -1, nil
 	}
+
+	// If no fragments exist, return -1
+	if lastFragment == nil {
+		logger.Ctx(ctx).Debug("no fragments exist, returning -1 as last entry ID",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey))
+		return -1, nil
+	}
+
 	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), lastFragment)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get last entryId failed",
@@ -938,6 +1072,7 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 		if minioHandler.IsFencedObject(objInfo) {
 			// it means the object is fenced out, no more fragment data
 			logger.Ctx(ctx).Info("object is fenced out", zap.String("objectKey", objInfo.Key))
+			f.fenced.Store(true)
 			break
 		}
 
@@ -1397,6 +1532,145 @@ func (f *ROSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
 	return nil
 }
 
+func (f *ROSegmentImpl) IsFenced(ctx context.Context) (bool, error) {
+	// If already fenced in memory, return true immediately
+	if f.fenced.Load() {
+		return true, nil
+	}
+
+	// Try to prefetch fragment infos to check for fence objects
+	// This might fail for empty segments, which is normal
+	_, _, err := f.prefetchFragmentInfos(ctx)
+	if err != nil {
+		// For empty segments or when objects don't exist, this is not necessarily an error
+		// Just return the current fence state
+		logger.Ctx(ctx).Debug("Failed to prefetch fragment infos for fence check, treating as not fenced",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Error(err))
+		return f.fenced.Load(), nil
+	}
+
+	return f.fenced.Load(), nil
+}
+
+func (f *ROSegmentImpl) Fence(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Fence")
+	defer sp.End()
+
+	// If already fenced, return idempotently
+	if f.fenced.Load() {
+		logger.Ctx(ctx).Debug("ROSegment already fenced, returning idempotently",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.Int64("logId", f.logId),
+			zap.Int64("segmentId", f.segmentId))
+		// Get last entry ID for read-only segment
+		lastEntryId, err := f.GetLastEntryId(ctx)
+		if err != nil {
+			return -1, err
+		}
+		return lastEntryId, nil
+	}
+
+	var lastEntryId int64
+	var fenceObjectKey string
+
+	// Use retry.Do to handle the fence object creation with retries
+	err := retry.Do(ctx,
+		func() error {
+			// Fetch fragments to get the latest fragment information
+			// For empty segments, this might fail, which is normal
+			_, lastFragment, prefetchErr := f.prefetchFragmentInfos(ctx)
+			if prefetchErr != nil {
+				logger.Ctx(ctx).Debug("Failed to prefetch fragment infos during fence, treating as empty segment",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.Error(prefetchErr))
+				// Treat as empty segment, lastFragment will be nil
+				lastFragment = nil
+			}
+
+			// Calculate fence fragment ID: last fragment ID + 1
+			var fenceFragmentId int64
+			if lastFragment != nil {
+				fenceFragmentId = lastFragment.GetFragmentId() + 1
+			} else {
+				// No fragments exist, start with fragment ID 0
+				fenceFragmentId = 0
+			}
+
+			fenceObjectKey = getFragmentObjectKey(f.segmentPrefixKey, fenceFragmentId)
+
+			// Try to create fence object
+			_, putErr := f.client.PutFencedObject(ctx, f.bucket, fenceObjectKey)
+			if putErr != nil {
+				if werr.ErrFragmentAlreadyExists.Is(putErr) {
+					// Fragment already exists, this might be normal during concurrent operations
+					logger.Ctx(ctx).Debug("Fence object already exists, retrying with updated fragment info",
+						zap.String("segmentPrefixKey", f.segmentPrefixKey),
+						zap.String("fenceObjectKey", fenceObjectKey),
+						zap.Int64("fenceFragmentId", fenceFragmentId))
+					return putErr // This will trigger a retry
+				}
+				// Other errors are not retryable
+				logger.Ctx(ctx).Error("Failed to create fence object",
+					zap.String("segmentPrefixKey", f.segmentPrefixKey),
+					zap.String("fenceObjectKey", fenceObjectKey),
+					zap.Error(putErr))
+				return putErr
+			}
+
+			// Successfully created fence object, get last entry ID
+			if lastFragment != nil {
+				var getLastEntryIdErr error
+				lastEntryId, getLastEntryIdErr = getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
+				if getLastEntryIdErr != nil {
+					logger.Ctx(ctx).Warn("Failed to get last entry ID from last fragment",
+						zap.String("segmentPrefixKey", f.segmentPrefixKey),
+						zap.String("lastFragmentKey", lastFragment.GetFragmentKey()),
+						zap.Error(getLastEntryIdErr))
+					return getLastEntryIdErr
+				}
+			} else {
+				// No fragments exist, last entry ID is -1
+				lastEntryId = -1
+			}
+
+			logger.Ctx(ctx).Info("Successfully created fence object for ROSegment",
+				zap.String("segmentPrefixKey", f.segmentPrefixKey),
+				zap.String("fenceObjectKey", fenceObjectKey),
+				zap.Int64("fenceFragmentId", fenceFragmentId),
+				zap.Int64("lastEntryId", lastEntryId))
+			return nil
+		},
+		retry.Attempts(5),                 // Retry up to 5 times
+		retry.Sleep(500*time.Millisecond), // Initial sleep between retries (longer for object storage)
+		retry.MaxSleepTime(2*time.Second), // Max sleep time between retries
+		retry.RetryErr(func(err error) bool {
+			// Only retry on fragment already exists error
+			return werr.ErrFragmentAlreadyExists.Is(err)
+		}),
+	)
+
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to create fence object after retries",
+			zap.String("segmentPrefixKey", f.segmentPrefixKey),
+			zap.String("fenceObjectKey", fenceObjectKey),
+			zap.Error(err))
+		return -1, fmt.Errorf("failed to create fence object %s: %w", fenceObjectKey, err)
+	}
+
+	// Mark as fenced
+	f.fenced.Store(true)
+
+	logger.Ctx(ctx).Info("Successfully fenced ROSegment",
+		zap.String("segmentPrefixKey", f.segmentPrefixKey),
+		zap.String("fenceObjectKey", fenceObjectKey),
+		zap.Int64("logId", f.logId),
+		zap.Int64("segmentId", f.segmentId),
+		zap.Int64("lastEntryId", lastEntryId))
+
+	return lastEntryId, nil
+}
+
 // NewLogFileReader creates a new LogFileReader instance.
 func NewLogFileReader(opt storage.ReaderOpt, objectFile *ROSegmentImpl) storage.Reader {
 	return &logFileReader{
@@ -1579,4 +1853,82 @@ func getFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *F
 		}
 	}
 	return firstEntryId, nil
+}
+
+// createSegmentLock creates a lock object in object storage for segment exclusivity
+func (f *SegmentImpl) createSegmentLock(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "createSegmentLock")
+	defer sp.End()
+
+	// Create lock object key
+	f.lockObjectKey = fmt.Sprintf("%s/segment_%d_%d.lock", f.segmentPrefixKey, f.logId, f.segmentId)
+
+	// Create lock object with segment information
+	lockInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\nhostname=%s\n",
+		f.logId, f.segmentId, os.Getpid(), time.Now().Unix(), getHostname())
+
+	// Use PutObjectIfNotMatch to atomically create lock object
+	_, err := f.client.PutObjectIfNotMatch(ctx, f.bucket, f.lockObjectKey,
+		strings.NewReader(lockInfo), int64(len(lockInfo)))
+	if err != nil {
+		if werr.ErrFragmentAlreadyExists.Is(err) {
+			logger.Ctx(ctx).Error("Lock object already exists - segment is already locked by another process",
+				zap.String("lockObjectKey", f.lockObjectKey))
+			return fmt.Errorf("segment is already locked by another process: %s", f.lockObjectKey)
+		}
+		logger.Ctx(ctx).Error("Failed to create lock object",
+			zap.String("lockObjectKey", f.lockObjectKey),
+			zap.Error(err))
+		return fmt.Errorf("failed to create lock object %s: %w", f.lockObjectKey, err)
+	}
+
+	logger.Ctx(ctx).Info("Successfully created segment lock object",
+		zap.String("lockObjectKey", f.lockObjectKey),
+		zap.Int64("logId", f.logId),
+		zap.Int64("segmentId", f.segmentId))
+
+	return nil
+}
+
+// releaseSegmentLock removes the lock object from object storage
+func (f *SegmentImpl) releaseSegmentLock(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "releaseSegmentLock")
+	defer sp.End()
+
+	if f.lockObjectKey == "" {
+		logger.Ctx(ctx).Debug("No lock object to release")
+		return nil
+	}
+
+	// Remove the lock object
+	err := f.client.RemoveObject(ctx, f.bucket, f.lockObjectKey, minio.RemoveObjectOptions{})
+	if err != nil {
+		// Check if object doesn't exist (already removed)
+		if minioHandler.IsObjectNotExists(err) {
+			logger.Ctx(ctx).Info("Lock object already removed",
+				zap.String("lockObjectKey", f.lockObjectKey))
+		} else {
+			logger.Ctx(ctx).Warn("Failed to remove lock object",
+				zap.String("lockObjectKey", f.lockObjectKey),
+				zap.Error(err))
+			return err
+		}
+	} else {
+		logger.Ctx(ctx).Info("Successfully removed segment lock object",
+			zap.String("lockObjectKey", f.lockObjectKey),
+			zap.Int64("logId", f.logId),
+			zap.Int64("segmentId", f.segmentId))
+	}
+
+	f.lockObjectKey = ""
+	return nil
+}
+
+// getHostname returns the hostname for lock identification
+func getHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return hostname
 }

@@ -704,7 +704,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 
 	// Mock FenceSegment to return ErrSegmentFenced but with lastEntryId = 1
-	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), werr.ErrSegmentFenced)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -755,8 +755,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 
 	// Call Fence - should return lastEntryId = 1 even with ErrSegmentFenced
 	lastEntryId, err := segmentHandle.Fence(context.Background())
-	assert.Error(t, err)
-	assert.True(t, werr.ErrSegmentFenced.Is(err))
+	assert.NoError(t, err)
 	assert.Equal(t, int64(1), lastEntryId)
 
 	time.Sleep(100 * time.Millisecond) // Give time for callbacks
@@ -772,145 +771,6 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	assert.False(t, failCallbacks[0], "Entry 0 should not fail")
 	assert.False(t, failCallbacks[1], "Entry 1 should not fail")
 	assert.False(t, successCallbacks[2], "Entry 2 should not succeed")
-}
-
-// TestFence_SegmentNotFoundError_WithPendingAppendOps tests the new ErrSegmentNotFound error handling
-func TestFence_SegmentNotFoundError_WithPendingAppendOps(t *testing.T) {
-	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
-
-	// Mock FenceSegment to return ErrSegmentNotFound with lastEntryId = -1
-	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(-1), werr.ErrSegmentNotFound)
-
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				SegmentAppend: config.SegmentAppendConfig{
-					QueueSize:  10,
-					MaxRetries: 2,
-				},
-			},
-		},
-	}
-
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
-	}
-
-	testQueue := list.New()
-	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
-
-	// Create pending append operations
-	successCallbacks := make([]bool, 2)
-	failCallbacks := make([]bool, 2)
-
-	for i := 0; i < 2; i++ {
-		entryIndex := i
-		callback := func(segmentId int64, entryId int64, err error) {
-			if err == nil {
-				successCallbacks[entryIndex] = true
-			} else {
-				failCallbacks[entryIndex] = true
-			}
-		}
-
-		op := NewAppendOp(
-			1,
-			1,
-			int64(i),
-			[]byte(fmt.Sprintf("test_%d", i)),
-			callback,
-			mockClientPool,
-			segmentHandle,
-			nil,
-			1)
-		testQueue.PushBack(op)
-	}
-
-	// Call Fence - should handle ErrSegmentNotFound correctly
-	lastEntryId, err := segmentHandle.Fence(context.Background())
-	assert.Error(t, err)
-	assert.True(t, werr.ErrSegmentNotFound.Is(err))
-	assert.Equal(t, int64(-1), lastEntryId)
-
-	time.Sleep(100 * time.Millisecond) // Give time for callbacks
-
-	// Verify that entry 0 got fail callback (lastEntry==-1)
-	assert.False(t, successCallbacks[0], "Entry 0 should fail")
-
-	// Verify that entry 1 got fail callback (entryId > lastEntryId)
-	assert.True(t, failCallbacks[1], "Entry 1 should fail")
-}
-
-// TestFence_NoWritingFragmentError_WithPendingAppendOps tests ErrSegmentNoWritingFragment handling
-func TestFence_NoWritingFragmentError_WithPendingAppendOps(t *testing.T) {
-	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
-
-	// Mock FenceSegment to return ErrSegmentNoWritingFragment with lastEntryId = -1 (no entries)
-	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(-1), werr.ErrSegmentNoWritingFragment)
-
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				SegmentAppend: config.SegmentAppendConfig{
-					QueueSize:  10,
-					MaxRetries: 2,
-				},
-			},
-		},
-	}
-
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
-	}
-
-	testQueue := list.New()
-	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
-
-	// Create pending append operations
-	failCallbacks := make([]bool, 2)
-
-	for i := 0; i < 2; i++ {
-		entryIndex := i
-		callback := func(segmentId int64, entryId int64, err error) {
-			if err != nil {
-				failCallbacks[entryIndex] = true
-			}
-		}
-
-		op := NewAppendOp(
-			1,
-			1,
-			int64(i),
-			[]byte(fmt.Sprintf("test_%d", i)),
-			callback,
-			mockClientPool,
-			segmentHandle,
-			nil,
-			1)
-		testQueue.PushBack(op)
-	}
-
-	// Call Fence - should handle ErrSegmentNoWritingFragment correctly
-	lastEntryId, err := segmentHandle.Fence(context.Background())
-	assert.Error(t, err)
-	assert.True(t, werr.ErrSegmentNoWritingFragment.Is(err))
-	assert.Equal(t, int64(-1), lastEntryId)
-
-	time.Sleep(100 * time.Millisecond) // Give time for callbacks
-
-	// All entries should fail since lastEntryId = -1
-	assert.True(t, failCallbacks[0], "Entry 0 should fail")
-	assert.True(t, failCallbacks[1], "Entry 1 should fail")
 }
 
 // TestIsFence_SyncLocalStateWithRemote tests IsFence method's ability to sync local state with remote

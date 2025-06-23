@@ -53,7 +53,7 @@ type SegmentProcessor interface {
 	ReadEntry(context.Context, int64) (*SegmentEntry, error)
 	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	IsFenced(ctx context.Context) bool
-	SetFenced(ctx context.Context) (int64, error)
+	Fence(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
@@ -107,7 +107,7 @@ type segmentProcessor struct {
 
 	// for segment writer
 	currentSegmentWriter storage.Segment
-	fenced               atomic.Bool
+	fenced               atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
 
 	// for segment reader
 	currentSegmentReader storage.Segment
@@ -125,11 +125,40 @@ func (s *segmentProcessor) IsFenced(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "IsFenced")
 	defer sp.End()
 	s.updateAccessTime()
-	return s.fenced.Load()
+
+	if s.fenced.Load() {
+		return true
+	}
+	segmentReader, err := s.getOrCreateSegmentReader(ctx, 0)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get segment reader for recovery",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Error(err))
+		return false
+	}
+	if segmentReader == nil {
+		logger.Ctx(ctx).Warn("Failed to get segment reader for fence",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Error(err))
+		return false
+	}
+	isFenced, fenceErr := segmentReader.IsFenced(ctx)
+	if fenceErr != nil {
+		logger.Ctx(ctx).Warn("Failed to check fence state",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Error(fenceErr))
+		return false
+	}
+	logger.Ctx(ctx).Info("Check fence state", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Bool("isFenced", isFenced))
+	s.fenced.CompareAndSwap(false, isFenced)
+	return isFenced
 }
 
-func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "SetFenced")
+func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Fenced")
 	defer sp.End()
 	s.updateAccessTime()
 	start := time.Now()
@@ -137,12 +166,7 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId))
 
-	// for idempotent fence, the storage layer can only fence until it is successful
-	s.fenced.Store(true)
-	logger.Ctx(ctx).Info("Set segment processor fenced state",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId))
-
+	// if writer exists, use writer to fence
 	if s.currentSegmentWriter != nil {
 		logger.Ctx(ctx).Info("Closing segment writer during fence operation",
 			zap.Int64("logId", s.logId),
@@ -172,14 +196,32 @@ func (s *segmentProcessor) SetFenced(ctx context.Context) (int64, error) {
 			zap.Duration("duration", time.Since(start)))
 
 		return lastEntryId, getLastEntryIdErr
+	} else {
+		// otherwise use segment reader to fence
+		segmentReader, err := s.getOrCreateSegmentReader(ctx, 0)
+		if err != nil {
+			logger.Ctx(ctx).Warn("Failed to get segment reader for recovery",
+				zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segId),
+				zap.Error(err))
+			return -1, err
+		}
+		lastEntryId, fenceErr := segmentReader.Fence(ctx)
+		if fenceErr != nil {
+			logger.Ctx(ctx).Warn("Failed to fence segment",
+				zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segId),
+				zap.Error(fenceErr))
+			return -1, fenceErr
+		}
+		s.fenced.CompareAndSwap(false, true)
+		logger.Ctx(ctx).Info("Segment processor fence operation completed successfully",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Int64("lastEntryId", lastEntryId),
+			zap.Duration("duration", time.Since(start)))
+		return lastEntryId, nil
 	}
-
-	logger.Ctx(ctx).Info("No segment writer found during fence operation",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId),
-		zap.Duration("duration", time.Since(start)))
-
-	return -1, werr.ErrSegmentNoWritingFragment
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh channel.ResultChannel) (int64, error) {

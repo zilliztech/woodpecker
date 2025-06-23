@@ -224,6 +224,62 @@ func (_c *Segment_DeleteFragments_Call) RunAndReturn(run func(context.Context, i
 	return _c
 }
 
+// Fence provides a mock function with given fields: ctx
+func (_m *Segment) Fence(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Fence")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Segment_Fence_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Fence'
+type Segment_Fence_Call struct {
+	*mock.Call
+}
+
+// Fence is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *Segment_Expecter) Fence(ctx interface{}) *Segment_Fence_Call {
+	return &Segment_Fence_Call{Call: _e.mock.On("Fence", ctx)}
+}
+
+func (_c *Segment_Fence_Call) Run(run func(ctx context.Context)) *Segment_Fence_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *Segment_Fence_Call) Return(_a0 int64, _a1 error) *Segment_Fence_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Segment_Fence_Call) RunAndReturn(run func(context.Context) (int64, error)) *Segment_Fence_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetId provides a mock function with no fields
 func (_m *Segment) GetId() int64 {
 	ret := _m.Called()
@@ -321,6 +377,62 @@ func (_c *Segment_GetLastEntryId_Call) Return(_a0 int64, _a1 error) *Segment_Get
 }
 
 func (_c *Segment_GetLastEntryId_Call) RunAndReturn(run func(context.Context) (int64, error)) *Segment_GetLastEntryId_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// IsFenced provides a mock function with given fields: ctx
+func (_m *Segment) IsFenced(ctx context.Context) (bool, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsFenced")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// Segment_IsFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsFenced'
+type Segment_IsFenced_Call struct {
+	*mock.Call
+}
+
+// IsFenced is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *Segment_Expecter) IsFenced(ctx interface{}) *Segment_IsFenced_Call {
+	return &Segment_IsFenced_Call{Call: _e.mock.On("IsFenced", ctx)}
+}
+
+func (_c *Segment_IsFenced_Call) Run(run func(ctx context.Context)) *Segment_IsFenced_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *Segment_IsFenced_Call) Return(_a0 bool, _a1 error) *Segment_IsFenced_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *Segment_IsFenced_Call) RunAndReturn(run func(context.Context) (bool, error)) *Segment_IsFenced_Call {
 	_c.Call.Return(run)
 	return _c
 }

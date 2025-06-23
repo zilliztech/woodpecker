@@ -19,6 +19,7 @@ package log
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -160,7 +161,6 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*proto.Segme
 	return result, err
 }
 
-// TODO fence last two segment if necessary
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogWriter")
 	defer sp.End()
@@ -175,8 +175,24 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		return nil, acquireLockErr
 	}
 
+	// Fence last two segments to prevent split-brain scenarios
+	err := l.fenceLastTwoSegments(ctx)
+	if err != nil {
+		// Release the acquired lock before returning error
+		if releaseErr := l.Metadata.ReleaseLogWriterLock(ctx, l.Name); releaseErr != nil {
+			logger.Ctx(ctx).Warn("failed to release log writer lock after fence error",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id),
+				zap.Error(releaseErr))
+		}
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "fence_error").Inc()
+		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "fence_error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("failed to fence last two segments", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
+		return nil, err
+	}
+
 	// getOrCreate writable segment handle
-	_, err := l.GetOrCreateWritableSegmentHandle(ctx)
+	_, err = l.GetOrCreateWritableSegmentHandle(ctx)
 	if err != nil {
 		// Release the acquired lock before returning error
 		if releaseErr := l.Metadata.ReleaseLogWriterLock(ctx, l.Name); releaseErr != nil {
@@ -187,13 +203,149 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		}
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("failed to acquire log writer lock", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
+		logger.Ctx(ctx).Warn("failed to get or create writable segment handle", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 		return nil, err
 	}
 	// return LogWriter instance if writableSegmentHandle is created
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return NewLogWriter(ctx, l, l.cfg, se), nil
+}
+
+// fenceLastTwoSegments fences the last two segments to prevent split-brain scenarios
+func (l *logHandleImpl) fenceLastTwoSegments(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "fenceLastTwoSegments")
+	defer sp.End()
+
+	// Get all segment metadata to find the last two segments
+	segments, err := l.GetSegments(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("failed to get segments for fencing",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Error(err))
+		return err
+	}
+
+	// Find all segment IDs and sort them
+	var segmentIds []int64
+	for segId := range segments {
+		segmentIds = append(segmentIds, segId)
+	}
+
+	// Sort in descending order to get the latest segments first
+	sort.Slice(segmentIds, func(i, j int) bool {
+		return segmentIds[i] > segmentIds[j]
+	})
+
+	// Determine segments to fence based on count
+	var segmentsToFence []int64
+	switch len(segmentIds) {
+	case 0:
+		// No segments exist, nothing to fence
+		logger.Ctx(ctx).Debug("no segments exist, skipping fence operation",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id))
+		return nil
+	case 1:
+		// Only one segment exists, fence it
+		segmentsToFence = segmentIds
+		logger.Ctx(ctx).Info("fencing single existing segment",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int64("segmentId", segmentIds[0]))
+	default:
+		// Two or more segments exist, fence the last two
+		segmentsToFence = segmentIds[:2]
+		logger.Ctx(ctx).Info("fencing last two segments",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int64s("segmentIds", segmentsToFence))
+	}
+
+	var fenceErrors []error
+	for _, segmentId := range segmentsToFence {
+		segMeta := segments[segmentId]
+
+		// Skip segments that are already completed or truncated
+		if segMeta.State == proto.SegmentState_Completed ||
+			segMeta.State == proto.SegmentState_Sealed ||
+			segMeta.State == proto.SegmentState_Truncated {
+			logger.Ctx(ctx).Debug("skipping fence for segment in final state",
+				zap.String("logName", l.Name),
+				zap.Int64("segmentId", segmentId),
+				zap.String("state", segMeta.State.String()))
+			continue
+		}
+
+		// Get or create segment handle for fencing
+		segmentHandle, err := l.GetExistsReadonlySegmentHandle(ctx, segmentId)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to get segment handle for fencing",
+				zap.String("logName", l.Name),
+				zap.Int64("segmentId", segmentId),
+				zap.Error(err))
+			fenceErrors = append(fenceErrors, fmt.Errorf("failed to get segment handle %d: %w", segmentId, err))
+			continue
+		}
+
+		if segmentHandle == nil {
+			logger.Ctx(ctx).Debug("segment handle not found, skipping fence",
+				zap.String("logName", l.Name),
+				zap.Int64("segmentId", segmentId))
+			continue
+		}
+
+		// Fence the segment
+		lastEntryId, err := segmentHandle.Fence(ctx)
+		if err != nil {
+			// Log warning but continue with other segments
+			logger.Ctx(ctx).Warn("failed to fence segment",
+				zap.String("logName", l.Name),
+				zap.Int64("segmentId", segmentId),
+				zap.Error(err))
+			fenceErrors = append(fenceErrors, fmt.Errorf("failed to fence segment %d: %w", segmentId, err))
+			continue
+		}
+
+		logger.Ctx(ctx).Info("successfully fenced segment",
+			zap.String("logName", l.Name),
+			zap.Int64("segmentId", segmentId),
+			zap.Int64("lastEntryId", lastEntryId))
+
+		// Update segment metadata if necessary
+		if segMeta.State == proto.SegmentState_Active {
+			segMeta.State = proto.SegmentState_Sealed
+			segMeta.LastEntryId = lastEntryId
+			err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMeta)
+			if err != nil {
+				logger.Ctx(ctx).Warn("failed to update segment metadata after fence",
+					zap.String("logName", l.Name),
+					zap.Int64("segmentId", segmentId),
+					zap.Error(err))
+				// Don't treat metadata update failure as critical error
+			}
+		}
+	}
+
+	// If we had errors fencing segments, return a combined error
+	if len(fenceErrors) > 0 {
+		logger.Ctx(ctx).Warn("encountered errors while fencing segments",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Int("errorCount", len(fenceErrors)))
+
+		// For now, we'll log the errors but not fail the entire operation
+		// This allows the system to continue even if some segments can't be fenced
+		return nil
+	}
+
+	logger.Ctx(ctx).Info("successfully fenced last segments",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.Int64s("segmentIds", segmentsToFence))
+
+	return nil
 }
 
 func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {

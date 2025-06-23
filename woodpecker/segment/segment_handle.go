@@ -173,7 +173,7 @@ type segmentHandleImpl struct {
 	commitedSize     atomic.Int64
 	pendingSize      atomic.Int64
 
-	fencedState       atomic.Bool
+	fencedState       atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
 	canWriteState     atomic.Bool
 	rollingState      atomic.Bool
 	rollingReadyState atomic.Bool
@@ -738,15 +738,11 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("lastEntryId", lastEntryId),
 		zap.Error(fencedErr))
 
-	// TODO simplify err condition
-	if lastEntryId == -1 && fencedErr != nil && (werr.ErrSegmentFenced.Is(fencedErr) || werr.ErrSegmentNotFound.Is(fencedErr) || werr.ErrSegmentNoWritingFragment.Is(fencedErr)) {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
-		// Use the actual lastEntryId returned from FenceSegment, even in error cases
-		// because these "errors" indicate the segment was already fenced, not a failure
-		s.fastFailAppendOpsUnsafe(ctx, lastEntryId, werr.ErrSegmentFenced)
-		logger.Ctx(ctx).Info("segment fence finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", lastEntryId))
-		return lastEntryId, fencedErr
+	if fencedErr != nil {
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Info("segment fence fail", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(fencedErr))
+		return -1, fencedErr
 	} else {
 		if lastEntryId != -1 && s.lastAddConfirmed.Load() < lastEntryId {
 			logger.Ctx(ctx).Info("Updating last add confirmed from fence result",
@@ -760,22 +756,16 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 		// Use the actual lastEntryId returned from FenceSegment, even in error cases
 		// because these "errors" indicate the segment was already fenced, not a failure
 		s.fastFailAppendOpsUnsafe(ctx, lastEntryId, werr.ErrSegmentFenced)
-		if fencedErr != nil {
-			logger.Ctx(ctx).Warn("segment fence finish with warn", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", lastEntryId), zap.Error(fencedErr))
-			metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "warn").Inc()
-			metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "warn").Observe(float64(time.Since(start).Milliseconds()))
-		} else {
-			logger.Ctx(ctx).Info("Segment fence completed successfully",
-				zap.String("logName", s.logName),
-				zap.Int64("logId", s.logId),
-				zap.Int64("segmentId", s.segmentId),
-				zap.Int64("lastEntryId", lastEntryId),
-				zap.Duration("duration", time.Since(start)))
-			s.fencedState.Store(true) // Set fenced state to prevent new append operations
-			metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
-			metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
-		}
-		return lastEntryId, fencedErr
+		logger.Ctx(ctx).Info("Segment fence completed successfully",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("lastEntryId", lastEntryId),
+			zap.Duration("duration", time.Since(start)))
+		s.fencedState.Store(true) // Set fenced state to prevent new append operations
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+		return lastEntryId, nil
 	}
 }
 

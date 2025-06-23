@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/channel"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zilliztech/woodpecker/common/channel"
+
 	"github.com/cockroachdb/errors"
+	"github.com/gofrs/flock"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -72,6 +74,12 @@ type DiskSegmentImpl struct {
 
 	autoSync bool // Whether to automatically sync data
 
+	// File lock for segment exclusivity
+	lockFile     *flock.Flock // Lock file handle
+	lockFilePath string       // Path to the lock file
+	// For fence state: true confirms it is fenced, while false requires verification by checking the file system for a fence flag file.
+	fenced atomic.Bool
+
 	// For async writes and control
 	closed    atomic.Bool
 	closeCh   chan struct{}
@@ -97,6 +105,7 @@ func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir
 	s.firstEntryID.Store(-1)
 	s.lastEntryID.Store(-1)
 	s.lastFragmentID.Store(-1)
+	s.fenced.Store(false)
 	s.closed.Store(false)
 
 	// Apply options
@@ -113,6 +122,11 @@ func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, parentDir
 	err := s.checkDirIsEmpty(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Create segment lock file
+	if err := s.createSegmentLock(ctx); err != nil {
+		return nil, errors.Wrap(err, "failed to create segment lock")
 	}
 
 	newBuffer := cache.NewSequentialBuffer(s.logId, s.segmentId, s.lastEntryID.Load()+1, s.maxBufferEntries) // Default cache for 10000 entries
@@ -132,6 +146,11 @@ func (s *DiskSegmentImpl) run() {
 	// Timer
 	ticker := time.NewTicker(time.Duration(s.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
+
+	// Fence check timer - check every 5 seconds
+	fenceCheckTicker := time.NewTicker(5 * time.Second)
+	defer fenceCheckTicker.Stop()
+
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	metrics.WpFileWriters.WithLabelValues(logIdStr).Inc()
 	for {
@@ -156,6 +175,45 @@ func (s *DiskSegmentImpl) run() {
 			}
 			sp.End()
 			ticker.Reset(time.Duration(s.maxIntervalMs * int(time.Millisecond)))
+		case <-fenceCheckTicker.C:
+			// Check if closed
+			if s.closed.Load() {
+				return
+			}
+
+			// Check for fence flag file
+			ctx, sp := logger.NewIntentCtx(SegmentScopeName, fmt.Sprintf("checkFence_%d_%d", s.logId, s.segmentId))
+			if exists, err := checkFenceFlagFileExists(ctx, s.logFileDir, s.logId, s.segmentId); err != nil {
+				logger.Ctx(ctx).Warn("Error checking fence flag file", zap.Error(err))
+			} else if exists {
+				// Mark as fenced and trigger close sequence
+				if !s.fenced.Load() {
+					logger.Ctx(ctx).Warn("Fence flag file detected, marking segment as fenced",
+						zap.String("logFileDir", s.logFileDir),
+						zap.Int64("logId", s.logId),
+						zap.Int64("segmentId", s.segmentId))
+
+					s.fenced.Store(true)
+
+					// Trigger close sequence when fenced
+					go func() {
+						closeCtx, sp := logger.NewIntentCtx(SegmentScopeName, fmt.Sprintf("fenced_close_%d_%d", s.logId, s.segmentId))
+						defer sp.End()
+
+						logger.Ctx(closeCtx).Info("Initiating close sequence due to fence detection",
+							zap.String("logFileDir", s.logFileDir),
+							zap.Int64("logId", s.logId),
+							zap.Int64("segmentId", s.segmentId))
+
+						if err := s.Close(closeCtx); err != nil {
+							logger.Ctx(closeCtx).Error("Failed to close segment after fence detection",
+								zap.String("logFileDir", s.logFileDir),
+								zap.Error(err))
+						}
+					}()
+				}
+			}
+			sp.End()
 		case <-s.closeCh:
 			logger.Ctx(context.Background()).Info("DiskSegmentImpl successfully closed",
 				zap.String("logFileDir", s.logFileDir))
@@ -213,8 +271,13 @@ func (s *DiskSegmentImpl) AppendAsync(ctx context.Context, entryId int64, value 
 
 	// Handle closed file
 	if s.closed.Load() {
-		logger.Ctx(ctx).Debug("AppendAsync: failed - file is closed", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
-		return -1, errors.New("DiskSegmentImpl closed")
+		logger.Ctx(ctx).Debug("AppendAsync: failed - segment writer is closed", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
+		return -1, werr.ErrLogFileClosed
+	}
+	if s.fenced.Load() {
+		// quick fail and return a fenced Err
+		logger.Ctx(ctx).Debug("AppendAsync: failed - segment is fenced", zap.String("logFileDir", s.logFileDir), zap.Int64("entryId", entryId), zap.Int("dataLength", len(value)), zap.String("logFileInst", fmt.Sprintf("%p", s)))
+		return -1, werr.ErrSegmentFenced
 	}
 
 	// First check if ID already exists in synced data
@@ -714,6 +777,13 @@ func (s *DiskSegmentImpl) Close(ctx context.Context) error {
 
 	logger.Ctx(ctx).Info("Closing DiskSegmentImpl", zap.String("logFileDir", s.logFileDir))
 
+	// Release segment lock
+	if err := s.releaseSegmentLock(ctx); err != nil {
+		logger.Ctx(ctx).Warn("Failed to release segment lock during close",
+			zap.String("logFileDir", s.logFileDir),
+			zap.Error(err))
+	}
+
 	// Send close signal
 	s.closeOnce.Do(func() {
 		s.closeCh <- struct{}{}
@@ -754,6 +824,248 @@ func (s *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
 	return werr.ErrNotSupport.WithCauseErrMsg("not support DiskSegmentImpl writer to delete fragments currently")
 }
 
+// createSegmentLock creates a lock file for the segment to ensure exclusive access
+func (s *DiskSegmentImpl) createSegmentLock(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "createSegmentLock")
+	defer sp.End()
+
+	// Create lock file path
+	s.lockFilePath = filepath.Join(s.logFileDir, fmt.Sprintf("segment_%d_%d.lock", s.logId, s.segmentId))
+
+	// Create flock instance
+	s.lockFile = flock.New(s.lockFilePath)
+
+	// Try to acquire exclusive lock (non-blocking)
+	locked, err := s.lockFile.TryLock()
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to try lock file",
+			zap.String("lockFilePath", s.lockFilePath),
+			zap.Error(err))
+		return errors.Wrapf(err, "failed to try lock file: %s", s.lockFilePath)
+	}
+
+	if !locked {
+		logger.Ctx(ctx).Error("Failed to acquire exclusive lock - file is already locked",
+			zap.String("lockFilePath", s.lockFilePath))
+		return errors.Errorf("failed to acquire exclusive lock on file: %s (already locked by another process)", s.lockFilePath)
+	}
+
+	// Write segment info to lock file (optional, for debugging purposes)
+	lockInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\n",
+		s.logId, s.segmentId, os.Getpid(), time.Now().Unix())
+
+	// Create or write to the lock file for information purposes
+	if infoFile, err := os.OpenFile(s.lockFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+		infoFile.WriteString(lockInfo)
+		infoFile.Sync()
+		infoFile.Close()
+	} else {
+		logger.Ctx(ctx).Warn("Failed to write lock info",
+			zap.String("lockFilePath", s.lockFilePath),
+			zap.Error(err))
+		// Continue even if writing lock info fails, as the lock itself is more important
+	}
+
+	logger.Ctx(ctx).Info("Successfully created and locked segment lock file",
+		zap.String("lockFilePath", s.lockFilePath),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId))
+
+	return nil
+}
+
+// releaseSegmentLock releases the segment lock and removes the lock file
+func (s *DiskSegmentImpl) releaseSegmentLock(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "releaseSegmentLock")
+	defer sp.End()
+
+	if s.lockFile == nil {
+		logger.Ctx(ctx).Debug("No lock file to release")
+		return nil
+	}
+
+	// Release the flock
+	err := s.lockFile.Unlock()
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to release flock",
+			zap.String("lockFilePath", s.lockFilePath),
+			zap.Error(err))
+	}
+
+	// Remove the lock file
+	if s.lockFilePath != "" {
+		if err := os.Remove(s.lockFilePath); err != nil {
+			logger.Ctx(ctx).Warn("Failed to remove lock file",
+				zap.String("lockFilePath", s.lockFilePath),
+				zap.Error(err))
+		} else {
+			logger.Ctx(ctx).Info("Successfully removed segment lock file",
+				zap.String("lockFilePath", s.lockFilePath),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId))
+		}
+	}
+
+	s.lockFile = nil
+	s.lockFilePath = ""
+	return nil
+}
+
+// checkFenceFlagFileExists checks for the existence of a fence flag file and returns (exists, error)
+func checkFenceFlagFileExists(ctx context.Context, logFileDir string, logId int64, segmentId int64) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "checkFenceFlagFileExists")
+	defer sp.End()
+
+	// Get fence flag file path
+	fenceFlagPath := getFenceFlagPath(logFileDir, logId, segmentId)
+
+	// Check if fence flag file exists
+	if _, err := os.Stat(fenceFlagPath); err == nil {
+		// Fence flag file exists
+		logger.Ctx(ctx).Debug("Fence flag file detected",
+			zap.String("logFileDir", logFileDir),
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId))
+		return true, nil
+	} else if os.IsNotExist(err) {
+		// File doesn't exist, that's normal - no fence flag
+		return false, nil
+	} else {
+		// Other error occurred while checking fence flag file
+		logger.Ctx(ctx).Warn("Error checking fence flag file",
+			zap.String("logFileDir", logFileDir),
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Error(err))
+		return false, err
+	}
+}
+
+// getFenceFlagPath returns the path to the fence flag file for a segment
+func getFenceFlagPath(logFileDir string, logId int64, segmentId int64) string {
+	return filepath.Join(logFileDir, fmt.Sprintf("segment_%d_%d.fence", logId, segmentId))
+}
+
+// waitForFenceCheckIntervalIfLockExists checks if lock file exists and waits for fence check interval
+// to ensure other processes have time to detect the fence flag
+func waitForFenceCheckIntervalIfLockExists(ctx context.Context, logFileDir string, logId int64, segmentId int64, fenceFlagPath string) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "waitForFenceCheckIntervalIfLockExists")
+	defer sp.End()
+
+	// Check if lock file exists
+	lockFilePath := filepath.Join(logFileDir, fmt.Sprintf("segment_%d_%d.lock", logId, segmentId))
+	if _, err := os.Stat(lockFilePath); err == nil {
+		// Lock file exists, wait for fence check interval (5 seconds)
+		logger.Ctx(ctx).Info("Lock file exists, waiting for fence check interval to ensure other processes detect fence flag",
+			zap.String("logFileDir", logFileDir),
+			zap.String("lockFilePath", lockFilePath),
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", segmentId))
+
+		select {
+		case <-ctx.Done():
+			logger.Ctx(ctx).Warn("Context cancelled while waiting for fence check interval",
+				zap.String("logFileDir", logFileDir))
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			// Wait completed
+			logger.Ctx(ctx).Info("Fence check interval wait completed",
+				zap.String("logFileDir", logFileDir))
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		// Error checking lock file (not "file not exists")
+		logger.Ctx(ctx).Warn("Error checking lock file existence",
+			zap.String("lockFilePath", lockFilePath),
+			zap.Error(err))
+		// Continue anyway, as fence flag file is already created
+	}
+
+	return nil
+}
+
+func (s *DiskSegmentImpl) IsFenced(ctx context.Context) (bool, error) {
+	// if already fenced, no need to check again
+	if s.fenced.Load() {
+		return true, nil
+	}
+	// otherwise, check fence flag file
+	exists, err := checkFenceFlagFileExists(ctx, s.logFileDir, s.logId, s.segmentId)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		s.fenced.Store(true)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *DiskSegmentImpl) Fence(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Fence")
+	defer sp.End()
+
+	// If already fenced, return idempotently
+	if s.fenced.Load() {
+		logger.Ctx(ctx).Debug("Segment already fenced, returning idempotently",
+			zap.String("logFileDir", s.logFileDir),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+		return s.lastEntryID.Load(), nil
+	}
+
+	// Get fence flag file path
+	fenceFlagPath := getFenceFlagPath(s.logFileDir, s.logId, s.segmentId)
+
+	// Create fence flag file
+	fenceFile, err := os.Create(fenceFlagPath)
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to create fence flag file",
+			zap.String("logFileDir", s.logFileDir),
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
+		return -1, fmt.Errorf("failed to create fence flag file %s: %w", fenceFlagPath, err)
+	}
+
+	// Write fence information to the file
+	fenceInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\nreason=manual_fence\n",
+		s.logId, s.segmentId, os.Getpid(), time.Now().Unix())
+
+	_, writeErr := fenceFile.WriteString(fenceInfo)
+	fenceFile.Close()
+
+	if writeErr != nil {
+		logger.Ctx(ctx).Warn("Failed to write fence info to file, but file created successfully",
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Error(writeErr))
+		// Continue even if writing info fails, as the file existence is what matters
+	}
+
+	// Mark as fenced
+	s.fenced.Store(true)
+	lastEntryId := s.lastEntryID.Load()
+
+	// Wait for fence check interval if lock file exists
+	if err := waitForFenceCheckIntervalIfLockExists(ctx, s.logFileDir, s.logId, s.segmentId, fenceFlagPath); err != nil {
+		logger.Ctx(ctx).Warn("Error during fence check interval wait",
+			zap.String("logFileDir", s.logFileDir),
+			zap.Error(err))
+		return lastEntryId, err
+	}
+
+	logger.Ctx(ctx).Info("Successfully created fence flag file and marked segment as fenced",
+		zap.String("logFileDir", s.logFileDir),
+		zap.String("fenceFlagPath", fenceFlagPath),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lastEntryId", lastEntryId))
+
+	return lastEntryId, nil
+}
+
 var _ storage.Segment = (*RODiskSegmentImpl)(nil)
 
 // RODiskSegmentImpl is used to manage and read exists data from disk-based storage as a logical segment
@@ -769,6 +1081,8 @@ type RODiskSegmentImpl struct {
 
 	// State
 	fragments []*FragmentFileReader // LogFile cached fragments in order
+	// For fence state: true confirms it is fenced, while false requires verification by checking the file system for a fence flag file.
+	fenced atomic.Bool
 }
 
 func NewRODiskSegmentImpl(ctx context.Context, logId int64, segId int64, basePath string, options ...ROption) (*RODiskSegmentImpl, error) {
@@ -780,6 +1094,7 @@ func NewRODiskSegmentImpl(ctx context.Context, logId int64, segId int64, basePat
 		fragmentSize: 128 * 1024 * 1024, // Default 128MB
 		fragments:    make([]*FragmentFileReader, 0),
 	}
+	rs.fenced.Store(false)
 
 	// Apply options
 	for _, opt := range options {
@@ -1159,6 +1474,100 @@ func (rs *RODiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) erro
 		return fmt.Errorf("failed to delete %d fragment files: ", len(deleteErrors))
 	}
 	return nil
+}
+
+func (rs *RODiskSegmentImpl) IsFenced(ctx context.Context) (bool, error) {
+	// if already fenced, no need to check again
+	if rs.fenced.Load() {
+		return true, nil
+	}
+	// otherwise, check fence flag file
+	exists, err := checkFenceFlagFileExists(ctx, rs.logFileDir, rs.logId, rs.segmentId)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		rs.fenced.Store(true)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (rs *RODiskSegmentImpl) Fence(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "Fence")
+	defer sp.End()
+
+	// If already fenced, return idempotently
+	if rs.fenced.Load() {
+		logger.Ctx(ctx).Debug("RODiskSegment already fenced, returning idempotently",
+			zap.String("logFileDir", rs.logFileDir),
+			zap.Int64("logId", rs.logId),
+			zap.Int64("segmentId", rs.segmentId))
+		// For read-only segment, get the last entry ID
+		lastEntryId, err := rs.GetLastEntryId(ctx)
+		if err != nil {
+			return -1, err
+		}
+		return lastEntryId, nil
+	}
+
+	// Get fence flag file path
+	fenceFlagPath := getFenceFlagPath(rs.logFileDir, rs.logId, rs.segmentId)
+
+	// Create fence flag file
+	fenceFile, err := os.Create(fenceFlagPath)
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to create fence flag file",
+			zap.String("logFileDir", rs.logFileDir),
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Int64("logId", rs.logId),
+			zap.Int64("segmentId", rs.segmentId),
+			zap.Error(err))
+		return -1, fmt.Errorf("failed to create fence flag file %s: %w", fenceFlagPath, err)
+	}
+
+	// Write fence information to the file
+	fenceInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\nreason=manual_fence\ntype=readonly\n",
+		rs.logId, rs.segmentId, os.Getpid(), time.Now().Unix())
+
+	_, writeErr := fenceFile.WriteString(fenceInfo)
+	fenceFile.Close()
+
+	if writeErr != nil {
+		logger.Ctx(ctx).Warn("Failed to write fence info to file, but file created successfully",
+			zap.String("fenceFlagPath", fenceFlagPath),
+			zap.Error(writeErr))
+		// Continue even if writing info fails, as the file existence is what matters
+	}
+
+	// Mark as fenced
+	rs.fenced.Store(true)
+
+	// For read-only segment, get the last entry ID
+	lastEntryId, err := rs.GetLastEntryId(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get last entry ID after fencing",
+			zap.String("logFileDir", rs.logFileDir),
+			zap.Error(err))
+		return -1, err
+	}
+
+	// Wait for fence check interval if lock file exists
+	if err := waitForFenceCheckIntervalIfLockExists(ctx, rs.logFileDir, rs.logId, rs.segmentId, fenceFlagPath); err != nil {
+		logger.Ctx(ctx).Warn("Error during fence check interval wait",
+			zap.String("logFileDir", rs.logFileDir),
+			zap.Error(err))
+		return lastEntryId, err
+	}
+
+	logger.Ctx(ctx).Info("Successfully created fence flag file and marked RODiskSegment as fenced",
+		zap.String("logFileDir", rs.logFileDir),
+		zap.String("fenceFlagPath", fenceFlagPath),
+		zap.Int64("logId", rs.logId),
+		zap.Int64("segmentId", rs.segmentId),
+		zap.Int64("lastEntryId", lastEntryId))
+
+	return lastEntryId, nil
 }
 
 // DiskReader implements the Reader interface

@@ -20,6 +20,7 @@ package disk
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1796,7 +1797,7 @@ func TestDeleteFragments(t *testing.T) {
 			// Check that at least one fragment file was created
 			files, err := os.ReadDir(segmentImpl.logFileDir)
 			assert.NoError(t, err)
-			assert.Equal(t, 10, len(files), "Expected 10 fragment files")
+			assert.Equal(t, 11, len(files), "Expected 10 fragment files + 1 lock file")
 		}
 
 		// Create read-only log file
@@ -1819,5 +1820,613 @@ func TestDeleteFragments(t *testing.T) {
 
 		err = roSegmentImpl.Close(context.TODO())
 		assert.NoError(t, err)
+	})
+}
+
+func TestDiskSegmentImpl_FileLock(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "test_log")
+
+	// Test creating segment with lock
+	t.Run("CreateSegmentWithLock", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create first segment instance
+		segment1, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment1, "Segment should not be nil")
+
+		// Verify lock file exists
+		lockFilePath := filepath.Join(logDir, "segment_1_1.lock")
+		_, err = os.Stat(lockFilePath)
+		assert.NoError(t, err, "Lock file should exist")
+
+		// Try to create another segment with same logId and segmentId (should fail)
+		segment2, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		assert.Error(t, err, "Should fail to create second segment with same ID")
+		assert.Nil(t, segment2, "Second segment should be nil")
+
+		// Close first segment
+		err = segment1.Close(ctx)
+		assert.NoError(t, err, "Should close segment successfully")
+
+		// Verify lock file is removed
+		_, err = os.Stat(lockFilePath)
+		assert.True(t, os.IsNotExist(err), "Lock file should be removed after close")
+
+		// Now should be able to create new segment with same ID
+		segment3, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		assert.NoError(t, err, "Should create segment successfully after previous one is closed")
+		assert.NotNil(t, segment3, "New segment should not be nil")
+
+		// Clean up
+		err = segment3.Close(ctx)
+		assert.NoError(t, err, "Should close segment successfully")
+	})
+
+	// Test concurrent segment creation
+	t.Run("ConcurrentSegmentCreation", func(t *testing.T) {
+		ctx := context.Background()
+		logDir2 := filepath.Join(tmpDir, "test_log_concurrent")
+
+		// Channel to collect results
+		resultCh := make(chan error, 2)
+
+		// Try to create two segments concurrently
+		go func() {
+			_, err := NewDiskSegmentImpl(ctx, 2, 2, logDir2)
+			resultCh <- err
+		}()
+
+		go func() {
+			// Add small delay to ensure first goroutine starts first
+			time.Sleep(10 * time.Millisecond)
+			_, err := NewDiskSegmentImpl(ctx, 2, 2, logDir2)
+			resultCh <- err
+		}()
+
+		// Collect results
+		var results []error
+		for i := 0; i < 2; i++ {
+			results = append(results, <-resultCh)
+		}
+
+		// One should succeed, one should fail
+		successCount := 0
+		failCount := 0
+		for _, err := range results {
+			if err == nil {
+				successCount++
+			} else {
+				failCount++
+			}
+		}
+
+		assert.Equal(t, 1, successCount, "Exactly one segment creation should succeed")
+		assert.Equal(t, 1, failCount, "Exactly one segment creation should fail")
+	})
+}
+
+func TestDiskSegmentImpl_FenceDetection(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "test_fence_log")
+
+	t.Run("FenceDetectionAndAutoClose", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+
+		// Verify segment is not fenced initially
+		assert.False(t, segment.fenced.Load(), "Segment should not be fenced initially")
+
+		// Create fence flag file
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		fenceFile, err := os.Create(fenceFlagPath)
+		require.NoError(t, err, "Should create fence flag file")
+		fenceFile.Close()
+
+		// Manually trigger fence check
+		exists, err := checkFenceFlagFileExists(ctx, segment.logFileDir, segment.logId, segment.segmentId)
+		require.NoError(t, err, "Should check fence flag without error")
+		if exists {
+			segment.fenced.Store(true)
+		}
+
+		// Verify segment is now fenced
+		assert.True(t, segment.fenced.Load(), "Segment should be fenced after fence flag detection")
+
+		// Try to append data (should fail with ErrSegmentFenced)
+		resultChannel := channel.NewLocalResultChannel("test/fence/1")
+		_, err = segment.AppendAsync(ctx, 1, []byte("test data"), resultChannel)
+		assert.Error(t, err, "AppendAsync should fail when segment is fenced")
+		assert.True(t, werr.ErrSegmentFenced.Is(err), "Should return ErrSegmentFenced")
+
+		// Wait a bit for the auto-close to potentially trigger
+		time.Sleep(100 * time.Millisecond)
+
+		// Clean up
+		segment.Close(ctx)
+	})
+
+	t.Run("NoFenceFileNormalOperation", func(t *testing.T) {
+		ctx := context.Background()
+		logDir2 := filepath.Join(tmpDir, "test_no_fence_log")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 2, 2, logDir2)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+
+		// Check fence (should not find any fence file)
+		exists, err := checkFenceFlagFileExists(ctx, segment.logFileDir, segment.logId, segment.segmentId)
+		require.NoError(t, err, "Should check fence flag without error")
+		if exists {
+			segment.fenced.Store(true)
+		}
+
+		// Verify segment is not fenced
+		assert.False(t, segment.fenced.Load(), "Segment should not be fenced when no fence file exists")
+
+		// Try to append data (should succeed)
+		resultChannel := channel.NewLocalResultChannel("test/no_fence/1")
+		_, err = segment.AppendAsync(ctx, 1, []byte("test data"), resultChannel)
+		assert.NoError(t, err, "AppendAsync should succeed when segment is not fenced")
+
+		// Clean up
+		segment.Close(ctx)
+	})
+
+	t.Run("FenceCheckAfterAlreadyFenced", func(t *testing.T) {
+		ctx := context.Background()
+		logDir3 := filepath.Join(tmpDir, "test_already_fenced_log")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 3, 3, logDir3)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+
+		// Manually set fenced state
+		segment.fenced.Store(true)
+
+		// Create fence flag file
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		fenceFile, err := os.Create(fenceFlagPath)
+		require.NoError(t, err, "Should create fence flag file")
+		fenceFile.Close()
+
+		// Check fence (should return early since already fenced)
+		exists, err := checkFenceFlagFileExists(ctx, segment.logFileDir, segment.logId, segment.segmentId)
+		require.NoError(t, err, "Should check fence flag without error")
+		if exists {
+			segment.fenced.Store(true)
+		}
+
+		// Verify segment is still fenced
+		assert.True(t, segment.fenced.Load(), "Segment should remain fenced")
+
+		// Clean up
+		segment.Close(ctx)
+	})
+
+	t.Run("GetFenceFlagPath", func(t *testing.T) {
+		ctx := context.Background()
+		logDir4 := filepath.Join(tmpDir, "test_fence_path_log")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 4, 5, logDir4)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+
+		// Test fence flag path generation
+		expectedPath := filepath.Join(logDir4, "segment_4_5.fence")
+		actualPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		assert.Equal(t, expectedPath, actualPath, "Fence flag path should be correct")
+
+		// Clean up
+		segment.Close(ctx)
+	})
+}
+
+func TestDiskSegmentImpl_PeriodicFenceCheck(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "test_periodic_fence")
+
+	t.Run("PeriodicFenceCheckInRunLoop", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create segment instance with shorter intervals for testing
+		segment, err := NewDiskSegmentImpl(ctx, 1, 1, logDir,
+			WithWriteMaxIntervalMs(100)) // 100ms for faster testing
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+
+		// Verify segment is not fenced initially
+		assert.False(t, segment.fenced.Load(), "Segment should not be fenced initially")
+
+		// Wait a bit to ensure the run loop is active
+		time.Sleep(200 * time.Millisecond)
+
+		// Create fence flag file while segment is running
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		fenceFile, err := os.Create(fenceFlagPath)
+		require.NoError(t, err, "Should create fence flag file")
+		fenceFile.Close()
+
+		// Wait for the periodic fence check to detect the fence file
+		// The fence check runs every 5 seconds, but we'll wait up to 10 seconds
+		maxWait := 10 * time.Second
+		checkInterval := 100 * time.Millisecond
+		fenced := false
+
+		for elapsed := time.Duration(0); elapsed < maxWait; elapsed += checkInterval {
+			if segment.fenced.Load() {
+				fenced = true
+				break
+			}
+			time.Sleep(checkInterval)
+		}
+
+		assert.True(t, fenced, "Segment should be fenced after periodic check detects fence file")
+
+		// Try to append data - should fail with either ErrSegmentFenced or closed error
+		resultChannel := channel.NewLocalResultChannel("test/periodic_fence/1")
+		_, err = segment.AppendAsync(ctx, 1, []byte("test data"), resultChannel)
+		assert.Error(t, err, "AppendAsync should fail when segment is fenced")
+
+		// The error could be either ErrSegmentFenced (if checked before auto-close)
+		// or a closed error (if auto-close happened first)
+		isFencedError := werr.ErrSegmentFenced.Is(err)
+		isClosedError := strings.Contains(err.Error(), "closed")
+		assert.True(t, isFencedError || isClosedError,
+			"Should return ErrSegmentFenced or closed error, got: %v", err)
+
+		// Wait a bit for auto-close to complete
+		time.Sleep(200 * time.Millisecond)
+
+		// Clean up
+		segment.Close(ctx)
+	})
+}
+
+func TestDiskSegmentImpl_IsFenced(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "test_is_fenced")
+
+	t.Run("DiskSegmentImpl_IsFenced", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test 1: Initially not fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "Segment should not be fenced initially")
+
+		// Test 2: Create fence flag file
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		fenceFile, err := os.Create(fenceFlagPath)
+		require.NoError(t, err, "Should create fence flag file")
+		fenceFile.Close()
+
+		// Test 3: Should detect fence flag file
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should be fenced after fence flag file created")
+
+		// Test 4: Should return true immediately on subsequent calls (cached)
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should remain fenced")
+
+		// Test 5: Remove fence flag file, but should still return true (cached)
+		os.Remove(fenceFlagPath)
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should remain fenced even after fence file removed (cached)")
+	})
+
+	t.Run("RODiskSegmentImpl_IsFenced", func(t *testing.T) {
+		ctx := context.Background()
+		logDir2 := filepath.Join(tmpDir, "test_ro_is_fenced")
+
+		// Create segment instance
+		segment, err := NewRODiskSegmentImpl(ctx, 2, 2, logDir2)
+		require.NoError(t, err, "Should create RO segment successfully")
+		require.NotNil(t, segment, "RO Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test 1: Initially not fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "RO Segment should not be fenced initially")
+
+		// Test 2: Create fence flag file
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		fenceFile, err := os.Create(fenceFlagPath)
+		require.NoError(t, err, "Should create fence flag file")
+		fenceFile.Close()
+
+		// Test 3: Should detect fence flag file
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "RO Segment should be fenced after fence flag file created")
+
+		// Test 4: Should return true immediately on subsequent calls (cached)
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "RO Segment should remain fenced")
+	})
+
+	t.Run("IsFenced_ErrorHandling", func(t *testing.T) {
+		ctx := context.Background()
+		logDir3 := filepath.Join(tmpDir, "test_is_fenced_error")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 3, 3, logDir3)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test with invalid permission (create a directory where fence file should be)
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		err = os.MkdirAll(fenceFlagPath, 0755) // Create directory instead of file
+		require.NoError(t, err, "Should create directory")
+
+		// Should handle error gracefully
+		isFenced, err := segment.IsFenced(ctx)
+		// This might return an error or false depending on the OS behavior
+		// The important thing is it doesn't panic
+		if err != nil {
+			assert.False(t, isFenced, "Should return false when error occurs")
+		}
+	})
+}
+
+func TestDiskSegmentImpl_Fence(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "test_fence")
+
+	t.Run("DiskSegmentImpl_Fence", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 1, 1, logDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test 1: Initially not fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "Segment should not be fenced initially")
+
+		// Test 2: Fence the segment
+		lastEntryId, err := segment.Fence(ctx)
+		require.NoError(t, err, "Fence should not return error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Test 3: Check if segment is fenced after fencing
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should be fenced after calling Fence")
+
+		// Test 4: Verify fence flag file exists
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		_, err = os.Stat(fenceFlagPath)
+		assert.NoError(t, err, "Fence flag file should exist")
+
+		// Test 5: Idempotent behavior - calling Fence again should not error
+		lastEntryId2, err := segment.Fence(ctx)
+		require.NoError(t, err, "Second Fence call should not return error")
+		assert.Equal(t, lastEntryId, lastEntryId2, "Should return same last entry ID on idempotent call")
+
+		// Test 6: Verify segment is still fenced
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should still be fenced after idempotent call")
+
+		// Test 7: Verify fence flag file content
+		content, err := os.ReadFile(fenceFlagPath)
+		require.NoError(t, err, "Should read fence flag file")
+		contentStr := string(content)
+		assert.Contains(t, contentStr, "logId=1", "Should contain logId")
+		assert.Contains(t, contentStr, "segmentId=1", "Should contain segmentId")
+		assert.Contains(t, contentStr, "reason=manual_fence", "Should contain reason")
+	})
+
+	t.Run("RODiskSegmentImpl_Fence", func(t *testing.T) {
+		ctx := context.Background()
+		roLogDir := filepath.Join(tmpDir, "test_fence_ro")
+
+		// Create segment instance
+		roSegment, err := NewRODiskSegmentImpl(ctx, 2, 2, roLogDir)
+		require.NoError(t, err, "Should create RO segment successfully")
+		require.NotNil(t, roSegment, "RO segment should not be nil")
+		defer roSegment.Close(ctx)
+
+		// Test 1: Initially not fenced
+		isFenced, err := roSegment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "RO segment should not be fenced initially")
+
+		// Test 2: Fence the RO segment
+		lastEntryId, err := roSegment.Fence(ctx)
+		require.NoError(t, err, "Fence should not return error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Test 3: Check if RO segment is fenced after fencing
+		isFenced, err = roSegment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "RO segment should be fenced after calling Fence")
+
+		// Test 4: Verify fence flag file exists
+		fenceFlagPath := getFenceFlagPath(roSegment.logFileDir, roSegment.logId, roSegment.segmentId)
+		_, err = os.Stat(fenceFlagPath)
+		assert.NoError(t, err, "Fence flag file should exist")
+
+		// Test 5: Idempotent behavior - calling Fence again should not error
+		lastEntryId2, err := roSegment.Fence(ctx)
+		require.NoError(t, err, "Second Fence call should not return error")
+		assert.Equal(t, lastEntryId, lastEntryId2, "Should return same last entry ID on idempotent call")
+
+		// Test 6: Verify RO segment is still fenced
+		isFenced, err = roSegment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "RO segment should still be fenced after idempotent call")
+
+		// Test 7: Verify fence flag file content for RO segment
+		content, err := os.ReadFile(fenceFlagPath)
+		require.NoError(t, err, "Should read fence flag file")
+		contentStr := string(content)
+		assert.Contains(t, contentStr, "logId=2", "Should contain logId")
+		assert.Contains(t, contentStr, "segmentId=2", "Should contain segmentId")
+		assert.Contains(t, contentStr, "reason=manual_fence", "Should contain reason")
+		assert.Contains(t, contentStr, "type=readonly", "Should contain type=readonly")
+	})
+
+	t.Run("Fence_FileCreationError", func(t *testing.T) {
+		ctx := context.Background()
+		invalidLogDir := "/invalid/path/that/does/not/exist"
+
+		// Create segment with invalid path
+		segment := &DiskSegmentImpl{
+			logId:      3,
+			segmentId:  3,
+			logFileDir: invalidLogDir,
+		}
+		segment.fenced.Store(false)
+		segment.lastEntryID.Store(10)
+
+		// Test: Fence should fail due to invalid path
+		lastEntryId, err := segment.Fence(ctx)
+		assert.Error(t, err, "Fence should return error for invalid path")
+		assert.Equal(t, int64(-1), lastEntryId, "Should return -1 on error")
+
+		// Verify segment is not marked as fenced on error
+		assert.False(t, segment.fenced.Load(), "Segment should not be fenced on error")
+	})
+
+	t.Run("Fence_WithLockFileWait", func(t *testing.T) {
+		ctx := context.Background()
+		lockWaitLogDir := filepath.Join(tmpDir, "test_fence_lock_wait")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(ctx, 4, 4, lockWaitLogDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Verify lock file exists (created by NewDiskSegmentImpl)
+		lockFilePath := filepath.Join(segment.logFileDir, fmt.Sprintf("segment_%d_%d.lock", segment.logId, segment.segmentId))
+		_, err = os.Stat(lockFilePath)
+		assert.NoError(t, err, "Lock file should exist")
+
+		// Measure time for fence operation
+		startTime := time.Now()
+		lastEntryId, err := segment.Fence(ctx)
+		duration := time.Since(startTime)
+
+		require.NoError(t, err, "Fence should not return error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Should take at least 5 seconds due to waiting for fence check interval
+		assert.GreaterOrEqual(t, duration, 5*time.Second, "Should wait at least 5 seconds when lock file exists")
+		assert.Less(t, duration, 6*time.Second, "Should not wait much longer than 5 seconds")
+
+		// Verify segment is fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should be fenced after calling Fence")
+
+		// Verify fence flag file exists
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		_, err = os.Stat(fenceFlagPath)
+		assert.NoError(t, err, "Fence flag file should exist")
+	})
+
+	t.Run("Fence_WithoutLockFileNoWait", func(t *testing.T) {
+		ctx := context.Background()
+		noLockWaitLogDir := filepath.Join(tmpDir, "test_fence_no_lock_wait")
+
+		// Create directory manually (don't use NewDiskSegmentImpl to avoid creating lock file)
+		err := os.MkdirAll(noLockWaitLogDir, 0755)
+		require.NoError(t, err, "Should create directory")
+
+		// Create segment instance manually without lock file
+		segment := &DiskSegmentImpl{
+			logId:      5,
+			segmentId:  5,
+			logFileDir: noLockWaitLogDir,
+		}
+		segment.fenced.Store(false)
+		segment.lastEntryID.Store(10)
+
+		// Verify lock file does not exist
+		lockFilePath := filepath.Join(segment.logFileDir, fmt.Sprintf("segment_%d_%d.lock", segment.logId, segment.segmentId))
+		_, err = os.Stat(lockFilePath)
+		assert.True(t, os.IsNotExist(err), "Lock file should not exist")
+
+		// Measure time for fence operation
+		startTime := time.Now()
+		lastEntryId, err := segment.Fence(ctx)
+		duration := time.Since(startTime)
+
+		require.NoError(t, err, "Fence should not return error")
+		assert.Equal(t, int64(10), lastEntryId, "Should return expected last entry ID")
+
+		// Should not wait when lock file doesn't exist
+		assert.Less(t, duration, 1*time.Second, "Should not wait when lock file doesn't exist")
+
+		// Verify segment is fenced
+		assert.True(t, segment.fenced.Load(), "Segment should be fenced")
+
+		// Verify fence flag file exists
+		fenceFlagPath := getFenceFlagPath(segment.logFileDir, segment.logId, segment.segmentId)
+		_, err = os.Stat(fenceFlagPath)
+		assert.NoError(t, err, "Fence flag file should exist")
+	})
+
+	t.Run("Fence_ContextCancellation", func(t *testing.T) {
+		bgCtx := context.Background()
+		cancelLogDir := filepath.Join(tmpDir, "test_fence_cancel")
+
+		// Create segment instance
+		segment, err := NewDiskSegmentImpl(bgCtx, 6, 6, cancelLogDir)
+		require.NoError(t, err, "Should create segment successfully")
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(bgCtx)
+
+		// Create context with short timeout
+		ctx, cancel := context.WithTimeout(bgCtx, 2*time.Second)
+		defer cancel()
+
+		// Fence operation should be cancelled before 5 second wait completes
+		startTime := time.Now()
+		lastEntryId, err := segment.Fence(ctx)
+		duration := time.Since(startTime)
+
+		// Should return context error
+		assert.Error(t, err, "Fence should return error due to context cancellation")
+		assert.True(t, errors.Is(err, context.DeadlineExceeded), "Should return context deadline exceeded error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return last entry ID even on cancellation")
+
+		// Should be cancelled around 2 seconds, not wait full 5 seconds
+		assert.GreaterOrEqual(t, duration, 2*time.Second, "Should wait at least timeout duration")
+		assert.Less(t, duration, 3*time.Second, "Should be cancelled before full wait")
+
+		// Segment should still be fenced (fence flag file was created before wait)
+		assert.True(t, segment.fenced.Load(), "Segment should be fenced even after context cancellation")
 	})
 }

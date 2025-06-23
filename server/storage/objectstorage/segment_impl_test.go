@@ -20,15 +20,18 @@ package objectstorage
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/channel"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/channel"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -40,6 +43,7 @@ import (
 // TestNewSegmentImpl tests the NewSegmentImpl function.
 func TestNewSegmentImpl(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -234,6 +238,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -266,6 +271,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -766,6 +772,7 @@ func TestSync(t *testing.T) {
 func TestClose(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -820,6 +827,7 @@ func TestClose(t *testing.T) {
 // TestGetId tests the GetId function.
 func TestGetId(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
+	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -2026,4 +2034,301 @@ func TestFlushingBufferSizeManagement(t *testing.T) {
 		segment.flushingBufferSize.Add(-300)
 		assert.Equal(t, initialSize, segment.flushingBufferSize.Load(), "Flushing buffer size should be decremented after flush completion")
 	})
+}
+
+func TestSegmentImpl_ObjectStorageLock(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("CreateSegmentWithLock", func(t *testing.T) {
+		// Create mock client
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      1000,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Expect lock creation to succeed
+		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+			"test-prefix/segment_1_1.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Create first segment instance
+		segment1 := NewSegmentImpl(ctx, 1, 1, "test-prefix", "test-bucket", client, cfg)
+		require.NotNil(t, segment1, "Should create segment successfully")
+
+		// Verify lock object key is set
+		segImpl := segment1.(*SegmentImpl)
+		assert.Equal(t, "test-prefix/segment_1_1.lock", segImpl.lockObjectKey, "Lock object key should be set correctly")
+
+		// Expect lock removal during close
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket",
+			"test-prefix/segment_1_1.lock", mock.Anything).Return(nil)
+
+		// Close segment
+		err := segment1.Close(ctx)
+		assert.NoError(t, err, "Should close segment successfully")
+	})
+
+	t.Run("CreateSegmentWithExistingLock", func(t *testing.T) {
+		// Create mock client
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      1000,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Expect lock creation to fail with ErrFragmentAlreadyExists
+		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+			"test-prefix/segment_2_2.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, werr.ErrFragmentAlreadyExists)
+
+		// Try to create segment (should fail due to existing lock)
+		segment := NewSegmentImpl(ctx, 2, 2, "test-prefix", "test-bucket", client, cfg)
+		assert.Nil(t, segment, "Should fail to create segment with existing lock")
+	})
+
+	t.Run("CreateSegmentWithLockError", func(t *testing.T) {
+		// Create mock client
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      1000,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Expect lock creation to fail with other error
+		expectedErr := fmt.Errorf("network error")
+		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+			"test-prefix/segment_3_3.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, expectedErr)
+
+		// Try to create segment (should fail due to lock creation error)
+		segment := NewSegmentImpl(ctx, 3, 3, "test-prefix", "test-bucket", client, cfg)
+		assert.Nil(t, segment, "Should fail to create segment when lock creation fails")
+	})
+
+	t.Run("CloseSegmentWithLockRemovalError", func(t *testing.T) {
+		// Create mock client
+		client := mocks_minio.NewMinioHandler(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      1000,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     1000,
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   100,
+					},
+				},
+			},
+		}
+
+		// Expect lock creation to succeed
+		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+			"test-prefix/segment_4_4.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Create segment
+		segment := NewSegmentImpl(ctx, 4, 4, "test-prefix", "test-bucket", client, cfg)
+		require.NotNil(t, segment, "Should create segment successfully")
+
+		// Expect lock removal to fail during close
+		expectedErr := fmt.Errorf("network error")
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket",
+			"test-prefix/segment_4_4.lock", mock.Anything).Return(expectedErr)
+
+		// Close segment (should succeed despite lock removal error)
+		err := segment.Close(ctx)
+		assert.NoError(t, err, "Should close segment successfully even if lock removal fails")
+	})
+}
+
+func TestSegmentImpl_Fence(t *testing.T) {
+	// Create test configuration
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Logstore: config.LogstoreConfig{
+				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+					MaxEntries:      1000,
+					MaxBytes:        1024 * 1024,
+					MaxInterval:     1000,
+					MaxFlushThreads: 5,
+					MaxFlushSize:    1024 * 1024,
+					MaxFlushRetries: 3,
+					RetryInterval:   100,
+				},
+			},
+		},
+	}
+
+	t.Run("SegmentImpl_Fence_Basic", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create mock minio handler
+		minioHandler := mocks_minio.NewMinioHandler(t)
+		bucket := "test-fence-bucket"
+
+		// Mock lock creation for segment
+		minioHandler.EXPECT().PutObjectIfNotMatch(mock.Anything, bucket,
+			"test-segment-fence/segment_1_1.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Mock fence object creation
+		minioHandler.EXPECT().PutFencedObject(mock.Anything, bucket, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Mock lock removal during close
+		minioHandler.EXPECT().RemoveObject(mock.Anything, bucket,
+			"test-segment-fence/segment_1_1.lock", mock.Anything).Return(nil)
+
+		// Create segment instance
+		segmentPrefixKey := "test-segment-fence"
+		segment := NewSegmentImpl(ctx, 1, 1, segmentPrefixKey, bucket, minioHandler, cfg).(*SegmentImpl)
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test: Initially not fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "Segment should not be fenced initially")
+
+		// Test: Fence the segment
+		lastEntryId, err := segment.Fence(ctx)
+		require.NoError(t, err, "Fence should not return error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Test: Check if segment is fenced after fencing
+		isFenced, err = segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should be fenced after calling Fence")
+
+		// Test: Idempotent behavior - calling Fence again should not error
+		lastEntryId2, err := segment.Fence(ctx)
+		require.NoError(t, err, "Second Fence call should not return error")
+		assert.Equal(t, lastEntryId, lastEntryId2, "Should return same last entry ID on idempotent call")
+	})
+
+	t.Run("ROSegmentImpl_Fence_Basic", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create mock minio handler
+		minioHandler := mocks_minio.NewMinioHandler(t)
+		bucket := "test-ro-fence-bucket"
+
+		// Mock empty list for prefetch (no existing fragments)
+		listEmptyChan := make(chan minio.ObjectInfo)
+		close(listEmptyChan)
+		minioHandler.EXPECT().ListObjects(mock.Anything, bucket, mock.Anything, mock.Anything, mock.Anything).Return(listEmptyChan)
+
+		// Mock object existence check for fragment 0 (should not exist during prefetch)
+		minioHandler.EXPECT().StatObject(mock.Anything, bucket, mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("object not found"))
+
+		// Mock fence object creation
+		minioHandler.EXPECT().PutFencedObject(mock.Anything, bucket, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Create RO segment instance
+		segmentPrefixKey := "test-ro-segment-fence"
+		roSegment := NewROSegmentImpl(ctx, 2, 2, segmentPrefixKey, bucket, minioHandler, cfg).(*ROSegmentImpl)
+		require.NotNil(t, roSegment, "RO segment should not be nil")
+		defer roSegment.Close(ctx)
+
+		// Test: Initially not fenced
+		isFenced, err := roSegment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.False(t, isFenced, "RO segment should not be fenced initially")
+
+		// Test: Fence the RO segment
+		lastEntryId, err := roSegment.Fence(ctx)
+		require.NoError(t, err, "Fence should not return error")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Test: Check if RO segment is fenced after fencing
+		isFenced, err = roSegment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "RO segment should be fenced after calling Fence")
+
+		// Test: Idempotent behavior - calling Fence again should not error
+		lastEntryId2, err := roSegment.Fence(ctx)
+		require.NoError(t, err, "Second Fence call should not return error")
+		assert.Equal(t, lastEntryId, lastEntryId2, "Should return same last entry ID on idempotent call")
+	})
+
+	t.Run("Fence_RetryOnConcurrentCreation", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create mock minio handler
+		minioHandler := mocks_minio.NewMinioHandler(t)
+		bucket := "test-fence-retry-bucket"
+		segmentPrefixKey := "test-segment-fence-retry"
+
+		// Mock lock creation for segment
+		minioHandler.EXPECT().PutObjectIfNotMatch(mock.Anything, bucket,
+			"test-segment-fence-retry/segment_4_4.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
+		// Mock first fence attempt (should fail with already exists)
+		minioHandler.EXPECT().PutFencedObject(mock.Anything, bucket, mock.Anything).Return(minio.UploadInfo{}, werr.ErrFragmentAlreadyExists).Once()
+
+		// Mock second fence attempt (should succeed)
+		minioHandler.EXPECT().PutFencedObject(mock.Anything, bucket, mock.Anything).Return(minio.UploadInfo{}, nil).Once()
+
+		// Mock lock removal during close
+		minioHandler.EXPECT().RemoveObject(mock.Anything, bucket,
+			"test-segment-fence-retry/segment_4_4.lock", mock.Anything).Return(nil)
+
+		// Create segment instance
+		segment := NewSegmentImpl(ctx, 4, 4, segmentPrefixKey, bucket, minioHandler, cfg).(*SegmentImpl)
+		require.NotNil(t, segment, "Segment should not be nil")
+		defer segment.Close(ctx)
+
+		// Test: Fence should retry and succeed on second attempt
+		lastEntryId, err := segment.Fence(ctx)
+		require.NoError(t, err, "Fence should succeed after retry")
+		assert.GreaterOrEqual(t, lastEntryId, int64(-1), "Should return valid last entry ID")
+
+		// Test: Verify segment is fenced
+		isFenced, err := segment.IsFenced(ctx)
+		require.NoError(t, err, "IsFenced should not return error")
+		assert.True(t, isFenced, "Segment should be fenced after retry")
+	})
+}
+
+// Helper function to check if an object exists in object storage
+func objectExists(ctx context.Context, client minioHandler.MinioHandler, bucket, objectKey string) (bool, error) {
+	_, err := client.StatObject(ctx, bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil && minioHandler.IsObjectNotExists(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

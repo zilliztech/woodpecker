@@ -71,6 +71,10 @@ type Segment interface {
 	Load(ctx context.Context) (int64, Fragment, error)
 	// DeleteFragments delete the segment log file fragments.
 	DeleteFragments(ctx context.Context, flag int) error
+	// IsFenced returns true if the segment log file is fenced.
+	IsFenced(ctx context.Context) (bool, error)
+	// Fence fence the segment log file. return last flushed entry id if fence success
+	Fence(ctx context.Context) (int64, error)
 	// Closer closes the log file.
 	Close(ctx context.Context) error
 }

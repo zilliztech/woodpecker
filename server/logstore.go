@@ -321,20 +321,21 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId)
 
-	if segmentProcessor := l.getExistsSegmentProcessor(logId, segmentId); segmentProcessor != nil {
-		// TODO close&sync, than fence
-		lastEntryId, err := segmentProcessor.SetFenced(ctx)
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence_segment", "success").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
-		return lastEntryId, err
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return -1, err
 	}
-	// TODO just fence
-
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence_segment", "segment_not_found").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence_segment", "segment_not_found").Observe(float64(time.Since(start).Milliseconds()))
-	fenceErr := werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("processor of log:%d segment:%d not exists", logId, segmentId))
-	logger.Ctx(ctx).Info("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
-	return -1, fenceErr
+	lastEntryId, fenceErr := segmentProcessor.Fence(ctx)
+	if fenceErr != nil {
+		logger.Ctx(ctx).Info("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
+		return -1, fenceErr
+	}
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return lastEntryId, nil
 }
 
 func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {

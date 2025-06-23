@@ -236,6 +236,62 @@ func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
+// Fence provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) Fence(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Fence")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentProcessor_Fence_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Fence'
+type SegmentProcessor_Fence_Call struct {
+	*mock.Call
+}
+
+// Fence is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) Fence(ctx interface{}) *SegmentProcessor_Fence_Call {
+	return &SegmentProcessor_Fence_Call{Call: _e.mock.On("Fence", ctx)}
+}
+
+func (_c *SegmentProcessor_Fence_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Fence_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_Fence_Call) Return(_a0 int64, _a1 error) *SegmentProcessor_Fence_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentProcessor_Fence_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_Fence_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetLastAccessTime provides a mock function with no fields
 func (_m *SegmentProcessor) GetLastAccessTime() int64 {
 	ret := _m.Called()
@@ -646,62 +702,6 @@ func (_c *SegmentProcessor_Recover_Call) Return(_a0 *proto.SegmentMetadata, _a1 
 }
 
 func (_c *SegmentProcessor_Recover_Call) RunAndReturn(run func(context.Context) (*proto.SegmentMetadata, error)) *SegmentProcessor_Recover_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SetFenced provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) SetFenced(ctx context.Context) (int64, error) {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetFenced")
-	}
-
-	var r0 int64
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(ctx)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(ctx)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentProcessor_SetFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetFenced'
-type SegmentProcessor_SetFenced_Call struct {
-	*mock.Call
-}
-
-// SetFenced is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *SegmentProcessor_Expecter) SetFenced(ctx interface{}) *SegmentProcessor_SetFenced_Call {
-	return &SegmentProcessor_SetFenced_Call{Call: _e.mock.On("SetFenced", ctx)}
-}
-
-func (_c *SegmentProcessor_SetFenced_Call) Run(run func(ctx context.Context)) *SegmentProcessor_SetFenced_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentProcessor_SetFenced_Call) Return(_a0 int64, _a1 error) *SegmentProcessor_SetFenced_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentProcessor_SetFenced_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_SetFenced_Call {
 	_c.Call.Return(run)
 	return _c
 }

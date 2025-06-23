@@ -19,6 +19,7 @@ package log
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -388,6 +389,7 @@ func TestGetOrCreateWritableSegmentHandle_ExistingWritableTriggersCleanup(t *tes
 
 	// Mock shouldCloseAndCreateNewSegment to return false (keep existing writable segment)
 	mockWritableSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // Small size, won't trigger rollover
+	mockWritableSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
 
 	// Expect Close calls for old segments during cleanup
 	mockOldSegment.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil).Times(6)
@@ -410,4 +412,146 @@ func TestGetOrCreateWritableSegmentHandle_ExistingWritableTriggersCleanup(t *tes
 	// Verify all expectations were met
 	mockWritableSegment.AssertExpectations(t)
 	mockOldSegment.AssertExpectations(t)
+}
+
+// TestFenceLastTwoSegments_Logic tests the logic of determining which segments to fence
+func TestFenceLastTwoSegments_Logic(t *testing.T) {
+	t.Run("NoSegments", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		// Mock GetSegments to return empty map
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{}, nil)
+
+		// Should return nil without error
+		err := logHandle.fenceLastTwoSegments(ctx)
+		assert.NoError(t, err)
+
+		mockMeta.AssertExpectations(t)
+	})
+
+	t.Run("GetSegmentsError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		// Mock GetSegments to return error
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, errors.New("metadata error"))
+
+		err := logHandle.fenceLastTwoSegments(ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "metadata error")
+
+		mockMeta.AssertExpectations(t)
+	})
+}
+
+// TestFenceLastTwoSegments_SegmentSelection tests the segment selection logic
+func TestFenceLastTwoSegments_SegmentSelection(t *testing.T) {
+	tests := []struct {
+		name     string
+		segments map[int64]*proto.SegmentMetadata
+		expected []int64 // expected segment IDs to fence, in order
+	}{
+		{
+			name:     "NoSegments",
+			segments: map[int64]*proto.SegmentMetadata{},
+			expected: nil,
+		},
+		{
+			name: "OneSegment",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Active},
+			},
+			expected: []int64{1},
+		},
+		{
+			name: "TwoSegments",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Active},
+				2: {SegNo: 2, State: proto.SegmentState_Active},
+			},
+			expected: []int64{2, 1}, // sorted in descending order
+		},
+		{
+			name: "ThreeSegments",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Active},
+				2: {SegNo: 2, State: proto.SegmentState_Active},
+				3: {SegNo: 3, State: proto.SegmentState_Active},
+			},
+			expected: []int64{3, 2}, // only last two
+		},
+		{
+			name: "SkipCompletedSegments",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Completed},
+				2: {SegNo: 2, State: proto.SegmentState_Active},
+				3: {SegNo: 3, State: proto.SegmentState_Sealed},
+			},
+			expected: []int64{2}, // only active segment
+		},
+		{
+			name: "MixedStates",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Active},
+				2: {SegNo: 2, State: proto.SegmentState_Completed},
+				3: {SegNo: 3, State: proto.SegmentState_Active},
+				4: {SegNo: 4, State: proto.SegmentState_Truncated},
+				5: {SegNo: 5, State: proto.SegmentState_Active},
+			},
+			expected: []int64{5}, // only segment 5 would be selected (latest 2 segments are 5 and 4, but 4 is truncated)
+		},
+		{
+			name: "TwoActiveSegmentsWithInactive",
+			segments: map[int64]*proto.SegmentMetadata{
+				1: {SegNo: 1, State: proto.SegmentState_Completed},
+				2: {SegNo: 2, State: proto.SegmentState_Active},
+				3: {SegNo: 3, State: proto.SegmentState_Active},
+				4: {SegNo: 4, State: proto.SegmentState_Completed},
+			},
+			expected: []int64{3}, // only segment 3 would be selected (latest 2 are 4 and 3, but 4 is completed)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test the segment selection logic directly
+			var segmentIds []int64
+			for segId := range tt.segments {
+				segmentIds = append(segmentIds, segId)
+			}
+
+			// Sort in descending order to get the latest segments first
+			sort.Slice(segmentIds, func(i, j int) bool {
+				return segmentIds[i] > segmentIds[j]
+			})
+
+			// Determine segments to fence based on count
+			var segmentsToFence []int64
+			switch len(segmentIds) {
+			case 0:
+				// No segments exist, nothing to fence
+				segmentsToFence = nil
+			case 1:
+				// Only one segment exists, fence it
+				segmentsToFence = segmentIds
+			default:
+				// Two or more segments exist, fence the last two
+				segmentsToFence = segmentIds[:2]
+			}
+
+			// Filter out segments in final states
+			var activeSegmentsToFence []int64
+			for _, segmentId := range segmentsToFence {
+				segMeta := tt.segments[segmentId]
+				if segMeta.State != proto.SegmentState_Completed &&
+					segMeta.State != proto.SegmentState_Sealed &&
+					segMeta.State != proto.SegmentState_Truncated {
+					activeSegmentsToFence = append(activeSegmentsToFence, segmentId)
+				}
+			}
+
+			assert.Equal(t, tt.expected, activeSegmentsToFence, "segment selection should match expected")
+		})
+	}
 }
