@@ -266,10 +266,10 @@ func TestMinioHandlePutIfNotMatch(t *testing.T) {
 	objectName := fmt.Sprintf("test-put-if-not-match-%d", time.Now().UnixNano())
 
 	// Test data
-	testData := []byte("test content for PutObjectIfNotMatch")
+	testData := []byte("test content for PutObjectIfNoneMatch")
 
 	// 1. Test successful upload to non-existent object (should succeed)
-	uploadInfo, err := minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	uploadInfo, err := minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(testData), int64(len(testData)))
 	require.NoError(t, err)
 	require.NotEmpty(t, uploadInfo.ETag)
@@ -277,7 +277,7 @@ func TestMinioHandlePutIfNotMatch(t *testing.T) {
 
 	// 2. Test failed upload to existing object (should return ErrFragmentAlreadyExists)
 	newData := []byte("should not be uploaded")
-	_, err = minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(newData), int64(len(newData)))
 	require.Error(t, err)
 	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Should return ErrFragmentAlreadyExists for existing object")
@@ -297,7 +297,7 @@ func TestMinioHandlePutIfNotMatch(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestMinioHandlePutIfNotMatchWithFencedObject tests PutObjectIfNotMatch with fenced objects
+// TestMinioHandlePutIfNotMatchWithFencedObject tests PutObjectIfNoneMatch with fenced objects
 func TestMinioHandlePutIfNotMatchWithFencedObject(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
@@ -315,9 +315,9 @@ func TestMinioHandlePutIfNotMatchWithFencedObject(t *testing.T) {
 	require.NotEmpty(t, uploadInfo.ETag)
 	t.Logf("Fenced object uploaded with ETag: %s", uploadInfo.ETag)
 
-	// 2. Test PutObjectIfNotMatch with fenced object (should return ErrSegmentFenced)
+	// 2. Test PutObjectIfNoneMatch with fenced object (should return ErrSegmentFenced)
 	newData := []byte("should not be uploaded to fenced object")
-	_, err = minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(newData), int64(len(newData)))
 	require.Error(t, err)
 	require.True(t, werr.ErrSegmentFenced.Is(err), "Should return ErrSegmentFenced for fenced object")
@@ -328,7 +328,7 @@ func TestMinioHandlePutIfNotMatchWithFencedObject(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestMinioHandlePutIfNotMatchConcurrency tests concurrent calls to PutObjectIfNotMatch
+// TestMinioHandlePutIfNotMatchConcurrency tests concurrent calls to PutObjectIfNoneMatch
 func TestMinioHandlePutIfNotMatchConcurrency(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
@@ -351,7 +351,7 @@ func TestMinioHandlePutIfNotMatchConcurrency(t *testing.T) {
 			defer wg.Done()
 
 			data := []byte(fmt.Sprintf("concurrent data from goroutine %d", id))
-			_, err := minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+			_, err := minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 				bytes.NewReader(data), int64(len(data)))
 			results <- err
 		}(i)
@@ -402,21 +402,21 @@ func TestMinioHandlePutIfNotMatchIdempotency(t *testing.T) {
 	testData := []byte("test content for idempotency")
 
 	// 1. First upload should succeed
-	uploadInfo1, err := minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	uploadInfo1, err := minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(testData), int64(len(testData)))
 	require.NoError(t, err)
 	require.NotEmpty(t, uploadInfo1.ETag)
 	t.Logf("First upload succeeded with ETag: %s", uploadInfo1.ETag)
 
 	// 2. Second upload with same content should return ErrFragmentAlreadyExists (idempotent)
-	_, err = minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(testData), int64(len(testData)))
 	require.Error(t, err)
 	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Second upload should return ErrFragmentAlreadyExists")
 
 	// 3. Third upload with different content should also return ErrFragmentAlreadyExists
 	differentData := []byte("different content")
-	_, err = minioCli.PutObjectIfNotMatch(ctx, bucketName, objectName,
+	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(differentData), int64(len(differentData)))
 	require.Error(t, err)
 	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Upload with different content should also return ErrFragmentAlreadyExists")

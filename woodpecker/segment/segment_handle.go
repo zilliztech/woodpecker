@@ -203,12 +203,12 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 	// Check fenced state first without lock to avoid deadlock
 	if s.fencedState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentFenced)
+		callback(s.segmentId, -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] fenced", s.logId, s.segmentId)))
 		return
 	}
 
 	if s.rollingState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentRolling)
+		callback(s.segmentId, -1, werr.ErrSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
 		return
 	}
 

@@ -155,7 +155,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 	fullDataReader, fullDataSize := serializeFragmentToReader(ctx, f)
 
 	// Upload TODO minio must v20240510 or later
-	_, err := f.client.PutObjectIfNotMatch(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize))
+	_, err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize))
 	if err != nil {
 		if werr.ErrSegmentFenced.Is(err) {
 			logger.Ctx(ctx).Info("fragment already fenced", zap.String("fragmentKey", f.fragmentKey))

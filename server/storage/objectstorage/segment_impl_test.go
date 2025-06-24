@@ -43,7 +43,7 @@ import (
 // TestNewSegmentImpl tests the NewSegmentImpl function.
 func TestNewSegmentImpl(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -94,7 +94,7 @@ func TestNewROSegmentImpl(t *testing.T) {
 func TestAppendAsyncReachBufferSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	//client.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -142,7 +142,7 @@ func TestAppendAsyncReachBufferSize(t *testing.T) {
 
 func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -190,7 +190,7 @@ func TestAppendAsyncSomeAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -238,7 +238,7 @@ func TestAppendAsyncOnceAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -271,7 +271,7 @@ func TestAppendAsyncNoneAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -324,7 +324,7 @@ func TestAppendAsyncWithHolesAndWaitForFlush(t *testing.T) {
 
 func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -402,7 +402,7 @@ func TestAppendAsyncWithHolesButFillFinally(t *testing.T) {
 // TestAppendAsyncDisorderWithinBounds test appends entries out of order, but within bounds.
 func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -450,7 +450,7 @@ func TestAppendAsyncDisorderWithinBounds(t *testing.T) {
 
 func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -509,7 +509,7 @@ func TestAppendAsyncDisorderAndPartialOutOfBounds(t *testing.T) {
 func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -717,7 +717,7 @@ func TestAppendAsyncReachBufferDataSize(t *testing.T) {
 // TestSync tests the Sync function.
 func TestSync(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error"))
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -771,7 +771,7 @@ func TestSync(t *testing.T) {
 // TestClose tests the Close function.
 func TestClose(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	client.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -827,7 +827,7 @@ func TestClose(t *testing.T) {
 // TestGetId tests the GetId function.
 func TestGetId(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -879,7 +879,7 @@ func TestMerge(t *testing.T) {
 	listChan := make(chan minio.ObjectInfo)
 	close(listChan)
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test fragments
@@ -2059,7 +2059,7 @@ func TestSegmentImpl_ObjectStorageLock(t *testing.T) {
 		}
 
 		// Expect lock creation to succeed
-		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+		client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket",
 			"test-prefix/segment_1_1.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 		// Create first segment instance
@@ -2099,7 +2099,7 @@ func TestSegmentImpl_ObjectStorageLock(t *testing.T) {
 		}
 
 		// Expect lock creation to fail with ErrFragmentAlreadyExists
-		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+		client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket",
 			"test-prefix/segment_2_2.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, werr.ErrFragmentAlreadyExists)
 
 		// Try to create segment (should fail due to existing lock)
@@ -2128,7 +2128,7 @@ func TestSegmentImpl_ObjectStorageLock(t *testing.T) {
 
 		// Expect lock creation to fail with other error
 		expectedErr := fmt.Errorf("network error")
-		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+		client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket",
 			"test-prefix/segment_3_3.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, expectedErr)
 
 		// Try to create segment (should fail due to lock creation error)
@@ -2156,7 +2156,7 @@ func TestSegmentImpl_ObjectStorageLock(t *testing.T) {
 		}
 
 		// Expect lock creation to succeed
-		client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket",
+		client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket",
 			"test-prefix/segment_4_4.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 		// Create segment
@@ -2200,7 +2200,7 @@ func TestSegmentImpl_Fence(t *testing.T) {
 		bucket := "test-fence-bucket"
 
 		// Mock lock creation for segment
-		minioHandler.EXPECT().PutObjectIfNotMatch(mock.Anything, bucket,
+		minioHandler.EXPECT().PutObjectIfNoneMatch(mock.Anything, bucket,
 			"test-segment-fence/segment_1_1.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 		// Mock fence object creation
@@ -2291,7 +2291,7 @@ func TestSegmentImpl_Fence(t *testing.T) {
 		segmentPrefixKey := "test-segment-fence-retry"
 
 		// Mock lock creation for segment
-		minioHandler.EXPECT().PutObjectIfNotMatch(mock.Anything, bucket,
+		minioHandler.EXPECT().PutObjectIfNoneMatch(mock.Anything, bucket,
 			"test-segment-fence-retry/segment_4_4.lock", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 		// Mock first fence attempt (should fail with already exists)

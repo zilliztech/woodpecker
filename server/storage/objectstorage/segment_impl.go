@@ -1867,8 +1867,8 @@ func (f *SegmentImpl) createSegmentLock(ctx context.Context) error {
 	lockInfo := fmt.Sprintf("logId=%d\nsegmentId=%d\npid=%d\ntimestamp=%d\nhostname=%s\n",
 		f.logId, f.segmentId, os.Getpid(), time.Now().Unix(), getHostname())
 
-	// Use PutObjectIfNotMatch to atomically create lock object
-	_, err := f.client.PutObjectIfNotMatch(ctx, f.bucket, f.lockObjectKey,
+	// Use PutObjectIfNoneMatch to atomically create lock object
+	_, err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.lockObjectKey,
 		strings.NewReader(lockInfo), int64(len(lockInfo)))
 	if err != nil {
 		if werr.ErrFragmentAlreadyExists.Is(err) {

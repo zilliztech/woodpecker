@@ -392,12 +392,12 @@ func (_c *MinioHandler_PutObject_Call) RunAndReturn(run func(context.Context, st
 	return _c
 }
 
-// PutObjectIfNotMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize
-func (_m *MinioHandler) PutObjectIfNotMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
+// PutObjectIfNoneMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize
+func (_m *MinioHandler) PutObjectIfNoneMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
 	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize)
 
 	if len(ret) == 0 {
-		panic("no return value specified for PutObjectIfNotMatch")
+		panic("no return value specified for PutObjectIfNoneMatch")
 	}
 
 	var r0 minio.UploadInfo
@@ -420,34 +420,34 @@ func (_m *MinioHandler) PutObjectIfNotMatch(ctx context.Context, bucketName stri
 	return r0, r1
 }
 
-// MinioHandler_PutObjectIfNotMatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutObjectIfNotMatch'
-type MinioHandler_PutObjectIfNotMatch_Call struct {
+// MinioHandler_PutObjectIfNoneMatch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PutObjectIfNoneMatch'
+type MinioHandler_PutObjectIfNoneMatch_Call struct {
 	*mock.Call
 }
 
-// PutObjectIfNotMatch is a helper method to define mock.On call
+// PutObjectIfNoneMatch is a helper method to define mock.On call
 //   - ctx context.Context
 //   - bucketName string
 //   - objectName string
 //   - reader io.Reader
 //   - objectSize int64
-func (_e *MinioHandler_Expecter) PutObjectIfNotMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}) *MinioHandler_PutObjectIfNotMatch_Call {
-	return &MinioHandler_PutObjectIfNotMatch_Call{Call: _e.mock.On("PutObjectIfNotMatch", ctx, bucketName, objectName, reader, objectSize)}
+func (_e *MinioHandler_Expecter) PutObjectIfNoneMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}) *MinioHandler_PutObjectIfNoneMatch_Call {
+	return &MinioHandler_PutObjectIfNoneMatch_Call{Call: _e.mock.On("PutObjectIfNoneMatch", ctx, bucketName, objectName, reader, objectSize)}
 }
 
-func (_c *MinioHandler_PutObjectIfNotMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64)) *MinioHandler_PutObjectIfNotMatch_Call {
+func (_c *MinioHandler_PutObjectIfNoneMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64)) *MinioHandler_PutObjectIfNoneMatch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64))
 	})
 	return _c
 }
 
-func (_c *MinioHandler_PutObjectIfNotMatch_Call) Return(_a0 minio.UploadInfo, _a1 error) *MinioHandler_PutObjectIfNotMatch_Call {
+func (_c *MinioHandler_PutObjectIfNoneMatch_Call) Return(_a0 minio.UploadInfo, _a1 error) *MinioHandler_PutObjectIfNoneMatch_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MinioHandler_PutObjectIfNotMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64) (minio.UploadInfo, error)) *MinioHandler_PutObjectIfNotMatch_Call {
+func (_c *MinioHandler_PutObjectIfNoneMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64) (minio.UploadInfo, error)) *MinioHandler_PutObjectIfNoneMatch_Call {
 	_c.Call.Return(run)
 	return _c
 }

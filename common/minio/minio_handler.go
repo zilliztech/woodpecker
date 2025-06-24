@@ -89,7 +89,7 @@ type MinioHandler interface {
 	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
 	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
-	PutObjectIfNotMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error)
+	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error)
 	PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
@@ -172,8 +172,8 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 	return info, nil
 }
 
-func (m *minioHandlerImpl) PutObjectIfNotMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObjectIfNotMatch")
+func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObjectIfNoneMatch")
 	defer sp.End()
 	start := time.Now()
 	opts := minio.PutObjectOptions{}
@@ -208,7 +208,7 @@ func (m *minioHandlerImpl) PutObjectIfNotMatch(ctx context.Context, bucketName, 
 }
 
 func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObjectIfNotMatch")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutFencedObject")
 	defer sp.End()
 	start := time.Now()
 	opts := minio.PutObjectOptions{}

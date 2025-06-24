@@ -56,7 +56,7 @@ func TestFragmentObject_Flush(t *testing.T) {
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", "test-key", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", "test-key", mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 	err := fragment.Flush(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, true, fragment.dataUploaded)
@@ -268,7 +268,7 @@ func TestFragmentObject_Release(t *testing.T) {
 
 func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	client.EXPECT().PutObjectIfNotMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 	fragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key1",
 		[]*cache.BufferEntry{

@@ -172,6 +172,7 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
+	logger.Ctx(ctx).Info("open log writer start", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 
 	se, acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
 	if acquireLockErr != nil {
@@ -215,6 +216,7 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	// return LogWriter instance if writableSegmentHandle is created
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
+	logger.Ctx(ctx).Info("open log writer success", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 	return NewLogWriter(ctx, l, l.cfg, se), nil
 }
 
