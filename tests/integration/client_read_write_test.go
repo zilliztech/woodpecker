@@ -63,7 +63,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -242,7 +242,7 @@ func TestReadWriteLoop(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -384,7 +384,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -529,7 +529,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -677,7 +677,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -773,7 +773,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 
@@ -979,7 +979,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create initial configuration
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 
@@ -1195,7 +1195,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create initial configuration
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 

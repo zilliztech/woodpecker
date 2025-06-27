@@ -124,7 +124,11 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 }
 
 func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler, managed bool) (Client, error) {
+	// init logger
 	logger.InitLogger(cfg)
+	// check if condition write support
+	minio.CheckIfConditionWriteSupport(ctx, minioCli, cfg.Minio.BucketName, cfg.Minio.RootPath)
+	// start embedded logStore
 	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, minioCli)
 	if err != nil {
 		return nil, err

@@ -55,7 +55,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -111,7 +111,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -180,7 +180,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -365,7 +365,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -579,7 +579,7 @@ func TestClientRecreation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -742,7 +742,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -932,7 +932,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				t.Logf("Cycle %d: Creating client with data writer", i+1)
 
 				// Create new client for writing data
-				cfg, err := config.NewConfiguration()
+				cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 				assert.NoError(t, err)
 				if tc.storageType != "" {
 					cfg.Woodpecker.Storage.Type = tc.storageType
@@ -994,7 +994,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				t.Logf("Cycle %d: Creating client with empty writer", i+1)
 
 				// Create new client for empty writer
-				emptyClientCfg, err := config.NewConfiguration()
+				emptyClientCfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 				assert.NoError(t, err)
 				emptyClient, err := woodpecker.NewEmbedClientFromConfig(ctx, emptyClientCfg)
 				assert.NoError(t, err)
@@ -1025,7 +1025,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 
 			// Create final client to read and verify all data
 			t.Log("Creating reader client to verify all messages")
-			readerCfg, err := config.NewConfiguration()
+			readerCfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			readerClient, err := woodpecker.NewEmbedClientFromConfig(ctx, readerCfg)
 			assert.NoError(t, err)
@@ -1136,7 +1136,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {
@@ -1487,7 +1487,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {
@@ -1840,7 +1840,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {

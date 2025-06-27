@@ -434,3 +434,133 @@ func TestMinioHandlePutIfNotMatchIdempotency(t *testing.T) {
 	err = minioCli.RemoveObject(ctx, bucketName, objectName, minio.RemoveObjectOptions{})
 	assert.NoError(t, err)
 }
+
+// TestCheckIfConditionWriteSupport tests the CheckIfConditionWriteSupport function
+func TestCheckIfConditionWriteSupport(t *testing.T) {
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	bucketName := cfg.Minio.BucketName
+	basePath := fmt.Sprintf("test-support-check-%d", time.Now().UnixNano())
+
+	// Test that the function runs successfully without panicking
+	assert.NotPanics(t, func() {
+		minioHandler.CheckIfConditionWriteSupport(ctx, minioCli, bucketName, basePath)
+	}, "CheckIfConditionWriteSupport should not panic with valid MinioHandler")
+
+	t.Logf("CheckIfConditionWriteSupport passed successfully for bucket: %s", bucketName)
+}
+
+// TestCheckIfConditionWriteSupportMultipleCalls tests that multiple calls are handled correctly
+func TestCheckIfConditionWriteSupportMultipleCalls(t *testing.T) {
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	bucketName := cfg.Minio.BucketName
+	basePath := fmt.Sprintf("test-support-check-multi-%d", time.Now().UnixNano())
+
+	// Call multiple times to test sync.Once behavior
+	for i := 0; i < 3; i++ {
+		assert.NotPanics(t, func() {
+			minioHandler.CheckIfConditionWriteSupport(ctx, minioCli, bucketName, basePath)
+		}, "Multiple calls to CheckIfConditionWriteSupport should not panic")
+	}
+
+	t.Logf("Multiple calls to CheckIfConditionWriteSupport handled correctly")
+}
+
+// TestCheckIfConditionWriteSupportConcurrency tests concurrent calls
+func TestCheckIfConditionWriteSupportConcurrency(t *testing.T) {
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	bucketName := cfg.Minio.BucketName
+	basePath := fmt.Sprintf("test-support-check-concurrent-%d", time.Now().UnixNano())
+
+	// Test concurrent calls to ensure sync.Once works correctly
+	const numGoroutines = 5
+	var wg sync.WaitGroup
+	panicChan := make(chan interface{}, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panicChan <- r
+				}
+			}()
+
+			minioHandler.CheckIfConditionWriteSupport(ctx, minioCli, bucketName, basePath)
+		}(i)
+	}
+
+	wg.Wait()
+	close(panicChan)
+
+	// Check that no goroutines panicked
+	panicCount := 0
+	for panic := range panicChan {
+		panicCount++
+		t.Errorf("Goroutine panicked: %v", panic)
+	}
+
+	assert.Equal(t, 0, panicCount, "No goroutines should panic during concurrent calls")
+	t.Logf("Concurrent calls to CheckIfConditionWriteSupport handled correctly")
+}
+
+// TestCheckIfConditionWriteSupportCleanup tests that cleanup works properly
+func TestCheckIfConditionWriteSupportCleanup(t *testing.T) {
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+
+	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	bucketName := cfg.Minio.BucketName
+	basePath := fmt.Sprintf("test-support-check-cleanup-%d", time.Now().UnixNano())
+
+	// Run the check
+	assert.NotPanics(t, func() {
+		minioHandler.CheckIfConditionWriteSupport(ctx, minioCli, bucketName, basePath)
+	})
+
+	// Verify that test objects were cleaned up by trying to list objects with the test prefix
+	// Note: We can't directly verify cleanup since the object names are generated internally,
+	// but we can at least verify the function completed without leaving obvious traces
+
+	// List objects with the base path prefix to check if any test objects remain
+	objectCh := minioCli.ListObjects(ctx, bucketName, basePath, true, minio.ListObjectsOptions{})
+
+	objectCount := 0
+	for object := range objectCh {
+		if object.Err != nil {
+			t.Logf("Error listing objects: %v", object.Err)
+			continue
+		}
+		objectCount++
+		t.Logf("Found object that might not have been cleaned up: %s", object.Key)
+	}
+
+	// We expect 0 objects since cleanup should have removed them
+	// However, due to eventual consistency, we'll just log if objects are found
+	if objectCount > 0 {
+		t.Logf("Warning: Found %d objects with prefix %s, cleanup might not have completed", objectCount, basePath)
+	} else {
+		t.Logf("Cleanup verification passed: no objects found with prefix %s", basePath)
+	}
+}

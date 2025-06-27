@@ -56,7 +56,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -163,7 +163,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -381,7 +381,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client with small segment size to force multiple segments
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -528,7 +528,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -688,7 +688,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client with small segment size to force multiple segments
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -945,7 +945,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Initialize client with small segment size to force multiple segments
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -1139,7 +1139,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 1. Initialize client with small segment size to force multiple segments
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
