@@ -119,8 +119,8 @@ func startReporting() {
 			select {
 			case <-ticker.C:
 				currentTimeMs := time.Now().UnixMilli()
-				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
-				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
+				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
+				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
 				if err != nil {
 					fmt.Printf("Failed to get metrics: %v\n", err)
 					continue

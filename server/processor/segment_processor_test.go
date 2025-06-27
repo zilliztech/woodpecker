@@ -46,7 +46,6 @@ func TestSegmentProcessor_AddEntry(t *testing.T) {
 	mockLogFile.EXPECT().AppendAsync(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(-1, werr.ErrLogFileClosed.WithCauseErrMsg("test close"))
 	mockLogFile.EXPECT().GetLastEntryId(mock.Anything).Return(int64(0), nil)
 	mockLogFile.EXPECT().Close(mock.Anything).Return(nil)
-	mockLogFile.EXPECT().IsFenced(mock.Anything).Return(false, nil)
 	cfg := &config.Configuration{
 		Minio: config.MinioConfig{
 			BucketName: "test-bucket",

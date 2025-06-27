@@ -145,10 +145,11 @@ func TestEmptyRuntime(t *testing.T) {
 	}
 }
 
+// Simulate throughput performance using single-threaded asynchronous writes
 func TestAsyncWriteThroughput(t *testing.T) {
 	startGopsAgentWithPort(6060)
 	startMetrics()
-	//startReporting()
+	startReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
 	writeCount := 10_000   // total rows to write
@@ -217,6 +218,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			writingResultChan := make([]<-chan *log.WriteResult, 0) // 10M*1k=10GB
 			writingMessages := make([]*log.WriterMessage, 0)
 			failMessages := make([]*log.WriterMessage, 0)
+			startTime := time.Now()
 			for i := 0; i < writeCount; i++ {
 				// append async
 				msg := &log.WriterMessage{
@@ -239,6 +241,9 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
 							//fmt.Printf("write success, returned recordId:%v \n", writeResult.LogMessageId)
+							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
+							startTime = time.Now()
 							successCount++
 						}
 					}
@@ -285,6 +290,9 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							fmt.Println(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
+							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
+							startTime = time.Now()
 							successCount++
 						}
 					}
@@ -304,6 +312,194 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
 			fmt.Printf("Test Write finished  %d entries\n", successCount)
+		})
+	}
+}
+
+// Simulate throughput performance using multithreaded synchronous writes
+func TestWriteThroughput(t *testing.T) {
+	startGopsAgentWithPort(6060)
+	startMetrics()
+	startReporting()
+	entrySize := 1_000_000 // 1MB per row
+	concurrency := 1_000   // concurrent goroutines
+	writeCount := 10_000   // total rows to write
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestWriteReadPerf",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// ### Create client
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			//cfg.Log.Level = "debug"
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			// ###  CreateLog if not exists
+			logName := fmt.Sprintf("test_log_pro_%s", tc.name)
+			client.CreateLog(context.Background(), logName)
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
+			if openErr != nil {
+				fmt.Printf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenWriter
+			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			if openWriterErr != nil {
+				fmt.Printf("Open writer failed, err:%v\n", openWriterErr)
+				panic(openWriterErr)
+			}
+
+			// gen static data
+			payloadStaticData, err := generateRandomBytes(entrySize)
+			assert.NoError(t, err)
+
+			// ### Fully concurrent write with producer-consumer pattern
+			var successCount atomic.Int64
+			var failCount atomic.Int64
+			var totalSent atomic.Int64
+
+			// Create a semaphore to control concurrency
+			semaphore := make(chan struct{}, concurrency)
+
+			// Channel to track completion
+			done := make(chan bool, writeCount)
+
+			// Start time for throughput calculation
+			startTime := time.Now()
+
+			// Status reporting goroutine
+			go func() {
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						elapsed := time.Since(startTime)
+						sent := totalSent.Load()
+						success := successCount.Load()
+						failed := failCount.Load()
+						if sent > 0 {
+							throughput := float64(success) / elapsed.Seconds()
+							fmt.Printf("Progress: sent=%d, success=%d, failed=%d, throughput=%.2f ops/sec\n",
+								sent, success, failed, throughput)
+						}
+					case <-done:
+						return
+					}
+				}
+			}()
+
+			// Producer: continuously send write requests
+			for i := 0; i < writeCount; i++ {
+				// Acquire semaphore to control concurrency
+				semaphore <- struct{}{}
+				totalSent.Add(1)
+
+				// Start async write in goroutine
+				go func(index int) {
+					defer func() {
+						// Release semaphore
+						<-semaphore
+					}()
+
+					msg := &log.WriterMessage{
+						Payload: payloadStaticData,
+						Properties: map[string]string{
+							"key": fmt.Sprintf("value%d", index),
+						},
+					}
+
+					// Retry loop for failed writes
+					for {
+						writeStart := time.Now()
+						resultChan := logWriter.WriteAsync(context.Background(), msg)
+						writeResult := <-resultChan
+
+						if writeResult.Err != nil {
+							failCount.Add(1)
+							fmt.Printf("Write failed for index %d, retrying: %v\n", index, writeResult.Err)
+							time.Sleep(100 * time.Millisecond) // Brief pause before retry
+							continue
+						} else {
+							// Success
+							successCount.Add(1)
+							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(writeStart).Milliseconds()))
+							break
+						}
+					}
+				}(i)
+			}
+
+			// Wait for all writes to complete
+			fmt.Printf("Waiting for all %d writes to complete...\n", writeCount)
+			for successCount.Load()+failCount.Load() < int64(writeCount) {
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			// Signal completion to status reporter
+			close(done)
+
+			// Calculate final statistics
+			elapsed := time.Since(startTime)
+			finalSuccess := successCount.Load()
+			finalFail := failCount.Load()
+			throughput := float64(finalSuccess) / elapsed.Seconds()
+			totalBytes := finalSuccess * int64(entrySize)
+			throughputMB := float64(totalBytes) / (1024 * 1024) / elapsed.Seconds()
+
+			fmt.Printf("\n=== Final Results ===\n")
+			fmt.Printf("Total time: %v\n", elapsed)
+			fmt.Printf("Total writes sent: %d\n", writeCount)
+			fmt.Printf("Successful writes: %d\n", finalSuccess)
+			fmt.Printf("Failed writes: %d\n", finalFail)
+			fmt.Printf("Success rate: %.2f%%\n", float64(finalSuccess)/float64(writeCount)*100)
+			fmt.Printf("Throughput: %.2f ops/sec\n", throughput)
+			fmt.Printf("Data throughput: %.2f MB/sec\n", throughputMB)
+
+			// ### close and print result
+			fmt.Printf("Closing log writer...\n")
+			closeErr := logWriter.Close(context.Background())
+			if closeErr != nil {
+				fmt.Printf("close failed, err:%v\n", closeErr)
+				panic(closeErr)
+			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
+			fmt.Printf("TestAsyncWriteThroughputPro finished with %d successful entries\n", finalSuccess)
 		})
 	}
 }
