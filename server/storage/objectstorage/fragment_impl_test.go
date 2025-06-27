@@ -27,10 +27,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/zilliztech/woodpecker/common/codec"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 func TestNewFragmentObject(t *testing.T) {

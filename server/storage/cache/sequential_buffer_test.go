@@ -23,10 +23,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-
 	"github.com/stretchr/testify/assert"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
@@ -528,7 +527,7 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 	}
 
 	// Test 1: Successful notification - entries should receive their own IDs
-	fmt.Println("=== Test 1: Successful Notification ===")
+	t.Logf("=== Test 1: Successful Notification ===\n")
 	buffer.NotifyEntriesInRange(context.TODO(), 100, 103, 1000, nil) // result >= 0 means success
 
 	// Verify first 3 entries received their own IDs
@@ -537,11 +536,11 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 		assert.NoError(t, err)
 		expectedId := int64(100 + i)
 		assert.Equal(t, expectedId, result.SyncedId, "Entry %d should receive its own ID %d", 100+i, expectedId)
-		fmt.Printf("Entry %d received: %d (expected: %d) ✓\n", 100+i, result.SyncedId, expectedId)
+		t.Logf("Entry %d received: %d (expected: %d) ✓\n", 100+i, result.SyncedId, expectedId)
 	}
 
 	// Test 2: Error notification - entries should receive the error result
-	fmt.Println("\n=== Test 2: Error Notification ===")
+	t.Logf("\n=== Test 2: Error Notification ===\n")
 	buffer.NotifyEntriesInRange(context.TODO(), 103, 105, -1, fmt.Errorf("test error")) // result < 0 means error
 
 	// Verify last 2 entries received the error result
@@ -549,12 +548,12 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 		result, err := resultChannels[i].ReadResult(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(-1), result.SyncedId, "Entry %d should receive error result -1", 100+i)
-		fmt.Printf("Entry %d received: %d (expected: -1) ✓\n", 100+i, result.SyncedId)
+		t.Logf("Entry %d received: %d (expected: -1) ✓\n", 100+i, result.SyncedId)
 	}
 
-	fmt.Println("\n=== Test Summary ===")
-	fmt.Println("✓ Successful entries (result >= 0): Each entry receives its own EntryId")
-	fmt.Println("✓ Failed entries (result < 0): All entries receive the same error result")
+	t.Logf("\n=== Test Summary ===\n")
+	t.Logf("✓ Successful entries (result >= 0): Each entry receives its own EntryId\n")
+	t.Logf("✓ Failed entries (result < 0): All entries receive the same error result\n")
 }
 
 // TestNotifyEntriesInRangeWithClosedChannels tests notification behavior when channels are closed
@@ -726,5 +725,5 @@ func TestConcurrentNotificationWithClosedChannels(t *testing.T) {
 	// Only open channels should have received notifications
 	// Note: Due to concurrent access, we can't predict exact values,
 	// but we can verify no panics occurred and channels work
-	fmt.Println("Concurrent notification test completed without panics")
+	t.Logf("Concurrent notification test completed without panics\n")
 }

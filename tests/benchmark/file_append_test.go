@@ -404,6 +404,6 @@ func TestFileFsyncPerformance(t *testing.T) {
 	}
 
 	duration := time.Since(start).Seconds()
-	fmt.Printf("Total written: %.2f MB, Time: %.2f s, Throughput: %.2f MB/s\n",
+	t.Logf("Total written: %.2f MB, Time: %.2f s, Throughput: %.2f MB/s\n",
 		float64(total)/1024/1024, duration, float64(total)/1024/1024/duration)
 }

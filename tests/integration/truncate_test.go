@@ -92,7 +92,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 				})
 				assert.NoError(t, result.Err)
 				writtenIds[i] = result.LogMessageId
-				fmt.Printf("Written message %d: segmentId=%d, entryId=%d\n",
+				t.Logf("Written message %d: segmentId=%d, entryId=%d\n",
 					i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 			}
 
@@ -437,14 +437,14 @@ func TestMultiSegmentTruncation(t *testing.T) {
 
 				// Print progress and segment info
 				if i%2 == 0 {
-					fmt.Printf("Written %d messages, currently in segment %d\n",
+					t.Logf("Written %d messages, currently in segment %d\n",
 						i, result.LogMessageId.SegmentId)
 				}
 			}
 
 			// Verify we've got multiple segments
 			numSegments := len(segmentsSeen)
-			fmt.Printf("Created %d segments\n", numSegments)
+			t.Logf("Created %d segments\n", numSegments)
 			assert.Equal(t, 5, numSegments, "Expected multiple segments to be created")
 
 			// 2. Find a message in the middle of a segment for truncation
@@ -462,7 +462,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 				truncatePoint = writtenIds[totalMsgs/2]
 			}
 
-			fmt.Printf("Truncating at message with segmentId=%d, entryId=%d\n",
+			t.Logf("Truncating at message with segmentId=%d, entryId=%d\n",
 				truncatePoint.SegmentId, truncatePoint.EntryId)
 
 			// 3. Truncate at the selected point

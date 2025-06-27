@@ -63,8 +63,8 @@ func (c *Codec) EncodeEntry(payload []byte) ([]byte, error) {
 
 	// Prepare entry buffer
 	entry := make([]byte, EntryHeaderSize+payloadSize)
-	copy(entry[:PayloadSize], intToBytes(payloadSize, PayloadSize))
-	copy(entry[PayloadSize:PayloadSize+CrcSize], intToBytes(int(crc), CrcSize))
+	copy(entry[:PayloadSize], IntToBytes(payloadSize, PayloadSize))
+	copy(entry[PayloadSize:PayloadSize+CrcSize], IntToBytes(int(crc), CrcSize))
 	copy(entry[EntryHeaderSize:], payload)
 
 	return entry, nil
@@ -94,8 +94,8 @@ func (c *Codec) DecodeEntry(entry []byte) ([]byte, error) {
 	return payload, nil
 }
 
-// intToBytes converts an integer to a byte slice of the specified size.
-func intToBytes(value int, size int) []byte {
+// IntToBytes converts an integer to a byte slice of the specified size.
+func IntToBytes(value int, size int) []byte {
 	buf := make([]byte, size)
 	for i := 0; i < size; i++ {
 		buf[i] = byte(value >> (8 * i))
@@ -103,7 +103,7 @@ func intToBytes(value int, size int) []byte {
 	return buf
 }
 
-func int64ToBytes(value int64) []byte {
+func Int64ToBytes(value int64) []byte {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(value))
 	return buf

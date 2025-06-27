@@ -211,7 +211,7 @@ func TestNewReaderForManyFragments(t *testing.T) {
 		if !hasNext {
 			break
 		}
-		fmt.Printf("read one ... ")
+		t.Logf("read one ... ")
 		entry, err := reader.ReadNext(context.TODO())
 		assert.NoError(t, err)
 		entries = append(entries, entry)

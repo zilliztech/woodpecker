@@ -260,7 +260,7 @@ func printDirContents(t *testing.T, ctx context.Context, cli *clientv3.Client, p
 	}
 
 	for _, kv := range resp.Kvs {
-		fmt.Printf("%s%s: %s\n", indent, string(kv.Key), string(kv.Value))
+		t.Logf("%s%s: %s\n", indent, string(kv.Key), string(kv.Value))
 
 		if strings.HasSuffix(string(kv.Key), "/") {
 			newPrefix := string(kv.Key)

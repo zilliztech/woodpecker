@@ -83,13 +83,13 @@ func TestMinioReadPerformance(t *testing.T) {
 			assert.NoError(t, err)
 			readSize := len(readData)
 			cost := time.Now().Sub(start)
-			//fmt.Printf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
+			//t.Logf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
 			<-ch
 			MinioIOBytes.WithLabelValues("0").Observe(float64(readSize))
 			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}(concurrentCh)
 	}
-	fmt.Printf("Test Minio Finish \n")
+	t.Logf("Test Minio Finish \n")
 }
 
 func TestMinioDelete(t *testing.T) {
@@ -113,16 +113,16 @@ func TestMinioDelete(t *testing.T) {
 				minio.RemoveObjectOptions{})
 			assert.NoError(t, removeErr)
 			if removeErr != nil {
-				fmt.Printf("remove test_object_%d failed,err:%v\n", i, removeErr)
+				t.Logf("remove test_object_%d failed,err:%v\n", i, removeErr)
 				return
 			}
-			fmt.Printf("remove test_object_%d completed,\n", i)
+			t.Logf("remove test_object_%d completed,\n", i)
 			<-ch
 			wg.Done()
 		}(concurrentCh)
 	}
 	wg.Wait()
-	fmt.Printf("Test Minio Finish \n")
+	t.Logf("Test Minio Finish \n")
 }
 
 func TestMinioWritePerformance(t *testing.T) {
@@ -161,7 +161,7 @@ func TestMinioWritePerformance(t *testing.T) {
 				assert.NoError(t, putErr)
 			}
 			cost := time.Now().Sub(start)
-			//fmt.Printf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
+			//t.Logf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
 			<-ch
 			wg.Done()
 			MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
@@ -169,5 +169,5 @@ func TestMinioWritePerformance(t *testing.T) {
 		}(concurrentCh)
 	}
 	wg.Wait()
-	fmt.Printf("Test Minio Finish \n")
+	t.Logf("Test Minio Finish \n")
 }
