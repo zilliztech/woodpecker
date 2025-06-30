@@ -727,12 +727,12 @@ func TestFragmentRotation(t *testing.T) {
 	_, _, err = roSegmentImpl.fetchROFragments(context.TODO())
 	assert.NoError(t, err)
 	assert.NotNil(t, roSegmentImpl.fragments)
-	assert.Equal(t, 10, len(roSegmentImpl.fragments))
+	assert.Equal(t, 10, len(roSegmentImpl.fragments), "Expected 10 fragment")
 
 	// Check that at least one fragment file was created
 	files, err := os.ReadDir(segmentImpl.logFileDir)
 	assert.NoError(t, err)
-	assert.Equal(t, 10, len(files), "Expected 10 fragment files")
+	assert.Equal(t, 10+1, len(files), "Expected 10 fragment files + 1 lock file")
 
 	// Verify data from various fragments
 	// Create reader to verify data

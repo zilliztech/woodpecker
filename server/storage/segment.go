@@ -32,6 +32,9 @@ type ReaderOpt struct {
 
 	// EndSequenceNum is the fileLastOffset to stop reading at.
 	EndSequenceNum int64
+
+	// BatchSize is the number of entries to read in a batch.
+	BatchSize int64
 }
 
 // Reader is an interface to read log entries sequentially.
@@ -40,7 +43,7 @@ type Reader interface {
 	// ReadNext returns the next entry in the log according to the Reader's direction.
 	ReadNext(ctx context.Context) (*proto.LogEntry, error)
 	// ReadNextBatch returns the next batch of entries in the log according to the Reader's direction.
-	ReadNextBatch(context.Context, int64) ([]*proto.LogEntry, error)
+	ReadNextBatch(context.Context) ([]*proto.LogEntry, error)
 	// HasNext returns true if there is an entry to read.
 	HasNext(context.Context) (bool, error)
 }

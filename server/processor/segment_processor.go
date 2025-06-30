@@ -305,6 +305,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 	r, err := segmentReader.NewReader(ctx, storage.ReaderOpt{
 		StartSequenceNum: fromEntryId,
 		EndSequenceNum:   0, // means no stop point
+		BatchSize:        size,
 	})
 	if err != nil {
 		return nil, err
@@ -321,7 +322,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 	}
 
 	// read batch entries
-	batchEntries, err := r.ReadNextBatch(ctx, size)
+	batchEntries, err := r.ReadNextBatch(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
 		return nil, err

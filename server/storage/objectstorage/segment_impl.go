@@ -30,11 +30,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -42,7 +41,6 @@ import (
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
-	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 )
@@ -994,7 +992,8 @@ func (f *ROSegmentImpl) objectExists(ctx context.Context, objectKey string) (boo
 func (f *ROSegmentImpl) NewReader(ctx context.Context, opt storage.ReaderOpt) (storage.Reader, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "NewReader")
 	defer sp.End()
-	reader := NewLogFileReader(opt, f)
+	opt.BatchSize = -1 // TODO currently only support auto batch size
+	reader := NewEntryReader(opt, f)
 	return reader, nil
 }
 
@@ -1669,129 +1668,6 @@ func (f *ROSegmentImpl) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("lastEntryId", lastEntryId))
 
 	return lastEntryId, nil
-}
-
-// NewLogFileReader creates a new LogFileReader instance.
-func NewLogFileReader(opt storage.ReaderOpt, objectFile *ROSegmentImpl) storage.Reader {
-	return &logFileReader{
-		opt:                opt,
-		logfile:            objectFile,
-		pendingReadEntryId: opt.StartSequenceNum,
-	}
-}
-
-var _ storage.Reader = (*logFileReader)(nil)
-
-type logFileReader struct {
-	ctx     context.Context
-	opt     storage.ReaderOpt
-	logfile *ROSegmentImpl
-
-	pendingReadEntryId int64
-	currentFragment    *FragmentObject
-}
-
-func (o *logFileReader) HasNext(ctx context.Context) (bool, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "HasNext")
-	defer sp.End()
-	startTime := time.Now()
-	logId := fmt.Sprintf("%d", o.logfile.logId)
-	if o.pendingReadEntryId >= int64(o.opt.EndSequenceNum) && o.opt.EndSequenceNum > 0 {
-		// reach the end of range
-		return false, nil
-	}
-	f, err := o.logfile.getFragment(ctx, o.pendingReadEntryId)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get fragment",
-			zap.String("segmentPrefixKey", o.logfile.segmentPrefixKey),
-			zap.Int64("pendingReadEntryId", o.pendingReadEntryId),
-			zap.Error(err))
-		return false, err
-	}
-	if f == nil {
-		// no more fragment
-		return false, nil
-	}
-	//
-	o.currentFragment = f
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, "has_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, "has_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return true, nil
-}
-
-func (o *logFileReader) ReadNext(ctx context.Context) (*proto.LogEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNext")
-	defer sp.End()
-	startTime := time.Now()
-	logId := fmt.Sprintf("%d", o.logfile.logId)
-	if o.currentFragment == nil {
-		return nil, errors.New("no readable Fragment")
-	}
-	loadErr := o.currentFragment.Load(context.TODO())
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	defer o.currentFragment.Release(ctx)
-	entryValue, err := o.currentFragment.GetEntry(ctx, o.pendingReadEntryId)
-	if err != nil {
-		return nil, err
-	}
-	entry := &proto.LogEntry{
-		EntryId: o.pendingReadEntryId,
-		Values:  entryValue,
-	}
-	o.pendingReadEntryId++
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, "read_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, "read_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return entry, nil
-}
-
-// ReadNextBatch reads next batch of entries from the log file.
-// size = -1 means auto batch,which will read all entries of a fragment for a time,
-// otherwise it's the number of entries to read.
-func (o *logFileReader) ReadNextBatch(ctx context.Context, size int64) ([]*proto.LogEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "ReadNextBatch")
-	defer sp.End()
-	if size != -1 {
-		// TODO add batch size limit.
-		return nil, werr.ErrNotSupport.WithCauseErrMsg("custom batch size not supported currently")
-	}
-
-	startTime := time.Now()
-	logId := fmt.Sprintf("%d", o.logfile.logId)
-	if o.currentFragment == nil {
-		return nil, errors.New("no readable Fragment")
-	}
-	loadErr := o.currentFragment.Load(context.TODO())
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	defer o.currentFragment.Release(ctx)
-	entries := make([]*proto.LogEntry, 0, 32)
-	for {
-		entryValue, err := o.currentFragment.GetEntry(ctx, o.pendingReadEntryId)
-		if err != nil {
-			if werr.ErrEntryNotFound.Is(err) {
-				break
-			}
-			return nil, err
-		}
-		entry := &proto.LogEntry{
-			EntryId: o.pendingReadEntryId,
-			Values:  entryValue,
-		}
-		entries = append(entries, entry)
-		o.pendingReadEntryId++
-	}
-
-	metrics.WpFileOperationsTotal.WithLabelValues(logId, "read_batch_next", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(logId, "read_batch_next", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return entries, nil
-}
-
-func (o *logFileReader) Close() error {
-	// NO OP
-	return nil
 }
 
 // utils for fragment object key
