@@ -24,16 +24,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
-
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 	"github.com/zilliztech/woodpecker/server/storage"

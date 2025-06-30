@@ -836,7 +836,7 @@ func NewROSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPref
 		fragments:           make([]*FragmentObject, 0),
 	}
 	objFile.fenced.Store(false)
-	existsFragments, existsMergedFragments, err := objFile.prefetchAllFragmentInfosOnce(context.TODO())
+	existsFragments, existsMergedFragments, err := objFile.prefetchAllFragmentInfosOnce(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
 			zap.String("segmentPrefixKey", segmentPrefixKey),
@@ -888,7 +888,7 @@ func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*Fragme
 	}
 
 	// try to fetch new fragments if exists
-	existsNewFragment, fetchedLastFragment, err := f.prefetchFragmentInfos(context.TODO())
+	existsNewFragment, fetchedLastFragment, err := f.prefetchFragmentInfos(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("prefetch fragment info failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
@@ -898,7 +898,7 @@ func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*Fragme
 		return nil, nil
 	}
 
-	fetchedLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), fetchedLastFragment)
+	fetchedLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, fetchedLastFragment)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.fragmentKey), zap.Error(err))
 		return nil, err
@@ -1012,7 +1012,7 @@ func (f *ROSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "GetLastEntryId")
 	defer sp.End()
 	// prefetch fragmentInfos if any new fragment created
-	_, lastFragment, err := f.prefetchFragmentInfos(context.TODO())
+	_, lastFragment, err := f.prefetchFragmentInfos(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Debug("get last entryId failed when fetch the last fragment, treating as empty segment",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -1028,7 +1028,7 @@ func (f *ROSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 		return -1, nil
 	}
 
-	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), lastFragment)
+	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get last entryId failed",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),

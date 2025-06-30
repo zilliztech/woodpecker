@@ -157,6 +157,16 @@ const (
 	DiskFragmentNoSpace
 	// StorageNotWritable indicates that the storage is not writable
 	StorageNotWritable
+	// CRCMismatch indicates that the CRC mismatch
+	CRCMismatch
+	// InvalidRecordSize indicates an invalid record size
+	InvalidRecordSize
+	// NoCodecFound indicates no codec found
+	NoCodecFound
+	// UnknownRecordTypeError indicates an unknown record type
+	UnknownRecordTypeError
+	// InvalidMagicCodeError indicates an invalid magic code
+	InvalidMagicCodeError
 	// TruncateLogError indicates an error occurred during log truncation
 	TruncateLogError
 	// GetTruncationPointError indicates an error occurred when retrieving truncation point
@@ -234,6 +244,11 @@ var (
 	// Storage related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
 	ErrStorageNotWritable  = newWoodpeckerError("storage is not writable", StorageNotWritable, false)
+	ErrCRCMismatch         = newWoodpeckerError("crc mismatch", CRCMismatch, false)
+	ErrInvalidRecordSize   = newWoodpeckerError("invalid record size", InvalidRecordSize, false)
+	ErrCodecNotFound       = newWoodpeckerError("not found codec", NoCodecFound, false)
+	ErrUnknownRecord       = newWoodpeckerError("unknown record type", UnknownRecordTypeError, false)
+	ErrInvalidMagicCode    = newWoodpeckerError("invalid magic code", InvalidMagicCodeError, false)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.

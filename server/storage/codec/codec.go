@@ -18,107 +18,188 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-// Constants for sizes
-const (
-	MagicString        = "woodpecker01"
-	VERSION            = uint32(1)
-	FileHeaderSize     = 16
-	PayloadSize        = 4
-	CrcSize            = 4
-	EntryHeaderSize    = PayloadSize + CrcSize
-	OffsetSize         = 4
-	SequenceNumberSize = 4
-	IndexItemSize      = 4
-)
-
-var (
-	ErrCRCMismatch        = errors.New("CRC mismatch")
-	ErrInvalidPayloadSize = errors.New("invalid payload size")
-)
-
-// Codec handles encoding and decoding of buffer entries.
-type Codec struct{}
-
-// NewCodec creates and returns a new Codec instance.
-func NewCodec() *Codec {
-	return &Codec{}
+func init() {
+	RegisterRecordCodec(HeaderRecordType, encodeHeader, decodeHeader)
+	RegisterRecordCodec(DataRecordType, encodeData, decodeData)
+	RegisterRecordCodec(IndexRecordType, encodeIndex, decodeIndex)
+	RegisterRecordCodec(FooterRecordType, encodeFooter, decodeFooter)
 }
 
-// EncodeEntry encodes the payload and sequence number into a byte slice.
-// Format: [PayloadSize (4 bytes)] + [CRC (4 bytes)] + [Payload].
-func (c *Codec) EncodeEntry(payload []byte) ([]byte, error) {
-	payloadSize := len(payload)
-	if payloadSize <= 0 {
-		return nil, ErrInvalidPayloadSize
-	}
+type EncoderFunc func(Record) ([]byte, error)
+type DecoderFunc func([]byte) (Record, error)
 
-	// Calculate CRC
-	crc := crc32.ChecksumIEEE(payload)
+var encoders = map[byte]EncoderFunc{}
+var decoders = map[byte]DecoderFunc{}
 
-	// Prepare entry buffer
-	entry := make([]byte, EntryHeaderSize+payloadSize)
-	copy(entry[:PayloadSize], IntToBytes(payloadSize, PayloadSize))
-	copy(entry[PayloadSize:PayloadSize+CrcSize], IntToBytes(int(crc), CrcSize))
-	copy(entry[EntryHeaderSize:], payload)
-
-	return entry, nil
+func RegisterRecordCodec(
+	typ byte,
+	encode EncoderFunc,
+	decode DecoderFunc) {
+	encoders[typ] = encode
+	decoders[typ] = decode
 }
 
-// DecodeEntry decodes a byte slice into payload and validates the CRC.
-// Assumes format: [PayloadSize (4 bytes)] + [CRC (4 bytes)] + [Payload].
-func (c *Codec) DecodeEntry(entry []byte) ([]byte, error) {
-	if len(entry) < EntryHeaderSize {
-		return nil, ErrInvalidPayloadSize
+func EncodeRecord(r Record) ([]byte, error) {
+	encodeFn := encoders[r.Type()]
+	if encodeFn == nil {
+		return nil, werr.ErrCodecNotFound.WithCauseErrMsg(fmt.Sprintf("no encoder for type: %x", r.Type()))
 	}
 
-	// Extract payload size
-	payloadSize := bytesToInt(entry[:PayloadSize])
-
-	if payloadSize <= 0 || len(entry) < EntryHeaderSize+payloadSize {
-		return nil, ErrInvalidPayloadSize
+	payload, err := encodeFn(r)
+	if err != nil {
+		return nil, err
 	}
 
-	// Extract and validate CRC
-	crc := uint32(bytesToInt(entry[PayloadSize : PayloadSize+CrcSize]))
-	payload := entry[EntryHeaderSize : EntryHeaderSize+payloadSize]
-	if crc != crc32.ChecksumIEEE(payload) {
-		return nil, ErrCRCMismatch
-	}
+	buf := make([]byte, 1+4+len(payload))
+	buf[0] = r.Type()
+	binary.LittleEndian.PutUint32(buf[1:], uint32(len(payload)))
+	copy(buf[5:], payload)
 
-	return payload, nil
+	crc := crc32.ChecksumIEEE(buf)
+	final := make([]byte, 4+len(buf))
+	binary.LittleEndian.PutUint32(final, crc)
+	copy(final[4:], buf)
+	return final, nil
 }
 
-// IntToBytes converts an integer to a byte slice of the specified size.
-func IntToBytes(value int, size int) []byte {
-	buf := make([]byte, size)
-	for i := 0; i < size; i++ {
-		buf[i] = byte(value >> (8 * i))
+func DecodeRecord(data []byte) (Record, error) {
+	if len(data) < 9 {
+		return nil, werr.ErrInvalidRecordSize.WithCauseErrMsg("too short")
 	}
-	return buf
+
+	expectedCRC := binary.LittleEndian.Uint32(data[:4])
+	crc := crc32.ChecksumIEEE(data[4:])
+	if expectedCRC != crc {
+		return nil, werr.ErrCRCMismatch.WithCauseErrMsg("crc mismatch")
+	}
+
+	typ := data[4]
+	length := binary.LittleEndian.Uint32(data[5:])
+	if int(9+length) > len(data) {
+		return nil, werr.ErrInvalidRecordSize.WithCauseErrMsg("truncated payload")
+	}
+
+	decoder := decoders[typ]
+	if decoder == nil {
+		return nil, werr.ErrCodecNotFound.WithCauseErrMsg(fmt.Sprintf("no decoder for type: %x", typ))
+	}
+
+	return decoder(data[9 : 9+length])
 }
 
-func Int64ToBytes(value int64) []byte {
+func encodeHeader(r Record) ([]byte, error) {
+	h, ok := r.(*HeaderRecord)
+	if !ok {
+		return nil, werr.ErrUnknownRecord.WithCauseErrMsg(fmt.Sprintf("invalid record type: %T", r))
+	}
 	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, uint64(value))
-	return buf
+	binary.LittleEndian.PutUint16(buf[0:], FormatVersion)
+	binary.LittleEndian.PutUint16(buf[2:], h.Flags)
+	copy(buf[4:], HeaderMagic[:])
+	return buf, nil
 }
 
-// bytesToInt converts a byte slice to an integer.
-func bytesToInt(data []byte) int {
-	result := 0
-	for i := 0; i < len(data); i++ {
-		result |= int(data[i]) << (8 * i)
+func decodeHeader(data []byte) (Record, error) {
+	if len(data) != 8 {
+		return nil, werr.ErrInvalidRecordSize.WithCauseErrMsg(fmt.Sprintf("invalid header length: %d", len(data)))
 	}
-	return result
+	h := &HeaderRecord{}
+	h.Version = binary.LittleEndian.Uint16(data[0:])
+	if h.Version != FormatVersion {
+		return nil, werr.ErrNotSupport.WithCauseErrMsg(fmt.Sprintf("unsupport file format v%d", h.Version))
+	}
+	h.Flags = binary.LittleEndian.Uint16(data[2:])
+	headerMagic := make([]byte, 4)
+	copy(headerMagic[:], data[4:])
+	if !bytes.Equal(headerMagic, HeaderMagic[:]) {
+		return nil, werr.ErrInvalidMagicCode.WithCauseErrMsg("invalid header magic")
+	}
+	return h, nil
 }
 
-func bytesToInt64(data []byte) int64 {
-	result := binary.BigEndian.Uint64(data)
-	return int64(result)
+func encodeData(r Record) ([]byte, error) {
+	d, ok := r.(*DataRecord)
+	if !ok {
+		return nil, fmt.Errorf("invalid record type: %T", r)
+	}
+	return d.Payload, nil
+}
+
+func decodeData(data []byte) (Record, error) {
+	return &DataRecord{Payload: append([]byte(nil), data...)}, nil
+}
+
+func encodeIndex(r Record) ([]byte, error) {
+	idx, ok := r.(*IndexRecord)
+	if !ok {
+		return nil, fmt.Errorf("invalid record type: %T", r)
+	}
+	buf := make([]byte, 8+4*len(idx.Offsets))
+	binary.LittleEndian.PutUint64(buf[0:], uint64(idx.FirstEntryID))
+	for i, offset := range idx.Offsets {
+		binary.LittleEndian.PutUint32(buf[8+i*4:], offset)
+	}
+	return buf, nil
+}
+
+func decodeIndex(data []byte) (Record, error) {
+	if len(data) < 8 || (len(data)-8)%4 != 0 {
+		return nil, fmt.Errorf("invalid index payload length: %d", len(data))
+	}
+	idx := &IndexRecord{}
+	firstEntryID := binary.LittleEndian.Uint64(data[0:])
+	idx.FirstEntryID = int64(firstEntryID)
+	count := (len(data) - 8) / 4
+	idx.Offsets = make([]uint32, count)
+	for i := 0; i < count; i++ {
+		idx.Offsets[i] = binary.LittleEndian.Uint32(data[8+i*4:])
+	}
+	return idx, nil
+}
+
+func encodeFooter(r Record) ([]byte, error) {
+	f, ok := r.(*FooterRecord)
+	if !ok {
+		return nil, fmt.Errorf("invalid record type: %T", r)
+	}
+	buf := make([]byte, 32)
+	binary.LittleEndian.PutUint64(buf[0:], f.IndexOffset)
+	binary.LittleEndian.PutUint32(buf[8:], f.IndexLength)
+	binary.LittleEndian.PutUint64(buf[12:], uint64(f.FirstEntryID))
+	binary.LittleEndian.PutUint32(buf[20:], f.Count)
+	binary.LittleEndian.PutUint16(buf[24:], FormatVersion)
+	binary.LittleEndian.PutUint16(buf[26:], f.Flags)
+	copy(buf[28:], FooterMagic[:])
+	return buf, nil
+}
+
+func decodeFooter(data []byte) (Record, error) {
+	if len(data) != 32 {
+		return nil, fmt.Errorf("invalid footer length: %d", len(data))
+	}
+	f := &FooterRecord{}
+	f.IndexOffset = binary.LittleEndian.Uint64(data[0:])
+	f.IndexLength = binary.LittleEndian.Uint32(data[8:])
+	f.FirstEntryID = int64(binary.LittleEndian.Uint64(data[12:]))
+	f.Count = binary.LittleEndian.Uint32(data[20:])
+	f.Version = binary.LittleEndian.Uint16(data[24:])
+	if f.Version != FormatVersion {
+		return nil, werr.ErrNotSupport.WithCauseErrMsg(fmt.Sprintf("unsupport file format v%d", f.Version))
+	}
+
+	f.Flags = binary.LittleEndian.Uint16(data[26:])
+	footerMagic := make([]byte, 4)
+	copy(footerMagic[:], data[28:])
+	if !bytes.Equal(footerMagic, FooterMagic[:]) {
+		return nil, werr.ErrInvalidMagicCode.WithCauseErrMsg("invalid footer magic")
+	}
+	return f, nil
 }

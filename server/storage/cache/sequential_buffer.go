@@ -44,6 +44,7 @@ type SequentialBuffer struct {
 	mu        sync.Mutex
 	logId     int64
 	segmentId int64
+	logIdStr  string // for metrics only
 
 	Entries                 []*BufferEntry // entries with data and notification channels
 	MaxEntries              int64          // max amount of entries
@@ -56,12 +57,15 @@ type SequentialBuffer struct {
 
 func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEntries int64) *SequentialBuffer {
 	b := &SequentialBuffer{
+		logId:        logId,
+		segmentId:    segmentId,
+		logIdStr:     fmt.Sprintf("%d", logId),
 		Entries:      make([]*BufferEntry, maxEntries),
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId)).Set(float64(maxEntries))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -73,12 +77,15 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		copy(entries, restData[:copyLen])
 	}
 	b := &SequentialBuffer{
+		logId:        logId,
+		segmentId:    segmentId,
+		logIdStr:     fmt.Sprintf("%d", logId),
 		Entries:      entries,
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", logId)).Set(float64(maxEntries))
+	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -111,7 +118,7 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 			b.ExpectedNextEntryId.Add(1)
 			bufferEntry := b.Entries[addedId-b.FirstEntryId]
 			b.SequentialReadyDataSize.Add(int64(len(bufferEntry.Data)))
-			metrics.WpWriteBufferSlotsTotal.WithLabelValues(fmt.Sprintf("%d", b.logId)).Dec()
+			metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Dec()
 		} else {
 			break
 		}

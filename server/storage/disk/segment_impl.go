@@ -761,7 +761,7 @@ func (s *DiskSegmentImpl) Close(ctx context.Context) error {
 	// Close current fragment
 	if s.currFragment != nil {
 		s.currFragment.isGrowing = false
-		if err := s.currFragment.Flush(context.TODO()); err != nil {
+		if err := s.currFragment.Flush(ctx); err != nil {
 			logger.Ctx(ctx).Warn("failed to flush fragment",
 				zap.String("logFileDir", s.logFileDir),
 				zap.Error(err))
@@ -1290,7 +1290,7 @@ func (rs *RODiskSegmentImpl) fetchROFragments(ctx context.Context) (bool, *Fragm
 		if err != nil {
 			break
 		}
-		if !fragment.IsMMapReadable(context.TODO()) {
+		if !fragment.IsMMapReadable(ctx) {
 			logger.Ctx(ctx).Warn("found a new fragment unreadable", zap.String("logFileDir", rs.logFileDir), zap.String("fragmentPath", fragmentPath), zap.Error(err))
 			break
 		}
@@ -1342,7 +1342,7 @@ func (rs *RODiskSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) 
 	if lastFragment == nil {
 		return -1, nil
 	}
-	return getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), lastFragment)
+	return getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
 }
 
 // findFragmentFrom returns the fragment index and fragment object
@@ -1353,7 +1353,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(ctx context.Context, fromIdx int, 
 	for i := fromIdx; i < len(rs.fragments); i++ {
 		lastIdx = i
 		fragment := rs.fragments[i]
-		firstID, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
+		firstID, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx, fragment)
 		if err != nil {
 			rs.mu.RUnlock()
 			logger.Ctx(ctx).Warn("get fragment firstEntryId failed",
@@ -1362,7 +1362,7 @@ func (rs *RODiskSegmentImpl) findFragmentFrom(ctx context.Context, fromIdx int, 
 				zap.Error(err))
 			return -1, nil, -1, err
 		}
-		lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), fragment)
+		lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx, fragment)
 		if err != nil {
 			rs.mu.RUnlock()
 			logger.Ctx(ctx).Warn("get fragment lastEntryId failed",
@@ -1602,12 +1602,12 @@ func (dr *DiskReader) HasNext(ctx context.Context) (bool, error) {
 
 	// current fragment contains this entry, fast return
 	if dr.currFragment != nil {
-		first, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
+		first, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
-		last, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
+		last, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
