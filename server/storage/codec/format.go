@@ -44,7 +44,11 @@ package codec
 //    Appears at the beginning of the file. Describes the file version and feature flags.
 //
 //    Payload:
-//      [Version:2][Flags:2][Magic:4]   // Magic can be "WPHD"
+//      [Version:2][Flags:2][FirstEntryID:8][Magic:4]
+//        - Version		: format version.
+//        - Flags		: feature flags (e.g. compression)
+//        - FirstEntryID: logical entry ID of the first record in this file.
+//        - Magic       : 4-byte constant (e.g. "WPHD")
 //
 // 2. Data Record (Type = 0x02)
 //    Carries application-defined content.
@@ -56,8 +60,7 @@ package codec
 //    Stores offsets of selected Data Records for fast lookup.
 //
 //    Payload:
-//      [FirstEntryID:8][Offset1:8][Offset2:8]...[OffsetN:8]
-//        - FirstEntryID: logical entry ID of the first record in this file.
+//      [Offset1:8][Offset2:8]...[OffsetN:8]
 //        - Offsets: list of physical file offsets for data records in order.
 //          The N-th entry maps to EntryID = StartEntryID + N.
 //
@@ -127,8 +130,9 @@ type Record interface {
 }
 
 type HeaderRecord struct {
-	Version uint16
-	Flags   uint16 //  reserved flags, used for compress,encryption...
+	Version      uint16
+	Flags        uint16 //   used for compress,encryption...
+	FirstEntryID int64
 }
 
 func (hr *HeaderRecord) Type() byte {
@@ -144,8 +148,7 @@ func (dr *DataRecord) Type() byte {
 }
 
 type IndexRecord struct {
-	FirstEntryID int64
-	Offsets      []uint32
+	Offsets []uint32
 }
 
 func (ir *IndexRecord) Type() byte {

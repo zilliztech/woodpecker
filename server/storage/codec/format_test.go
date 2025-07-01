@@ -166,29 +166,25 @@ func TestIndexRecordCodec(t *testing.T) {
 		{
 			name: "empty offsets",
 			record: &IndexRecord{
-				FirstEntryID: 100,
-				Offsets:      []uint32{},
+				Offsets: []uint32{},
 			},
 		},
 		{
 			name: "single offset",
 			record: &IndexRecord{
-				FirstEntryID: 200,
-				Offsets:      []uint32{1000},
+				Offsets: []uint32{1000},
 			},
 		},
 		{
 			name: "multiple offsets",
 			record: &IndexRecord{
-				FirstEntryID: 300,
-				Offsets:      []uint32{1000, 2000, 3000, 4000, 5000},
+				Offsets: []uint32{1000, 2000, 3000, 4000, 5000},
 			},
 		},
 		{
 			name: "large offsets",
 			record: &IndexRecord{
-				FirstEntryID: -100, // Test negative number
-				Offsets:      []uint32{0xFFFFFFFF, 0x80000000, 0x12345678},
+				Offsets: []uint32{0xFFFFFFFF, 0x80000000, 0x12345678},
 			},
 		},
 	}
@@ -208,7 +204,6 @@ func TestIndexRecordCodec(t *testing.T) {
 			require.True(t, ok, "decoded record should be IndexRecord")
 
 			// Verify content
-			assert.Equal(t, tt.record.FirstEntryID, indexRecord.FirstEntryID)
 			assert.Equal(t, tt.record.Offsets, indexRecord.Offsets)
 			assert.Equal(t, IndexRecordType, indexRecord.Type())
 		})
@@ -368,15 +363,16 @@ func TestUnsupportedRecordType(t *testing.T) {
 func TestHeaderVersionValidation(t *testing.T) {
 	// Create a valid header
 	header := &HeaderRecord{
-		Version: FormatVersion,
-		Flags:   0,
+		Version:      FormatVersion,
+		Flags:        0,
+		FirstEntryID: 100,
 	}
 
 	encoded, err := EncodeRecord(header)
 	require.NoError(t, err)
 
 	// Modify the version number in the payload
-	// Header payload: [Version:2][Flags:2][Magic:4]
+	// Header payload: [Version:2][Flags:2][FirstEntryID:8][Magic:4]
 	// Version number is in the first 2 bytes of the payload, payload starts at byte 9
 	binary.LittleEndian.PutUint16(encoded[9:11], 999) // Set an unsupported version number
 
@@ -394,15 +390,17 @@ func TestHeaderVersionValidation(t *testing.T) {
 func TestMagicValidation(t *testing.T) {
 	// Test Header magic
 	header := &HeaderRecord{
-		Version: FormatVersion,
-		Flags:   0,
+		Version:      FormatVersion,
+		Flags:        0,
+		FirstEntryID: 100,
 	}
 
 	encoded, err := EncodeRecord(header)
 	require.NoError(t, err)
 
-	// Corrupt Header magic (in bytes 4-7 of the payload)
-	copy(encoded[13:17], []byte("XXXX"))
+	// Corrupt Header magic (magic is at the end of the payload: Version(2) + Flags(2) + FirstEntryID(8) + Magic(4))
+	// Payload starts at byte 9, magic is at bytes 21-24 (9+2+2+8 to 9+2+2+8+4)
+	copy(encoded[21:25], []byte("XXXX"))
 
 	// Recalculate CRC
 	crc := crc32.ChecksumIEEE(encoded[4:])
@@ -446,7 +444,7 @@ func TestRecordRoundTrip(t *testing.T) {
 	records := []Record{
 		&HeaderRecord{Version: FormatVersion, Flags: 0x1234},
 		&DataRecord{Payload: []byte("test payload data")},
-		&IndexRecord{FirstEntryID: 12345, Offsets: []uint32{100, 200, 300}},
+		&IndexRecord{Offsets: []uint32{100, 200, 300}},
 		&FooterRecord{
 			IndexOffset:  98765,
 			IndexLength:  432,

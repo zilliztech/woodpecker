@@ -1,22 +1,24 @@
-package codec
+package benchmark
 
 import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
 	"testing"
+
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 // BenchmarkHeaderRecordEncode benchmarks HeaderRecord encoding
 func BenchmarkHeaderRecordEncode(b *testing.B) {
-	record := &HeaderRecord{
-		Version: FormatVersion,
+	record := &codec.HeaderRecord{
+		Version: codec.FormatVersion,
 		Flags:   0x1234,
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := EncodeRecord(record)
+		_, err := codec.EncodeRecord(record)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -25,19 +27,19 @@ func BenchmarkHeaderRecordEncode(b *testing.B) {
 
 // BenchmarkHeaderRecordDecode benchmarks HeaderRecord decoding
 func BenchmarkHeaderRecordDecode(b *testing.B) {
-	record := &HeaderRecord{
-		Version: FormatVersion,
+	record := &codec.HeaderRecord{
+		Version: codec.FormatVersion,
 		Flags:   0x1234,
 	}
 
-	encoded, err := EncodeRecord(record)
+	encoded, err := codec.EncodeRecord(record)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := DecodeRecord(encoded)
+		_, err := codec.DecodeRecord(encoded)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -55,12 +57,12 @@ func BenchmarkDataRecordEncode(b *testing.B) {
 				payload[i] = byte(i % 256)
 			}
 
-			record := &DataRecord{Payload: payload}
+			record := &codec.DataRecord{Payload: payload}
 
 			b.ResetTimer()
 			b.SetBytes(int64(size))
 			for i := 0; i < b.N; i++ {
-				_, err := EncodeRecord(record)
+				_, err := codec.EncodeRecord(record)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -80,8 +82,8 @@ func BenchmarkDataRecordDecode(b *testing.B) {
 				payload[i] = byte(i % 256)
 			}
 
-			record := &DataRecord{Payload: payload}
-			encoded, err := EncodeRecord(record)
+			record := &codec.DataRecord{Payload: payload}
+			encoded, err := codec.EncodeRecord(record)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -89,7 +91,7 @@ func BenchmarkDataRecordDecode(b *testing.B) {
 			b.ResetTimer()
 			b.SetBytes(int64(size))
 			for i := 0; i < b.N; i++ {
-				_, err := DecodeRecord(encoded)
+				_, err := codec.DecodeRecord(encoded)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -109,14 +111,13 @@ func BenchmarkIndexRecordEncode(b *testing.B) {
 				offsets[i] = uint32(i * 1000)
 			}
 
-			record := &IndexRecord{
-				FirstEntryID: 12345,
-				Offsets:      offsets,
+			record := &codec.IndexRecord{
+				Offsets: offsets,
 			}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := EncodeRecord(record)
+				_, err := codec.EncodeRecord(record)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -136,19 +137,18 @@ func BenchmarkIndexRecordDecode(b *testing.B) {
 				offsets[i] = uint32(i * 1000)
 			}
 
-			record := &IndexRecord{
-				FirstEntryID: 12345,
-				Offsets:      offsets,
+			record := &codec.IndexRecord{
+				Offsets: offsets,
 			}
 
-			encoded, err := EncodeRecord(record)
+			encoded, err := codec.EncodeRecord(record)
 			if err != nil {
 				b.Fatal(err)
 			}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := DecodeRecord(encoded)
+				_, err := codec.DecodeRecord(encoded)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -159,18 +159,17 @@ func BenchmarkIndexRecordDecode(b *testing.B) {
 
 // BenchmarkFooterRecordEncode benchmarks FooterRecord encoding
 func BenchmarkFooterRecordEncode(b *testing.B) {
-	record := &FooterRecord{
-		IndexOffset:  98765,
-		IndexLength:  432,
-		FirstEntryID: 12345,
-		Count:        123,
-		Version:      FormatVersion,
-		Flags:        0x5678,
+	record := &codec.FooterRecord{
+		IndexOffset: 98765,
+		IndexLength: 432,
+		Count:       123,
+		Version:     codec.FormatVersion,
+		Flags:       0x5678,
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := EncodeRecord(record)
+		_, err := codec.EncodeRecord(record)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -179,23 +178,22 @@ func BenchmarkFooterRecordEncode(b *testing.B) {
 
 // BenchmarkFooterRecordDecode benchmarks FooterRecord decoding
 func BenchmarkFooterRecordDecode(b *testing.B) {
-	record := &FooterRecord{
-		IndexOffset:  98765,
-		IndexLength:  432,
-		FirstEntryID: 12345,
-		Count:        123,
-		Version:      FormatVersion,
-		Flags:        0x5678,
+	record := &codec.FooterRecord{
+		IndexOffset: 98765,
+		IndexLength: 432,
+		Count:       123,
+		Version:     codec.FormatVersion,
+		Flags:       0x5678,
 	}
 
-	encoded, err := EncodeRecord(record)
+	encoded, err := codec.EncodeRecord(record)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := DecodeRecord(encoded)
+		_, err := codec.DecodeRecord(encoded)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -223,20 +221,19 @@ func BenchmarkCRCCalculation(b *testing.B) {
 func BenchmarkRecordRoundTrip(b *testing.B) {
 	records := []struct {
 		name   string
-		record Record
+		record codec.Record
 	}{
 		{
 			name:   "Header",
-			record: &HeaderRecord{Version: FormatVersion, Flags: 0x1234},
+			record: &codec.HeaderRecord{Version: codec.FormatVersion, Flags: 0x1234},
 		},
 		{
 			name:   "Data_1KB",
-			record: &DataRecord{Payload: bytes.Repeat([]byte("test"), 256)},
+			record: &codec.DataRecord{Payload: bytes.Repeat([]byte("test"), 256)},
 		},
 		{
 			name: "Index_100",
-			record: &IndexRecord{
-				FirstEntryID: 12345,
+			record: &codec.IndexRecord{
 				Offsets: func() []uint32 {
 					offsets := make([]uint32, 100)
 					for i := range offsets {
@@ -248,13 +245,12 @@ func BenchmarkRecordRoundTrip(b *testing.B) {
 		},
 		{
 			name: "Footer",
-			record: &FooterRecord{
-				IndexOffset:  98765,
-				IndexLength:  432,
-				FirstEntryID: 12345,
-				Count:        123,
-				Version:      FormatVersion,
-				Flags:        0x5678,
+			record: &codec.FooterRecord{
+				IndexOffset: 98765,
+				IndexLength: 432,
+				Count:       123,
+				Version:     codec.FormatVersion,
+				Flags:       0x5678,
 			},
 		},
 	}
@@ -263,14 +259,14 @@ func BenchmarkRecordRoundTrip(b *testing.B) {
 		b.Run(rec.name, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				// 编码
-				encoded, err := EncodeRecord(rec.record)
+				// Encoding
+				encoded, err := codec.EncodeRecord(rec.record)
 				if err != nil {
 					b.Fatal(err)
 				}
 
-				// 解码
-				_, err = DecodeRecord(encoded)
+				// Decoding
+				_, err = codec.DecodeRecord(encoded)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -281,19 +277,19 @@ func BenchmarkRecordRoundTrip(b *testing.B) {
 
 // BenchmarkMemoryAllocation benchmarks memory allocation patterns
 func BenchmarkMemoryAllocation(b *testing.B) {
-	record := &DataRecord{
+	record := &codec.DataRecord{
 		Payload: bytes.Repeat([]byte("test"), 1024), // 4KB payload
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		encoded, err := EncodeRecord(record)
+		encoded, err := codec.EncodeRecord(record)
 		if err != nil {
 			b.Fatal(err)
 		}
 
-		_, err = DecodeRecord(encoded)
+		_, err = codec.DecodeRecord(encoded)
 		if err != nil {
 			b.Fatal(err)
 		}

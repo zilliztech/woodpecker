@@ -127,7 +127,9 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	// init logger
 	logger.InitLogger(cfg)
 	if minioCli != nil {
-		// check if condition write support
+		// Check if conditional write is supported.
+		// For MinIO, the version must be v20240510 or later.
+		// For cloud storage, the if-none-match feature is required.
 		minio.CheckIfConditionWriteSupport(ctx, minioCli, cfg.Minio.BucketName, cfg.Minio.RootPath)
 	}
 	// start embedded logStore

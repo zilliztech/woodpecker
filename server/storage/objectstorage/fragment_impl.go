@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"io"
 	"sync"
 	"time"
@@ -35,7 +36,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 const (
@@ -154,7 +154,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 
 	fullDataReader, fullDataSize := serializeFragmentToReader(ctx, f)
 
-	// Upload TODO minio must v20240510 or later
+	// Upload
 	_, err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.fragmentKey, fullDataReader, int64(fullDataSize))
 	if err != nil {
 		if werr.ErrSegmentFenced.Is(err) {
@@ -214,7 +214,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 		return err
 	}
 
-	tmpFrag, deserializeErr := deserializeFragment(ctx, data, objDataSize)
+	tmpFrag, deserializeErr := deserializeFragment(ctx, data)
 	if deserializeErr != nil {
 		logger.Ctx(ctx).Warn("failed to deserialize fragment", zap.String("fragmentKey", f.fragmentKey), zap.Error(deserializeErr))
 		return deserializeErr
@@ -376,6 +376,55 @@ func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *F
 	return nil
 }
 
+func genFragmentDataFromRaw(ctx context.Context, rawEntries []*cache.BufferEntry) ([]byte, []byte) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "genFragmentDataFromRaw")
+	defer sp.End()
+	// Calculate total data size
+	entriesCount := len(rawEntries)
+	if entriesCount == 0 {
+		return make([]byte, 0), make([]byte, 0)
+	}
+
+	// Calculate total data and index size
+	totalDataSize := 0
+	for _, item := range rawEntries {
+		totalDataSize += len(item.Data)
+	}
+	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
+
+	// Get buffers from byte pool
+	data := make([]byte, 0, totalDataSize)
+	index := make([]byte, 0, indexSize)
+
+	// Temporary index buffer, reuse to reduce memory allocation
+	entryIndex := make([]byte, 8)
+
+	// Fill data and indexes
+	offset := 0
+	for i := 0; i < entriesCount; i++ {
+		item := rawEntries[i]
+		entryLength := uint32(len(item.Data))
+		entryOffset := uint32(offset)
+
+		// Fill index data
+		binary.BigEndian.PutUint32(entryIndex[:4], entryOffset)
+		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
+
+		// Add to index buffer
+		index = append(index, entryIndex...)
+
+		// Add to data buffer
+		data = append(data, item.Data...)
+
+		offset += len(item.Data)
+	}
+
+	// No need to return buffers before returning, as they will be held by FragmentObject
+	// They will be returned to the pool when FragmentObject is released
+	return index, data
+}
+
+// serializeFragmentToReader from fragment object to reader
 func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reader, int) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "serializeFragment")
 	defer sp.End()
@@ -397,7 +446,7 @@ func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reade
 }
 
 // deserializeFragment from object data bytes
-func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64) (*FragmentObject, error) {
+func deserializeFragment(ctx context.Context, data []byte) (*FragmentObject, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "deserializeFragment")
 	defer sp.End()
 	// Create a buffer to read from the data
@@ -445,52 +494,4 @@ func deserializeFragment(ctx context.Context, data []byte, maxFragmentSize int64
 		firstEntryId: int64(firstEntryID),
 		lastEntryId:  int64(lastEntryId),
 	}, nil
-}
-
-func genFragmentDataFromRaw(ctx context.Context, rawEntries []*cache.BufferEntry) ([]byte, []byte) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "genFragmentDataFromRaw")
-	defer sp.End()
-	// Calculate total data size
-	entriesCount := len(rawEntries)
-	if entriesCount == 0 {
-		return make([]byte, 0), make([]byte, 0)
-	}
-
-	// Calculate total data and index size
-	totalDataSize := 0
-	for _, item := range rawEntries {
-		totalDataSize += len(item.Data)
-	}
-	indexSize := entriesCount * 8 // Each index entry occupies 8 bytes (offset+length)
-
-	// Get buffers from byte pool
-	data := make([]byte, 0, totalDataSize)
-	index := make([]byte, 0, indexSize)
-
-	// Temporary index buffer, reuse to reduce memory allocation
-	entryIndex := make([]byte, 8)
-
-	// Fill data and indexes
-	offset := 0
-	for i := 0; i < entriesCount; i++ {
-		item := rawEntries[i]
-		entryLength := uint32(len(item.Data))
-		entryOffset := uint32(offset)
-
-		// Fill index data
-		binary.BigEndian.PutUint32(entryIndex[:4], entryOffset)
-		binary.BigEndian.PutUint32(entryIndex[4:], entryLength)
-
-		// Add to index buffer
-		index = append(index, entryIndex...)
-
-		// Add to data buffer
-		data = append(data, item.Data...)
-
-		offset += len(item.Data)
-	}
-
-	// No need to return buffers before returning, as they will be held by FragmentObject
-	// They will be returned to the pool when FragmentObject is released
-	return index, data
 }

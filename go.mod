@@ -6,6 +6,7 @@ require (
 	github.com/aliyun/credentials-go v1.2.7
 	github.com/cockroachdb/errors v1.9.1
 	github.com/edsrzf/mmap-go v1.2.0
+	github.com/gofrs/flock v0.8.1
 	github.com/google/gops v0.3.28
 	github.com/google/uuid v1.6.0
 	github.com/grafana/pyroscope-go/godeltaprof v0.1.8
@@ -59,7 +60,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/btree v1.1.2 // indirect

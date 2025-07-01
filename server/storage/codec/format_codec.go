@@ -100,15 +100,16 @@ func encodeHeader(r Record) ([]byte, error) {
 	if !ok {
 		return nil, werr.ErrUnknownRecord.WithCauseErrMsg(fmt.Sprintf("invalid record type: %T", r))
 	}
-	buf := make([]byte, 8)
+	buf := make([]byte, 16) // Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
 	binary.LittleEndian.PutUint16(buf[0:], FormatVersion)
 	binary.LittleEndian.PutUint16(buf[2:], h.Flags)
-	copy(buf[4:], HeaderMagic[:])
+	binary.LittleEndian.PutUint64(buf[4:], uint64(h.FirstEntryID))
+	copy(buf[12:], HeaderMagic[:])
 	return buf, nil
 }
 
 func decodeHeader(data []byte) (Record, error) {
-	if len(data) != 8 {
+	if len(data) != 16 {
 		return nil, werr.ErrInvalidRecordSize.WithCauseErrMsg(fmt.Sprintf("invalid header length: %d", len(data)))
 	}
 	h := &HeaderRecord{}
@@ -117,8 +118,9 @@ func decodeHeader(data []byte) (Record, error) {
 		return nil, werr.ErrNotSupport.WithCauseErrMsg(fmt.Sprintf("unsupport file format v%d", h.Version))
 	}
 	h.Flags = binary.LittleEndian.Uint16(data[2:])
+	h.FirstEntryID = int64(binary.LittleEndian.Uint64(data[4:]))
 	headerMagic := make([]byte, 4)
-	copy(headerMagic[:], data[4:])
+	copy(headerMagic[:], data[12:])
 	if !bytes.Equal(headerMagic, HeaderMagic[:]) {
 		return nil, werr.ErrInvalidMagicCode.WithCauseErrMsg("invalid header magic")
 	}
@@ -142,25 +144,22 @@ func encodeIndex(r Record) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid record type: %T", r)
 	}
-	buf := make([]byte, 8+4*len(idx.Offsets))
-	binary.LittleEndian.PutUint64(buf[0:], uint64(idx.FirstEntryID))
+	buf := make([]byte, 4*len(idx.Offsets))
 	for i, offset := range idx.Offsets {
-		binary.LittleEndian.PutUint32(buf[8+i*4:], offset)
+		binary.LittleEndian.PutUint32(buf[i*4:], offset)
 	}
 	return buf, nil
 }
 
 func decodeIndex(data []byte) (Record, error) {
-	if len(data) < 8 || (len(data)-8)%4 != 0 {
+	if len(data)%4 != 0 {
 		return nil, fmt.Errorf("invalid index payload length: %d", len(data))
 	}
 	idx := &IndexRecord{}
-	firstEntryID := binary.LittleEndian.Uint64(data[0:])
-	idx.FirstEntryID = int64(firstEntryID)
-	count := (len(data) - 8) / 4
+	count := len(data) / 4
 	idx.Offsets = make([]uint32, count)
 	for i := 0; i < count; i++ {
-		idx.Offsets[i] = binary.LittleEndian.Uint32(data[8+i*4:])
+		idx.Offsets[i] = binary.LittleEndian.Uint32(data[i*4:])
 	}
 	return idx, nil
 }
