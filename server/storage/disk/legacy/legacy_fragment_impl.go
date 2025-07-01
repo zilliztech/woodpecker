@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package disk
+package legacy
 
 import (
 	"context"
@@ -36,7 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
-var _ storage.Fragment = (*FragmentFileWriter)(nil)
+var _ storage.AppendableFragment = (*LegacyFragmentFileWriter)(nil)
 
 const (
 	// Header size
@@ -49,8 +49,9 @@ const (
 	FragmentScopeName = "DiskFragment"
 )
 
-// FragmentFileWriter manages fragment data write
-type FragmentFileWriter struct {
+// Deprecated, should never use this again
+// LegacyFragmentFileWriter manages fragment data write
+type LegacyFragmentFileWriter struct {
 	mu         sync.RWMutex
 	logId      int64
 	segmentId  int64
@@ -72,9 +73,9 @@ type FragmentFileWriter struct {
 	closed      bool // Whether the file is closed
 }
 
-// NewFragmentFileWriter creates a new FragmentFile, which can write only
-func NewFragmentFileWriter(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64, firstEntryID int64) (*FragmentFileWriter, error) {
-	fw := &FragmentFileWriter{
+// NewLegacyFragmentFileWriter creates a new FragmentFile, which can write only
+func NewLegacyFragmentFileWriter(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64, firstEntryID int64) (*LegacyFragmentFileWriter, error) {
+	fw := &LegacyFragmentFileWriter{
 		logId:      logId,
 		segmentId:  segmentId,
 		fragmentId: fragmentId,
@@ -136,7 +137,7 @@ func NewFragmentFileWriter(ctx context.Context, filePath string, fileSize int64,
 }
 
 // writeHeader writes the file header.
-func (fw *FragmentFileWriter) writeHeader(ctx context.Context) error {
+func (fw *LegacyFragmentFileWriter) writeHeader(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "writeHeader")
 	defer sp.End()
 	// Write magic string
@@ -148,26 +149,26 @@ func (fw *FragmentFileWriter) writeHeader(ctx context.Context) error {
 	return nil
 }
 
-func (fw *FragmentFileWriter) GetLogId() int64 {
+func (fw *LegacyFragmentFileWriter) GetLogId() int64 {
 	return fw.logId
 }
 
-func (fw *FragmentFileWriter) GetSegmentId() int64 {
+func (fw *LegacyFragmentFileWriter) GetSegmentId() int64 {
 	return fw.segmentId
 }
 
 // GetFragmentId returns the fragment ID.
-func (fw *FragmentFileWriter) GetFragmentId() int64 {
+func (fw *LegacyFragmentFileWriter) GetFragmentId() int64 {
 	return fw.fragmentId
 }
 
 // GetFragmentKey returns the fragment key (file path).
-func (fw *FragmentFileWriter) GetFragmentKey() string {
+func (fw *LegacyFragmentFileWriter) GetFragmentKey() string {
 	return fw.filePath
 }
 
 // Flush ensures all data is written to disk.
-func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
+func (fw *LegacyFragmentFileWriter) Flush(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Flush")
 	defer sp.End()
 	fw.mu.Lock()
@@ -200,7 +201,7 @@ func (fw *FragmentFileWriter) Flush(ctx context.Context) error {
 }
 
 // writeFooter writes the file footer.
-func (fw *FragmentFileWriter) writeFooter(ctx context.Context) error {
+func (fw *LegacyFragmentFileWriter) writeFooter(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "writeFooter")
 	defer sp.End()
 	footerOffset := uint32(fw.fileSize - footerSize)
@@ -227,12 +228,12 @@ func (fw *FragmentFileWriter) writeFooter(ctx context.Context) error {
 }
 
 // Load loads the fragment file.
-func (fw *FragmentFileWriter) Load(ctx context.Context) error {
+func (fw *LegacyFragmentFileWriter) Load(ctx context.Context) error {
 	return werr.ErrNotSupport.WithCauseErrMsg("Fragment Writer support write only, cannot load data not")
 }
 
 // GetLastEntryId returns the last entry ID.
-func (fw *FragmentFileWriter) GetLastEntryId(ctx context.Context) (int64, error) {
+func (fw *LegacyFragmentFileWriter) GetLastEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
 	defer sp.End()
 	if fw.closed {
@@ -242,7 +243,7 @@ func (fw *FragmentFileWriter) GetLastEntryId(ctx context.Context) (int64, error)
 }
 
 // GetFirstEntryId returns the first entry ID.
-func (fw *FragmentFileWriter) GetFirstEntryId(ctx context.Context) (int64, error) {
+func (fw *LegacyFragmentFileWriter) GetFirstEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
 	defer sp.End()
 	if fw.closed {
@@ -252,7 +253,7 @@ func (fw *FragmentFileWriter) GetFirstEntryId(ctx context.Context) (int64, error
 }
 
 // GetLastModified returns the last modification time.
-func (fw *FragmentFileWriter) GetLastModified(ctx context.Context) int64 {
+func (fw *LegacyFragmentFileWriter) GetLastModified(ctx context.Context) int64 {
 	info, err := os.Stat(fw.filePath)
 	if err != nil {
 		return 0
@@ -262,7 +263,7 @@ func (fw *FragmentFileWriter) GetLastModified(ctx context.Context) int64 {
 
 // GetEntry returns the entry at the specified ID.
 // NOTE: The result entry maybe not flush to disk yet.
-func (fw *FragmentFileWriter) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+func (fw *LegacyFragmentFileWriter) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
 	defer sp.End()
 	if fw.closed {
@@ -361,16 +362,16 @@ func (fw *FragmentFileWriter) GetEntry(ctx context.Context, entryId int64) ([]by
 }
 
 // GetSize returns the current size of the fragment.
-func (fw *FragmentFileWriter) GetSize() int64 {
+func (fw *LegacyFragmentFileWriter) GetSize() int64 {
 	return fw.fileSize
 }
 
-func (fw *FragmentFileWriter) GetRawBufSize() int64 {
+func (fw *LegacyFragmentFileWriter) GetRawBufSize() int64 {
 	return fw.fileSize
 }
 
 // Release releases the fragment file.
-func (fw *FragmentFileWriter) Release(ctx context.Context) error {
+func (fw *LegacyFragmentFileWriter) Release(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
 	defer sp.End()
 	fw.mu.Lock()
@@ -406,14 +407,15 @@ func (fw *FragmentFileWriter) Release(ctx context.Context) error {
 	return nil
 }
 
-func (fw *FragmentFileWriter) Close() {
+func (fw *LegacyFragmentFileWriter) Close(ctx context.Context) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	fw.closed = true
+	return nil
 }
 
 // Write writes data to the fragment file.
-func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntryId int64) error {
+func (fw *LegacyFragmentFileWriter) Append(ctx context.Context, data []byte, writeEntryId int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Write")
 	defer sp.End()
 	fw.mu.Lock()
@@ -525,10 +527,56 @@ func (fw *FragmentFileWriter) Write(ctx context.Context, data []byte, writeEntry
 	return nil
 }
 
-var _ storage.Fragment = (*FragmentFileReader)(nil)
+func (fw *LegacyFragmentFileWriter) IsFull(ctx context.Context, requestSize int64) bool {
+	// Check if already reached file size limit
+	currentLeftSize := fw.indexOffset - fw.dataOffset
+	if currentLeftSize <= uint32(requestSize) { // Leave some margin to prevent overflow
+		logger.Ctx(ctx).Debug("fragment is full, no enough space left",
+			zap.String("fragmentFilePath", fw.filePath),
+			zap.Int64("requestSize", requestSize),
+			zap.Uint32("currentLeftSize", currentLeftSize))
+		return true
+	}
+	return false
+}
 
-// FragmentFileReader manages fragment data read
-type FragmentFileReader struct {
+func (fw *LegacyFragmentFileWriter) IsGrowing(ctx context.Context) (bool, error) {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	isGrowing := !fw.closed
+	return isGrowing, nil
+}
+
+func (fw *LegacyFragmentFileWriter) IsClosed(ctx context.Context) bool {
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	isClosed := fw.closed
+	return isClosed
+}
+
+func (fw *LegacyFragmentFileWriter) GetFetchedLastEntryId(ctx context.Context) (int64, error) {
+	if fw.closed {
+		return 0, errors.New("fragment file is closed")
+	}
+	return fw.lastEntryID, nil
+}
+
+func (fw *LegacyFragmentFileWriter) Finalize(ctx context.Context) error {
+	return fw.Flush(ctx)
+}
+
+func (fw *LegacyFragmentFileWriter) LoadSizeStateOnly(ctx context.Context) (int64, error) {
+	return fw.fileSize, nil
+}
+
+func (fw *LegacyFragmentFileWriter) AppendToMergeTarget(ctx context.Context, mergeTarget storage.Fragment, baseOffset int64) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("Fragment reader cannot support append to merge target")
+}
+
+var _ storage.AppendableFragment = (*LegacyFragmentFileReader)(nil)
+
+// LegacyFragmentFileReader manages fragment data read
+type LegacyFragmentFileReader struct {
 	mu         sync.RWMutex
 	logId      int64
 	segmentId  int64
@@ -555,9 +603,9 @@ type FragmentFileReader struct {
 	dataRefCnt int // The number of references to the fragment data used
 }
 
-// NewFragmentFileReader creates a new FragmentFile, which can read only
-func NewFragmentFileReader(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64) (*FragmentFileReader, error) {
-	ff := &FragmentFileReader{
+// NewLegacyFragmentFileReader creates a new FragmentFile, which can read only
+func NewLegacyFragmentFileReader(ctx context.Context, filePath string, fileSize int64, logId int64, segmentId int64, fragmentId int64) (*LegacyFragmentFileReader, error) {
+	ff := &LegacyFragmentFileReader{
 		filePath:   filePath,
 		fileSize:   fileSize,
 		logId:      logId,
@@ -580,31 +628,31 @@ func NewFragmentFileReader(ctx context.Context, filePath string, fileSize int64,
 	return ff, nil
 }
 
-func (fr *FragmentFileReader) GetLogId() int64 {
+func (fr *LegacyFragmentFileReader) GetLogId() int64 {
 	return fr.logId
 }
 
-func (fr *FragmentFileReader) GetSegmentId() int64 {
+func (fr *LegacyFragmentFileReader) GetSegmentId() int64 {
 	return fr.segmentId
 }
 
 // GetFragmentId returns the fragment ID.
-func (fr *FragmentFileReader) GetFragmentId() int64 {
+func (fr *LegacyFragmentFileReader) GetFragmentId() int64 {
 	return fr.fragmentId
 }
 
 // GetFragmentKey returns the fragment key (file path).
-func (fr *FragmentFileReader) GetFragmentKey() string {
+func (fr *LegacyFragmentFileReader) GetFragmentKey() string {
 	return fr.filePath
 }
 
 // Flush ensures all data is written to disk.
-func (fr *FragmentFileReader) Flush(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) Flush(ctx context.Context) error {
 	return werr.ErrNotSupport.WithCauseErrMsg("Fragment reader cannot support flush")
 }
 
 // Load loads the fragment file.
-func (fr *FragmentFileReader) Load(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) Load(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Load")
 	defer sp.End()
 	fr.mu.Lock()
@@ -677,7 +725,7 @@ func (fr *FragmentFileReader) Load(ctx context.Context) error {
 }
 
 // validateHeader validates the file header.
-func (fr *FragmentFileReader) validateHeader(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) validateHeader(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "validateHeader")
 	defer sp.End()
 	if int64(len(fr.mappedFile)) < fr.fileSize {
@@ -703,7 +751,7 @@ func (fr *FragmentFileReader) validateHeader(ctx context.Context) error {
 }
 
 // readFooter reads the file footer.
-func (fr *FragmentFileReader) readFooter(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) readFooter(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "readFooter")
 	defer sp.End()
 	if int64(len(fr.mappedFile)) < fr.fileSize {
@@ -743,7 +791,7 @@ func (fr *FragmentFileReader) readFooter(ctx context.Context) error {
 }
 
 // IsMMapReadable check and release resource immediately, avoid memory surges when catching up read
-func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
+func (fr *LegacyFragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "IsMMapReadable")
 	defer sp.End()
 	fr.mu.Lock()
@@ -847,7 +895,7 @@ func (fr *FragmentFileReader) IsMMapReadable(ctx context.Context) bool {
 	return isReady
 }
 
-func (fr *FragmentFileReader) refreshFooter(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) refreshFooter(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "refreshFooter")
 	defer sp.End()
 	// Read file header
@@ -864,7 +912,7 @@ func (fr *FragmentFileReader) refreshFooter(ctx context.Context) error {
 }
 
 // GetLastEntryId returns the last entry ID.
-func (fr *FragmentFileReader) GetLastEntryId(ctx context.Context) (int64, error) {
+func (fr *LegacyFragmentFileReader) GetLastEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
 	defer sp.End()
 	fr.mu.RLock()
@@ -881,7 +929,7 @@ func (fr *FragmentFileReader) GetLastEntryId(ctx context.Context) (int64, error)
 }
 
 // GetFetchedLastEntryId returns the last refresh fetch lastEntry ID directly
-func (fr *FragmentFileReader) GetFetchedLastEntryId(ctx context.Context) (int64, error) {
+func (fr *LegacyFragmentFileReader) GetFetchedLastEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFetchedLastEntryId")
 	defer sp.End()
 	fr.mu.RLock()
@@ -898,7 +946,7 @@ func (fr *FragmentFileReader) GetFetchedLastEntryId(ctx context.Context) (int64,
 }
 
 // GetFirstEntryId returns the first entry ID.
-func (fr *FragmentFileReader) GetFirstEntryId(ctx context.Context) (int64, error) {
+func (fr *LegacyFragmentFileReader) GetFirstEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
 	defer sp.End()
 	fr.mu.RLock()
@@ -915,7 +963,7 @@ func (fr *FragmentFileReader) GetFirstEntryId(ctx context.Context) (int64, error
 }
 
 // GetLastModified returns the last modification time.
-func (fr *FragmentFileReader) GetLastModified(ctx context.Context) int64 {
+func (fr *LegacyFragmentFileReader) GetLastModified(ctx context.Context) int64 {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastModified")
 	defer sp.End()
 	info, err := os.Stat(fr.filePath)
@@ -926,7 +974,7 @@ func (fr *FragmentFileReader) GetLastModified(ctx context.Context) int64 {
 }
 
 // GetEntry returns the entry at the specified ID.
-func (fr *FragmentFileReader) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+func (fr *LegacyFragmentFileReader) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
 	defer sp.End()
 	fr.mu.RLock()
@@ -953,7 +1001,7 @@ func (fr *FragmentFileReader) GetEntry(ctx context.Context, entryId int64) ([]by
 }
 
 // getEntryLocked is a helper method to retrieve an entry with lock already held
-func (fr *FragmentFileReader) getEntryLocked(ctx context.Context, entryId int64) ([]byte, error) {
+func (fr *LegacyFragmentFileReader) getEntryLocked(ctx context.Context, entryId int64) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "getEntryLocked")
 	defer sp.End()
 	// Calculate index position - relative position of entry ID in index area
@@ -1028,7 +1076,7 @@ func (fr *FragmentFileReader) getEntryLocked(ctx context.Context, entryId int64)
 }
 
 // IteratorPrint for Debug Test only
-func (fr *FragmentFileReader) IteratorPrint() error {
+func (fr *LegacyFragmentFileReader) IteratorPrint() error {
 	ctx := context.Background()
 	if fr.closed {
 		// Use context.Background() for logging since we don't have a context parameter
@@ -1122,16 +1170,16 @@ func (fr *FragmentFileReader) IteratorPrint() error {
 }
 
 // GetSize returns the current size of the fragment.
-func (fr *FragmentFileReader) GetSize() int64 {
+func (fr *LegacyFragmentFileReader) GetSize() int64 {
 	return fr.fileSize
 }
 
-func (fr *FragmentFileReader) GetRawBufSize() int64 {
+func (fr *LegacyFragmentFileReader) GetRawBufSize() int64 {
 	return fr.fileSize
 }
 
 // Release releases the fragment file.
-func (fr *FragmentFileReader) Release(ctx context.Context) error {
+func (fr *LegacyFragmentFileReader) Release(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
 	defer sp.End()
 	fr.mu.Lock()
@@ -1183,8 +1231,77 @@ func (fr *FragmentFileReader) Release(ctx context.Context) error {
 	return nil
 }
 
-func (fr *FragmentFileReader) Close() {
+func (fr *LegacyFragmentFileReader) Close(ctx context.Context) error {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 	fr.closed = true
+	return nil
+}
+
+func (fr *LegacyFragmentFileReader) Append(ctx context.Context, data []byte, entryId int64) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("Fragment reader cannot support append")
+}
+
+func (fr *LegacyFragmentFileReader) IsFull(ctx context.Context, requestSize int64) bool {
+	// should not call this method
+	return false
+}
+
+func (fr *LegacyFragmentFileReader) IsGrowing(ctx context.Context) (bool, error) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	isGrowing := fr.isGrowing
+	return isGrowing, nil
+}
+
+func (fr *LegacyFragmentFileReader) IsClosed(ctx context.Context) bool {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	isClosed := fr.closed
+	return isClosed
+}
+
+func (fr *LegacyFragmentFileReader) Finalize(ctx context.Context) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("Fragment reader cannot support finalize")
+}
+
+func (fr *LegacyFragmentFileReader) LoadSizeStateOnly(ctx context.Context) (int64, error) {
+	return fr.fileSize, nil
+}
+
+func (fr *LegacyFragmentFileReader) AppendToMergeTarget(ctx context.Context, mergeTarget storage.Fragment, baseOffset int64) error {
+	return werr.ErrNotSupport.WithCauseErrMsg("Fragment reader cannot support append to merge target")
+}
+
+func GetFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment storage.AppendableFragment) (int64, error) {
+	firstEntryId, err := fragment.GetFirstEntryId(ctx)
+	if werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		firstEntryId, err = fragment.GetFirstEntryId(ctx)
+		fragment.Release(ctx)
+		if err != nil {
+			return -1, err
+		}
+	}
+	return firstEntryId, nil
+}
+
+func GetFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment storage.AppendableFragment) (int64, error) {
+	lastEntryId, err := fragment.GetLastEntryId(ctx)
+	if err != nil && werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		lastEntryId, err = fragment.GetFetchedLastEntryId(ctx)
+		fragment.Release(ctx)
+		if err != nil {
+			return -1, err
+		}
+		return lastEntryId, nil
+	}
+	return lastEntryId, nil
 }

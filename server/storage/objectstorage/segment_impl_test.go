@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage/legacy"
 	"sync"
 	"testing"
 	"time"
@@ -863,12 +864,12 @@ func TestMerge(t *testing.T) {
 	}
 
 	// mock fragments
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+	mockFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 100, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 101, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+	mockFragment2 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 102, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 103, Data: []byte("entry4"), NotifyChan: nil},
@@ -881,7 +882,7 @@ func TestMerge(t *testing.T) {
 	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestMerge/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test fragments
+	roSegmentImpl.fragments = []storage.Fragment{mockFragment1, mockFragment2} // set test fragments
 	mergedFrags, entryOffset, fragmentIdOffset, err := roSegmentImpl.Merge(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(mergedFrags))
@@ -915,12 +916,12 @@ func TestLoad(t *testing.T) {
 	}
 
 	// mock fragments
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
+	mockFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestMerge/1/0/1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 100, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 101, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
+	mockFragment2 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestMerge/1/0/2.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 102, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 103, Data: []byte("entry4"), NotifyChan: nil},
@@ -932,10 +933,10 @@ func TestLoad(t *testing.T) {
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
 	// Load data
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestLoad/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
+	roSegmentImpl.fragments = []storage.Fragment{mockFragment1, mockFragment2} // set test mock fragments
 	totalSize, lastFragment, err := roSegmentImpl.Load(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, mockFragment1.size+mockFragment2.size, totalSize)
+	assert.Equal(t, mockFragment1.GetSize()+mockFragment2.GetSize(), totalSize)
 	assert.NotNil(t, lastFragment)
 	firstEntryId, err := lastFragment.GetFirstEntryId(context.TODO())
 	assert.NoError(t, err)
@@ -965,12 +966,12 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 	}
 
 	// mock fragments
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInWriterLogFile/1/0/1.frag",
+	mockFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInWriterLogFile/1/0/1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 0, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 1, Data: []byte("entry2"), NotifyChan: nil},
 		}, 0, true, false, true)
-	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestNewReaderInWriterLogFile/1/0/2.frag",
+	mockFragment2 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestNewReaderInWriterLogFile/1/0/2.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 2, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 3, Data: []byte("entry4"), NotifyChan: nil},
@@ -987,7 +988,7 @@ func TestNewReaderInSegmentImpl(t *testing.T) {
 
 	// Create a reader for [0, 100)
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestNewReaderInWriterLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-	roSegmentImpl.fragments = []*FragmentObject{mockFragment1, mockFragment2} // set test mock fragments
+	roSegmentImpl.fragments = []storage.Fragment{mockFragment1, mockFragment2} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -1031,7 +1032,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 		{EntryId: 2, Data: []byte("entry3"), NotifyChan: nil},
 		{EntryId: 3, Data: []byte("entry4"), NotifyChan: nil},
 	}
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInROSegmentImpl/1/0/1.frag",
+	mockFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestNewReaderInROSegmentImpl/1/0/1.frag",
 		data, 0, true, false, true)
 
 	// mock object storage interfaces
@@ -1045,7 +1046,7 @@ func TestNewReaderInROSegmentImpl(t *testing.T) {
 
 	// Create a reader for [0, 100)
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestNewReaderInROLogFile/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
-	roSegmentImpl.fragments = []*FragmentObject{mockFragment1} // set test mock fragments
+	roSegmentImpl.fragments = []storage.Fragment{mockFragment1} // set test mock fragments
 	reader, err := roSegmentImpl.NewReader(context.Background(), storage.ReaderOpt{
 		StartSequenceNum: 0,
 		EndSequenceNum:   100,
@@ -1083,37 +1084,37 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	}
 
 	// test read data with holes (fragment 1,x,3) in minio
-	mockFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/0.frag",
+	mockFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/0.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 100, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 101, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	mockFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/1.frag",
+	mockFragment2 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 102, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 103, Data: []byte("entry4"), NotifyChan: nil},
 		}, 102, true, false, true)
 	//mockFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/2.frag",
 	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
-	mockFragment4 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/3.frag",
+	mockFragment4 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/3.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 106, Data: []byte("entry6"), NotifyChan: nil},
 			{EntryId: 107, Data: []byte("entry7"), NotifyChan: nil},
 		}, 106, true, false, true)
 
-	mockMergedFragment0 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/m_0.frag",
+	mockMergedFragment0 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "TestROLogFileReadDataWithHoles/1/0/m_0.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 100, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 101, Data: []byte("entry2"), NotifyChan: nil},
 		}, 100, true, false, true)
-	mockMergedFragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/m_1.frag",
+	mockMergedFragment1 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "TestROLogFileReadDataWithHoles/1/0/m_1.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 102, Data: []byte("entry3"), NotifyChan: nil},
 			{EntryId: 103, Data: []byte("entry4"), NotifyChan: nil},
 		}, 102, true, false, true)
 	//mockMergedFragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 3, "TestROLogFileReadDataWithHoles/1/0/m_2.frag",
 	//	[][]byte{[]byte("entry4"), []byte("entry5")}, 104, true, false, true)
-	mockMergedFragment3 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/m_3.frag",
+	mockMergedFragment3 := legacy.NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 4, "TestROLogFileReadDataWithHoles/1/0/m_3.frag",
 		[]*cache.BufferEntry{
 			{EntryId: 106, Data: []byte("entry6"), NotifyChan: nil},
 			{EntryId: 107, Data: []byte("entry7"), NotifyChan: nil},
@@ -1121,28 +1122,28 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 
 	listChan := make(chan minio.ObjectInfo, 6) // list return disorder and hole list
 	listChan <- minio.ObjectInfo{
-		Key:  mockFragment2.fragmentKey,
-		Size: mockFragment2.size,
+		Key:  mockFragment2.GetFragmentKey(),
+		Size: mockFragment2.GetSize(),
 	}
 	listChan <- minio.ObjectInfo{
-		Key:  mockMergedFragment0.fragmentKey,
-		Size: mockMergedFragment0.size,
+		Key:  mockMergedFragment0.GetFragmentKey(),
+		Size: mockMergedFragment0.GetSize(),
 	}
 	listChan <- minio.ObjectInfo{
-		Key:  mockFragment4.fragmentKey,
-		Size: mockFragment4.size,
+		Key:  mockFragment4.GetFragmentKey(),
+		Size: mockFragment4.GetSize(),
 	}
 	listChan <- minio.ObjectInfo{
-		Key:  mockMergedFragment3.fragmentKey,
-		Size: mockMergedFragment3.size,
+		Key:  mockMergedFragment3.GetFragmentKey(),
+		Size: mockMergedFragment3.GetSize(),
 	}
 	listChan <- minio.ObjectInfo{
-		Key:  mockMergedFragment1.fragmentKey,
-		Size: mockMergedFragment1.size,
+		Key:  mockMergedFragment1.GetFragmentKey(),
+		Size: mockMergedFragment1.GetSize(),
 	}
 	listChan <- minio.ObjectInfo{
-		Key:  mockFragment1.fragmentKey,
-		Size: mockFragment1.size,
+		Key:  mockFragment1.GetFragmentKey(),
+		Size: mockFragment1.GetSize(),
 	}
 	close(listChan)
 	client.EXPECT().ListObjects(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(listChan)
@@ -1151,93 +1152,11 @@ func TestROLogFileReadDataWithHoles(t *testing.T) {
 	roSegmentImpl := NewROSegmentImpl(context.TODO(), 1, 0, "TestROLogFileReadDataWithHoles/1/0", "test-bucket", client, cfg).(*ROSegmentImpl)
 	assert.NotNil(t, roSegmentImpl.fragments)
 	assert.Equal(t, 2, len(roSegmentImpl.fragments))
-	assert.Equal(t, mockFragment1.fragmentKey, roSegmentImpl.fragments[0].fragmentKey)
-	assert.Equal(t, mockFragment2.fragmentKey, roSegmentImpl.fragments[1].fragmentKey)
+	assert.Equal(t, mockFragment1.GetFragmentKey(), roSegmentImpl.fragments[0].GetFragmentKey())
+	assert.Equal(t, mockFragment2.GetFragmentKey(), roSegmentImpl.fragments[1].GetFragmentKey())
 	assert.Equal(t, 2, len(roSegmentImpl.mergedFragments))
-	assert.Equal(t, mockMergedFragment0.fragmentKey, roSegmentImpl.mergedFragments[0].fragmentKey)
-	assert.Equal(t, mockMergedFragment1.fragmentKey, roSegmentImpl.mergedFragments[1].fragmentKey)
-}
-
-func TestFindFragment(t *testing.T) {
-	// Create mock Fragment object list
-	mockFragments := []*FragmentObject{
-		{fragmentId: 1, firstEntryId: 0, lastEntryId: 99, infoFetched: true},    // [0,99]
-		{fragmentId: 2, firstEntryId: 100, lastEntryId: 199, infoFetched: true}, // [100,199]
-		{fragmentId: 3, firstEntryId: 200, lastEntryId: 299, infoFetched: true}, // [200,299]
-	}
-
-	// Create LogFile instance and inject mock data
-	roSegmentImpl := &ROSegmentImpl{
-		fragments: mockFragments,
-	}
-
-	t.Run("Find Fragment in middle position", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(150)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(2), frag.fragmentId)
-	})
-
-	t.Run("Find first Fragment", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(50)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), frag.fragmentId)
-	})
-
-	t.Run("Find last Fragment", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(250)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(3), frag.fragmentId)
-	})
-
-	t.Run("entryId after the last Fragment", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(300)
-		assert.NoError(t, err)
-		assert.Nil(t, frag)
-	})
-
-	t.Run("First Fragment boundary values", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(0)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), frag.fragmentId)
-
-		frag, err = roSegmentImpl.findFragment(99)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), frag.fragmentId)
-	})
-	t.Run("Second Fragment boundary values", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(100)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(2), frag.fragmentId)
-
-		frag, err = roSegmentImpl.findFragment(199)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(2), frag.fragmentId)
-	})
-
-	t.Run("Last Fragment boundary values", func(t *testing.T) {
-		frag, err := roSegmentImpl.findFragment(200)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(3), frag.fragmentId)
-
-		frag, err = roSegmentImpl.findFragment(299)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(3), frag.fragmentId)
-	})
-
-	t.Run("Return leftmost match when multiple candidate Fragments", func(t *testing.T) {
-		// Mock overlapping Fragments
-		overlappingFrags := []*FragmentObject{
-			{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
-			{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
-		}
-		newLogFile := &ROSegmentImpl{
-			fragments: overlappingFrags,
-		}
-
-		frag, err := newLogFile.findFragment(150)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), frag.fragmentId)
-	})
+	assert.Equal(t, mockMergedFragment0.GetFragmentKey(), roSegmentImpl.mergedFragments[0].GetFragmentKey())
+	assert.Equal(t, mockMergedFragment1.GetFragmentKey(), roSegmentImpl.mergedFragments[1].GetFragmentKey())
 }
 
 // TestDeleteFragments tests the DeleteFragments function.

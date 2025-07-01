@@ -41,7 +41,7 @@ type EntryReader struct {
 	segment *ROSegmentImpl
 
 	pendingReadEntryId int64
-	currentFragment    *FragmentObject
+	currentFragment    storage.Fragment
 }
 
 // NewEntryReader creates a new entry reader instance.

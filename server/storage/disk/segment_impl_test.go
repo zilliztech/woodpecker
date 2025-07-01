@@ -1676,25 +1676,6 @@ func TestWrite10kWithSmallFragments(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestFragmentDataValueCheck Debug Test Only
-func TestFragmentDataValueCheck(t *testing.T) {
-	t.Skipf("just for debug, skip")
-	cfg, _ := config.NewConfiguration()
-	cfg.Log.Level = "debug"
-	logger.InitLogger(cfg)
-
-	for i := 0; i <= 14; i++ {
-		filePath := fmt.Sprintf("/tmp/TestWriteReadPerf/woodpecker/14/0/fragment_%d", i)
-		ff, err := NewFragmentFileReader(context.TODO(), filePath, 128*1024*1024, 14, 0, int64(i))
-		assert.NoError(t, err)
-		err = ff.IteratorPrint()
-		assert.NoError(t, err)
-		if err != nil {
-			logger.Ctx(context.Background()).Error("iterator failed", zap.Int("fragmentId", i), zap.Error(err))
-		}
-	}
-}
-
 // TestDeleteFragments tests the DeleteFragments function focusing on its ability
 // to handle directory and logging operations, rather than actual file operations.
 func TestDeleteFragments(t *testing.T) {

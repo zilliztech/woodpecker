@@ -120,9 +120,9 @@ var (
 	DataRecordType   byte   = 0x2
 	IndexRecordType  byte   = 0x3
 	FooterRecordType byte   = 0x4
-	HeaderMagic             = [4]byte{'W', 'P', 'H', 'D'}
-	FooterMagic             = [4]byte{'W', 'P', 'F', 'T'}
-	FormatVersion    uint16 = 1
+	HeaderMagic             = [4]byte{'W', 'P', 'H', 'D'} // header record magic code
+	FooterMagic             = [4]byte{'W', 'P', 'F', 'T'} // footer record magic code
+	FormatVersion    uint16 = 2                           // Current Format Version
 )
 
 type Record interface {

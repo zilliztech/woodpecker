@@ -10,7 +10,7 @@ import (
 
 func TestBatchCodecHandler_WriteMode(t *testing.T) {
 	// Create handler in write mode
-	handler := NewBatchCodecHandlerForWriting(1000, 1, 0)
+	handler := NewBatchCodecHandlerForWriting(1000, 0)
 
 	// Verify initial state
 	assert.True(t, handler.IsWriteMode())
@@ -47,14 +47,14 @@ func TestBatchCodecHandler_WriteMode(t *testing.T) {
 	// Verify header
 	header := handler.GetHeader()
 	assert.NotNil(t, header)
-	assert.Equal(t, uint16(1), header.Version)
+	assert.Equal(t, uint16(2), header.Version)
 	assert.Equal(t, uint16(0), header.Flags)
 	assert.Equal(t, int64(1000), header.FirstEntryID)
 }
 
 func TestBatchCodecHandler_ReadMode(t *testing.T) {
 	// First create some data using write mode
-	writeHandler := NewBatchCodecHandlerForWriting(2000, 1, 0)
+	writeHandler := NewBatchCodecHandlerForWriting(2000, 0)
 	writeHandler.AddData([]byte("read data 1"))
 	writeHandler.AddData([]byte("read data 2"))
 	writeHandler.AddData([]byte("read data 3"))
@@ -77,7 +77,7 @@ func TestBatchCodecHandler_ReadMode(t *testing.T) {
 	// Verify header
 	header := readHandler.GetHeader()
 	assert.NotNil(t, header)
-	assert.Equal(t, uint16(1), header.Version)
+	assert.Equal(t, uint16(2), header.Version)
 	assert.Equal(t, uint16(0), header.Flags)
 	assert.Equal(t, int64(2000), header.FirstEntryID)
 
@@ -114,7 +114,7 @@ func TestBatchCodecHandler_ReadMode(t *testing.T) {
 
 func TestBatchCodecHandler_RoundTrip(t *testing.T) {
 	// Create original data
-	originalHandler := NewBatchCodecHandlerForWriting(3000, 1, 0x1234)
+	originalHandler := NewBatchCodecHandlerForWriting(3000, 0x1234)
 	originalHandler.AddData([]byte("round trip 1"))
 	originalHandler.AddData([]byte("round trip 2"))
 
@@ -151,7 +151,7 @@ func TestBatchCodecHandler_RoundTrip(t *testing.T) {
 
 func TestBatchCodecHandler_EmptyData(t *testing.T) {
 	// Test empty write mode
-	writeHandler := NewBatchCodecHandlerForWriting(4000, 1, 0)
+	writeHandler := NewBatchCodecHandlerForWriting(4000, 0)
 	assert.False(t, writeHandler.HasData())
 	assert.Equal(t, 0, writeHandler.GetDataRecordCount())
 	assert.Equal(t, int64(-1), writeHandler.GetLastEntryID())
@@ -174,7 +174,7 @@ func TestBatchCodecHandler_EmptyData(t *testing.T) {
 
 func TestBatchCodecHandler_ReadModeCannotWrite(t *testing.T) {
 	// Create some data
-	writeHandler := NewBatchCodecHandlerForWriting(5000, 1, 0)
+	writeHandler := NewBatchCodecHandlerForWriting(5000, 0)
 	writeHandler.AddData([]byte("test"))
 	data, err := writeHandler.ToBytes()
 	require.NoError(t, err)
@@ -190,12 +190,12 @@ func TestBatchCodecHandler_ReadModeCannotWrite(t *testing.T) {
 
 func TestBatchCodecHandler_FileInfo(t *testing.T) {
 	// Test write mode file info
-	writeHandler := NewBatchCodecHandlerForWriting(6000, 1, 0x5678)
+	writeHandler := NewBatchCodecHandlerForWriting(6000, 0x5678)
 	writeHandler.AddData([]byte("info test 1"))
 	writeHandler.AddData([]byte("info test 2"))
 
 	writeInfo := writeHandler.GetFileInfo()
-	assert.Equal(t, uint16(1), writeInfo.Version)
+	assert.Equal(t, uint16(2), writeInfo.Version)
 	assert.Equal(t, uint16(0x5678), writeInfo.Flags)
 	assert.Equal(t, int64(6000), writeInfo.FirstEntryID)
 	assert.Equal(t, uint32(2), writeInfo.RecordCount)
@@ -210,7 +210,7 @@ func TestBatchCodecHandler_FileInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	readInfo := readHandler.GetFileInfo()
-	assert.Equal(t, uint16(1), readInfo.Version)
+	assert.Equal(t, uint16(2), readInfo.Version)
 	assert.Equal(t, uint16(0x5678), readInfo.Flags)
 	assert.Equal(t, int64(6000), readInfo.FirstEntryID)
 	assert.Equal(t, uint32(2), readInfo.RecordCount)
@@ -222,7 +222,7 @@ func TestBatchCodecHandler_FileInfo(t *testing.T) {
 
 func TestBatchCodecHandler_LargeDataSet(t *testing.T) {
 	// Create large dataset
-	handler := NewBatchCodecHandlerForWriting(10000, 1, 0)
+	handler := NewBatchCodecHandlerForWriting(10000, 0)
 
 	const numRecords = 100
 	expectedData := make([]string, numRecords)
@@ -276,7 +276,7 @@ func TestBatchCodecHandler_ErrorHandling(t *testing.T) {
 	assert.Error(t, err)
 
 	// Create valid handler for other error tests
-	handler := NewBatchCodecHandlerForWriting(7000, 1, 0)
+	handler := NewBatchCodecHandlerForWriting(7000, 0)
 	handler.AddData([]byte("test"))
 	data, err := handler.ToBytes()
 	require.NoError(t, err)

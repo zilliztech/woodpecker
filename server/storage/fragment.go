@@ -31,6 +31,8 @@ type Fragment interface {
 	GetFragmentKey() string
 	Flush(ctx context.Context) error
 	Load(ctx context.Context) error
+	LoadSizeStateOnly(ctx context.Context) (int64, error)
+	AppendToMergeTarget(ctx context.Context, mergeTarget Fragment, baseOffset int64) error
 	GetLastEntryId(ctx context.Context) (int64, error)
 	GetFirstEntryId(ctx context.Context) (int64, error)
 	GetLastModified(ctx context.Context) int64
@@ -40,16 +42,14 @@ type Fragment interface {
 	Release(ctx context.Context) error
 }
 
-// LogEntry represents a single log entry with payload and its metadata
-type LogEntry struct {
-	Payload     []byte
-	SequenceNum uint64
-	CRC         uint32
-}
-
-// Footer holds the index information (entries and CRC)
-type Footer struct {
-	EntryOffset []uint32
-	CRC         uint32
-	IndexSize   uint32
+//go:generate mockery --dir=./server/storage --name=AppendableFragment --structname=AppendableFragment --output=mocks/mocks_server/mocks_storage --filename=mock_appendable_fragment.go --with-expecter=true  --outpkg=mocks_storage
+type AppendableFragment interface {
+	Fragment
+	Append(ctx context.Context, data []byte, entryId int64) error
+	IsFull(ctx context.Context, requestSize int64) bool
+	IsGrowing(ctx context.Context) (bool, error)
+	Finalize(ctx context.Context) error
+	GetFetchedLastEntryId(ctx context.Context) (int64, error)
+	Close(ctx context.Context) error
+	IsClosed(ctx context.Context) bool
 }

@@ -56,7 +56,7 @@ func TestConstants(t *testing.T) {
 
 	assert.Equal(t, [4]byte{'W', 'P', 'H', 'D'}, HeaderMagic)
 	assert.Equal(t, [4]byte{'W', 'P', 'F', 'T'}, FooterMagic)
-	assert.Equal(t, uint16(1), FormatVersion)
+	assert.Equal(t, uint16(2), FormatVersion)
 }
 
 // TestHeaderRecordCodec tests HeaderRecord encoding/decoding

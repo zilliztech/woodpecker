@@ -56,17 +56,17 @@ func NewBatchCodecHandlerFromData(data []byte) (*BatchCodecHandler, error) {
 }
 
 // NewBatchCodecHandlerForWriting creates a new batch handler for building data (write mode)
-func NewBatchCodecHandlerForWriting(firstEntryID int64, version uint16, flags uint16) *BatchCodecHandler {
+func NewBatchCodecHandlerForWriting(firstEntryID int64, flags uint16) *BatchCodecHandler {
 	return &BatchCodecHandler{
 		header: &HeaderRecord{
-			Version:      version,
+			Version:      FormatVersion,
 			Flags:        flags,
 			FirstEntryID: firstEntryID,
 		},
 		dataRecords:  make([]*DataRecord, 0),
 		firstEntryID: firstEntryID,
 		nextEntryID:  firstEntryID,
-		version:      version,
+		version:      FormatVersion,
 		flags:        flags,
 	}
 }

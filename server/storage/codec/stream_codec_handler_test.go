@@ -62,7 +62,7 @@ func newTestBuffer() *testBuffer {
 
 func TestStreamEncodeWriter_Basic(t *testing.T) {
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 1000, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 1000, 0)
 	require.NoError(t, err)
 
 	// Test initial state
@@ -105,7 +105,7 @@ func TestStreamEncodeWriter_Basic(t *testing.T) {
 
 func TestStreamEncodeWriter_ErrorHandling(t *testing.T) {
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 2000, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 2000, 0)
 	require.NoError(t, err)
 
 	// Test writing after finalization
@@ -118,7 +118,7 @@ func TestStreamEncodeWriter_ErrorHandling(t *testing.T) {
 
 func TestStreamEncodeWriter_EmptyFile(t *testing.T) {
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 3000, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 3000, 0)
 	require.NoError(t, err)
 
 	// Finalize without writing any data
@@ -135,7 +135,7 @@ func TestStreamEncodeWriter_EmptyFile(t *testing.T) {
 func TestStreamDecodeReader_IncompleteFile(t *testing.T) {
 	// Create an incomplete file (header + data, no index/footer)
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 200, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 200, 0)
 	require.NoError(t, err)
 
 	// Write some data but don't finalize
@@ -310,7 +310,7 @@ func TestConcurrentStreamEncodeWriterReaders(t *testing.T) {
 	sharedBuffer := NewConcurrentWriteSeeker()
 
 	// Create a StreamEncodeWriter
-	writer, err := NewStreamEncodeWriter(sharedBuffer, 5000, 1, 0)
+	writer, err := NewStreamEncodeWriter(sharedBuffer, 5000, 0)
 	assert.NoError(t, err)
 	assert.NotNil(t, writer)
 
@@ -403,7 +403,7 @@ func TestConcurrentStreamEncodeWriterReaders(t *testing.T) {
 func TestStreamDecodeReader_SequentialReading(t *testing.T) {
 	// Create a complete file
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 4000, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 4000, 0)
 	require.NoError(t, err)
 
 	// Write test data
@@ -459,7 +459,7 @@ func TestStreamDecodeReader_SequentialReading(t *testing.T) {
 func TestStreamDecodeReader_IterateRecords(t *testing.T) {
 	// Create a complete file
 	buf := newTestBuffer()
-	writer, err := NewStreamEncodeWriter(buf, 6000, 1, 0)
+	writer, err := NewStreamEncodeWriter(buf, 6000, 0)
 	require.NoError(t, err)
 
 	// Write test data
@@ -514,7 +514,7 @@ func TestStreamEncodeWriter_RealFile(t *testing.T) {
 	}()
 
 	// Test writing to real file
-	writer, err := NewStreamEncodeWriter(tempFile, 7000, 1, 0)
+	writer, err := NewStreamEncodeWriter(tempFile, 7000, 0)
 	require.NoError(t, err)
 
 	// Write test data
@@ -589,7 +589,7 @@ func TestStreamDecodeReader_RealFileIncomplete(t *testing.T) {
 	}()
 
 	// Write incomplete file (no finalization)
-	writer, err := NewStreamEncodeWriter(tempFile, 8000, 1, 0)
+	writer, err := NewStreamEncodeWriter(tempFile, 8000, 0)
 	require.NoError(t, err)
 
 	writer.WriteData([]byte("Incomplete data 1"))
@@ -631,7 +631,7 @@ func TestConcurrentFileWriteRead(t *testing.T) {
 	}()
 
 	// Writer goroutine
-	writer, err := NewStreamEncodeWriter(tempFile, 9000, 1, 0)
+	writer, err := NewStreamEncodeWriter(tempFile, 9000, 0)
 	require.NoError(t, err)
 
 	const numRecords = 100
@@ -757,7 +757,7 @@ func TestLargeFileHandling(t *testing.T) {
 	}()
 
 	// Write large file
-	writer, err := NewStreamEncodeWriter(tempFile, 10000, 1, 0)
+	writer, err := NewStreamEncodeWriter(tempFile, 10000, 0)
 	require.NoError(t, err)
 
 	const numRecords = 1000
@@ -875,7 +875,7 @@ func TestFileAppendSimulation(t *testing.T) {
 	}()
 
 	// Initial write
-	writer, err := NewStreamEncodeWriter(tempFile, 11000, 1, 0)
+	writer, err := NewStreamEncodeWriter(tempFile, 11000, 0)
 	require.NoError(t, err)
 
 	// Write initial data
@@ -898,7 +898,7 @@ func TestFileAppendSimulation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Continue writing with new writer instance
-	writer2, err := NewStreamEncodeWriter(appendFile, 11002, 1, 0) // Continue from where we left off
+	writer2, err := NewStreamEncodeWriter(appendFile, 11002, 0) // Continue from where we left off
 	require.NoError(t, err)
 
 	writer2.WriteData([]byte("Appended data 1"))

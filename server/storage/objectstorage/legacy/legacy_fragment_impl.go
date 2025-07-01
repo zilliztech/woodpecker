@@ -15,14 +15,14 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package objectstorage
+package legacy
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/cockroachdb/errors"
 	"io"
 	"sync"
 	"time"
@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 const (
@@ -43,10 +44,10 @@ const (
 	FragmentScopeName = "Fragment"
 )
 
-var _ storage.Fragment = (*FragmentObject)(nil)
+var _ storage.Fragment = (*LegacyFragmentObject)(nil)
 
-// FragmentObject uses MinIO for object storage.
-type FragmentObject struct {
+// LegacyFragmentObject uses MinIO for object storage.
+type LegacyFragmentObject struct {
 	mu     sync.RWMutex
 	client minioHandler.MinioHandler
 
@@ -75,15 +76,15 @@ type FragmentObject struct {
 	dataRefCnt int // The number of references to the fragment data used
 }
 
-// NewFragmentObject initializes a new FragmentObject.
-func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId int64, fragmentKey string, entries []*cache.BufferEntry, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *FragmentObject {
+// NewLegacyFragmentObject initializes a new LegacyFragmentObject.
+func NewLegacyFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bucket string, logId int64, segmentId int64, fragmentId int64, fragmentKey string, entries []*cache.BufferEntry, firstEntryId int64, dataLoaded, dataUploaded, infoFetched bool) *LegacyFragmentObject {
 	index, data := genFragmentDataFromRaw(ctx, entries)
 	lastEntryId := firstEntryId + int64(len(entries)) - 1
 	size := int64(len(data) + len(index))
 	rawBufSize := int64(cap(data) + cap(index))
 	//metrics.WpFragmentBufferBytes.WithLabelValues(bucket).Add(float64(len(data) + len(index)))
 	//metrics.WpFragmentLoadedGauge.WithLabelValues(bucket).Inc()
-	f := &FragmentObject{
+	f := &LegacyFragmentObject{
 		client:       client,
 		bucket:       bucket,
 		logId:        logId,
@@ -108,34 +109,34 @@ func NewFragmentObject(ctx context.Context, client minioHandler.MinioHandler, bu
 	return f
 }
 
-func (f *FragmentObject) GetLogId() int64 {
+func (f *LegacyFragmentObject) GetLogId() int64 {
 	return f.logId
 }
 
-func (f *FragmentObject) GetSegmentId() int64 {
+func (f *LegacyFragmentObject) GetSegmentId() int64 {
 	return f.segmentId
 }
 
-func (f *FragmentObject) GetFragmentId() int64 {
+func (f *LegacyFragmentObject) GetFragmentId() int64 {
 	// This field is immutable after initialization, so no lock is needed
 	return int64(f.fragmentId)
 }
 
-func (f *FragmentObject) GetFragmentKey() string {
+func (f *LegacyFragmentObject) GetFragmentKey() string {
 	// This field is immutable after initialization, so no lock is needed
 	return f.fragmentKey
 }
 
-func (f *FragmentObject) GetSize() int64 {
+func (f *LegacyFragmentObject) GetSize() int64 {
 	return f.size
 }
 
-func (f *FragmentObject) GetRawBufSize() int64 {
+func (f *LegacyFragmentObject) GetRawBufSize() int64 {
 	return f.rawBufSize
 }
 
 // Flush uploads the data to MinIO.
-func (f *FragmentObject) Flush(ctx context.Context) error {
+func (f *LegacyFragmentObject) Flush(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Flush")
 	defer sp.End()
 	f.mu.Lock()
@@ -181,7 +182,7 @@ func (f *FragmentObject) Flush(ctx context.Context) error {
 }
 
 // Load reads the data from MinIO.
-func (f *FragmentObject) Load(ctx context.Context) error {
+func (f *LegacyFragmentObject) Load(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Load")
 	defer sp.End()
 	f.mu.Lock()
@@ -240,7 +241,7 @@ func (f *FragmentObject) Load(ctx context.Context) error {
 	return nil
 }
 
-func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
+func (f *LegacyFragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "LoadSizeStateOnly")
 	defer sp.End()
 	f.mu.Lock()
@@ -256,7 +257,7 @@ func (f *FragmentObject) LoadSizeStateOnly(ctx context.Context) (int64, error) {
 	return objInfo.Size, nil
 }
 
-func (f *FragmentObject) GetLastEntryId(ctx context.Context) (int64, error) {
+func (f *LegacyFragmentObject) GetLastEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetLastEntryId")
 	defer sp.End()
 	// First check with read lock
@@ -268,7 +269,7 @@ func (f *FragmentObject) GetLastEntryId(ctx context.Context) (int64, error) {
 	return f.lastEntryId, nil
 }
 
-func (f *FragmentObject) GetFirstEntryId(ctx context.Context) (int64, error) {
+func (f *LegacyFragmentObject) GetFirstEntryId(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetFirstEntryId")
 	defer sp.End()
 	// First check with read lock
@@ -280,13 +281,13 @@ func (f *FragmentObject) GetFirstEntryId(ctx context.Context) (int64, error) {
 	return f.firstEntryId, nil
 }
 
-func (f *FragmentObject) GetLastModified(ctx context.Context) int64 {
+func (f *LegacyFragmentObject) GetLastModified(ctx context.Context) int64 {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.lastModified
 }
 
-func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
+func (f *LegacyFragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "GetEntry")
 	defer sp.End()
 	// First check if we need to load data
@@ -319,7 +320,7 @@ func (f *FragmentObject) GetEntry(ctx context.Context, entryId int64) ([]byte, e
 }
 
 // Release releases the memory used by the fragment.
-func (f *FragmentObject) Release(ctx context.Context) error {
+func (f *LegacyFragmentObject) Release(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "Release")
 	defer sp.End()
 	f.mu.Lock()
@@ -350,7 +351,7 @@ func (f *FragmentObject) Release(ctx context.Context) error {
 }
 
 // AppendToMergeTarget append the fragment data to a mergeTarget fragment
-func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *FragmentObject, baseOffset int64) error {
+func (f *LegacyFragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget storage.Fragment, baseOffset int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "AppendToMergeTarget")
 	defer sp.End()
 	f.mu.RLock()
@@ -369,10 +370,11 @@ func (f *FragmentObject) AppendToMergeTarget(ctx context.Context, mergeTarget *F
 		binary.BigEndian.PutUint32(newIndex[:4], newEntryOffset)
 		binary.BigEndian.PutUint32(newIndex[4:], entryLength)
 
-		mergeTarget.indexes = append(mergeTarget.indexes, newIndex...)
+		// TODO merge to New Format FragmentObject? or legacy fragment does not need to merge all the way, it will be truncated in the future
+		mergeTarget.(*LegacyFragmentObject).indexes = append(mergeTarget.(*LegacyFragmentObject).indexes, newIndex...)
 	}
 	// write data to pendingMergedFragment
-	mergeTarget.entriesData = append(mergeTarget.entriesData, f.entriesData...)
+	mergeTarget.(*LegacyFragmentObject).entriesData = append(mergeTarget.(*LegacyFragmentObject).entriesData, f.entriesData...)
 	return nil
 }
 
@@ -419,13 +421,13 @@ func genFragmentDataFromRaw(ctx context.Context, rawEntries []*cache.BufferEntry
 		offset += len(item.Data)
 	}
 
-	// No need to return buffers before returning, as they will be held by FragmentObject
-	// They will be returned to the pool when FragmentObject is released
+	// No need to return buffers before returning, as they will be held by LegacyFragmentObject
+	// They will be returned to the pool when LegacyFragmentObject is released
 	return index, data
 }
 
 // serializeFragmentToReader from fragment object to reader
-func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reader, int) {
+func serializeFragmentToReader(ctx context.Context, f *LegacyFragmentObject) (io.Reader, int) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "serializeFragment")
 	defer sp.End()
 	// Calculate required space
@@ -446,7 +448,7 @@ func serializeFragmentToReader(ctx context.Context, f *FragmentObject) (io.Reade
 }
 
 // deserializeFragment from object data bytes
-func deserializeFragment(ctx context.Context, data []byte) (*FragmentObject, error) {
+func deserializeFragment(ctx context.Context, data []byte) (*LegacyFragmentObject, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, FragmentScopeName, "deserializeFragment")
 	defer sp.End()
 	// Create a buffer to read from the data
@@ -488,10 +490,220 @@ func deserializeFragment(ctx context.Context, data []byte) (*FragmentObject, err
 	// Read entriesData (remaining data)
 	entriesDataTmp := buf.Bytes()
 
-	return &FragmentObject{
+	return &LegacyFragmentObject{
 		indexes:      indexesTmp,
 		entriesData:  entriesDataTmp,
 		firstEntryId: int64(firstEntryID),
 		lastEntryId:  int64(lastEntryId),
 	}, nil
+}
+
+func GetLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment storage.Fragment) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "Segment", "getLastEntryIdWithoutDataLoadedIfPossible")
+	defer sp.End()
+	lastEntryId, err := fragment.GetLastEntryId(ctx)
+	if werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		defer fragment.Release(ctx)
+		lastEntryId, err = fragment.GetLastEntryId(ctx)
+		if err != nil {
+			return -1, err
+		}
+	}
+	return lastEntryId, nil
+}
+
+func GetFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment storage.Fragment) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "Segment", "getFirstEntryIdWithoutDataLoadedIfPossible")
+	defer sp.End()
+	firstEntryId, err := fragment.GetFirstEntryId(ctx)
+	if werr.ErrFragmentInfoNotFetched.Is(err) {
+		loadErr := fragment.Load(ctx)
+		if loadErr != nil {
+			return -1, loadErr
+		}
+		defer fragment.Release(ctx)
+		firstEntryId, err = fragment.GetFirstEntryId(ctx)
+		if err != nil {
+			return -1, err
+		}
+	}
+	return firstEntryId, nil
+}
+
+func MergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, cli minioHandler.MinioHandler, bucket string, mergedFragKey string, mergeFragId int64, fragments []storage.Fragment, pendingMergeSize int64, releaseImmediately bool) (storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "Segment", "mergeFragmentsAndReleaseAfterCompleted")
+	defer sp.End()
+	// Check args
+	if len(fragments) == 0 {
+		return nil, errors.New("no fragments to merge")
+	}
+
+	// Fast merge by rename
+	if len(fragments) == 1 {
+		// no need to merge here, just rename
+		return fastMergeSingleFragment(ctx, cli, bucket, mergedFragKey, mergeFragId, fragments[0])
+	}
+
+	// Merge them one by one to reduce memory usage
+	startTime := time.Now()
+	dataBuff := make([]byte, 0, pendingMergeSize)
+	indexBuff := make([]byte, 0, 1024)
+
+	mergeTarget := &LegacyFragmentObject{
+		client:       cli,
+		bucket:       bucket,
+		fragmentId:   mergeFragId,
+		fragmentKey:  mergedFragKey,
+		entriesData:  dataBuff,
+		indexes:      indexBuff,
+		firstEntryId: -1,
+		lastEntryId:  -1,
+		dataUploaded: false,
+		dataLoaded:   false,
+		infoFetched:  true,
+	}
+	expectedEntryId := int64(-1)
+	fragIds := make([]int64, 0)
+	for _, candidateFrag := range fragments {
+		fragFirstEntryId, err := GetFirstEntryIdWithoutDataLoadedIfPossible(ctx, candidateFrag)
+		if err != nil {
+			return nil, err
+		}
+		fragLastEntryId, err := GetLastEntryIdWithoutDataLoadedIfPossible(ctx, candidateFrag)
+		if err != nil {
+			return nil, err
+		}
+		// check the order of entries
+		if expectedEntryId == -1 {
+			// the first segment
+			mergeTarget.firstEntryId = fragFirstEntryId
+			expectedEntryId = fragLastEntryId + 1
+		} else {
+			if expectedEntryId != fragFirstEntryId {
+				logger.Ctx(ctx).Warn("fragments are not in order", zap.String("fragmentKey", candidateFrag.GetFragmentKey()), zap.Int64("expectedEntryId", expectedEntryId), zap.Int64("fragFirstEntryId", fragFirstEntryId))
+				return nil, errors.New("fragments are not in order")
+			}
+			expectedEntryId = fragLastEntryId + 1
+			mergeTarget.lastEntryId = fragLastEntryId
+		}
+		// load candidate fragment data
+		loadCandidateFragmentDataErr := candidateFrag.Load(ctx)
+		if loadCandidateFragmentDataErr != nil {
+			logger.Ctx(ctx).Warn("failed to load fragment", zap.String("fragmentKey", candidateFrag.GetFragmentKey()), zap.Error(loadCandidateFragmentDataErr))
+			return nil, loadCandidateFragmentDataErr
+		}
+		// append fragment data to merge target
+		baseOffset := len(mergeTarget.entriesData)
+		mergeOneFragmentErr := candidateFrag.AppendToMergeTarget(ctx, mergeTarget, int64(baseOffset))
+		candidateFrag.Release(ctx) // release candidate fragment data immediately
+		if mergeOneFragmentErr != nil {
+			logger.Ctx(ctx).Warn("failed to merge fragment", zap.String("fragmentKey", candidateFrag.GetFragmentKey()), zap.Error(mergeOneFragmentErr))
+			return nil, mergeOneFragmentErr
+		}
+		fragIds = append(fragIds, candidateFrag.GetFragmentId())
+	}
+
+	// set data cache ready
+	mergeTarget.dataLoaded = true
+	mergeTarget.size = int64(len(mergeTarget.entriesData) + len(mergeTarget.indexes))
+	mergeTarget.rawBufSize = int64(cap(mergeTarget.entriesData) + cap(mergeTarget.indexes))
+
+	if mergeTarget.firstEntryId == -1 {
+		logger.Ctx(ctx).Warn("fragment not loaded", zap.String("fragKey", mergeTarget.fragmentKey))
+	}
+	// upload the mergedFragment
+	flushErr := mergeTarget.Flush(ctx)
+	if flushErr != nil {
+		return nil, flushErr
+	}
+	// set flag
+	mergeTarget.dataUploaded = true
+	mergeTarget.infoFetched = true
+
+	if releaseImmediately {
+		// release immediately
+		mergeTarget.entriesData = nil
+		mergeTarget.indexes = nil
+		mergeTarget.dataLoaded = false
+	}
+	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergeTarget.fragmentKey), zap.Int64("mergeFragId", mergeFragId), zap.Int64s("fragmentIds", fragIds), zap.Int64("size", mergeTarget.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	return mergeTarget, nil
+}
+
+func fastMergeSingleFragment(ctx context.Context, cli minioHandler.MinioHandler, bucket string, mergedFragKey string, mergeFragId int64, fragment storage.Fragment) (storage.Fragment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "Segment", "fastMergeSingleFragment")
+	defer sp.End()
+	startTime := time.Now()
+	// merge
+	mergedFrag := &LegacyFragmentObject{
+		client:       cli,
+		bucket:       bucket,
+		fragmentId:   mergeFragId,
+		fragmentKey:  mergedFragKey,
+		entriesData:  make([]byte, 0),
+		indexes:      make([]byte, 0),
+		firstEntryId: -1,
+		lastEntryId:  -1,
+		dataUploaded: false,
+		dataLoaded:   false,
+		infoFetched:  false,
+	}
+
+	// fast rename
+	uploadInfo, uploadErr := cli.CopyObject(ctx,
+		minio.CopyDestOptions{
+			Bucket: mergedFrag.bucket,
+			Object: mergedFrag.fragmentKey,
+		}, minio.CopySrcOptions{
+			Bucket: bucket,
+			Object: fragment.GetFragmentKey(),
+		})
+	if uploadErr != nil {
+		return nil, uploadErr
+	}
+
+	// set data cache ready
+	mergedFrag.size = uploadInfo.Size
+	mergedFrag.rawBufSize = uploadInfo.Size
+	mergedFrag.dataLoaded = false
+	mergedFrag.dataUploaded = true
+	mergedFrag.infoFetched = false
+
+	logger.Ctx(ctx).Info("fast merge single fragment completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Int64("mergeFragId", mergeFragId), zap.Int64("fragmentId", fragment.GetFragmentId()), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+	return mergedFrag, nil
+}
+
+func SearchFragment(entryId int64, list []storage.Fragment) (storage.Fragment, error) {
+	low, high := 0, len(list)-1
+	var candidate storage.Fragment
+
+	for low <= high {
+		mid := (low + high) / 2
+		frag := list[mid]
+
+		first, err := GetFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), frag)
+		if err != nil {
+			return nil, err
+		}
+
+		if first > entryId {
+			high = mid - 1
+		} else {
+			last, err := GetLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), frag)
+			if err != nil {
+				return nil, err
+			}
+			if last >= entryId {
+				candidate = frag
+				return candidate, nil
+			} else {
+				low = mid + 1
+			}
+		}
+	}
+	return candidate, nil
 }

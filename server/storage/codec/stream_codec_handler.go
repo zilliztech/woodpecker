@@ -384,7 +384,7 @@ type StreamEncodeWriter struct {
 }
 
 // NewStreamEncodeWriter creates a new stream writer for disk fragment scenario
-func NewStreamEncodeWriter(writer io.WriteSeeker, firstEntryID int64, version uint16, flags uint16) (*StreamEncodeWriter, error) {
+func NewStreamEncodeWriter(writer io.WriteSeeker, firstEntryID int64, flags uint16) (*StreamEncodeWriter, error) {
 	sw := &StreamEncodeWriter{
 		writer:       writer,
 		firstEntryID: firstEntryID,
@@ -396,7 +396,7 @@ func NewStreamEncodeWriter(writer io.WriteSeeker, firstEntryID int64, version ui
 
 	// Create and write header
 	header := &HeaderRecord{
-		Version:      version,
+		Version:      FormatVersion,
 		Flags:        flags,
 		FirstEntryID: firstEntryID,
 	}

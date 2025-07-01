@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/disk/legacy"
 )
 
 var _ storage.Reader = (*DiskEntryReader)(nil)
@@ -38,12 +39,12 @@ var _ storage.Reader = (*DiskEntryReader)(nil)
 type DiskEntryReader struct {
 	ctx             context.Context
 	segment         *RODiskSegmentImpl
-	batchSize       int64               // Max batch size
-	currFragmentIdx int                 // Current fragment index
-	currFragment    *FragmentFileReader // Current fragment reader
-	currEntryID     int64               // Current entry ID being read
-	endEntryID      int64               // End ID (not included)
-	closed          bool                // Whether closed
+	batchSize       int64                      // Max batch size
+	currFragmentIdx int                        // Current fragment index
+	currFragment    storage.AppendableFragment // Current fragment reader
+	currEntryID     int64                      // Current entry ID being read
+	endEntryID      int64                      // End ID (not included)
+	closed          bool                       // Whether closed
 }
 
 func NewDiskEntryReader(ctx context.Context, opt storage.ReaderOpt, batchSize int64, segment *RODiskSegmentImpl) storage.Reader {
@@ -80,14 +81,14 @@ func (dr *DiskEntryReader) HasNext(ctx context.Context) (bool, error) {
 
 	// current fragment contains this entry, fast return
 	if dr.currFragment != nil {
-		first, err := getFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
+		first, err := legacy.GetFragmentFileFirstEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
+			logger.Ctx(ctx).Warn("Failed to get first entry id", zap.String("fragmentFile", dr.currFragment.GetFragmentKey()), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
-		last, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
+		last, err := legacy.GetFragmentFileLastEntryIdWithoutDataLoadedIfPossible(ctx, dr.currFragment)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.filePath), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
+			logger.Ctx(ctx).Warn("Failed to get last entry id", zap.String("fragmentFile", dr.currFragment.GetFragmentKey()), zap.Int64("currEntryId", dr.currEntryID), zap.Int64("endEntryId", dr.endEntryID), zap.Error(err))
 			return false, err
 		}
 		// fast return if current entry is in this current fragment
@@ -126,7 +127,7 @@ func (dr *DiskEntryReader) ReadNextBatch(ctx context.Context) ([]*proto.LogEntry
 	}
 
 	// Get current fragment lastEntryId
-	lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
+	lastID, err := legacy.GetFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +151,7 @@ func (dr *DiskEntryReader) ReadNextBatch(ctx context.Context) ([]*proto.LogEntry
 			// If current entryID not in fragment, may need to move to next fragment
 			logger.Ctx(ctx).Warn("Failed to read entry",
 				zap.Int64("entryId", dr.currEntryID),
-				zap.String("fragmentFile", dr.currFragment.filePath),
+				zap.String("fragmentFile", dr.currFragment.GetFragmentKey()),
 				zap.Error(err))
 			return nil, err
 		}
@@ -165,8 +166,7 @@ func (dr *DiskEntryReader) ReadNextBatch(ctx context.Context) ([]*proto.LogEntry
 
 		logger.Ctx(ctx).Debug("Data read complete",
 			zap.Int64("entryId", dr.currEntryID),
-			zap.Int64("fragmentId", dr.currFragment.fragmentId),
-			zap.String("fragmentPath", dr.currFragment.filePath))
+			zap.String("fragmentPath", dr.currFragment.GetFragmentKey()))
 
 		// Extract entryID and actual data
 		actualID := int64(binary.LittleEndian.Uint64(data[:8]))
@@ -216,7 +216,7 @@ func (dr *DiskEntryReader) ReadNext(ctx context.Context) (*proto.LogEntry, error
 	}
 
 	// Get current fragment
-	lastID, err := getFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
+	lastID, err := legacy.GetFragmentFileLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), dr.currFragment)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func (dr *DiskEntryReader) ReadNext(ctx context.Context) (*proto.LogEntry, error
 		// If current entryID not in fragment, may need to move to next fragment
 		logger.Ctx(ctx).Warn("Failed to read entry",
 			zap.Int64("entryId", dr.currEntryID),
-			zap.String("fragmentFile", dr.currFragment.filePath),
+			zap.String("fragmentFile", dr.currFragment.GetFragmentKey()),
 			zap.Error(err))
 		return nil, err
 	}
@@ -250,8 +250,7 @@ func (dr *DiskEntryReader) ReadNext(ctx context.Context) (*proto.LogEntry, error
 
 	logger.Ctx(ctx).Debug("Data read complete",
 		zap.Int64("entryId", dr.currEntryID),
-		zap.Int64("fragmentId", dr.currFragment.fragmentId),
-		zap.String("fragmentPath", dr.currFragment.filePath))
+		zap.String("fragmentPath", dr.currFragment.GetFragmentKey()))
 
 	// Extract entryID and actual data
 	actualID := int64(binary.LittleEndian.Uint64(data[:8]))

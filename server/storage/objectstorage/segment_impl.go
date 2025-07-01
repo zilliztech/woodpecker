@@ -43,6 +43,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage/legacy"
 )
 
 const (
@@ -334,7 +335,7 @@ type flushTask struct {
 
 // flushResult is the result of flush operation
 type flushResult struct {
-	target       *FragmentObject
+	target       storage.Fragment
 	err          error
 	fragmentSize int64 // Size of the fragment for tracking flushing buffer size
 }
@@ -531,7 +532,7 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 		resultFuture := f.pool.Submit(func() (*flushResult, error) {
 			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("fragId", fragId), zap.Int("count", len(fragmentData)), zap.Int64("fragmentSize", fragmentSize))
 			key := getFragmentObjectKey(f.segmentPrefixKey, fragId)
-			fragment := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryId, true, false, true)
+			fragment := legacy.NewLegacyFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, key, part, fragmentFirstEntryId, true, false, true)
 			flushErr := retry.Do(ctx,
 				func() error {
 					return fragment.Flush(ctx)
@@ -576,7 +577,7 @@ func (f *SegmentImpl) submitFragmentFlushTaskUnsafe(ctx context.Context, current
 	return flushResultFutures
 }
 
-func (f *SegmentImpl) awaitSuccessfulFlushes(ctx context.Context, flushResultFutures []*conc.Future[*flushResult]) ([]*FragmentObject, int64, int64, int64) {
+func (f *SegmentImpl) awaitSuccessfulFlushes(ctx context.Context, flushResultFutures []*conc.Future[*flushResult]) ([]storage.Fragment, int64, int64, int64) {
 	logger.Ctx(ctx).Debug("wait for all parts of buffer to be flushed", zap.String("segmentPrefixKey", f.segmentPrefixKey))
 	firstFLushErr := conc.BlockOnAll(flushResultFutures...)
 	if firstFLushErr != nil {
@@ -584,7 +585,7 @@ func (f *SegmentImpl) awaitSuccessfulFlushes(ctx context.Context, flushResultFut
 	} else {
 		logger.Ctx(ctx).Info("all parts of buffer have been flushed success", zap.String("segmentPrefixKey", f.segmentPrefixKey))
 	}
-	successFrags := make([]*FragmentObject, 0)
+	successFrags := make([]storage.Fragment, 0)
 	flushedFirstEntryId := int64(-1)   // first entry id of the first fragment that was successfully flushed in sequence
 	flushedLastEntryId := int64(-1)    // last entry id of the last fragment that was successfully flushed in sequence
 	flushedLastFragmentId := int64(-1) // last fragment id that was successfully flushed in sequence
@@ -815,8 +816,8 @@ type ROSegmentImpl struct {
 
 	logId           int64
 	segmentId       int64
-	fragments       []*FragmentObject // Segment cached fragments in order
-	mergedFragments []*FragmentObject // Segment cached merged fragments in order
+	fragments       []storage.Fragment // Segment cached fragments in order
+	mergedFragments []storage.Fragment // Segment cached merged fragments in order
 
 	// For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
 	fenced atomic.Bool
@@ -831,7 +832,7 @@ func NewROSegmentImpl(ctx context.Context, logId int64, segId int64, segmentPref
 		client:              objectCli,
 		segmentPrefixKey:    segmentPrefixKey,
 		bucket:              bucket,
-		fragments:           make([]*FragmentObject, 0),
+		fragments:           make([]storage.Fragment, 0),
 	}
 	objFile.fenced.Store(false)
 	existsFragments, existsMergedFragments, err := objFile.prefetchAllFragmentInfosOnce(ctx)
@@ -862,7 +863,7 @@ func (f *ROSegmentImpl) Append(ctx context.Context, data []byte) error {
 }
 
 // get the fragment for the entryId
-func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*FragmentObject, error) {
+func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (storage.Fragment, error) {
 	logger.Ctx(ctx).Debug("get fragment for entryId", zap.Int64("entryId", entryId))
 
 	// find from merged fragments first
@@ -896,9 +897,9 @@ func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*Fragme
 		return nil, nil
 	}
 
-	fetchedLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, fetchedLastFragment)
+	fetchedLastEntryId, err := legacy.GetLastEntryIdWithoutDataLoadedIfPossible(ctx, fetchedLastFragment)
 	if err != nil {
-		logger.Ctx(ctx).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.fragmentKey), zap.Error(err))
+		logger.Ctx(ctx).Warn("get fragment lastEntryId failed", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int64("entryId", entryId), zap.String("fragmentKey", fetchedLastFragment.GetFragmentKey()), zap.Error(err))
 		return nil, err
 	}
 	if entryId > fetchedLastEntryId {
@@ -925,50 +926,19 @@ func (f *ROSegmentImpl) getFragment(ctx context.Context, entryId int64) (*Fragme
 }
 
 // findFragment finds the exists cache fragments for the entryId
-func (f *ROSegmentImpl) findFragment(entryId int64) (*FragmentObject, error) {
+func (f *ROSegmentImpl) findFragment(entryId int64) (storage.Fragment, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return searchFragment(entryId, f.fragments)
+	return legacy.SearchFragment(entryId, f.fragments)
 }
 
-func (f *ROSegmentImpl) findMergedFragment(entryId int64) (*FragmentObject, error) {
+func (f *ROSegmentImpl) findMergedFragment(entryId int64) (storage.Fragment, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if len(f.mergedFragments) == 0 {
 		return nil, nil
 	}
-	return searchFragment(entryId, f.mergedFragments)
-}
-
-func searchFragment(entryId int64, list []*FragmentObject) (*FragmentObject, error) {
-	low, high := 0, len(list)-1
-	var candidate *FragmentObject
-
-	for low <= high {
-		mid := (low + high) / 2
-		frag := list[mid]
-
-		first, err := getFirstEntryIdWithoutDataLoadedIfPossible(context.TODO(), frag)
-		if err != nil {
-			return nil, err
-		}
-
-		if first > entryId {
-			high = mid - 1
-		} else {
-			last, err := getLastEntryIdWithoutDataLoadedIfPossible(context.TODO(), frag)
-			if err != nil {
-				return nil, err
-			}
-			if last >= entryId {
-				candidate = frag
-				return candidate, nil
-			} else {
-				low = mid + 1
-			}
-		}
-	}
-	return candidate, nil
+	return legacy.SearchFragment(entryId, f.mergedFragments)
 }
 
 // objectExists checks if an object exists in the MinIO bucket
@@ -1027,7 +997,7 @@ func (f *ROSegmentImpl) GetLastEntryId(ctx context.Context) (int64, error) {
 		return -1, nil
 	}
 
-	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
+	lastEntryId, err := legacy.GetLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get last entryId failed",
 			zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -1055,8 +1025,8 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 	defer sp.End()
 	listPrefix := fmt.Sprintf("%s/", f.segmentPrefixKey)
 	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{})
-	existsFragments := make([]*FragmentObject, 0, 32)
-	existsMergedFragments := make([]*FragmentObject, 0, 32)
+	existsFragments := make([]storage.Fragment, 0, 32)
+	existsMergedFragments := make([]storage.Fragment, 0, 32)
 	for objInfo := range objectCh {
 		if objInfo.Err != nil {
 			logger.Ctx(ctx).Warn("Error listing objects",
@@ -1090,7 +1060,7 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 			zap.Int64("fragmentId", fragmentId),
 			zap.Bool("isMerged", isMerged))
 
-		frag := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragmentId, objInfo.Key, nil, -1, false, true, false)
+		frag := legacy.NewLegacyFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragmentId, objInfo.Key, nil, -1, false, true, false)
 		if isMerged {
 			existsMergedFragments = append(existsMergedFragments, frag)
 		} else {
@@ -1099,14 +1069,14 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 	}
 	// ensure no hole in list
 	sort.Slice(existsFragments, func(i, j int) bool {
-		return existsFragments[i].fragmentId < existsFragments[j].fragmentId
+		return existsFragments[i].GetFragmentId() < existsFragments[j].GetFragmentId()
 	})
 	existsFragmentExpectedFragId := int64(0)
 	for i := 0; i < len(existsFragments); i++ {
-		if existsFragments[i].fragmentId != existsFragmentExpectedFragId {
+		if existsFragments[i].GetFragmentId() != existsFragmentExpectedFragId {
 			logger.Ctx(ctx).Debug("Found fragment hole",
 				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("fragmentId", existsFragments[i].fragmentId),
+				zap.Int64("fragmentId", existsFragments[i].GetFragmentId()),
 				zap.Int64("expectedFragmentId", existsFragmentExpectedFragId))
 			existsFragments = existsFragments[:i]
 			break
@@ -1116,14 +1086,14 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 
 	// ensure no hole in list
 	sort.Slice(existsMergedFragments, func(i, j int) bool {
-		return existsMergedFragments[i].fragmentId < existsMergedFragments[j].fragmentId
+		return existsMergedFragments[i].GetFragmentId() < existsMergedFragments[j].GetFragmentId()
 	})
 	existsMergedFragmentExpectedFragId := int64(0)
 	for i := 0; i < len(existsMergedFragments); i++ {
-		if existsMergedFragments[i].fragmentId != existsMergedFragmentExpectedFragId {
+		if existsMergedFragments[i].GetFragmentId() != existsMergedFragmentExpectedFragId {
 			logger.Ctx(ctx).Debug("Found fragment hole",
 				zap.String("segmentPrefixKey", f.segmentPrefixKey),
-				zap.Int64("fragmentId", existsMergedFragments[i].fragmentId),
+				zap.Int64("fragmentId", existsMergedFragments[i].GetFragmentId()),
 				zap.Int64("expectedFragmentId", existsMergedFragmentExpectedFragId))
 			existsMergedFragments = existsMergedFragments[:i]
 			break
@@ -1137,14 +1107,14 @@ func (f *ROSegmentImpl) prefetchAllFragmentInfosOnce(ctx context.Context) (int, 
 }
 
 // incrementally fetch new fragments as they come in
-func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, *FragmentObject, error) {
+func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, storage.Fragment, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "prefetchFragmentInfos")
 	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", f.logId)
-	var fetchedLastFragment *FragmentObject = nil
+	var fetchedLastFragment storage.Fragment = nil
 
 	fragId := int64(0)
 	if len(f.fragments) > 0 {
@@ -1165,7 +1135,7 @@ func (f *ROSegmentImpl) prefetchFragmentInfos(ctx context.Context) (bool, *Fragm
 		}
 
 		if exists {
-			fragment := NewFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, fragKey, nil, -1, false, true, false)
+			fragment := legacy.NewLegacyFragmentObject(ctx, f.client, f.bucket, f.logId, f.segmentId, fragId, fragKey, nil, -1, false, true, false)
 			fetchedLastFragment = fragment
 			f.fragments = append(f.fragments, fragment)
 			existsNewFragment = true
@@ -1202,7 +1172,7 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 
 	totalMergeSize := int64(0)
 	pendingMergeSize := int64(0)
-	pendingMergeFrags := make([]*FragmentObject, 0)
+	pendingMergeFrags := make([]storage.Fragment, 0)
 	// load all fragment in memory
 	for _, frag := range f.fragments {
 		fragSize, loadFragSizeErr := frag.LoadSizeStateOnly(ctx)
@@ -1213,44 +1183,44 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 		pendingMergeSize += fragSize
 		if pendingMergeSize >= fileMaxSize || fragSize >= singleFragmentMaxSize {
 			// merge immediately
-			mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompletedPro(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize, true)
+			mergedFrag, mergeErr := legacy.MergeFragmentsAndReleaseAfterCompletedPro(ctx, f.client, f.bucket, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize, true)
 			if mergeErr != nil {
 				return nil, nil, nil, mergeErr
 			}
 			mergedFrags = append(mergedFrags, mergedFrag)
 			mergedFragId++
-			mergedFragFirstEntryId, getFirstEntryIdErr := getFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
+			mergedFragFirstEntryId, getFirstEntryIdErr := legacy.GetFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
 			if getFirstEntryIdErr != nil {
 				return nil, nil, nil, getFirstEntryIdErr
 			}
 			entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 			fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
-			pendingMergeFrags = make([]*FragmentObject, 0)
+			pendingMergeFrags = make([]storage.Fragment, 0)
 			totalMergeSize += pendingMergeSize
 			pendingMergeSize = 0
 		}
 	}
 	if pendingMergeSize > 0 && len(pendingMergeFrags) > 0 {
 		// merge immediately
-		mergedFrag, mergeErr := mergeFragmentsAndReleaseAfterCompletedPro(ctx, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize, true)
+		mergedFrag, mergeErr := legacy.MergeFragmentsAndReleaseAfterCompletedPro(ctx, f.client, f.bucket, getMergedFragmentObjectKey(f.segmentPrefixKey, mergedFragId), mergedFragId, pendingMergeFrags, pendingMergeSize, true)
 		if mergeErr != nil {
 			return nil, nil, nil, mergeErr
 		}
 		mergedFrags = append(mergedFrags, mergedFrag)
 		mergedFragId++
-		mergedFragFirstEntryId, getFirstEntryIdErr := getFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
+		mergedFragFirstEntryId, getFirstEntryIdErr := legacy.GetFirstEntryIdWithoutDataLoadedIfPossible(ctx, mergedFrag)
 		if getFirstEntryIdErr != nil {
 			return nil, nil, nil, getFirstEntryIdErr
 		}
 		entryOffset = append(entryOffset, int32(mergedFragFirstEntryId))
 		fragmentIdOffset = append(fragmentIdOffset, int32(pendingMergeFrags[0].GetFragmentId()))
-		pendingMergeFrags = make([]*FragmentObject, 0)
+		pendingMergeFrags = make([]storage.Fragment, 0)
 		totalMergeSize += pendingMergeSize
 		pendingMergeSize = 0
 	}
 
 	lastMergedFragment := mergedFrags[len(mergedFrags)-1]
-	lastMergedFragmentLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastMergedFragment.(*FragmentObject))
+	lastMergedFragmentLastEntryId, err := legacy.GetLastEntryIdWithoutDataLoadedIfPossible(ctx, lastMergedFragment)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1261,149 +1231,6 @@ func (f *ROSegmentImpl) Merge(ctx context.Context) ([]storage.Fragment, []int32,
 	metrics.WpFileCompactBytesWritten.WithLabelValues(logId).Add(float64(totalMergeSize))
 	logger.Ctx(ctx).Info("merge fragments finish", zap.String("segmentPrefixKey", f.segmentPrefixKey), zap.Int("mergedFrags", len(mergedFrags)), zap.Int64("lastMergedFragmentLastEntryId", lastMergedFragmentLastEntryId), zap.Int("fragments", len(f.fragments)), zap.Int64("totalMergeSize", totalMergeSize), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	return mergedFrags, entryOffset, fragmentIdOffset, nil
-}
-
-func mergeFragmentsAndReleaseAfterCompletedPro(ctx context.Context, mergedFragKey string, mergeFragId int64, fragments []*FragmentObject, pendingMergeSize int64, releaseImmediately bool) (*FragmentObject, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "mergeFragmentsAndReleaseAfterCompleted")
-	defer sp.End()
-	// Check args
-	if len(fragments) == 0 {
-		return nil, errors.New("no fragments to merge")
-	}
-
-	// Fast merge by rename
-	if len(fragments) == 1 {
-		// no need to merge here, just rename
-		return fastMergeSingleFragment(ctx, mergedFragKey, mergeFragId, fragments[0])
-	}
-
-	// Merge them one by one to reduce memory usage
-	startTime := time.Now()
-	dataBuff := make([]byte, 0, pendingMergeSize)
-	indexBuff := make([]byte, 0, 1024)
-
-	mergeTarget := &FragmentObject{
-		client:       fragments[0].client,
-		bucket:       fragments[0].bucket,
-		fragmentId:   mergeFragId,
-		fragmentKey:  mergedFragKey,
-		entriesData:  dataBuff,
-		indexes:      indexBuff,
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		dataUploaded: false,
-		dataLoaded:   false,
-		infoFetched:  true,
-	}
-	expectedEntryId := int64(-1)
-	fragIds := make([]int64, 0)
-	for _, candidateFrag := range fragments {
-		fragFirstEntryId, err := getFirstEntryIdWithoutDataLoadedIfPossible(ctx, candidateFrag)
-		if err != nil {
-			return nil, err
-		}
-		fragLastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, candidateFrag)
-		if err != nil {
-			return nil, err
-		}
-		// check the order of entries
-		if expectedEntryId == -1 {
-			// the first segment
-			mergeTarget.firstEntryId = fragFirstEntryId
-			expectedEntryId = fragLastEntryId + 1
-		} else {
-			if expectedEntryId != fragFirstEntryId {
-				logger.Ctx(ctx).Warn("fragments are not in order", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Int64("expectedEntryId", expectedEntryId), zap.Int64("fragFirstEntryId", fragFirstEntryId))
-				return nil, errors.New("fragments are not in order")
-			}
-			expectedEntryId = fragLastEntryId + 1
-			mergeTarget.lastEntryId = fragLastEntryId
-		}
-		// load candidate fragment data
-		loadCandidateFragmentDataErr := candidateFrag.Load(ctx)
-		if loadCandidateFragmentDataErr != nil {
-			logger.Ctx(ctx).Warn("failed to load fragment", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Error(loadCandidateFragmentDataErr))
-			return nil, loadCandidateFragmentDataErr
-		}
-		// append fragment data to merge target
-		baseOffset := len(mergeTarget.entriesData)
-		mergeOneFragmentErr := candidateFrag.AppendToMergeTarget(ctx, mergeTarget, int64(baseOffset))
-		candidateFrag.Release(ctx) // release candidate fragment data immediately
-		if mergeOneFragmentErr != nil {
-			logger.Ctx(ctx).Warn("failed to merge fragment", zap.String("fragmentKey", candidateFrag.fragmentKey), zap.Error(mergeOneFragmentErr))
-			return nil, mergeOneFragmentErr
-		}
-		fragIds = append(fragIds, candidateFrag.GetFragmentId())
-	}
-
-	// set data cache ready
-	mergeTarget.dataLoaded = true
-	mergeTarget.size = int64(len(mergeTarget.entriesData) + len(mergeTarget.indexes))
-	mergeTarget.rawBufSize = int64(cap(mergeTarget.entriesData) + cap(mergeTarget.indexes))
-
-	if mergeTarget.firstEntryId == -1 {
-		logger.Ctx(ctx).Warn("fragment not loaded", zap.String("fragKey", mergeTarget.fragmentKey))
-	}
-	// upload the mergedFragment
-	flushErr := mergeTarget.Flush(ctx)
-	if flushErr != nil {
-		return nil, flushErr
-	}
-	// set flag
-	mergeTarget.dataUploaded = true
-	mergeTarget.infoFetched = true
-
-	if releaseImmediately {
-		// release immediately
-		mergeTarget.entriesData = nil
-		mergeTarget.indexes = nil
-		mergeTarget.dataLoaded = false
-	}
-	logger.Ctx(ctx).Info("merge fragments and release after completed", zap.String("mergedFragKey", mergeTarget.fragmentKey), zap.Int64("mergeFragId", mergeFragId), zap.Int64s("fragmentIds", fragIds), zap.Int64("size", mergeTarget.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergeTarget, nil
-}
-
-func fastMergeSingleFragment(ctx context.Context, mergedFragKey string, mergeFragId int64, fragment *FragmentObject) (*FragmentObject, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "fastMergeSingleFragment")
-	defer sp.End()
-	startTime := time.Now()
-	// merge
-	mergedFrag := &FragmentObject{
-		client:       fragment.client,
-		bucket:       fragment.bucket,
-		fragmentId:   mergeFragId,
-		fragmentKey:  mergedFragKey,
-		entriesData:  make([]byte, 0),
-		indexes:      make([]byte, 0),
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		dataUploaded: false,
-		dataLoaded:   false,
-		infoFetched:  false,
-	}
-
-	// fast rename
-	uploadInfo, uploadErr := fragment.client.CopyObject(ctx,
-		minio.CopyDestOptions{
-			Bucket: mergedFrag.bucket,
-			Object: mergedFrag.fragmentKey,
-		}, minio.CopySrcOptions{
-			Bucket: fragment.bucket,
-			Object: fragment.fragmentKey,
-		})
-	if uploadErr != nil {
-		return nil, uploadErr
-	}
-
-	// set data cache ready
-	mergedFrag.size = uploadInfo.Size
-	mergedFrag.rawBufSize = uploadInfo.Size
-	mergedFrag.dataLoaded = false
-	mergedFrag.dataUploaded = true
-	mergedFrag.infoFetched = false
-
-	logger.Ctx(ctx).Info("fast merge single fragment completed", zap.String("mergedFragKey", mergedFrag.fragmentKey), zap.Int64("mergeFragId", mergeFragId), zap.Int64("fragmentId", fragment.fragmentId), zap.Int64("size", mergedFrag.size), zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	return mergedFrag, nil
 }
 
 // Load here only need to load the last fragment data, only used in recover to load fragments info
@@ -1428,7 +1255,7 @@ func (f *ROSegmentImpl) Load(ctx context.Context) (int64, storage.Fragment, erro
 	}
 
 	lastFragment := f.fragments[len(f.fragments)-1]
-	lastEntryId, err := getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
+	lastEntryId, err := legacy.GetLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
 	if err != nil {
 		return -1, nil, err
 	}
@@ -1506,8 +1333,8 @@ func (f *ROSegmentImpl) DeleteFragments(ctx context.Context, flag int) error {
 	}
 
 	// Clean up internal state
-	f.fragments = make([]*FragmentObject, 0)
-	f.mergedFragments = make([]*FragmentObject, 0)
+	f.fragments = make([]storage.Fragment, 0)
+	f.mergedFragments = make([]storage.Fragment, 0)
 
 	// Update metrics
 	if len(deleteErrors) > 0 {
@@ -1620,7 +1447,7 @@ func (f *ROSegmentImpl) Fence(ctx context.Context) (int64, error) {
 			// Successfully created fence object, get last entry ID
 			if lastFragment != nil {
 				var getLastEntryIdErr error
-				lastEntryId, getLastEntryIdErr = getLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
+				lastEntryId, getLastEntryIdErr = legacy.GetLastEntryIdWithoutDataLoadedIfPossible(ctx, lastFragment)
 				if getLastEntryIdErr != nil {
 					logger.Ctx(ctx).Warn("Failed to get last entry ID from last fragment",
 						zap.String("segmentPrefixKey", f.segmentPrefixKey),
@@ -1693,42 +1520,6 @@ func parseFragmentFilename(key string) (id int64, isMerge bool, err error) {
 	isMerge = false
 	id, err = strconv.ParseInt(name, 10, 64)
 	return id, isMerge, err
-}
-
-func getLastEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentObject) (int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getLastEntryIdWithoutDataLoadedIfPossible")
-	defer sp.End()
-	lastEntryId, err := fragment.GetLastEntryId(ctx)
-	if werr.ErrFragmentInfoNotFetched.Is(err) {
-		loadErr := fragment.Load(ctx)
-		if loadErr != nil {
-			return -1, loadErr
-		}
-		defer fragment.Release(ctx)
-		lastEntryId, err = fragment.GetLastEntryId(ctx)
-		if err != nil {
-			return -1, err
-		}
-	}
-	return lastEntryId, nil
-}
-
-func getFirstEntryIdWithoutDataLoadedIfPossible(ctx context.Context, fragment *FragmentObject) (int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "getFirstEntryIdWithoutDataLoadedIfPossible")
-	defer sp.End()
-	firstEntryId, err := fragment.GetFirstEntryId(ctx)
-	if werr.ErrFragmentInfoNotFetched.Is(err) {
-		loadErr := fragment.Load(ctx)
-		if loadErr != nil {
-			return -1, loadErr
-		}
-		defer fragment.Release(ctx)
-		firstEntryId, err = fragment.GetFirstEntryId(ctx)
-		if err != nil {
-			return -1, err
-		}
-	}
-	return firstEntryId, nil
 }
 
 // createSegmentLock creates a lock object in object storage for segment exclusivity

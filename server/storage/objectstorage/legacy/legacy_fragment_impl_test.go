@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package objectstorage
+package legacy
 
 import (
 	"context"
@@ -29,15 +29,16 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
+	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-func TestNewFragmentObject(t *testing.T) {
+func TestNewLegacyFragmentObject(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	// Test creating a new FragmentObject
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	// Test creating a new LegacyFragmentObject
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -49,9 +50,9 @@ func TestNewFragmentObject(t *testing.T) {
 	assert.Equal(t, "test-key", fragment.fragmentKey)
 }
 
-func TestFragmentObject_Flush(t *testing.T) {
+func TestLegacyFragmentObject_Flush(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -63,18 +64,18 @@ func TestFragmentObject_Flush(t *testing.T) {
 	client.AssertExpectations(t)
 }
 
-func TestFragmentObject_Flush_EmptyFragment(t *testing.T) {
+func TestLegacyFragmentObject_Flush_EmptyFragment(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, false, false)
 	err := fragment.Flush(context.Background())
 	assert.Error(t, err)
 	assert.True(t, werr.ErrFragmentNotLoaded.Is(err))
 }
 
-func TestFragmentObject_Load(t *testing.T) {
+func TestLegacyFragmentObject_Load(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, true, false)
 	data := make([]byte, 0)
 	data = append(data, codec.Int64ToBytes(1)...)
@@ -111,19 +112,19 @@ func (m *mockObjectReader) Close() error {
 	return nil
 }
 
-func TestFragmentObject_Load_NotUploaded(t *testing.T) {
+func TestLegacyFragmentObject_Load_NotUploaded(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, false, false)
 	err := fragment.Load(context.Background())
 	assert.Error(t, err)
 	assert.True(t, werr.ErrFragmentNotUploaded.Is(err))
 }
 
-func TestFragmentObject_GetFirstEntryId(t *testing.T) {
+func TestLegacyFragmentObject_GetFirstEntryId(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -134,10 +135,10 @@ func TestFragmentObject_GetFirstEntryId(t *testing.T) {
 	assert.Equal(t, int64(100), firstEntryId)
 }
 
-func TestFragmentObject_GetFirstEntryId_EmptyData(t *testing.T) {
+func TestLegacyFragmentObject_GetFirstEntryId_EmptyData(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, false, true)
 
 	firstEntryId, err := fragment.GetFirstEntryId(context.TODO())
@@ -145,10 +146,10 @@ func TestFragmentObject_GetFirstEntryId_EmptyData(t *testing.T) {
 	assert.Equal(t, int64(100), firstEntryId)
 }
 
-func TestFragmentObject_GetFirstEntryId_NotFetched(t *testing.T) {
+func TestLegacyFragmentObject_GetFirstEntryId_NotFetched(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, true, true)
 
 	firstEntryId, err := fragment.GetFirstEntryId(context.TODO())
@@ -156,11 +157,11 @@ func TestFragmentObject_GetFirstEntryId_NotFetched(t *testing.T) {
 	assert.Equal(t, int64(100), firstEntryId)
 }
 
-func TestFragmentObject_GetLastEntryId(t *testing.T) {
+func TestLegacyFragmentObject_GetLastEntryId(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
 	// Test with empty data - should return firstEntryId - 1
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{}, 100, false, false, true)
 
 	lastEntryId, err := fragment.GetLastEntryId(context.TODO())
@@ -168,10 +169,10 @@ func TestFragmentObject_GetLastEntryId(t *testing.T) {
 	assert.Equal(t, int64(99), lastEntryId) // firstEntryId - 1 for empty fragment
 }
 
-func TestFragmentObject_GetLastEntryId_WithData(t *testing.T) {
+func TestLegacyFragmentObject_GetLastEntryId_WithData(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -182,10 +183,10 @@ func TestFragmentObject_GetLastEntryId_WithData(t *testing.T) {
 	assert.Equal(t, int64(101), lastEntryId)
 }
 
-func TestFragmentObject_GetLastEntryId_WithDataAndFetched(t *testing.T) {
+func TestLegacyFragmentObject_GetLastEntryId_WithDataAndFetched(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -196,10 +197,10 @@ func TestFragmentObject_GetLastEntryId_WithDataAndFetched(t *testing.T) {
 	assert.Equal(t, int64(101), lastEntryId)
 }
 
-func TestFragmentObject_GetLastEntryId_NotFetched(t *testing.T) {
+func TestLegacyFragmentObject_GetLastEntryId_NotFetched(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -210,10 +211,10 @@ func TestFragmentObject_GetLastEntryId_NotFetched(t *testing.T) {
 	assert.Equal(t, int64(101), lastEntryId)
 }
 
-func TestFragmentObject_GetSize(t *testing.T) {
+func TestLegacyFragmentObject_GetSize(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -223,9 +224,9 @@ func TestFragmentObject_GetSize(t *testing.T) {
 	assert.Greater(t, size, int64(0))
 }
 
-func TestFragmentObject_GetEntry(t *testing.T) {
+func TestLegacyFragmentObject_GetEntry(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -239,9 +240,9 @@ func TestFragmentObject_GetEntry(t *testing.T) {
 	assert.Equal(t, []byte("entry2"), entry)
 }
 
-func TestFragmentObject_GetEntry_NotFound(t *testing.T) {
+func TestLegacyFragmentObject_GetEntry_NotFound(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -252,9 +253,9 @@ func TestFragmentObject_GetEntry_NotFound(t *testing.T) {
 	assert.Nil(t, entry)
 }
 
-func TestFragmentObject_Release(t *testing.T) {
+func TestLegacyFragmentObject_Release(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
-	fragment := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
+	fragment := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
@@ -270,17 +271,17 @@ func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
 	client := mocks_minio.NewMinioHandler(t)
 	client.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
-	fragment1 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key1",
+	fragment1 := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 1, "test-key1",
 		[]*cache.BufferEntry{
 			{EntryId: 1, Data: []byte("entry1"), NotifyChan: nil},
 		}, 100, true, false, true)
-	fragment2 := NewFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "test-key2",
+	fragment2 := NewLegacyFragmentObject(context.TODO(), client, "test-bucket", 1, 0, 2, "test-key2",
 		[]*cache.BufferEntry{
 			{EntryId: 2, Data: []byte("entry2"), NotifyChan: nil},
 		}, 101, true, false, true)
-	fragments := []*FragmentObject{fragment1, fragment2}
+	fragments := []storage.Fragment{fragment1, fragment2}
 
-	mergedFragment, err := mergeFragmentsAndReleaseAfterCompletedPro(context.Background(), "merged-key", 3, fragments, fragment1.size+fragment2.size, false)
+	mergedFragment, err := MergeFragmentsAndReleaseAfterCompletedPro(context.Background(), client, "test-bucket", "merged-key", 3, fragments, fragment1.size+fragment2.size, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, mergedFragment)
 	firstEntryId, err := mergedFragment.GetFirstEntryId(context.TODO())
@@ -302,4 +303,78 @@ func TestMergeFragmentsAndReleaseAfterCompleted(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, werr.ErrEntryNotFound, err)
 	assert.Nil(t, entry)
+}
+
+func TestFindFragment(t *testing.T) {
+	// Create mock Fragment object list
+	mockFragments := []storage.Fragment{
+		&LegacyFragmentObject{fragmentId: 1, firstEntryId: 0, lastEntryId: 99, infoFetched: true},    // [0,99]
+		&LegacyFragmentObject{fragmentId: 2, firstEntryId: 100, lastEntryId: 199, infoFetched: true}, // [100,199]
+		&LegacyFragmentObject{fragmentId: 3, firstEntryId: 200, lastEntryId: 299, infoFetched: true}, // [200,299]
+	}
+
+	t.Run("Find Fragment in middle position", func(t *testing.T) {
+		frag, err := SearchFragment(150, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), frag.GetFragmentId())
+	})
+
+	t.Run("Find first Fragment", func(t *testing.T) {
+		frag, err := SearchFragment(50, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), frag.GetFragmentId())
+	})
+
+	t.Run("Find last Fragment", func(t *testing.T) {
+		frag, err := SearchFragment(250, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), frag.GetFragmentId())
+	})
+
+	t.Run("entryId after the last Fragment", func(t *testing.T) {
+		frag, err := SearchFragment(300, mockFragments)
+		assert.NoError(t, err)
+		assert.Nil(t, frag)
+	})
+
+	t.Run("First Fragment boundary values", func(t *testing.T) {
+		frag, err := SearchFragment(0, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), frag.GetFragmentId())
+
+		frag, err = SearchFragment(99, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), frag.GetFragmentId())
+	})
+	t.Run("Second Fragment boundary values", func(t *testing.T) {
+		frag, err := SearchFragment(100, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), frag.GetFragmentId())
+
+		frag, err = SearchFragment(199, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), frag.GetFragmentId())
+	})
+
+	t.Run("Last Fragment boundary values", func(t *testing.T) {
+		frag, err := SearchFragment(200, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), frag.GetFragmentId())
+
+		frag, err = SearchFragment(299, mockFragments)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), frag.GetFragmentId())
+	})
+
+	t.Run("Return leftmost match when multiple candidate Fragments", func(t *testing.T) {
+		// Mock overlapping Fragments
+		overlappingFrags := []storage.Fragment{
+			&LegacyFragmentObject{fragmentId: 1, firstEntryId: 0, lastEntryId: 200, infoFetched: true},
+			&LegacyFragmentObject{fragmentId: 2, firstEntryId: 100, lastEntryId: 300, infoFetched: true},
+		}
+
+		frag, err := SearchFragment(150, overlappingFrags)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), frag.GetFragmentId())
+	})
 }

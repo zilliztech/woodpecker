@@ -16,7 +16,7 @@ import (
 
 func TestStreamDecodeReader_CompleteFile(t *testing.T) {
 	// Create a complete file using BatchCodecHandler
-	writer := NewBatchCodecHandlerForWriting(100, 1, 0)
+	writer := NewBatchCodecHandlerForWriting(100, 0)
 	writer.AddData([]byte("test data 1"))
 	writer.AddData([]byte("test data 2"))
 	writer.AddData([]byte("test data 3"))
@@ -34,7 +34,7 @@ func TestStreamDecodeReader_CompleteFile(t *testing.T) {
 	// Test header
 	header := reader.GetHeader()
 	assert.NotNil(t, header)
-	assert.Equal(t, uint16(1), header.Version)
+	assert.Equal(t, uint16(2), header.Version)
 
 	// Test footer
 	footer := reader.GetFooter()
@@ -64,7 +64,7 @@ func TestStreamDecodeReader_CompleteFile(t *testing.T) {
 
 func TestStreamDecodeReader_EmptyFile(t *testing.T) {
 	// Create empty file
-	writer := NewBatchCodecHandlerForWriting(300, 1, 0)
+	writer := NewBatchCodecHandlerForWriting(300, 0)
 	data, err := writer.ToBytes()
 	require.NoError(t, err)
 
@@ -81,7 +81,7 @@ func TestStreamDecodeReader_EmptyFile(t *testing.T) {
 // BatchCodecHandler Tests
 
 func TestBatchCodecHandler_Basic(t *testing.T) {
-	writer := NewBatchCodecHandlerForWriting(200, 1, 0)
+	writer := NewBatchCodecHandlerForWriting(200, 0)
 
 	// Add some data
 	entryID1 := writer.AddData([]byte("batch data 1"))
@@ -119,7 +119,7 @@ func TestBatchCodecHandler_Basic(t *testing.T) {
 }
 
 func TestBatchCodecHandler_EmptyBatch(t *testing.T) {
-	writer := NewBatchCodecHandlerForWriting(300, 1, 0)
+	writer := NewBatchCodecHandlerForWriting(300, 0)
 
 	assert.False(t, writer.HasData())
 	assert.Equal(t, int64(-1), writer.GetLastEntryID())
@@ -146,7 +146,7 @@ func TestWriterCompatibility(t *testing.T) {
 	}
 
 	// Create with BatchCodecHandler
-	batchHandler := NewBatchCodecHandlerForWriting(1000, 1, 0)
+	batchHandler := NewBatchCodecHandlerForWriting(1000, 0)
 	for _, data := range testData {
 		batchHandler.AddData(data)
 	}
@@ -155,7 +155,7 @@ func TestWriterCompatibility(t *testing.T) {
 
 	// Create with StreamEncodeWriter
 	streamBuf := newTestBuffer()
-	streamWriter, err := NewStreamEncodeWriter(streamBuf, 1000, 1, 0)
+	streamWriter, err := NewStreamEncodeWriter(streamBuf, 1000, 0)
 	require.NoError(t, err)
 	for _, data := range testData {
 		streamWriter.WriteData(data)
@@ -200,7 +200,7 @@ func TestLargeDataSet(t *testing.T) {
 	}
 
 	// Test BatchCodecHandler
-	batchHandler := NewBatchCodecHandlerForWriting(5000, 1, 0)
+	batchHandler := NewBatchCodecHandlerForWriting(5000, 0)
 	for _, data := range testData {
 		batchHandler.AddData(data)
 	}
@@ -236,7 +236,7 @@ func TestErrorHandling(t *testing.T) {
 	assert.Error(t, err)
 
 	// Test valid reader with invalid operations
-	writer := NewBatchCodecHandlerForWriting(3000, 1, 0)
+	writer := NewBatchCodecHandlerForWriting(3000, 0)
 	writer.AddData([]byte("test"))
 	data, _ := writer.ToBytes()
 
@@ -265,7 +265,7 @@ func TestBatchCodecHandlerToFileToStreamDecodeReader(t *testing.T) {
 	}
 
 	// Step 1: Create data with BatchCodecHandler
-	batchWriter := NewBatchCodecHandlerForWriting(12000, 1, 0x1234)
+	batchWriter := NewBatchCodecHandlerForWriting(12000, 0x1234)
 	for _, data := range testData {
 		batchWriter.AddData([]byte(data))
 	}
@@ -298,7 +298,7 @@ func TestBatchCodecHandlerToFileToStreamDecodeReader(t *testing.T) {
 
 	header := streamReader.GetHeader()
 	assert.NotNil(t, header)
-	assert.Equal(t, uint16(1), header.Version)
+	assert.Equal(t, uint16(2), header.Version)
 	assert.Equal(t, uint16(0x1234), header.Flags)
 	assert.Equal(t, int64(12000), header.FirstEntryID)
 
@@ -349,7 +349,7 @@ func TestStreamEncodeWriterToFileToBatchCodecHandler(t *testing.T) {
 		os.Remove(tempFile.Name())
 	}()
 
-	streamWriter, err := NewStreamEncodeWriter(tempFile, 13000, 1, 0x5678)
+	streamWriter, err := NewStreamEncodeWriter(tempFile, 13000, 0x5678)
 	require.NoError(t, err)
 
 	var entryIDs []int64
@@ -377,7 +377,7 @@ func TestStreamEncodeWriterToFileToBatchCodecHandler(t *testing.T) {
 
 	header := batchReader.GetHeader()
 	assert.NotNil(t, header)
-	assert.Equal(t, uint16(1), header.Version)
+	assert.Equal(t, uint16(2), header.Version)
 	assert.Equal(t, uint16(0x5678), header.Flags)
 	assert.Equal(t, int64(13000), header.FirstEntryID)
 
@@ -443,7 +443,7 @@ func TestLargeFileCrossCompatibility(t *testing.T) {
 	// Test 1: BatchCodecHandler -> File -> StreamDecodeReader
 	t.Run("BatchToStream", func(t *testing.T) {
 		// Create with BatchCodecHandler
-		batchWriter := NewBatchCodecHandlerForWriting(14000, 1, 0)
+		batchWriter := NewBatchCodecHandlerForWriting(14000, 0)
 		for _, data := range testData {
 			batchWriter.AddData(data)
 		}
@@ -493,7 +493,7 @@ func TestLargeFileCrossCompatibility(t *testing.T) {
 			os.Remove(tempFile.Name())
 		}()
 
-		streamWriter, err := NewStreamEncodeWriter(tempFile, 15000, 1, 0)
+		streamWriter, err := NewStreamEncodeWriter(tempFile, 15000, 0)
 		require.NoError(t, err)
 
 		for _, data := range testData {
@@ -529,7 +529,7 @@ func TestEmptyFileCrossCompatibility(t *testing.T) {
 	// Test 1: Empty BatchCodecHandler -> File -> StreamDecodeReader
 	t.Run("EmptyBatchToStream", func(t *testing.T) {
 		// Create empty BatchCodecHandler
-		batchWriter := NewBatchCodecHandlerForWriting(16000, 1, 0)
+		batchWriter := NewBatchCodecHandlerForWriting(16000, 0)
 		batchData, err := batchWriter.ToBytes()
 		require.NoError(t, err)
 
@@ -569,7 +569,7 @@ func TestEmptyFileCrossCompatibility(t *testing.T) {
 			os.Remove(tempFile.Name())
 		}()
 
-		streamWriter, err := NewStreamEncodeWriter(tempFile, 17000, 1, 0)
+		streamWriter, err := NewStreamEncodeWriter(tempFile, 17000, 0)
 		require.NoError(t, err)
 
 		err = streamWriter.Finalize()
@@ -599,7 +599,7 @@ func TestConcurrentCrossCompatibilityAccess(t *testing.T) {
 	}
 
 	// Step 1: Create file with BatchCodecHandler
-	batchWriter := NewBatchCodecHandlerForWriting(18000, 1, 0)
+	batchWriter := NewBatchCodecHandlerForWriting(18000, 0)
 	for _, data := range testData {
 		batchWriter.AddData([]byte(data))
 	}
@@ -713,7 +713,7 @@ func TestConcurrentCrossCompatibilityAccess(t *testing.T) {
 
 func TestFileCorruptionDetection(t *testing.T) {
 	// Create valid file with BatchCodecHandler
-	batchWriter := NewBatchCodecHandlerForWriting(19000, 1, 0)
+	batchWriter := NewBatchCodecHandlerForWriting(19000, 0)
 	batchWriter.AddData([]byte("corruption test data 1"))
 	batchWriter.AddData([]byte("corruption test data 2"))
 
