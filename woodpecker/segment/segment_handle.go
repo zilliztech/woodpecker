@@ -49,8 +49,6 @@ type SegmentHandle interface {
 	GetId(context.Context) int64
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
-	// Read range entries within [from,to] of the segment
-	Read(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
 	// ReadBatch num of entries from the segment
 	ReadBatch(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
 	// GetLastAddConfirmed entryId for the segment
@@ -75,6 +73,8 @@ type SegmentHandle interface {
 	GetSize(context.Context) int64
 	// RequestCompactionAsync request compaction for the segment asynchronously
 	RequestCompactionAsync(context.Context) error
+	// Complete the segment writing
+	Complete(context.Context) (int64, error)
 	// Fence the segment in all nodes
 	Fence(context.Context) (int64, error)
 	// IsFence check if the segment is fenced
@@ -391,44 +391,6 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 
 }
 
-func (s *segmentHandleImpl) Read(ctx context.Context, from int64, to int64) ([]*processor.SegmentEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Read")
-	defer sp.End()
-	s.updateAccessTime()
-	// write data to quorum
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return nil, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
-	}
-
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return nil, err
-	}
-
-	if from > to {
-		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg("from must be less than to")
-	}
-
-	if from == to {
-		segmentEntry, err := cli.ReadEntry(ctx, s.logId, s.segmentId, from)
-		if err != nil {
-			return nil, err
-		}
-		return []*processor.SegmentEntry{segmentEntry}, nil
-	}
-
-	segmentEntryList, err := cli.ReadEntriesInRange(ctx, s.logId, s.segmentId, from, to)
-	if err != nil {
-		return nil, err
-	}
-	return segmentEntryList, nil
-}
-
 // ReadBatch reads batch entries from segment.
 func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, size int64) ([]*processor.SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
@@ -679,6 +641,52 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 	return nil
 }
 
+func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Complete")
+	defer sp.End()
+
+	// fence segment, prevent new append operations
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		// Revert fenced state on error
+		logger.Ctx(ctx).Warn("Failed to get quorum info during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
+		return -1, err
+	}
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		// Revert fenced state on error
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("quorumId", quorumInfo.Id),
+			zap.Int("nodeCount", len(quorumInfo.Nodes)))
+		return -1, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	}
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		// Revert fenced state on error
+		logger.Ctx(ctx).Warn("Failed to get logstore client during fence, reverting fenced state",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("node", quorumInfo.Nodes[0]),
+			zap.Error(err))
+		return -1, err
+	}
+
+	logger.Ctx(ctx).Info("Sending fence request to logstore",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.String("targetNode", quorumInfo.Nodes[0]))
+
+	return cli.CompleteSegment(ctx, s.logId, s.segmentId)
+}
+
 func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
@@ -786,51 +794,52 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 }
 
 func (s *segmentHandleImpl) IsFence(ctx context.Context) (bool, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "IsFence")
-	defer sp.End()
-	s.updateAccessTime()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
-	if s.fencedState.Load() {
-		// fast return if fenced state set locally
-		return true, nil
-	}
-
-	// fence segment, prevent new append operations
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return false, err
-	}
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return false, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return false, err
-	}
-	isSegFenced, err := cli.IsSegmentFenced(ctx, s.logId, s.segmentMetaCache.Load().SegNo)
-	if err != nil {
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "is_fence", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "is_fence", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return false, err
-	}
-
-	// Sync local state with remote state
-	if isSegFenced && !s.fencedState.Load() {
-		s.Lock()
-		// Double-check under lock
-		if !s.fencedState.Load() {
-			logger.Ctx(ctx).Info("found segment in server fenced, fast fail all start", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-			s.fastFailAppendOpsUnsafe(ctx, -1, werr.ErrSegmentFenced)
-			logger.Ctx(ctx).Info("found segment in server fenced, fast fail all finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-			s.fencedState.Store(true)
-		}
-		s.Unlock()
-	}
-
-	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "is_fence", "success").Inc()
-	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "is_fence", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return isSegFenced, err
+	//ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "IsFence")
+	//defer sp.End()
+	//s.updateAccessTime()
+	//start := time.Now()
+	//logIdStr := fmt.Sprintf("%d", s.logId)
+	//if s.fencedState.Load() {
+	//	// fast return if fenced state set locally
+	//	return true, nil
+	//}
+	//
+	//// fence segment, prevent new append operations
+	//quorumInfo, err := s.GetQuorumInfo(ctx)
+	//if err != nil {
+	//	return false, err
+	//}
+	//if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+	//	return false, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+	//}
+	//cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	//if err != nil {
+	//	return false, err
+	//}
+	//isSegFenced, err := cli.IsSegmentFenced(ctx, s.logId, s.segmentMetaCache.Load().SegNo)
+	//if err != nil {
+	//	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "is_fence", "error").Inc()
+	//	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "is_fence", "error").Observe(float64(time.Since(start).Milliseconds()))
+	//	return false, err
+	//}
+	//
+	//// Sync local state with remote state
+	//if isSegFenced && !s.fencedState.Load() {
+	//	s.Lock()
+	//	// Double-check under lock
+	//	if !s.fencedState.Load() {
+	//		logger.Ctx(ctx).Info("found segment in server fenced, fast fail all start", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+	//		s.fastFailAppendOpsUnsafe(ctx, -1, werr.ErrSegmentFenced)
+	//		logger.Ctx(ctx).Info("found segment in server fenced, fast fail all finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+	//		s.fencedState.Store(true)
+	//	}
+	//	s.Unlock()
+	//}
+	//
+	//metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "is_fence", "success").Inc()
+	//metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "is_fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	//return isSegFenced, err
+	return false, nil
 }
 
 // RecoveryOrCompact used for the auditor of this Log

@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	pb "github.com/zilliztech/woodpecker/proto"
 )
 
@@ -80,6 +81,11 @@ type WriterMessage struct {
 }
 
 func MarshalMessage(m *WriterMessage) ([]byte, error) {
+	// Validate that payload is not empty
+	if len(m.Payload) == 0 {
+		return nil, werr.ErrEmptyPayload
+	}
+
 	msgLayout := &pb.LogMessageLayout{
 		Payload:    m.Payload,
 		Properties: m.Properties,

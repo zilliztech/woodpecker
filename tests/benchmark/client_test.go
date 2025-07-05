@@ -42,7 +42,7 @@ func TestE2EWrite(t *testing.T) {
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
-			rootPath:    "/tmp/TestE2EWrite",
+			rootPath:    "/tmp/TestE2E",
 		},
 		{
 			name:        "ObjectStorage",
@@ -55,6 +55,7 @@ func TestE2EWrite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration()
 			assert.NoError(t, err)
+			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -67,7 +68,7 @@ func TestE2EWrite(t *testing.T) {
 			assert.NoError(t, err)
 
 			// ###  CreateLog if not exists
-			logName := fmt.Sprintf("test_e2e_log_%s", tc.name)
+			logName := fmt.Sprintf("test_log_%s", tc.name)
 			client.GetMetadataProvider().CreateLog(context.Background(), logName)
 
 			// ### OpenLog
@@ -92,6 +93,101 @@ func TestE2EWrite(t *testing.T) {
 			err = client.Close()
 			assert.NoError(t, err)
 
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+func TestE2ERead(t *testing.T) {
+	startGopsAgent()
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestE2E",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			//cfg.Log.Level = "debug"
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			// ###  CreateLog if not exists
+			logName := fmt.Sprintf("test_log_%s", tc.name)
+			client.CreateLog(context.Background(), logName)
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
+			if openErr != nil {
+				t.Logf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenReader
+			earliest := log.EarliestLogMessageID()
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "TestReadThroughput")
+			if openReaderErr != nil {
+				t.Logf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			// read loop with timeout mechanism
+			totalEntries := atomic.Int64{}
+			consecutiveTimeouts := 0
+			maxConsecutiveTimeouts := 5
+			readTimeout := 5 * time.Second
+
+			for {
+				// Create context with timeout for ReadNext
+				ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+				msg, readErr := logReader.ReadNext(ctx)
+				cancel() // Always cancel context to avoid resource leak
+				if readErr != nil {
+					consecutiveTimeouts++
+					t.Logf("read failed (timeout %d/%d), err:%v\n", consecutiveTimeouts, maxConsecutiveTimeouts, err)
+					// Check if we've exceeded the maximum consecutive timeouts
+					if consecutiveTimeouts >= maxConsecutiveTimeouts {
+						t.Logf("Reached maximum consecutive timeouts (%d), stopping read loop\n", maxConsecutiveTimeouts)
+						break
+					}
+					continue
+				} else {
+					// Reset timeout counter on successful read
+					consecutiveTimeouts = 0
+					// Update statistics
+					totalEntries.Add(1)
+					t.Logf("read success, recordId:%v\n", msg.Id)
+				}
+			}
+
+			finalEntries := totalEntries.Load()
+			t.Logf("Total entries read: %d\n", finalEntries)
 			// stop embed LogStore singleton
 			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
 			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")

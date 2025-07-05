@@ -131,6 +131,8 @@ const (
 	ResultChannelClosed
 	// LogFileClosed indicates that the log file is closed.
 	LogFileClosed
+	// LogFileEmpty indicates that the log file is empty.
+	LogFileEmpty
 	// FragmentEmpty indicates that the fragment is empty.
 	FragmentEmpty
 	// FragmentNotFound indicates that the fragment is not found.
@@ -157,6 +159,8 @@ const (
 	DiskFragmentNoSpace
 	// StorageNotWritable indicates that the storage is not writable
 	StorageNotWritable
+	// NoBlockFound indicates that no block found
+	NoBlockFound
 	// CRCMismatch indicates that the CRC mismatch
 	CRCMismatch
 	// InvalidRecordSize indicates an invalid record size
@@ -165,6 +169,8 @@ const (
 	NoCodecFound
 	// UnknownRecordTypeError indicates an unknown record type
 	UnknownRecordTypeError
+	// UnexpectedRecordTypeError indicates an unexpected record type
+	UnexpectedRecordTypeError
 	// InvalidMagicCodeError indicates an invalid magic code
 	InvalidMagicCodeError
 	// TruncateLogError indicates an error occurred during log truncation
@@ -173,6 +179,8 @@ const (
 	GetTruncationPointError
 	// WriterLockLost indicates the writer has lost its exclusive lock
 	WriterLockLost
+	// EmptyPayload indicates that the payload is empty
+	EmptyPayload
 )
 
 var (
@@ -207,6 +215,11 @@ var (
 	ErrConfigError         = newWoodpeckerError("config error", ConfigError, false)
 	ErrReaderTempInfoError = newWoodpeckerError("reader temp info error", MetadataCreateReaderError, true)
 	ErrWriterLockLost      = newWoodpeckerError("writer lock has been lost", WriterLockLost, false)
+	ErrWriterClosed        = newWoodpeckerError("writer is closed", WriterClosed, false)
+	ErrWriterFinalized     = newWoodpeckerError("writer is finalized", WriterClosed, false)
+	ErrRecordTooLarge      = newWoodpeckerError("record is too large", MessageTooBig, false)
+	ErrReaderClosed        = newWoodpeckerError("reader is closed", ReaderClosed, false)
+	ErrEmptyPayload        = newWoodpeckerError("payload cannot be empty", EmptyPayload, false)
 	// Truncation related
 	ErrTruncateLog        = newWoodpeckerError("failed to truncate log", TruncateLogError, true)
 	ErrGetTruncationPoint = newWoodpeckerError("failed to get truncation point", GetTruncationPointError, true)
@@ -217,6 +230,7 @@ var (
 
 	// LogFile & Fragment related
 	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, false)
+	ErrLogFileEmpty           = newWoodpeckerError("Fragment is empty", LogFileEmpty, true)
 	ErrFragmentEmpty          = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
 	ErrFragmentNotFound       = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
 	ErrFragmentInfoNotFetched = newWoodpeckerError("Fragment info is not fetched", FragmentInfoNotFetched, false)
@@ -244,10 +258,12 @@ var (
 	// Storage related
 	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
 	ErrStorageNotWritable  = newWoodpeckerError("storage is not writable", StorageNotWritable, false)
+	ErrNoBlockFound        = newWoodpeckerError("there is no block found", NoBlockFound, false)
 	ErrCRCMismatch         = newWoodpeckerError("crc mismatch", CRCMismatch, false)
 	ErrInvalidRecordSize   = newWoodpeckerError("invalid record size", InvalidRecordSize, false)
 	ErrCodecNotFound       = newWoodpeckerError("not found codec", NoCodecFound, false)
 	ErrUnknownRecord       = newWoodpeckerError("unknown record type", UnknownRecordTypeError, false)
+	ErrUnexpectedRecord    = newWoodpeckerError("unexpected record type", UnexpectedRecordTypeError, false)
 	ErrInvalidMagicCode    = newWoodpeckerError("invalid magic code", InvalidMagicCodeError, false)
 )
 

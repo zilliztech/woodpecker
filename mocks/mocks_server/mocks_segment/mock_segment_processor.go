@@ -236,6 +236,62 @@ func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
+// Complete provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) Complete(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Complete")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentProcessor_Complete_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Complete'
+type SegmentProcessor_Complete_Call struct {
+	*mock.Call
+}
+
+// Complete is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) Complete(ctx interface{}) *SegmentProcessor_Complete_Call {
+	return &SegmentProcessor_Complete_Call{Call: _e.mock.On("Complete", ctx)}
+}
+
+func (_c *SegmentProcessor_Complete_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Complete_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_Complete_Call) Return(_a0 int64, _a1 error) *SegmentProcessor_Complete_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentProcessor_Complete_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_Complete_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Fence provides a mock function with given fields: ctx
 func (_m *SegmentProcessor) Fence(ctx context.Context) (int64, error) {
 	ret := _m.Called(ctx)
@@ -483,52 +539,6 @@ func (_c *SegmentProcessor_GetSegmentLastAddConfirmed_Call) RunAndReturn(run fun
 	return _c
 }
 
-// IsFenced provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) IsFenced(ctx context.Context) bool {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for IsFenced")
-	}
-
-	var r0 bool
-	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
-		r0 = rf(ctx)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	return r0
-}
-
-// SegmentProcessor_IsFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsFenced'
-type SegmentProcessor_IsFenced_Call struct {
-	*mock.Call
-}
-
-// IsFenced is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *SegmentProcessor_Expecter) IsFenced(ctx interface{}) *SegmentProcessor_IsFenced_Call {
-	return &SegmentProcessor_IsFenced_Call{Call: _e.mock.On("IsFenced", ctx)}
-}
-
-func (_c *SegmentProcessor_IsFenced_Call) Run(run func(ctx context.Context)) *SegmentProcessor_IsFenced_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentProcessor_IsFenced_Call) Return(_a0 bool) *SegmentProcessor_IsFenced_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *SegmentProcessor_IsFenced_Call) RunAndReturn(run func(context.Context) bool) *SegmentProcessor_IsFenced_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ReadBatchEntries provides a mock function with given fields: _a0, _a1, _a2
 func (_m *SegmentProcessor) ReadBatchEntries(_a0 context.Context, _a1 int64, _a2 int64) ([]*processor.SegmentEntry, error) {
 	ret := _m.Called(_a0, _a1, _a2)
@@ -585,65 +595,6 @@ func (_c *SegmentProcessor_ReadBatchEntries_Call) Return(_a0 []*processor.Segmen
 }
 
 func (_c *SegmentProcessor_ReadBatchEntries_Call) RunAndReturn(run func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)) *SegmentProcessor_ReadBatchEntries_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ReadEntry provides a mock function with given fields: _a0, _a1
-func (_m *SegmentProcessor) ReadEntry(_a0 context.Context, _a1 int64) (*processor.SegmentEntry, error) {
-	ret := _m.Called(_a0, _a1)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ReadEntry")
-	}
-
-	var r0 *processor.SegmentEntry
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64) (*processor.SegmentEntry, error)); ok {
-		return rf(_a0, _a1)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64) *processor.SegmentEntry); ok {
-		r0 = rf(_a0, _a1)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*processor.SegmentEntry)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
-		r1 = rf(_a0, _a1)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentProcessor_ReadEntry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadEntry'
-type SegmentProcessor_ReadEntry_Call struct {
-	*mock.Call
-}
-
-// ReadEntry is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-func (_e *SegmentProcessor_Expecter) ReadEntry(_a0 interface{}, _a1 interface{}) *SegmentProcessor_ReadEntry_Call {
-	return &SegmentProcessor_ReadEntry_Call{Call: _e.mock.On("ReadEntry", _a0, _a1)}
-}
-
-func (_c *SegmentProcessor_ReadEntry_Call) Run(run func(_a0 context.Context, _a1 int64)) *SegmentProcessor_ReadEntry_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64))
-	})
-	return _c
-}
-
-func (_c *SegmentProcessor_ReadEntry_Call) Return(_a0 *processor.SegmentEntry, _a1 error) *SegmentProcessor_ReadEntry_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentProcessor_ReadEntry_Call) RunAndReturn(run func(context.Context, int64) (*processor.SegmentEntry, error)) *SegmentProcessor_ReadEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }

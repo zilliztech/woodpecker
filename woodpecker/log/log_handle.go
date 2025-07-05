@@ -865,7 +865,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	}
 	// 1. fence segmentHandle
 	// Send fence request to log stores and fail pending append operations
-	lastFlushedEntryId, err := writeableSegmentHandle.Fence(ctx) // fence first, which will wait for all writing request to be done
+	lastFlushedEntryId, err := writeableSegmentHandle.Complete(ctx) // fence first, which will wait for all writing request to be done
 	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		logger.Ctx(ctx).Info("fence segment failed",
 			zap.String("logName", l.Name),
@@ -907,7 +907,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	var lastError error
 	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
-		lastFlushedEntryId, err := segmentHandle.Fence(ctx)
+		lastFlushedEntryId, err := segmentHandle.Complete(ctx)
 		if err != nil {
 			logger.Ctx(ctx).Info("fence segment failed when closing logHandle",
 				zap.String("logName", l.Name),

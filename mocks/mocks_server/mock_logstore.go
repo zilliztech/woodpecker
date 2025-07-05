@@ -196,6 +196,64 @@ func (_c *LogStore_CompactSegment_Call) RunAndReturn(run func(context.Context, i
 	return _c
 }
 
+// CompleteSegment provides a mock function with given fields: _a0, _a1, _a2
+func (_m *LogStore) CompleteSegment(_a0 context.Context, _a1 int64, _a2 int64) (int64, error) {
+	ret := _m.Called(_a0, _a1, _a2)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompleteSegment")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
+		return rf(_a0, _a1, _a2)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
+		r0 = rf(_a0, _a1, _a2)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(_a0, _a1, _a2)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStore_CompleteSegment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompleteSegment'
+type LogStore_CompleteSegment_Call struct {
+	*mock.Call
+}
+
+// CompleteSegment is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+func (_e *LogStore_Expecter) CompleteSegment(_a0 interface{}, _a1 interface{}, _a2 interface{}) *LogStore_CompleteSegment_Call {
+	return &LogStore_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", _a0, _a1, _a2)}
+}
+
+func (_c *LogStore_CompleteSegment_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64)) *LogStore_CompleteSegment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStore_CompleteSegment_Call) Return(_a0 int64, _a1 error) *LogStore_CompleteSegment_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStore_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStore_CompleteSegment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // FenceSegment provides a mock function with given fields: _a0, _a1, _a2
 func (_m *LogStore) FenceSegment(_a0 context.Context, _a1 int64, _a2 int64) (int64, error) {
 	ret := _m.Called(_a0, _a1, _a2)
@@ -361,67 +419,6 @@ func (_c *LogStore_GetBatchEntries_Call) RunAndReturn(run func(context.Context, 
 	return _c
 }
 
-// GetEntry provides a mock function with given fields: _a0, _a1, _a2, _a3
-func (_m *LogStore) GetEntry(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64) (*processor.SegmentEntry, error) {
-	ret := _m.Called(_a0, _a1, _a2, _a3)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetEntry")
-	}
-
-	var r0 *processor.SegmentEntry
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)); ok {
-		return rf(_a0, _a1, _a2, _a3)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) *processor.SegmentEntry); ok {
-		r0 = rf(_a0, _a1, _a2, _a3)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*processor.SegmentEntry)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64) error); ok {
-		r1 = rf(_a0, _a1, _a2, _a3)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// LogStore_GetEntry_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetEntry'
-type LogStore_GetEntry_Call struct {
-	*mock.Call
-}
-
-// GetEntry is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 int64
-//   - _a3 int64
-func (_e *LogStore_Expecter) GetEntry(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *LogStore_GetEntry_Call {
-	return &LogStore_GetEntry_Call{Call: _e.mock.On("GetEntry", _a0, _a1, _a2, _a3)}
-}
-
-func (_c *LogStore_GetEntry_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64)) *LogStore_GetEntry_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64))
-	})
-	return _c
-}
-
-func (_c *LogStore_GetEntry_Call) Return(_a0 *processor.SegmentEntry, _a1 error) *LogStore_GetEntry_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *LogStore_GetEntry_Call) RunAndReturn(run func(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)) *LogStore_GetEntry_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetSegmentLastAddConfirmed provides a mock function with given fields: _a0, _a1, _a2
 func (_m *LogStore) GetSegmentLastAddConfirmed(_a0 context.Context, _a1 int64, _a2 int64) (int64, error) {
 	ret := _m.Called(_a0, _a1, _a2)
@@ -476,64 +473,6 @@ func (_c *LogStore_GetSegmentLastAddConfirmed_Call) Return(_a0 int64, _a1 error)
 }
 
 func (_c *LogStore_GetSegmentLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStore_GetSegmentLastAddConfirmed_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// IsSegmentFenced provides a mock function with given fields: _a0, _a1, _a2
-func (_m *LogStore) IsSegmentFenced(_a0 context.Context, _a1 int64, _a2 int64) (bool, error) {
-	ret := _m.Called(_a0, _a1, _a2)
-
-	if len(ret) == 0 {
-		panic("no return value specified for IsSegmentFenced")
-	}
-
-	var r0 bool
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (bool, error)); ok {
-		return rf(_a0, _a1, _a2)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) bool); ok {
-		r0 = rf(_a0, _a1, _a2)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(_a0, _a1, _a2)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// LogStore_IsSegmentFenced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsSegmentFenced'
-type LogStore_IsSegmentFenced_Call struct {
-	*mock.Call
-}
-
-// IsSegmentFenced is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 int64
-func (_e *LogStore_Expecter) IsSegmentFenced(_a0 interface{}, _a1 interface{}, _a2 interface{}) *LogStore_IsSegmentFenced_Call {
-	return &LogStore_IsSegmentFenced_Call{Call: _e.mock.On("IsSegmentFenced", _a0, _a1, _a2)}
-}
-
-func (_c *LogStore_IsSegmentFenced_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64)) *LogStore_IsSegmentFenced_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
-	})
-	return _c
-}
-
-func (_c *LogStore_IsSegmentFenced_Call) Return(_a0 bool, _a1 error) *LogStore_IsSegmentFenced_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *LogStore_IsSegmentFenced_Call) RunAndReturn(run func(context.Context, int64, int64) (bool, error)) *LogStore_IsSegmentFenced_Call {
 	_c.Call.Return(run)
 	return _c
 }

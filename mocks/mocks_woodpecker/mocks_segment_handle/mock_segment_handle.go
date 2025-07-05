@@ -106,6 +106,62 @@ func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) RunAndReturn(
 	return _c
 }
 
+// Complete provides a mock function with given fields: _a0
+func (_m *SegmentHandle) Complete(_a0 context.Context) (int64, error) {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Complete")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(_a0)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentHandle_Complete_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Complete'
+type SegmentHandle_Complete_Call struct {
+	*mock.Call
+}
+
+// Complete is a helper method to define mock.On call
+//   - _a0 context.Context
+func (_e *SegmentHandle_Expecter) Complete(_a0 interface{}) *SegmentHandle_Complete_Call {
+	return &SegmentHandle_Complete_Call{Call: _e.mock.On("Complete", _a0)}
+}
+
+func (_c *SegmentHandle_Complete_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Complete_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_Complete_Call) Return(_a0 int64, _a1 error) *SegmentHandle_Complete_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentHandle_Complete_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentHandle_Complete_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Fence provides a mock function with given fields: _a0
 func (_m *SegmentHandle) Fence(_a0 context.Context) (int64, error) {
 	ret := _m.Called(_a0)
@@ -716,66 +772,6 @@ func (_c *SegmentHandle_IsWritable_Call) Return(_a0 bool, _a1 error) *SegmentHan
 }
 
 func (_c *SegmentHandle_IsWritable_Call) RunAndReturn(run func(context.Context) (bool, error)) *SegmentHandle_IsWritable_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Read provides a mock function with given fields: _a0, _a1, _a2
-func (_m *SegmentHandle) Read(_a0 context.Context, _a1 int64, _a2 int64) ([]*processor.SegmentEntry, error) {
-	ret := _m.Called(_a0, _a1, _a2)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Read")
-	}
-
-	var r0 []*processor.SegmentEntry
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)); ok {
-		return rf(_a0, _a1, _a2)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) []*processor.SegmentEntry); ok {
-		r0 = rf(_a0, _a1, _a2)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]*processor.SegmentEntry)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(_a0, _a1, _a2)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentHandle_Read_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Read'
-type SegmentHandle_Read_Call struct {
-	*mock.Call
-}
-
-// Read is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 int64
-func (_e *SegmentHandle_Expecter) Read(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentHandle_Read_Call {
-	return &SegmentHandle_Read_Call{Call: _e.mock.On("Read", _a0, _a1, _a2)}
-}
-
-func (_c *SegmentHandle_Read_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64)) *SegmentHandle_Read_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_Read_Call) Return(_a0 []*processor.SegmentEntry, _a1 error) *SegmentHandle_Read_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentHandle_Read_Call) RunAndReturn(run func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)) *SegmentHandle_Read_Call {
 	_c.Call.Return(run)
 	return _c
 }

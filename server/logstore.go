@@ -50,10 +50,9 @@ type LogStore interface {
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
 	AddEntry(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)
-	GetEntry(context.Context, int64, int64, int64) (*processor.SegmentEntry, error)
 	GetBatchEntries(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)
 	FenceSegment(context.Context, int64, int64) (int64, error)
-	IsSegmentFenced(context.Context, int64, int64) (bool, error)
+	CompleteSegment(context.Context, int64, int64) (int64, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
@@ -255,33 +254,6 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 	return nil
 }
 
-func (l *logStore) GetEntry(ctx context.Context, logId int64, segmentId int64, entryId int64) (*processor.SegmentEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetEntry")
-	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
-
-	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
-	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_entry", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_entry", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
-		return nil, err
-	}
-	entry, err := segmentProcessor.ReadEntry(ctx, entryId)
-	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_entry", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
-		if !werr.ErrEntryNotFound.Is(err) {
-			logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
-		}
-		return nil, err
-	}
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_entry", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_entry", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return entry, nil
-}
-
 func (l *logStore) GetBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntries")
 	defer sp.End()
@@ -309,6 +281,21 @@ func (l *logStore) GetBatchEntries(ctx context.Context, logId int64, segmentId i
 	return entries, nil
 }
 
+func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return -1, err
+	}
+	return segmentProcessor.Complete(ctx)
+}
+
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
 	defer sp.End()
@@ -332,28 +319,28 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 	return lastEntryId, nil
 }
 
-func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "IsSegmentFenced")
-	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
-
-	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-		isFenced := processor.IsFenced(ctx)
-		status := "not_fenced"
-		if isFenced {
-			status = "fenced"
-		}
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", status).Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", status).Observe(float64(time.Since(start).Milliseconds()))
-		return isFenced, nil
-	}
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Observe(float64(time.Since(start).Milliseconds()))
-	checkErr := werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
-	logger.Ctx(ctx).Info("check if segment fenced failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(checkErr))
-	return false, checkErr
-}
+//func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
+//	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "IsSegmentFenced")
+//	defer sp.End()
+//	start := time.Now()
+//	logIdStr := fmt.Sprintf("%d", logId)
+//
+//	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
+//		isFenced := processor.IsFenced(ctx)
+//		status := "not_fenced"
+//		if isFenced {
+//			status = "fenced"
+//		}
+//		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", status).Inc()
+//		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", status).Observe(float64(time.Since(start).Milliseconds()))
+//		return isFenced, nil
+//	}
+//	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Inc()
+//	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Observe(float64(time.Since(start).Milliseconds()))
+//	checkErr := werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
+//	logger.Ctx(ctx).Info("check if segment fenced failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(checkErr))
+//	return false, checkErr
+//}
 
 func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
