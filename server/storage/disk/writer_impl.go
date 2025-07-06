@@ -70,7 +70,6 @@ type LocalFileWriter struct {
 	// write buffer
 	buffer            atomic.Pointer[cache.SequentialBuffer] // Write buffer
 	lastSyncTimestamp atomic.Int64
-	duplicatedSubmit  map[int64]channel.ResultChannel
 
 	// file state
 	currentBlockNumber atomic.Int64
@@ -127,7 +126,6 @@ func NewLocalFileWriterWithMode(parentDir string, logId int64, segmentId int64, 
 		closed:           false,
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
-		duplicatedSubmit: make(map[int64]channel.ResultChannel),
 		maxFlushSize:     blockSize,
 		maxBufferEntries: 1000, // Default max entries per buffer
 		maxIntervalMs:    200,  // 200ms default sync interval for more responsive syncing
@@ -456,18 +454,6 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 
 // notifyFlushError notifies all result channels of flush error
 func (w *LocalFileWriter) notifyFlushError(entries []*cache.BufferEntry, err error) {
-	// Notify duplicated submit entries for failed entries
-	w.mu.Lock()
-	for _, entry := range entries {
-		if duplicatedCh, exists := w.duplicatedSubmit[entry.EntryId]; exists {
-			// Notify the duplicated channel with err
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, duplicatedCh, entry.EntryId, err)
-			// Remove from duplicated submit map after notification
-			delete(w.duplicatedSubmit, entry.EntryId)
-		}
-	}
-	w.mu.Unlock()
-
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
@@ -478,18 +464,6 @@ func (w *LocalFileWriter) notifyFlushError(entries []*cache.BufferEntry, err err
 
 // notifyFlushError notifies all result channels of flush error
 func (w *LocalFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
-	w.mu.Lock()
-	// notify exists duplicated entries channel with success if necessary
-	for _, entry := range entries {
-		if duplicatedCh, exists := w.duplicatedSubmit[entry.EntryId]; exists {
-			// Notify the duplicated channel with success
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, duplicatedCh, entry.EntryId, nil)
-			// Remove from duplicated submit map after notification
-			delete(w.duplicatedSubmit, entry.EntryId)
-		}
-	}
-	w.mu.Unlock()
-
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
@@ -538,7 +512,6 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	}
 	if entryId <= w.lastSubmittedFlushingEntryID.Load() {
 		// If entryId is less than or equal to lastSubmittedFlushingEntryID, it indicates that the entry has already been submitted for flushing. Store the channel for later notification.
-		w.duplicatedSubmit[entryId] = resultCh
 		w.mu.Unlock()
 		return entryId, nil
 	}

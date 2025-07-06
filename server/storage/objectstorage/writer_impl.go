@@ -75,7 +75,6 @@ type MinioFileWriter struct {
 	// write buffer
 	buffer            atomic.Pointer[cache.SequentialBuffer] // Write buffer
 	lastSyncTimestamp atomic.Int64
-	duplicatedSubmit  map[int64]channel.ResultChannel
 
 	// written info
 	firstEntryID     atomic.Int64 // The first entryId of this Segment which already written to object storage
@@ -134,7 +133,6 @@ func NewMinioFileWriterWithMode(ctx context.Context, logId int64, segId int64, s
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
-		duplicatedSubmit: make(map[int64]channel.ResultChannel),
 	}
 	segmentFileWriter.firstEntryID.Store(-1)
 	segmentFileWriter.lastEntryID.Store(-1)
@@ -674,7 +672,6 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	if entryId <= f.lastSubmittedUploadingEntryID.Load() {
 		// If entryId is less than or equal to lastSubmittedUploadingEntryID, it indicates that the entry has already been submitted for upload. Return immediately.
 		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastSubmittedUploadingEntryID, already submitted for upload", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId))
-		f.duplicatedSubmit[entryId] = resultCh
 		f.mu.Unlock()
 		return entryId, nil
 	}
@@ -933,11 +930,6 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 func (f *MinioFileWriter) fastFlushFailUnsafe(ctx context.Context, fragmentData []*cache.BufferEntry, resultErr error) {
 	for _, item := range fragmentData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, -1, resultErr)
-		// TODO data race
-		if ch, ok := f.duplicatedSubmit[item.EntryId]; ok {
-			cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, ch, -1, resultErr)
-			delete(f.duplicatedSubmit, item.EntryId)
-		}
 	}
 }
 
@@ -958,11 +950,6 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, partInfo *
 	})
 	for _, item := range fragmentData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId, nil)
-		// TODO data race
-		if ch, ok := f.duplicatedSubmit[item.EntryId]; ok {
-			cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, ch, item.EntryId, nil)
-			delete(f.duplicatedSubmit, item.EntryId)
-		}
 	}
 }
 

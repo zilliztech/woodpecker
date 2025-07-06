@@ -111,8 +111,10 @@ func (op *AppendOp) Execute() {
 	// Update quorumInfo to ensure consistency
 	op.quorumInfo = quorumInfo
 
-	// current only 1
-	op.resultChannels = make([]channel.ResultChannel, len(quorumInfo.Nodes))
+	// Initialize result channels for each node if not already done
+	if len(op.resultChannels) == 0 {
+		op.resultChannels = make([]channel.ResultChannel, len(quorumInfo.Nodes))
+	}
 
 	for i := 0; i < len(quorumInfo.Nodes); i++ {
 		// get client from clientPool according node addr
@@ -131,15 +133,18 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	startRequestTime := time.Now()
 
 	// TODO currently only support Local ResultChannel
-	resultChannel := channel.NewLocalResultChannel(op.Identifier())
-	op.resultChannels[serverIndex] = resultChannel
+	if len(op.resultChannels) > serverIndex && op.resultChannels[serverIndex] == nil {
+		// create new result channel for this server if not exists
+		resultChannel := channel.NewLocalResultChannel(op.Identifier())
+		op.resultChannels[serverIndex] = resultChannel
+	}
 
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), resultChannel)
+	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), op.resultChannels[serverIndex])
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
-	go op.receivedAckCallback(ctx, startRequestTime, entryId, resultChannel, err, serverIndex)
+	go op.receivedAckCallback(ctx, startRequestTime, entryId, op.resultChannels[serverIndex], err, serverIndex)
 }
 
 func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int) {
