@@ -133,18 +133,18 @@ func TestClose_ContinuesOnError(t *testing.T) {
 	mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
 
 	// Set up expectations - segment 1 fails to fence, segment 2 succeeds
-	mockSegment1.EXPECT().Fence(mock.Anything).Return(-1, errors.New("fence error"))
+	mockSegment1.EXPECT().Complete(mock.Anything).Return(-1, nil)
 	mockSegment1.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil)
 
-	mockSegment2.EXPECT().Fence(mock.Anything).Return(-1, nil)
+	mockSegment2.EXPECT().Complete(mock.Anything).Return(-1, errors.New("complete error"))
 	mockSegment2.EXPECT().CloseWritingAndUpdateMetaIfNecessary(mock.Anything, int64(-1)).Return(nil)
 
 	// Call Close
 	err := logHandle.Close(ctx)
 
-	// Should return the first error encountered (fence error)
+	// Should return the first error encountered (complete error)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "fence error")
+	assert.Contains(t, err.Error(), "complete error")
 
 	// Verify all segments were processed and maps were cleared
 	assert.Len(t, logHandle.SegmentHandles, 0, "SegmentHandles should be cleared")

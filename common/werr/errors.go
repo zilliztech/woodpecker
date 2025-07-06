@@ -147,6 +147,8 @@ const (
 	FragmentVersionError
 	// FragmentAlreadyExists indicates that the fragment already exists.
 	FragmentAlreadyExists
+	// FragmentNotExists indicates that the fragment does not exist.
+	SegmentWriterNotExists
 	// WriteBufferFull indicates that the write buffer is full.
 	WriteBufferFull
 	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
@@ -239,6 +241,7 @@ var (
 	ErrFragmentVersion        = newWoodpeckerError("Fragment version is not supported", FragmentVersionError, false)
 	ErrWriteBufferFull        = newWoodpeckerError("Write buffer is full", WriteBufferFull, true)
 	ErrFragmentAlreadyExists  = newWoodpeckerError("Fragment already exists", FragmentAlreadyExists, false)
+	ErrSegmentWriterNotExists = newWoodpeckerError("Segment writer not exists", SegmentWriterNotExists, false)
 
 	// ---------------------------------------------
 	// Dependencies Side Error

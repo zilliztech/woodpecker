@@ -147,7 +147,8 @@ func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
 		// fast return if fenced
 		return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", s.logId, s.segId))
 	}
-	writer, err := s.getOrCreateSegmentWriter(ctx, false)
+
+	writer, err := s.getSegmentWriter(ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -313,6 +314,17 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		logger.Ctx(ctx).Info("create segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentReader)))
 	}
 	return s.currentSegmentReader, nil
+}
+
+func (s *segmentProcessor) getSegmentWriter(ctx context.Context) (storage.Writer, error) {
+	// First check with read lock to avoid data race
+	s.RLock()
+	defer s.RUnlock()
+	if s.currentSegmentWriter != nil {
+		writer := s.currentSegmentWriter
+		return writer, nil
+	}
+	return nil, werr.ErrSegmentWriterNotExists.WithCauseErrMsg("current segment writer not exists")
 }
 
 func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recoverMode bool) (storage.Writer, error) {
