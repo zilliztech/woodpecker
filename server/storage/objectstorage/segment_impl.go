@@ -49,7 +49,8 @@ type SegmentImpl struct {
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
-func NewSegmentImpl(ctx context.Context, logId int64, segId int64, segmentFileKey string, bucket string, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+func NewSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
 	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentFileKey", segmentFileKey))
 	segmentImpl := &SegmentImpl{
 		cfg:            cfg,

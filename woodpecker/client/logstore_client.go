@@ -69,10 +69,6 @@ func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, seg
 	return l.store.FenceSegment(ctx, logId, segmentId)
 }
 
-//func (l *logStoreClientLocal) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
-//	return l.store.IsSegmentFenced(ctx, logId, segmentId)
-//}
-
 func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	return l.store.GetSegmentLastAddConfirmed(ctx, logId, segmentId)
 }

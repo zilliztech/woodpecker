@@ -60,7 +60,8 @@ type MinioFileReader struct {
 }
 
 // NewMinioFileReader creates a new MinIO reader
-func NewMinioFileReader(ctx context.Context, client minioHandler.MinioHandler, bucket string, segmentFileKey string) (*MinioFileReader, error) {
+func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler) (*MinioFileReader, error) {
+	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
 	// Get object size
 	reader := &MinioFileReader{
 		client:         client,
@@ -83,16 +84,16 @@ func NewMinioFileReader(ctx context.Context, client minioHandler.MinioHandler, b
 		return reader, nil
 	}
 	// if uncompleted, try fetch all block infos
-	existsFragments, err := reader.prefetchAllBlockInfoOnce(ctx)
+	existsBlocks, err := reader.prefetchAllBlockInfoOnce(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Warn("prefetch fragment infos failed when create Read-only SegmentImpl",
+		logger.Ctx(ctx).Warn("prefetch block infos failed when create Read-only SegmentImpl",
 			zap.String("segmentFileKey", segmentFileKey),
 			zap.Error(err))
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("prefetch all fragment infos finish",
+	logger.Ctx(ctx).Debug("prefetch all block infos finish",
 		zap.String("segmentFileKey", segmentFileKey),
-		zap.Int("fragments", existsFragments))
+		zap.Int("blocks", existsBlocks))
 	return reader, nil
 }
 
@@ -107,7 +108,7 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{
 		Recursive: f.isCompleted.Load(), // only list compacted merged blocks
 	})
-	existsFragments := make([]*codec.IndexRecord, 0, 32)
+	existsBlocks := make([]*codec.IndexRecord, 0, 32)
 	for objInfo := range objectCh {
 		if objInfo.Err != nil {
 			logger.Ctx(ctx).Warn("Error listing objects",
@@ -128,13 +129,13 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 		}
 
 		if minioHandler.IsFencedObject(objInfo) {
-			// it means the object is fenced out, no more fragment data
+			// it means the object is fenced out, no more blocks data
 			logger.Ctx(ctx).Info("segment file is fenced out", zap.String("segmentFileKey", f.segmentFileKey), zap.String("fencedBlockKey", objInfo.Key))
 			f.isFenced.Store(true)
 			break
 		}
 
-		fragmentId, isMerged, parseErr := parseFilePartName(objInfo.Key)
+		blockId, isMerged, parseErr := parseFilePartName(objInfo.Key)
 		if parseErr != nil {
 			logger.Ctx(ctx).Warn("Error parsing segment file block id from block key",
 				zap.String("segmentFileKey", f.segmentFileKey),
@@ -142,11 +143,11 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 				zap.Error(parseErr))
 			return 0, parseErr
 		}
-		logger.Ctx(ctx).Info("Found segment file block",
+		logger.Ctx(ctx).Debug("Found segment file block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", objInfo.Key),
 			zap.Int64("blockSize", objInfo.Size),
-			zap.Int64("blockID", fragmentId),
+			zap.Int64("blockID", blockId),
 			zap.Bool("isMerged", isMerged))
 
 		// get block last record
@@ -158,9 +159,9 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 		if isMerged == f.isCompacted.Load() {
 			// if compacted, only merged blocks we need
 			// if not compacted, not merged blocks we need
-			existsFragments = append(existsFragments, &codec.IndexRecord{
-				BlockNumber:       int32(fragmentId),
-				StartOffset:       fragmentId,
+			existsBlocks = append(existsBlocks, &codec.IndexRecord{
+				BlockNumber:       int32(blockId),
+				StartOffset:       blockId,
 				FirstRecordOffset: 0,
 				FirstEntryID:      blockLastRecord.FirstEntryID,
 				LastEntryID:       blockLastRecord.LastEntryID,
@@ -168,24 +169,24 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 		}
 	}
 	// ensure no hole in list
-	sort.Slice(existsFragments, func(i, j int) bool {
-		return existsFragments[i].BlockNumber < existsFragments[j].BlockNumber
+	sort.Slice(existsBlocks, func(i, j int) bool {
+		return existsBlocks[i].BlockNumber < existsBlocks[j].BlockNumber
 	})
 	existsBlocksExpectedBlockId := int32(0)
-	for i := 0; i < len(existsFragments); i++ {
-		if existsFragments[i].BlockNumber != existsBlocksExpectedBlockId {
+	for i := 0; i < len(existsBlocks); i++ {
+		if existsBlocks[i].BlockNumber != existsBlocksExpectedBlockId {
 			logger.Ctx(ctx).Debug("Found block hole",
 				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int32("blockID", existsFragments[i].BlockNumber),
+				zap.Int32("blockID", existsBlocks[i].BlockNumber),
 				zap.Int32("expectedBlockId", existsBlocksExpectedBlockId))
-			existsFragments = existsFragments[:i]
+			existsBlocks = existsBlocks[:i]
 			break
 		}
 		existsBlocksExpectedBlockId += 1
 	}
 
-	f.blocks = existsFragments
-	return len(existsFragments), nil
+	f.blocks = existsBlocks
+	return len(existsBlocks), nil
 }
 
 func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
@@ -292,55 +293,55 @@ func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
 	return nil
 }
 
-// incrementally fetch new fragments as they come in
+// incrementally fetch new blocks as they come in
 func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (bool, *codec.IndexRecord, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchIncrementalBlockInfo")
 	defer sp.End()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var fetchedLastFragment *codec.IndexRecord
+	var fetchedLastBlock *codec.IndexRecord
 
 	blockID := int64(0)
 	if len(f.blocks) > 0 {
 		lastFrag := f.blocks[len(f.blocks)-1]
 		blockID = int64(lastFrag.BlockNumber) + 1
-		fetchedLastFragment = lastFrag
+		fetchedLastBlock = lastFrag
 	}
-	existsNewFragment := false
+	existsNewBlock := false
 	for {
 		blockKey := getPartKey(f.segmentFileKey, blockID)
 
-		// check if the fragment exists in object storage
+		// check if the block exists in object storage
 		_, err := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
 		if err != nil && minioHandler.IsObjectNotExists(err) {
 			break
 		}
 		if err != nil {
-			// indicates that the prefetching of fragments has completed.
-			//fmt.Println("object storage read fragment err: ", err)
-			return existsNewFragment, nil, err
+			// indicates that the prefetching of blocks has completed.
+			//fmt.Println("object storage read block err: ", err)
+			return existsNewBlock, nil, err
 		}
 
 		blockLastRecord, getErr := f.getBlockLastRecord(ctx, blockKey)
 		if getErr != nil {
-			return existsNewFragment, nil, getErr
+			return existsNewBlock, nil, getErr
 		}
 
-		fetchedLastFragment = &codec.IndexRecord{
+		fetchedLastBlock = &codec.IndexRecord{
 			BlockNumber:       int32(blockID),
 			StartOffset:       blockID,
 			FirstRecordOffset: 0,
 			FirstEntryID:      blockLastRecord.FirstEntryID,
 			LastEntryID:       blockLastRecord.LastEntryID,
 		}
-		f.blocks = append(f.blocks, fetchedLastFragment)
-		existsNewFragment = true
-		logger.Ctx(ctx).Info("prefetch fragment info", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("lastBlockID", blockID))
+		f.blocks = append(f.blocks, fetchedLastBlock)
+		existsNewBlock = true
+		logger.Ctx(ctx).Info("prefetch block info", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("lastBlockID", blockID))
 		blockID++
 	}
 
-	logger.Ctx(ctx).Debug("prefetch fragment infos", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("fragments", len(f.blocks)), zap.Int64("lastBlockID", blockID-1))
-	return existsNewFragment, fetchedLastFragment, nil
+	logger.Ctx(ctx).Debug("prefetch block infos", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("blocks", len(f.blocks)), zap.Int64("lastBlockID", blockID-1))
+	return existsNewBlock, fetchedLastBlock, nil
 }
 
 func (f *MinioFileReader) getBlockLastRecord(ctx context.Context, blockKey string) (*codec.BlockLastRecord, error) {
@@ -392,32 +393,32 @@ func (f *MinioFileReader) getBlockLastRecord(ctx context.Context, blockKey strin
 
 // get the Block for the entryId
 func (f *MinioFileReader) getBlock(ctx context.Context, entryId int64) (*codec.IndexRecord, error) {
-	logger.Ctx(ctx).Debug("get fragment for entryId", zap.Int64("entryId", entryId))
+	logger.Ctx(ctx).Debug("get block for entryId", zap.Int64("entryId", entryId))
 
 	// find from normal block
 	foundFrag, err := f.findBlock(entryId)
 	if err != nil {
-		logger.Ctx(ctx).Warn("get fragment from cache failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("get block from cache failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(ctx).Debug("get fragment from cache for entryId completed", zap.Int64("entryId", entryId), zap.Int32("blockID", foundFrag.BlockNumber))
+		logger.Ctx(ctx).Debug("get block from cache for entryId completed", zap.Int64("entryId", entryId), zap.Int32("blockID", foundFrag.BlockNumber))
 		return foundFrag, nil
 	}
 
 	if f.isCompleted.Load() || f.isFenced.Load() {
-		// means the prefetching of fragments has not completed.
+		// means the prefetching of blocks has not completed.
 		return nil, nil
 	}
 
-	// try to fetch new fragments if exists
-	existsNewFragment, _, err := f.prefetchIncrementalBlockInfo(ctx)
+	// try to fetch new blocks if exists
+	existsNewBlock, _, err := f.prefetchIncrementalBlockInfo(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Warn("prefetch fragment info failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("prefetch block info failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Error(err))
 		return nil, err
 	}
-	if !existsNewFragment {
-		// means get no fragment for this entryId
+	if !existsNewBlock {
+		// means get no block for this entryId
 		return nil, nil
 	}
 
@@ -427,15 +428,15 @@ func (f *MinioFileReader) getBlock(ctx context.Context, entryId int64) (*codec.I
 		return nil, err
 	}
 	if foundFrag != nil {
-		logger.Ctx(ctx).Debug("get fragment from cache for entryId", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int32("blockID", foundFrag.BlockNumber))
+		logger.Ctx(ctx).Debug("get block from cache for entryId", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int32("blockID", foundFrag.BlockNumber))
 		return foundFrag, nil
 	}
 
-	// means get no fragment for this entryId
+	// means get no block for this entryId
 	return nil, nil
 }
 
-// findBlock finds the exists cache fragments for the entryId
+// findBlock finds the exists cache blocks for the entryId
 func (f *MinioFileReader) findBlock(entryId int64) (*codec.IndexRecord, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -457,38 +458,10 @@ func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 		return f.blocks[len(f.blocks)-1].LastEntryID, nil
 	}
 
-	logger.Ctx(ctx).Debug("no fragments exist, returning -1 as last entry ID",
+	logger.Ctx(ctx).Debug("no blocks exist, returning -1 as last entry ID",
 		zap.String("segmentFileKey", f.segmentFileKey))
 	return -1, nil
 }
-
-//
-//func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
-//	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "GetLastEntryId")
-//	defer sp.End()
-//	// prefetch fragmentInfos if any new fragment created
-//	_, lastFragment, err := f.prefetchIncrementalBlockInfo(ctx)
-//	if err != nil {
-//		logger.Ctx(ctx).Debug("get last entryId failed when fetch the last fragment, treating as empty segment",
-//			zap.String("segmentFileKey", f.segmentFileKey),
-//			zap.Error(err))
-//		// For empty segments, return -1 as the last entry ID
-//		return -1, nil
-//	}
-//
-//	// If no fragments exist, return -1
-//	if lastFragment == nil {
-//		logger.Ctx(ctx).Debug("no fragments exist, returning -1 as last entry ID",
-//			zap.String("segmentFileKey", f.segmentFileKey))
-//		return -1, nil
-//	}
-//
-//	logger.Ctx(ctx).Debug("get last entryId finish",
-//		zap.String("segmentFileKey", f.segmentFileKey),
-//		zap.Int32("lastBlockID", lastFragment.BlockNumber),
-//		zap.Int64("lastEntryId", lastFragment.LastEntryID))
-//	return lastFragment.LastEntryID, nil
-//}
 
 func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
@@ -534,7 +507,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	// Get object info to determine the actual size
 	objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
 	if statErr != nil {
-		logger.Ctx(ctx).Warn("Failed to get fragment object info",
+		logger.Ctx(ctx).Warn("Failed to get block object info",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 			zap.Error(statErr))
@@ -543,7 +516,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	blockObj, getErr := f.client.GetObject(ctx, f.bucket, blockObjKey, minio.GetObjectOptions{})
 	if getErr != nil {
-		logger.Ctx(ctx).Warn("Failed to get fragment",
+		logger.Ctx(ctx).Warn("Failed to get block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 			zap.Error(getErr))
@@ -553,7 +526,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, objInfo.Size)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to read fragment data",
+		logger.Ctx(ctx).Warn("Failed to read block data",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 			zap.Error(err))
@@ -562,7 +535,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	records, decodeErr := codec.DecodeRecordList(blockData)
 	if decodeErr != nil {
-		logger.Ctx(ctx).Warn("Failed to decode fragment",
+		logger.Ctx(ctx).Warn("Failed to decode block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 			zap.Error(decodeErr))
@@ -610,7 +583,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		// Get object info to determine the actual size
 		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
 		if statErr != nil {
-			logger.Ctx(ctx).Warn("Failed to get fragment object info",
+			logger.Ctx(ctx).Warn("Failed to get block object info",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 				zap.Error(statErr))
@@ -619,7 +592,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 		blockObj, getErr := f.client.GetObject(ctx, f.bucket, blockObjKey, minio.GetObjectOptions{})
 		if getErr != nil {
-			logger.Ctx(ctx).Warn("Failed to get fragment",
+			logger.Ctx(ctx).Warn("Failed to get block",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 				zap.Error(getErr))
@@ -628,7 +601,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 		blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, objInfo.Size)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to read fragment data",
+			logger.Ctx(ctx).Warn("Failed to read block data",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 				zap.Error(err))
@@ -639,7 +612,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 		records, decodeErr := codec.DecodeRecordList(blockData)
 		if decodeErr != nil {
-			logger.Ctx(ctx).Warn("Failed to decode fragment",
+			logger.Ctx(ctx).Warn("Failed to decode block",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 				zap.Error(decodeErr))

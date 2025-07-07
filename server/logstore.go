@@ -319,29 +319,6 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 	return lastEntryId, nil
 }
 
-//func (l *logStore) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
-//	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "IsSegmentFenced")
-//	defer sp.End()
-//	start := time.Now()
-//	logIdStr := fmt.Sprintf("%d", logId)
-//
-//	if processor := l.getExistsSegmentProcessor(logId, segmentId); processor != nil {
-//		isFenced := processor.IsFenced(ctx)
-//		status := "not_fenced"
-//		if isFenced {
-//			status = "fenced"
-//		}
-//		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", status).Inc()
-//		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", status).Observe(float64(time.Since(start).Milliseconds()))
-//		return isFenced, nil
-//	}
-//	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Inc()
-//	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "is_segment_fenced", "segment_not_found").Observe(float64(time.Since(start).Milliseconds()))
-//	checkErr := werr.ErrSegmentNotFound.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d not exists", logId, segmentId))
-//	logger.Ctx(ctx).Info("check if segment fenced failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(checkErr))
-//	return false, checkErr
-//}
-
 func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()

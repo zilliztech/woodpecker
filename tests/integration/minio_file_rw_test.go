@@ -96,11 +96,11 @@ func TestMinioFileWriter_BasicWriteAndSync(t *testing.T) {
 
 	logId := int64(1)
 	segmentId := int64(100)
-	segmentFileKey := fmt.Sprintf("test-basic-write-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-basic-write-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create MinioFileWriter
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -152,10 +152,10 @@ func TestMinioFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 
 	logId := int64(2)
 	segmentId := int64(200)
-	segmentFileKey := fmt.Sprintf("test-large-data-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-large-data-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -193,7 +193,7 @@ func TestMinioFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 	assert.Equal(t, int64(len(largeData)-1), writer.GetLastEntryId(ctx))
 
 	// Verify objects were created in MinIO
-	objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+	objectCh := minioHdl.ListObjects(ctx, testBucket, baseDir, true, minio.ListObjectsOptions{})
 	objectCount := 0
 	for object := range objectCh {
 		require.NoError(t, object.Err)
@@ -209,10 +209,10 @@ func TestMinioFileWriter_ConcurrentWrites(t *testing.T) {
 
 	logId := int64(3)
 	segmentId := int64(300)
-	segmentFileKey := fmt.Sprintf("test-concurrent-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-concurrent-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -278,10 +278,10 @@ func TestMinioFileWriter_Finalize(t *testing.T) {
 
 	logId := int64(4)
 	segmentId := int64(400)
-	segmentFileKey := fmt.Sprintf("test-finalize-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-finalize-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Write some test data
@@ -309,7 +309,7 @@ func TestMinioFileWriter_Finalize(t *testing.T) {
 	assert.Equal(t, int64(len(testData)-1), lastEntryId)
 
 	// Verify objects were created including footer
-	objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 	objects := make([]string, 0)
 	for object := range objectCh {
 		require.NoError(t, object.Err)
@@ -331,10 +331,10 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
 		logId := int64(5)
 		segmentId := int64(500)
-		segmentFileKey := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-		writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -370,10 +370,10 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdInBuffer", func(t *testing.T) {
 		logId := int64(5)
 		segmentId := int64(500)
-		segmentFileKey := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-		writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -411,10 +411,10 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdInUploading", func(t *testing.T) {
 		logId := int64(5)
 		segmentId := int64(500)
-		segmentFileKey := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-		writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -450,10 +450,10 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("WriteAfterClose", func(t *testing.T) {
 		logId := int64(6)
 		segmentId := int64(600)
-		segmentFileKey := fmt.Sprintf("test-write-after-close-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+		baseDir := fmt.Sprintf("test-write-after-close-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-		writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 
 		// Close writer
@@ -480,10 +480,10 @@ func TestMinioFileWriter_BlockLastRecordVerification(t *testing.T) {
 
 	logId := int64(7)
 	segmentId := int64(700)
-	segmentFileKey := fmt.Sprintf("test-block-last-record-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-block-last-record-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -509,7 +509,7 @@ func TestMinioFileWriter_BlockLastRecordVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back the objects and verify they contain BlockLastRecord
-	objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
 	for object := range objectCh {
 		require.NoError(t, object.Err)
@@ -566,15 +566,15 @@ func TestMinioFileWriter_SegmentLocking(t *testing.T) {
 
 	logId := int64(8)
 	segmentId := int64(800)
-	segmentFileKey := fmt.Sprintf("test-segment-locking-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-segment-locking-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create first writer
-	writer1, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Try to create second writer with same segment (should fail due to lock)
-	writer2, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer2, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	assert.Error(t, err, "Should not be able to create second writer for same segment")
 	assert.Nil(t, writer2)
 
@@ -583,7 +583,7 @@ func TestMinioFileWriter_SegmentLocking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now should be able to create new writer
-	writer3, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer3, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer3)
 
@@ -601,12 +601,12 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	logId := int64(10)
 	segmentId := int64(1000)
-	segmentFileKey := fmt.Sprintf("test-recovery-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-recovery-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	t.Run("WriteDataAndInterrupt", func(t *testing.T) {
 		// Create first writer and write some data
-		writer1, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		require.NotNil(t, writer1)
 
@@ -648,7 +648,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		}
 
 		// Verify objects were created in MinIO
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 		objectCount := 0
 		hasFooter := false
 		for object := range objectCh {
@@ -674,10 +674,10 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	var recoverySegmentFileKey string
 	t.Run("RecoverAndContinueWriting", func(t *testing.T) {
 		// Use the same segment key to test true recovery
-		recoverySegmentFileKey = segmentFileKey
+		recoverySegmentFileKey = baseDir
 
 		// Check if segment has footer first
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh := minioHdl.ListObjects(ctx, testBucket, baseDir, true, minio.ListObjectsOptions{})
 		hasFooter := false
 		for object := range objectCh {
 			require.NoError(t, object.Err)
@@ -692,7 +692,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			t.Log("Testing recovery from completed segment (should not be writable)")
 
 			// Create a new writer for the completed segment
-			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, logId, segmentId, recoverySegmentFileKey, testBucket, minioHdl, cfg, true)
+			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, cfg, true)
 			require.NoError(t, err)
 			require.NotNil(t, writer2)
 
@@ -715,7 +715,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			t.Log("Testing recovery from incomplete segment (should be writable)")
 
 			// Create a new writer for continuation (recovery scenario)
-			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, logId, segmentId, recoverySegmentFileKey, testBucket, minioHdl, cfg, true)
+			writer2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, cfg, true)
 			require.NoError(t, err)
 			require.NotNil(t, writer2)
 
@@ -769,7 +769,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("VerifyOriginalSegmentObjects", func(t *testing.T) {
 		// Verify that the objects were created
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
 		dataObjects := make([]string, 0)
 		for object := range objectCh {
@@ -786,7 +786,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("VerifyFinalSegmentState", func(t *testing.T) {
 		// Create reader to verify the final segment state
-		reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, recoverySegmentFileKey)
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -832,7 +832,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("VerifyAllObjectsExist", func(t *testing.T) {
 		// List all objects and verify structure
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
 		dataObjects := make([]string, 0)
 
@@ -865,10 +865,10 @@ func BenchmarkMinioFileWriter_WriteDataAsync(b *testing.B) {
 
 	logId := int64(9)
 	segmentId := int64(900)
-	segmentFileKey := fmt.Sprintf("bench-write-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("bench-write-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -978,11 +978,11 @@ func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 
 	logId := int64(1)
 	segmentId := int64(100)
-	segmentFileKey := fmt.Sprintf("test-block-last-record-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-block-last-record-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1013,7 +1013,7 @@ func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now read the objects directly and check their content
-	objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
 	for object := range objectCh {
 		require.NoError(t, object.Err)
@@ -1070,11 +1070,11 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 
 	logId := int64(10)
 	segmentId := int64(1000)
-	segmentFileKey := fmt.Sprintf("test-batch-modes-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-batch-modes-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer and write test data across multiple blocks
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1110,7 +1110,7 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -1201,8 +1201,8 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 
 	logId := int64(20)
 	segmentId := int64(2000)
-	segmentFileKey := fmt.Sprintf("test-data-integrity-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-data-integrity-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Test various data sizes: single byte, small, medium, large
 	// Note: We skip empty data as it's not a valid log entry
@@ -1218,7 +1218,7 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	}
 
 	// Write data
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1248,7 +1248,7 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 
 	// Read all entries
@@ -1282,11 +1282,11 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 
 	logId := int64(21)
 	segmentId := int64(2100)
-	segmentFileKey := fmt.Sprintf("test-sequential-reading-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-sequential-reading-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer and write test data
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Write 20 entries to create multiple blocks
@@ -1317,7 +1317,7 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 
 	t.Run("ReadFromBeginning", func(t *testing.T) {
@@ -1406,11 +1406,11 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 
 	logId := int64(22)
 	segmentId := int64(2200)
-	segmentFileKey := fmt.Sprintf("test-concurrent-rw-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-concurrent-rw-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Write initial data
@@ -1470,7 +1470,7 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Try to read existing data
-		reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 		if err != nil {
 			errors <- err
 			return
@@ -1516,7 +1516,7 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Final verification
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 
 	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
@@ -1540,9 +1540,9 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("NonExistentSegment", func(t *testing.T) {
-		nonExistentKey := fmt.Sprintf("non-existent-segment-%d", time.Now().Unix())
+		nonExistentBaseDir := fmt.Sprintf("non-existent-segment-%d", time.Now().Unix())
 
-		reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, nonExistentKey)
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, nonExistentBaseDir, 1000, 2000, minioHdl)
 		require.NoError(t, err) // Should succeed in creating reader
 
 		// But reading should fail gracefully
@@ -1561,12 +1561,12 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 		// Create a valid segment first
 		logId := int64(23)
 		segmentId := int64(2300)
-		segmentFileKey := fmt.Sprintf("test-invalid-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+		baseDir := fmt.Sprintf("test-invalid-entry-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 		// Create and write some data
 		cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
-		writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 
 		// Write a few entries
@@ -1588,7 +1588,7 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create reader and test invalid entry IDs
-		reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 		require.NoError(t, err)
 
 		// Test reading from non-existent entry ID
@@ -1623,10 +1623,10 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 
 	logId := int64(24)
 	segmentId := int64(2400)
-	segmentFileKey := fmt.Sprintf("test-large-entry-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-large-entry-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Test different large entry sizes
@@ -1676,7 +1676,7 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify reading large entries
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 
 	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
@@ -1709,10 +1709,10 @@ func TestMinioFileWriter_MetadataConsistency(t *testing.T) {
 
 	logId := int64(25)
 	segmentId := int64(2500)
-	segmentFileKey := fmt.Sprintf("test-metadata-consistency-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-metadata-consistency-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 
 	// Write entries with metadata tracking
@@ -1744,7 +1744,7 @@ func TestMinioFileWriter_MetadataConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify metadata consistency in reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
 	require.NoError(t, err)
 
 	// Check footer metadata
@@ -1784,10 +1784,10 @@ func BenchmarkMinioFileWriter_ThroughputTest(b *testing.B) {
 	minioHdl, cfg := setupMinioFileWriterTest(&testing.T{})
 	ctx := context.Background()
 
-	segmentFileKey := fmt.Sprintf("bench-throughput-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("bench-throughput-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
 
-	writer, err := objectstorage.NewMinioFileWriter(ctx, 1, 1, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, 1, 1, minioHdl, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1818,11 +1818,11 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	minioHdl, cfg := setupMinioFileWriterTest(&testing.T{})
 	ctx := context.Background()
 
-	segmentFileKey := fmt.Sprintf("bench-read-throughput-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("bench-read-throughput-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
 
 	// Prepare test data
-	writer, err := objectstorage.NewMinioFileWriter(ctx, 1, 1, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, 1, 1, minioHdl, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1854,7 +1854,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := objectstorage.NewMinioFileReader(ctx, minioHdl, testBucket, segmentFileKey)
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, 1, 1, minioHdl)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1883,11 +1883,11 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	logId := int64(30)
 	segmentId := int64(3000)
-	segmentFileKey := fmt.Sprintf("test-empty-payload-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-empty-payload-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1962,11 +1962,11 @@ func TestMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 
 	logId := int64(30)
 	segmentId := int64(3000)
-	segmentFileKey := fmt.Sprintf("test-header-record-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-header-record-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Create writer
-	writer, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1998,7 +1998,7 @@ func TestMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now read the first object and verify it starts with HeaderRecord
-	objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
 	var firstDataObject string
 	for object := range objectCh {
@@ -2068,12 +2068,12 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 
 	logId := int64(50)       // 修改为不同的 logId 避免冲突
 	segmentId := int64(5000) // 修改为不同的 segmentId 避免冲突
-	segmentFileKey := fmt.Sprintf("test-recovery-debug-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, segmentFileKey)
+	baseDir := fmt.Sprintf("test-recovery-debug-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	t.Run("WriteDataAndInterruptOnly", func(t *testing.T) {
 		// Create first writer and write some data
-		writer1, err := objectstorage.NewMinioFileWriter(ctx, logId, segmentId, segmentFileKey, testBucket, minioHdl, cfg)
+		writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		require.NotNil(t, writer1)
 
@@ -2109,7 +2109,7 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 
 		// List objects BEFORE close
 		t.Log("Objects BEFORE close:")
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 		for object := range objectCh {
 			require.NoError(t, object.Err)
 			t.Logf("  Before close: %s (size: %d)", object.Key, object.Size)
@@ -2127,7 +2127,7 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 
 		// List objects AFTER close
 		t.Log("Objects AFTER close:")
-		objectCh = minioHdl.ListObjects(ctx, testBucket, segmentFileKey, true, minio.ListObjectsOptions{})
+		objectCh = minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 		objectCount := 0
 		for object := range objectCh {
 			require.NoError(t, object.Err)

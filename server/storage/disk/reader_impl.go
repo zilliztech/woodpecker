@@ -40,6 +40,8 @@ var _ storage.Reader = (*LocalFileReader)(nil)
 
 // LocalFileReader implements AbstractFileReader for local filesystem storage
 type LocalFileReader struct {
+	logId        int64
+	segId        int64
 	filePath     string
 	file         *os.File
 	size         int64
@@ -49,7 +51,8 @@ type LocalFileReader struct {
 }
 
 // NewLocalFileReader creates a new local filesystem reader
-func NewLocalFileReader(filePath string) (*LocalFileReader, error) {
+func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId int64) (*LocalFileReader, error) {
+	filePath := getSegmentFilePath(baseDir, logId, segId)
 	// Open file for reading
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -64,6 +67,8 @@ func NewLocalFileReader(filePath string) (*LocalFileReader, error) {
 	}
 
 	reader := &LocalFileReader{
+		logId:    logId,
+		segId:    segId,
 		filePath: filePath,
 		file:     file,
 		size:     stat.Size(),

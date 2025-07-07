@@ -71,7 +71,7 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 	// Create LocalFileWriter
 	logId := int64(1)
 	segmentId := int64(100)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -121,7 +121,7 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify file exists (construct expected file path)
-	expectedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId))
+	expectedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 	_, err = os.Stat(expectedFilePath)
 	require.NoError(t, err)
 }
@@ -134,7 +134,7 @@ func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 
 	logId := int64(2)
 	segmentId := int64(200)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -178,7 +178,7 @@ func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
 
 	logId := int64(3)
 	segmentId := int64(300)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -245,7 +245,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("EmptyPayloadValidation", func(t *testing.T) {
 		logId := int64(4)
 		segmentId := int64(400)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -259,7 +259,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("WriteAfterFinalize", func(t *testing.T) {
 		logId := int64(5)
 		segmentId := int64(500)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -285,7 +285,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("WriteAfterClose", func(t *testing.T) {
 		logId := int64(6)
 		segmentId := int64(600)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 
 		// Close writer
@@ -302,7 +302,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
 		logId := int64(7)
 		segmentId := int64(700)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -338,7 +338,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdInBuffer", func(t *testing.T) {
 		logId := int64(8)
 		segmentId := int64(800)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -378,7 +378,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 
 		logId := int64(9)
 		segmentId := int64(900)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -416,7 +416,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("LargePayloadValidation", func(t *testing.T) {
 		logId := int64(10)
 		segmentId := int64(1000)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -447,7 +447,7 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	// Write test data
 	logId := int64(11)
 	segmentId := int64(1100)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -466,7 +466,7 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now test reading
-	reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -556,7 +556,7 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	// Write test data
 	logId := int64(12)
 	segmentId := int64(1200)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -581,7 +581,7 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test reading with different batch modes
-	reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -632,7 +632,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 
 	t.Run("NonExistentFile", func(t *testing.T) {
 		nonExistentPath := filepath.Join(tempDir, "non-existent.log")
-		reader, err := disk.NewLocalFileReader(nonExistentPath)
+		reader, err := disk.NewLocalFileReader(context.TODO(), nonExistentPath, 1000, 2000)
 		assert.Error(t, err)
 		assert.Nil(t, reader)
 	})
@@ -641,7 +641,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		// Create a valid file first
 		logId := int64(13)
 		segmentId := int64(1300)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 
 		// Write a few entries
@@ -663,7 +663,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test reading invalid entry IDs
-		reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -680,7 +680,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 	t.Run("ReadAfterClose", func(t *testing.T) {
 		logId := int64(14)
 		segmentId := int64(1400)
-		writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 		require.NoError(t, err)
 
 		// Write and finalize
@@ -698,7 +698,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create reader and close it
-		reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 		require.NoError(t, err)
 
 		err = reader.Close(ctx)
@@ -736,7 +736,7 @@ func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	// Write data
 	logId := int64(15)
 	segmentId := int64(1500)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 
 	for i, tc := range testCases {
@@ -765,7 +765,7 @@ func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -792,7 +792,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 
 	logId := int64(16)
 	segmentId := int64(1600)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, 256*1024)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -865,7 +865,7 @@ func BenchmarkLocalFileWriter_WriteDataAsync(b *testing.B) {
 
 	logId := int64(17)
 	segmentId := int64(1700)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -901,13 +901,12 @@ func BenchmarkLocalFileReader_ReadNextBatch(b *testing.B) {
 	defer os.RemoveAll(tempDir)
 
 	ctx := context.Background()
-	filePath := filepath.Join(tempDir, "bench-read.log")
 	blockSize := int64(2 * 1024 * 1024) // 2MB
 
 	// Prepare test data
 	logId := int64(18)
 	segmentId := int64(1800)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -939,7 +938,7 @@ func BenchmarkLocalFileReader_ReadNextBatch(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := disk.NewLocalFileReader(filePath)
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -970,7 +969,7 @@ func TestLocalFileRW_BlockLastRecordVerification(t *testing.T) {
 	// Create writer
 	logId := int64(19)
 	segmentId := int64(1900)
-	writer, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1000,7 +999,7 @@ func TestLocalFileRW_BlockLastRecordVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader and verify block structure
-	reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -1029,7 +1028,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Create first writer and write some data
 		logId := int64(20)
 		segmentId := int64(2000)
-		writer1, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 		require.NoError(t, err)
 		require.NotNil(t, writer1)
 
@@ -1066,7 +1065,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify file exists but is incomplete (no footer)
-		stat, err := os.Stat(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId)))
+		stat, err := os.Stat(filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId)))
 		require.NoError(t, err)
 		assert.Greater(t, stat.Size(), int64(0), "File should contain some data")
 
@@ -1078,7 +1077,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Create a new writer in recovery mode
 		logId := int64(20)
 		segmentId := int64(2000)
-		writer2, err := disk.NewLocalFileWriterWithMode(tempDir, logId, segmentId, blockSize, true)
+		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer2)
 
@@ -1137,7 +1136,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	t.Run("VerifyRecoveredFileComplete", func(t *testing.T) {
 		// Create reader to verify the file is properly finalized
 		// Use the logId and segmentId from the RecoverAndContinueWriting test (21, 2100)
-		reader, err := disk.NewLocalFileReader(filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", 20, 2000)))
+		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, 20, 2000)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -1192,7 +1191,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Try to create a recovery writer from the finalized file
 		logId := int64(20)
 		segmentId := int64(2000)
-		_, err := disk.NewLocalFileWriterWithMode(tempDir, logId, segmentId, blockSize, true)
+		_, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
 		require.NoError(t, err, "Should be able to recover from a finalized file")
 	})
 
@@ -1208,7 +1207,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, err)
 		emptyFile.Close()
 
-		writer, err := disk.NewLocalFileWriterWithMode(tempDir, logId, segmentId, blockSize, true)
+		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 
@@ -1237,7 +1236,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Try to recover from non-existent file
 		logId := int64(24)
 		segmentId := int64(2400)
-		writer, err := disk.NewLocalFileWriterWithMode(tempDir, logId, segmentId, blockSize, true)
+		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 
@@ -1266,9 +1265,9 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Create a file with valid data first
 		logId := int64(25)
 		segmentId := int64(2500)
-		corruptedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d_%d.log", logId, segmentId))
+		corruptedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 
-		writer1, err := disk.NewLocalFileWriter(tempDir, logId, segmentId, blockSize)
+		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
 		require.NoError(t, err)
 
 		// Write some data
@@ -1299,7 +1298,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		t.Logf("Corrupted file by truncating from %d to %d bytes", stat.Size(), truncatedSize)
 
 		// Try to recover from corrupted file using the same logId and segmentId
-		writer2, err := disk.NewLocalFileWriterWithMode(tempDir, logId, segmentId, blockSize, true)
+		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer2)
 

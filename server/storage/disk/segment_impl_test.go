@@ -42,14 +42,13 @@ func TestNewDiskSegmentImpl(t *testing.T) {
 	tmpDir := getTempDir(t)
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
-	baseDir := filepath.Join(tmpDir, "1/0")
-	segmentImpl := NewDiskSegmentImpl(context.TODO(), 1, 0, baseDir, cfg).(*DiskSegmentImpl)
+	segmentImpl := NewDiskSegmentImpl(context.TODO(), tmpDir, 1, 0, cfg).(*DiskSegmentImpl)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
-	assert.Equal(t, baseDir, segmentImpl.segmentFileParentDir)
+	assert.Equal(t, getSegmentDir(tmpDir, 1, 0), segmentImpl.segmentDir)
 	// The actual implementation uses fmt.Sprintf("%d.log", segId), not the getSegmentFilePath function
-	expectedPath := filepath.Join(baseDir, "0.log")
+	expectedPath := getSegmentFilePath(tmpDir, 1, 0)
 	assert.Equal(t, expectedPath, segmentImpl.segmentFilePath)
 }
 
@@ -69,7 +68,7 @@ func TestDeleteFileData(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Create read-only log file
-		roSegmentImpl := NewDiskSegmentImpl(context.TODO(), logId, 0, logDir, cfg).(*DiskSegmentImpl)
+		roSegmentImpl := NewDiskSegmentImpl(context.TODO(), testDir, logId, 0, cfg).(*DiskSegmentImpl)
 		assert.NotNil(t, roSegmentImpl)
 
 		// Execute deletion operation
@@ -83,7 +82,7 @@ func TestDeleteFileData(t *testing.T) {
 		nonExistDir := getTempDir(t)
 		os.RemoveAll(nonExistDir) // Ensure directory does not exist
 		cfg, _ := config.NewConfiguration()
-		segmentImpl2 := NewDiskSegmentImpl(context.TODO(), 1, 0, nonExistDir, cfg).(*DiskSegmentImpl)
+		segmentImpl2 := NewDiskSegmentImpl(context.TODO(), nonExistDir, 1, 0, cfg).(*DiskSegmentImpl)
 
 		deleteCount, err := segmentImpl2.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err, "DeleteFileData should not error when directory doesn't exist")
@@ -98,14 +97,15 @@ func TestDeleteFileData(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create the segment directory
-		err = os.MkdirAll(dir, 0755)
+		segmentDir := getSegmentDir(dir, logId, segmentId)
+		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
 		// Create test files that should be deleted
-		segmentFile1 := filepath.Join(dir, "0.log")  // This matches the segment file pattern
-		segmentFile2 := filepath.Join(dir, "1.log")  // Another segment file
-		lockFile := filepath.Join(dir, "1_0.lock")   // Lock file
-		otherFile := filepath.Join(dir, "other.txt") // This should NOT be deleted
+		segmentFile1 := filepath.Join(segmentDir, "0.log")  // This matches the segment file pattern
+		segmentFile2 := filepath.Join(segmentDir, "1.log")  // Another segment file
+		lockFile := filepath.Join(segmentDir, "1_0.lock")   // Lock file
+		otherFile := filepath.Join(segmentDir, "other.txt") // This should NOT be deleted
 
 		// Create segment files (.log files)
 		err = os.WriteFile(segmentFile1, []byte("segment data 1"), 0644)
@@ -132,7 +132,7 @@ func TestDeleteFileData(t *testing.T) {
 		assert.NoError(t, err, "other file should exist before deletion")
 
 		// Create DiskSegmentImpl and test deletion
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), logId, segmentId, dir, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
 		require.NotNil(t, segmentImpl)
 
 		// Execute deletion operation

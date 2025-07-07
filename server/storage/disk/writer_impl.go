@@ -56,7 +56,7 @@ type blockFlushTask struct {
 // LocalFileWriter implements AbstractFileWriter for local filesystem storage with async buffer management
 type LocalFileWriter struct {
 	mu              sync.Mutex
-	parentDir       string
+	baseDir         string
 	segmentFilePath string
 	logId           int64
 	segmentId       int64
@@ -97,33 +97,33 @@ type LocalFileWriter struct {
 	// Close management
 	fileClose chan struct{} // Close signal
 	closeOnce sync.Once
-	closed    bool
+	closed    atomic.Bool
 	runCtx    context.Context
 	runCancel context.CancelFunc
 }
 
 // NewLocalFileWriter creates a new local filesystem writer
-func NewLocalFileWriter(parentDir string, logId int64, segmentId int64, blockSize int64) (*LocalFileWriter, error) {
-	return NewLocalFileWriterWithMode(parentDir, logId, segmentId, blockSize, false)
+func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmentId int64, blockSize int64) (*LocalFileWriter, error) {
+	return NewLocalFileWriterWithMode(ctx, baseDir, logId, segmentId, blockSize, false)
 }
 
 // NewLocalFileWriterWithMode creates a new local filesystem writer with recovery mode option
-func NewLocalFileWriterWithMode(parentDir string, logId int64, segmentId int64, blockSize int64, recoveryMode bool) (*LocalFileWriter, error) {
+func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, blockSize int64, recoveryMode bool) (*LocalFileWriter, error) {
+	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
-	filePath := getSegmentFilePath(parentDir, logId, segmentId)
+	filePath := getSegmentFilePath(baseDir, logId, segmentId)
 
 	// Create context for async operations
 	runCtx, runCancel := context.WithCancel(context.Background())
 
 	writer := &LocalFileWriter{
-		parentDir:        parentDir,
+		baseDir:          baseDir,
 		segmentFilePath:  filePath,
 		logId:            logId,
 		segmentId:        segmentId,
-		closed:           false,
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,
@@ -141,6 +141,7 @@ func NewLocalFileWriterWithMode(parentDir string, logId int64, segmentId int64, 
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
 	writer.fenced.Store(false)
+	writer.closed.Store(false)
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
 	writer.flushingSize.Store(0)
@@ -224,7 +225,7 @@ func (w *LocalFileWriter) run() {
 			logger.Ctx(w.runCtx).Debug("Flush task processing completed")
 		case <-ticker.C:
 			// Periodic check fenced flag make by other process
-			foundFencedFlag, _ := checkFenceFlagFileExists(w.runCtx, w.parentDir, w.logId, w.segmentId)
+			foundFencedFlag, _ := checkFenceFlagFileExists(w.runCtx, w.baseDir, w.logId, w.segmentId)
 			if foundFencedFlag {
 				w.fenced.Store(true)
 			}
@@ -241,7 +242,7 @@ func (w *LocalFileWriter) run() {
 
 // Sync forces immediate sync of all buffered data
 func (w *LocalFileWriter) Sync(ctx context.Context) error {
-	if w.closed {
+	if w.closed.Load() {
 		return nil
 	}
 
@@ -478,7 +479,7 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		zap.Int64("entryId", entryId),
 		zap.Int("dataLen", len(data)))
 
-	if w.closed {
+	if w.closed.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
 		return entryId, werr.ErrWriterClosed
 	}
@@ -598,7 +599,7 @@ func (w *LocalFileWriter) writeRecord(record codec.Record) error {
 
 // Finalize finalizes the writer and writes the footer
 func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
-	if w.closed {
+	if w.closed.Load() {
 		return w.lastEntryID.Load(), werr.ErrWriterClosed
 	}
 
@@ -668,7 +669,7 @@ func (w *LocalFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 // Close closes the writer
 func (w *LocalFileWriter) Close(ctx context.Context) error {
 	w.closeOnce.Do(func() {
-		w.closed = true
+		w.closed.Store(true)
 		// Cancel async operations
 		w.runCancel()
 
@@ -686,7 +687,7 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 		// Release segment lock
 		if err := w.releaseSegmentLock(ctx); err != nil {
 			logger.Ctx(ctx).Warn("Failed to release segment lock during close",
-				zap.String("logFileDir", w.parentDir),
+				zap.String("segmentFilePath", w.segmentFilePath),
 				zap.Error(err))
 		}
 	})
@@ -711,7 +712,7 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 	}
 
 	// Get fence flag file path
-	fenceFlagPath := getFenceFlagPath(w.parentDir, w.logId, w.segmentId)
+	fenceFlagPath := getFenceFlagPath(w.baseDir, w.logId, w.segmentId)
 
 	// Create fence flag file
 	fenceFile, err := os.Create(fenceFlagPath)
@@ -741,7 +742,7 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 	w.fenced.Store(true)
 
 	// wait if necessary
-	_ = waitForFenceCheckIntervalIfLockExists(ctx, w.parentDir, w.logId, w.segmentId, fenceFlagPath)
+	_ = waitForFenceCheckIntervalIfLockExists(ctx, w.baseDir, w.logId, w.segmentId, fenceFlagPath)
 
 	lastEntryId := w.GetLastEntryId(ctx)
 	logger.Ctx(ctx).Info("Successfully created fence flag file and marked LocalFileWriter as fenced",
@@ -791,7 +792,7 @@ func (w *LocalFileWriter) recoverFromExistingFile() error {
 	}
 
 	// recover fence state
-	isFenceFlagExists, _ := checkFenceFlagFileExists(w.runCtx, w.parentDir, w.logId, w.segmentId)
+	isFenceFlagExists, _ := checkFenceFlagFileExists(w.runCtx, w.baseDir, w.logId, w.segmentId)
 	w.fenced.Store(isFenceFlagExists)
 
 	// Open file for reading to analyze its content
@@ -1038,7 +1039,7 @@ func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
 	defer sp.End()
 
 	// Create lock file path
-	s.lockFilePath = getSegmentLockPath(s.parentDir, s.logId, s.segmentId)
+	s.lockFilePath = getSegmentLockPath(s.baseDir, s.logId, s.segmentId)
 
 	// Create flock instance
 	s.lockFile = flock.New(s.lockFilePath)
@@ -1120,32 +1121,35 @@ func (s *LocalFileWriter) releaseSegmentLock(ctx context.Context) error {
 }
 
 // Utility functions
-func getSegmentLockPath(dir string, logId int64, segmentId int64) string {
-	return filepath.Join(dir, fmt.Sprintf("%d_%d.lock", logId, segmentId))
+func getSegmentLockPath(baseDir string, logId int64, segmentId int64) string {
+	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/write.lock", logId, segmentId))
 }
 
-func getSegmentFilePath(dir string, logId int64, segmentId int64) string {
-	return filepath.Join(dir, fmt.Sprintf("%d_%d.log", logId, segmentId))
+func getSegmentDir(baseDir string, logId int64, segmentId int64) string {
+	return filepath.Join(baseDir, fmt.Sprintf("%d/%d", logId, segmentId))
+}
+
+func getSegmentFilePath(baseDir string, logId int64, segmentId int64) string {
+	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 }
 
 // getFenceFlagPath returns the path to the fence flag file for a segment
-func getFenceFlagPath(logFileDir string, logId int64, segmentId int64) string {
-	return filepath.Join(logFileDir, fmt.Sprintf("%d_%d.fence", logId, segmentId))
+func getFenceFlagPath(baseDir string, logId int64, segmentId int64) string {
+	return filepath.Join(baseDir, fmt.Sprintf("%d/%d/write.fence", logId, segmentId))
 }
 
 // checkFenceFlagFileExists checks for the existence of a fence flag file and returns (exists, error)
-func checkFenceFlagFileExists(ctx context.Context, segmentFileParentDir string, logId int64, segmentId int64) (bool, error) {
+func checkFenceFlagFileExists(ctx context.Context, baseDir string, logId int64, segmentId int64) (bool, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "checkFenceFlagFileExists")
 	defer sp.End()
 
 	// Get fence flag file path
-	fenceFlagPath := getFenceFlagPath(segmentFileParentDir, logId, segmentId)
+	fenceFlagPath := getFenceFlagPath(baseDir, logId, segmentId)
 
 	// Check if fence flag file exists
 	if _, err := os.Stat(fenceFlagPath); err == nil {
 		// Fence flag file exists
 		logger.Ctx(ctx).Debug("Fence flag file detected",
-			zap.String("segmentFileParentDir", segmentFileParentDir),
 			zap.String("fenceFlagPath", fenceFlagPath),
 			zap.Int64("logId", logId),
 			zap.Int64("segmentId", segmentId))
@@ -1156,7 +1160,6 @@ func checkFenceFlagFileExists(ctx context.Context, segmentFileParentDir string, 
 	} else {
 		// Other error occurred while checking fence flag file
 		logger.Ctx(ctx).Warn("Error checking fence flag file",
-			zap.String("segmentFileParentDir", segmentFileParentDir),
 			zap.String("fenceFlagPath", fenceFlagPath),
 			zap.Error(err))
 		return false, err
@@ -1164,16 +1167,15 @@ func checkFenceFlagFileExists(ctx context.Context, segmentFileParentDir string, 
 }
 
 // waitForFenceCheckIntervalIfLockExists checks if lock file exists and waits for fence check interval
-func waitForFenceCheckIntervalIfLockExists(ctx context.Context, logFileDir string, logId int64, segmentId int64, fenceFlagPath string) error {
+func waitForFenceCheckIntervalIfLockExists(ctx context.Context, baseDir string, logId int64, segmentId int64, fenceFlagPath string) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "waitForFenceCheckIntervalIfLockExists")
 	defer sp.End()
 
 	// Check if lock file exists
-	lockFilePath := getSegmentLockPath(logFileDir, logId, segmentId)
+	lockFilePath := getSegmentLockPath(baseDir, logId, segmentId)
 	if _, err := os.Stat(lockFilePath); err == nil {
 		// Lock file exists, wait for fence check interval (5 seconds)
 		logger.Ctx(ctx).Info("Lock file exists, waiting for fence check interval to ensure other processes detect fence flag",
-			zap.String("logFileDir", logFileDir),
 			zap.String("lockFilePath", lockFilePath),
 			zap.String("fenceFlagPath", fenceFlagPath),
 			zap.Int64("logId", logId),
@@ -1182,12 +1184,12 @@ func waitForFenceCheckIntervalIfLockExists(ctx context.Context, logFileDir strin
 		select {
 		case <-ctx.Done():
 			logger.Ctx(ctx).Warn("Context cancelled while waiting for fence check interval",
-				zap.String("logFileDir", logFileDir))
+				zap.String("fenceFlagPath", fenceFlagPath))
 			return ctx.Err()
 		case <-time.After(5 * time.Second):
 			// Wait completed
 			logger.Ctx(ctx).Info("Fence check interval wait completed",
-				zap.String("logFileDir", logFileDir))
+				zap.String("fenceFlagPath", fenceFlagPath))
 			return nil
 		}
 	} else if !os.IsNotExist(err) {

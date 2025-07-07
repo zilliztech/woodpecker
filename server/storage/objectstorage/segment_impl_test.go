@@ -49,7 +49,7 @@ func TestNewSegmentImpl(t *testing.T) {
 		},
 	}
 
-	segmentImpl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+	segmentImpl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
 	assert.Equal(t, int64(0), segmentImpl.GetId())
@@ -85,7 +85,7 @@ func TestDeleteFileData(t *testing.T) {
 		close(objectCh)
 
 		// Create the LogFile
-		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 3)
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
@@ -127,7 +127,7 @@ func TestDeleteFileData(t *testing.T) {
 		emptyObjectCh := make(chan minio.ObjectInfo, 0)
 		close(emptyObjectCh)
 		// Create the LogFile
-		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		errorObjectCh := make(chan minio.ObjectInfo, 1)
 		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
@@ -168,7 +168,7 @@ func TestDeleteFileData(t *testing.T) {
 		close(objectCh)
 
 		// Create the LogFile
-		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 2)
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
@@ -214,7 +214,7 @@ func TestDeleteFileData(t *testing.T) {
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh)
 
 		// Create the LogFile
-		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Call DeleteFileData
 		deleteCound, err := impl.DeleteFileData(context.Background(), 0)
@@ -252,7 +252,7 @@ func TestDeleteFileData(t *testing.T) {
 		close(objectCh)
 
 		// Create the readonly segment impl
-		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		objectCh2 := make(chan minio.ObjectInfo, 3)
 		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}

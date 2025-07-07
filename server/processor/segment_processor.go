@@ -200,7 +200,11 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 		BatchSize:        size,
 	})
 	if err != nil {
-		logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
+		if werr.ErrEntryNotFound.Is(err) {
+			logger.Ctx(ctx).Debug("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
+		} else {
+			logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
+		}
 		return nil, err
 	}
 	// batch result
@@ -256,21 +260,22 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		s.currentSegmentImpl = disk.NewDiskSegmentImpl(
 			ctx,
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()), s.cfg)
-		logger.Ctx(ctx).Info("create segment impl for local", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentImpl)))
+			s.cfg)
+		logger.Ctx(ctx).Info("create segment impl for local", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentImpl)))
 		return s.currentSegmentImpl, nil
 	} else {
 		s.currentSegmentImpl = objectstorage.NewSegmentImpl(
 			ctx,
+			s.getInstanceBucket(),
+			s.getLogBaseDir(),
 			s.logId,
 			s.segId,
-			s.getSegmentKeyPrefix(),
-			s.getInstanceBucket(),
 			s.minioClient,
 			s.cfg)
-		logger.Ctx(ctx).Info("create segment impl for object", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentImpl)))
+		logger.Ctx(ctx).Info("create segment impl for object", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentImpl)))
 	}
 	return s.currentSegmentImpl, nil
 }
@@ -297,21 +302,27 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 	//Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		readerFile, err := disk.NewLocalFileReader(path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()))
+		readerFile, err := disk.NewLocalFileReader(
+			ctx,
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
+			s.logId,
+			s.segId)
 		s.currentSegmentReader = readerFile
-		logger.Ctx(ctx).Info("create segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", readerFile)))
+		logger.Ctx(ctx).Info("create segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", readerFile)))
 		return s.currentSegmentReader, err
 	} else {
 		r, getReaderErr := objectstorage.NewMinioFileReader(
 			ctx,
-			s.minioClient,
 			s.getInstanceBucket(),
-			s.getSegmentKeyPrefix())
+			s.getLogBaseDir(),
+			s.logId,
+			s.segId,
+			s.minioClient)
 		if getReaderErr != nil {
 			return nil, getReaderErr
 		}
 		s.currentSegmentReader = r
-		logger.Ctx(ctx).Info("create segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentReader)))
+		logger.Ctx(ctx).Info("create segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentReader)))
 	}
 	return s.currentSegmentReader, nil
 }
@@ -350,22 +361,23 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
 		// use local FileSystem or local FileSystem + minio-compatible
 		writerFile, err := disk.NewLocalFileWriterWithMode(
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getSegmentKeyPrefix()),
+			ctx,
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
 			s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize,
 			recoverMode)
 		s.currentSegmentWriter = writerFile
-		logger.Ctx(ctx).Info("create segment local writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
+		logger.Ctx(ctx).Info("create segment local writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
 		return s.currentSegmentWriter, err
 	} else {
 		// use MinIO-compatible storage
 		w, getWriterErr := objectstorage.NewMinioFileWriterWithMode(
 			ctx,
+			s.getInstanceBucket(),
+			s.getLogBaseDir(),
 			s.logId,
 			s.segId,
-			s.getSegmentKeyPrefix(),
-			s.getInstanceBucket(),
 			s.minioClient,
 			s.cfg,
 			recoverMode)
@@ -373,7 +385,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			return nil, getWriterErr
 		}
 		s.currentSegmentWriter = w
-		logger.Ctx(ctx).Info("create segment writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("SegmentKeyPrefix", s.getSegmentKeyPrefix()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentWriter)))
+		logger.Ctx(ctx).Info("create segment writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentWriter)))
 	}
 	return s.currentSegmentWriter, nil
 }
@@ -382,8 +394,8 @@ func (s *segmentProcessor) getInstanceBucket() string {
 	return s.cfg.Minio.BucketName
 }
 
-func (s *segmentProcessor) getSegmentKeyPrefix() string {
-	return fmt.Sprintf("%s/%d", s.cfg.Minio.RootPath, s.logId)
+func (s *segmentProcessor) getLogBaseDir() string {
+	return fmt.Sprintf("%s", s.cfg.Minio.RootPath)
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {

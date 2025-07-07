@@ -41,24 +41,25 @@ const (
 var _ storage.Segment = (*DiskSegmentImpl)(nil)
 
 type DiskSegmentImpl struct {
-	mu                   sync.Mutex
-	cfg                  *config.Configuration
-	logId                int64
-	segmentId            int64
-	segmentFileParentDir string
-	segmentFilePath      string
+	mu              sync.Mutex
+	cfg             *config.Configuration
+	logId           int64
+	segmentId       int64
+	segmentDir      string
+	segmentFilePath string
 }
 
 // NewDiskSegmentImpl is used to create a new Segment, which is used to write data to object storage
-func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, segmentFileParentDir string, cfg *config.Configuration) storage.Segment {
-	filePath := filepath.Join(segmentFileParentDir, fmt.Sprintf("%d.log", segId))
+func NewDiskSegmentImpl(ctx context.Context, baseDir string, logId int64, segId int64, cfg *config.Configuration) storage.Segment {
+	segmentDir := getSegmentDir(baseDir, logId, segId)
+	filePath := getSegmentFilePath(baseDir, logId, segId)
 	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentFilePath", filePath))
 	segmentImpl := &DiskSegmentImpl{
-		cfg:                  cfg,
-		logId:                logId,
-		segmentId:            segId,
-		segmentFileParentDir: segmentFileParentDir,
-		segmentFilePath:      filePath,
+		cfg:             cfg,
+		logId:           logId,
+		segmentId:       segId,
+		segmentDir:      segmentDir,
+		segmentFilePath: filePath,
 	}
 	return segmentImpl
 }
@@ -73,15 +74,15 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 	logId := fmt.Sprintf("%d", rs.logId)
 
 	logger.Ctx(ctx).Info("Starting to delete segment file",
-		zap.String("segmentFileParentDir", rs.segmentFileParentDir),
+		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("flag", flag))
 
 	// Read directory contents
-	entries, err := os.ReadDir(rs.segmentFileParentDir)
+	entries, err := os.ReadDir(rs.segmentDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			logger.Ctx(ctx).Info("Directory does not exist, nothing to delete",
-				zap.String("segmentFileParentDir", rs.segmentFileParentDir))
+				zap.String("segmentDir", rs.segmentDir))
 			return 0, nil
 		}
 		return 0, err
@@ -93,7 +94,7 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 	// Filter and delete segment files
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
-			segmentFilePath := filepath.Join(rs.segmentFileParentDir, entry.Name())
+			segmentFilePath := filepath.Join(rs.segmentDir, entry.Name())
 
 			// Delete file
 			if err := os.Remove(segmentFilePath); err != nil {
@@ -119,7 +120,7 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 	}
 
 	logger.Ctx(ctx).Info("Completed fragment deletion",
-		zap.String("segmentFileParentDir", rs.segmentFileParentDir),
+		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", len(deleteErrors)))
 
