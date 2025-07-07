@@ -226,16 +226,81 @@ func TestDecodeRecordList_EmptyBuffer(t *testing.T) {
 }
 
 func TestDecodeRecordList_IncompleteBuffer(t *testing.T) {
-	// Create a record and truncate it
-	original := &DataRecord{Payload: []byte("hello world")}
-	encoded := EncodeRecord(original)
+	// Create multiple records and concatenate them
+	records := []Record{
+		&DataRecord{Payload: []byte("first record")},
+		&DataRecord{Payload: []byte("second record")},
+		&DataRecord{Payload: []byte("third record")},
+	}
 
-	// Truncate to incomplete record
-	truncated := encoded[:len(encoded)-5]
+	var buf bytes.Buffer
+	for _, record := range records {
+		encoded := EncodeRecord(record)
+		buf.Write(encoded)
+	}
 
-	records, err := DecodeRecordList(truncated)
+	// Test with truncated buffer that cuts off the last record
+	fullBuffer := buf.Bytes()
+
+	// Truncate to remove the last 10 bytes (making the last record incomplete)
+	truncatedBuffer := fullBuffer[:len(fullBuffer)-10]
+
+	decodedRecords, err := DecodeRecordList(truncatedBuffer)
 	require.NoError(t, err)
-	assert.Empty(t, records) // Should return empty list for incomplete records
+
+	// Should return the first two complete records (the third is incomplete)
+	assert.Equal(t, 2, len(decodedRecords))
+
+	// Verify the first two records are correctly parsed
+	for i := 0; i < 2; i++ {
+		dataRecord, ok := decodedRecords[i].(*DataRecord)
+		require.True(t, ok)
+		originalData := records[i].(*DataRecord)
+		assert.Equal(t, originalData.Payload, dataRecord.Payload)
+	}
+}
+
+func TestDecodeRecordList_CorruptedRecord(t *testing.T) {
+	// Create multiple records and concatenate them
+	records := []Record{
+		&DataRecord{Payload: []byte("first record")},
+		&DataRecord{Payload: []byte("second record")},
+		&DataRecord{Payload: []byte("third record")},
+	}
+
+	var buf bytes.Buffer
+	for _, record := range records {
+		encoded := EncodeRecord(record)
+		buf.Write(encoded)
+	}
+
+	// Corrupt the third record by changing its CRC
+	fullBuffer := buf.Bytes()
+
+	// Find the start of the third record and corrupt its CRC
+	// First two records should be parsed successfully
+	firstRecordSize := len(EncodeRecord(records[0]))
+	secondRecordSize := len(EncodeRecord(records[1]))
+	thirdRecordStart := firstRecordSize + secondRecordSize
+
+	// Corrupt the CRC of the third record
+	corruptedBuffer := make([]byte, len(fullBuffer))
+	copy(corruptedBuffer, fullBuffer)
+	corruptedBuffer[thirdRecordStart] = 0xFF // Corrupt first byte of CRC
+
+	decodedRecords, err := DecodeRecordList(corruptedBuffer)
+	require.NoError(t, err)
+
+	// Should return the first two complete records (the third has corrupted CRC)
+	assert.Equal(t, 2, len(decodedRecords))
+
+	// Verify the first two records are correctly parsed
+	for i := 0; i < 2; i++ {
+		dataRecord, ok := decodedRecords[i].(*DataRecord)
+		require.True(t, ok)
+		originalData := records[i].(*DataRecord)
+		assert.Equal(t, originalData.Payload, dataRecord.Payload)
+	}
 }
 
 func TestDecodeRecord_CorruptedCRC(t *testing.T) {

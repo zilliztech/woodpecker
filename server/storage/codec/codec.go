@@ -114,7 +114,7 @@ func DecodeRecordList(buf []byte) ([]Record, error) {
 	for offset < len(buf) {
 		// Check if we have enough bytes for record header
 		if offset+RecordHeaderSize > len(buf) {
-			// Not enough bytes for a complete record header, stop parsing
+			// Not enough bytes for a complete record header, return what we have parsed so far
 			break
 		}
 
@@ -126,15 +126,16 @@ func DecodeRecordList(buf []byte) ([]Record, error) {
 		// Check if we have enough bytes for the complete record
 		totalRecordLength := RecordHeaderSize + int(payloadLength)
 		if offset+totalRecordLength > len(buf) {
-			// Not enough bytes for complete record, stop parsing
+			// Not enough bytes for complete record, return what we have parsed so far
 			break
 		}
 
 		// Verify CRC32 over Type + Length + Payload
 		calculatedCRC := crc32.ChecksumIEEE(buf[offset+4 : offset+totalRecordLength])
 		if crc != calculatedCRC {
-			// CRC mismatch indicates corruption, stop parsing
-			return records, errors.Errorf("CRC32 mismatch at offset %d: expected %x, got %x", offset, crc, calculatedCRC)
+			// CRC mismatch indicates corruption, return what we have parsed so far
+			// Don't return error - just stop parsing and return successful records
+			break
 		}
 
 		// Extract payload
@@ -143,8 +144,9 @@ func DecodeRecordList(buf []byte) ([]Record, error) {
 		// Parse record based on type
 		record, err := ParseRecord(recordType, payload)
 		if err != nil {
-			// Failed to parse record, stop parsing
-			return records, errors.Wrapf(err, "failed to parse record at offset %d", offset)
+			// Failed to parse record, return what we have parsed so far
+			// Don't return error - just stop parsing and return successful records
+			break
 		}
 
 		// Add successfully parsed record to list

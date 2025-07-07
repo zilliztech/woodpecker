@@ -1328,3 +1328,159 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// TestLocalFileReader_ReadIncompleteFile tests reading a file that is still being written (no footer)
+func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
+	tempDir := setupLocalFileTest(t)
+	ctx := context.Background()
+
+	blockSize := int64(256 * 1024) // 256KB per block
+
+	logId := int64(30)
+	segmentId := int64(3000)
+
+	// Create a writer and write some data without finalizing
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	require.NoError(t, err)
+
+	// Write test data but don't finalize (so no footer will be written)
+	testData := [][]byte{
+		[]byte("Entry 0: First entry in incomplete file"),
+		[]byte("Entry 1: Second entry in incomplete file"),
+		generateTestData(1024), // Entry 2: 1KB data
+		[]byte("Entry 3: Final entry in incomplete file"),
+	}
+
+	for i, data := range testData {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-incomplete-write-%d", i))
+		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+		require.NoError(t, err)
+
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		require.NoError(t, result.Err)
+	}
+
+	// Force sync to ensure data is written to disk
+	err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	// Close writer WITHOUT finalizing (this simulates an incomplete file)
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Now test reading the incomplete file
+	t.Run("ReadIncompleteFileWithFullScan", func(t *testing.T) {
+		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close(ctx)
+
+		// Verify that footer is nil (file is incomplete)
+		footer := reader.GetFooter()
+		assert.Nil(t, footer, "Footer should be nil for incomplete file")
+
+		// Verify that block indexes were built from full scan
+		blockIndexes := reader.GetBlockIndexes()
+		assert.Greater(t, len(blockIndexes), 0, "Should have block indexes from full scan")
+
+		// Verify we can get the last entry ID
+		lastEntryId, err := reader.GetLastEntryID(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), lastEntryId)
+
+		// Verify we can read all entries
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(len(testData)),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(testData), len(entries))
+
+		// Verify content
+		for i, entry := range entries {
+			assert.Equal(t, int64(i), entry.EntryId)
+			assert.Equal(t, testData[i], entry.Values)
+		}
+
+		// Verify we can read from middle
+		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 1,
+			BatchSize:        2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(entries))
+		assert.Equal(t, int64(1), entries[0].EntryId)
+		assert.Equal(t, testData[1], entries[0].Values)
+		assert.Equal(t, int64(2), entries[1].EntryId)
+		assert.Equal(t, testData[2], entries[1].Values)
+
+		// Verify auto batch mode works
+		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 2,
+			BatchSize:        -1, // Auto batch mode
+		})
+		require.NoError(t, err)
+		assert.Greater(t, len(entries), 0)
+		assert.Equal(t, int64(2), entries[0].EntryId)
+		assert.Equal(t, testData[2], entries[0].Values)
+	})
+
+	t.Run("CompareWithFinalizedFile", func(t *testing.T) {
+		// Create another writer and write the same data, but finalize it
+		logId2 := int64(31)
+		segmentId2 := int64(3100)
+		writer2, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId2, segmentId2, blockSize)
+		require.NoError(t, err)
+
+		for i, data := range testData {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-finalized-write-%d", i))
+			_, err := writer2.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		// Finalize this file
+		_, err = writer2.Finalize(ctx)
+		require.NoError(t, err)
+		err = writer2.Close(ctx)
+		require.NoError(t, err)
+
+		// Read finalized file
+		reader2, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId2, segmentId2)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		// Verify that footer exists (file is complete)
+		footer2 := reader2.GetFooter()
+		assert.NotNil(t, footer2, "Footer should exist for finalized file")
+
+		// Read incomplete file
+		reader1, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		require.NoError(t, err)
+		defer reader1.Close(ctx)
+
+		// Compare data from both files
+		entries1, err := reader1.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(len(testData)),
+		})
+		require.NoError(t, err)
+
+		entries2, err := reader2.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(len(testData)),
+		})
+		require.NoError(t, err)
+
+		// Data should be identical
+		assert.Equal(t, len(entries1), len(entries2))
+		for i := range entries1 {
+			assert.Equal(t, entries1[i].EntryId, entries2[i].EntryId)
+			assert.Equal(t, entries1[i].Values, entries2[i].Values)
+		}
+	})
+}
