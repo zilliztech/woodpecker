@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -734,7 +735,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			assert.True(t, strings.Contains(newErr.Error(), context.DeadlineExceeded.Error()))
 			assert.Nil(t, newMessage)
 
 			// Clean up

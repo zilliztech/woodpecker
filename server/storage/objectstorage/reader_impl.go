@@ -20,11 +20,12 @@ package objectstorage
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
@@ -168,22 +169,34 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 			})
 		}
 	}
-	// ensure no hole in list
+	// ensure no hole in list - only include continuous blocks from 0
 	sort.Slice(existsBlocks, func(i, j int) bool {
 		return existsBlocks[i].BlockNumber < existsBlocks[j].BlockNumber
 	})
-	existsBlocksExpectedBlockId := int32(0)
-	for i := 0; i < len(existsBlocks); i++ {
-		if existsBlocks[i].BlockNumber != existsBlocksExpectedBlockId {
-			logger.Ctx(ctx).Debug("Found block hole",
+
+	// Only keep continuous blocks starting from 0
+	continuousBlocks := make([]*codec.IndexRecord, 0, len(existsBlocks))
+	expectedBlockId := int32(0)
+
+	for _, block := range existsBlocks {
+		if block.BlockNumber == expectedBlockId {
+			continuousBlocks = append(continuousBlocks, block)
+			expectedBlockId++
+			logger.Ctx(ctx).Debug("Added continuous block",
 				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int32("blockID", existsBlocks[i].BlockNumber),
-				zap.Int32("expectedBlockId", existsBlocksExpectedBlockId))
-			existsBlocks = existsBlocks[:i]
+				zap.Int32("blockID", block.BlockNumber),
+				zap.Int64("firstEntryID", block.FirstEntryID),
+				zap.Int64("lastEntryID", block.LastEntryID))
+		} else {
+			logger.Ctx(ctx).Debug("Found block hole, stopping at continuous sequence",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int32("blockID", block.BlockNumber),
+				zap.Int32("expectedBlockId", expectedBlockId))
 			break
 		}
-		existsBlocksExpectedBlockId += 1
 	}
+
+	existsBlocks = continuousBlocks
 
 	f.blocks = existsBlocks
 	return len(existsBlocks), nil
@@ -467,6 +480,20 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
 	defer sp.End()
 
+	logger.Ctx(ctx).Debug("ReadNextBatch called",
+		zap.Int64("startSequenceNum", opt.StartSequenceNum),
+		zap.Int64("batchSize", opt.BatchSize),
+		zap.Bool("isCompleted", f.isCompleted.Load()),
+		zap.Bool("isFenced", f.isFenced.Load()))
+
+	// For incomplete files, try to scan for new blocks if we don't have enough data
+	if !f.isCompleted.Load() && !f.isFenced.Load() {
+		if err := f.ensureSufficientBlocks(ctx, opt.StartSequenceNum, opt.BatchSize); err != nil {
+			logger.Ctx(ctx).Warn("failed to scan for new blocks", zap.Error(err))
+			// Continue with existing blocks even if scan fails
+		}
+	}
+
 	// Get all available blocks
 	f.mu.RLock()
 	allBlocks := make([]*codec.IndexRecord, len(f.blocks))
@@ -480,24 +507,93 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	// Find the starting block that contains the start sequence number
 	startBlockIndex := -1
 	for i, block := range allBlocks {
+		logger.Ctx(ctx).Debug("checking block for start sequence",
+			zap.Int("blockIndex", i),
+			zap.Int32("blockNumber", block.BlockNumber),
+			zap.Int64("blockFirstEntryID", block.FirstEntryID),
+			zap.Int64("blockLastEntryID", block.LastEntryID),
+			zap.Int64("startSequenceNum", opt.StartSequenceNum))
+
 		if block.FirstEntryID <= opt.StartSequenceNum && opt.StartSequenceNum <= block.LastEntryID {
 			startBlockIndex = i
+			logger.Ctx(ctx).Debug("found matching block",
+				zap.Int("startBlockIndex", startBlockIndex),
+				zap.Int32("blockNumber", block.BlockNumber))
 			break
 		}
 	}
 
 	if startBlockIndex == -1 {
-		// Start sequence number is not found in any block
+		logger.Ctx(ctx).Error("no block found for start sequence number",
+			zap.Int64("startSequenceNum", opt.StartSequenceNum),
+			zap.Int("totalBlocks", len(allBlocks)))
 		return nil, werr.ErrEntryNotFound
 	}
 
 	if opt.BatchSize == -1 {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
+		logger.Ctx(ctx).Debug("using single block mode")
 		return f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartSequenceNum)
 	} else {
 		// Specified batch size mode: read across multiple blocks if necessary to get the requested number of entries
+		logger.Ctx(ctx).Debug("using multiple blocks mode",
+			zap.Int("startBlockIndex", startBlockIndex),
+			zap.Int64("batchSize", opt.BatchSize))
 		return f.readMultipleBlocks(ctx, allBlocks, startBlockIndex, opt.StartSequenceNum, opt.BatchSize)
 	}
+}
+
+// ensureSufficientBlocks ensures we have scanned enough blocks to satisfy the read request
+// This method checks if we need to scan for new blocks in incomplete files
+func (f *MinioFileReader) ensureSufficientBlocks(ctx context.Context, startSequenceNum int64, batchSize int64) error {
+	// Check if we already have the starting block
+	hasStartingBlock := false
+	var lastAvailableEntryID int64 = -1
+
+	f.mu.RLock()
+	for _, block := range f.blocks {
+		if block.FirstEntryID <= startSequenceNum && startSequenceNum <= block.LastEntryID {
+			hasStartingBlock = true
+		}
+		if block.LastEntryID > lastAvailableEntryID {
+			lastAvailableEntryID = block.LastEntryID
+		}
+	}
+	f.mu.RUnlock()
+
+	// If we don't have the starting block, definitely need to scan
+	needToScan := !hasStartingBlock
+
+	// If we have the starting block but need more data for the batch size
+	if hasStartingBlock && batchSize > 0 {
+		requiredLastEntryID := startSequenceNum + batchSize - 1
+		if lastAvailableEntryID < requiredLastEntryID {
+			needToScan = true
+			logger.Ctx(ctx).Debug("need more blocks for batch size",
+				zap.Int64("startSequenceNum", startSequenceNum),
+				zap.Int64("batchSize", batchSize),
+				zap.Int64("requiredLastEntryID", requiredLastEntryID),
+				zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+		}
+	}
+
+	if needToScan {
+		logger.Ctx(ctx).Debug("scanning for new blocks to satisfy read request",
+			zap.Int64("startSequenceNum", startSequenceNum),
+			zap.Int64("batchSize", batchSize),
+			zap.Bool("hasStartingBlock", hasStartingBlock),
+			zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+
+		_, _, err := f.prefetchIncrementalBlockInfo(ctx)
+		return err
+	}
+
+	logger.Ctx(ctx).Debug("sufficient blocks available, no scan needed",
+		zap.Int64("startSequenceNum", startSequenceNum),
+		zap.Int64("batchSize", batchSize),
+		zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+
+	return nil
 }
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID

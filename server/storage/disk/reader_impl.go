@@ -50,6 +50,10 @@ type LocalFileReader struct {
 	footer       *codec.FooterRecord
 	blockIndexes []*codec.IndexRecord
 	closed       atomic.Bool
+
+	// Fields for dynamic scanning of incomplete files
+	lastScannedOffset int64 // Last offset we scanned to (for incomplete files)
+	isIncompleteFile  bool  // Whether this file is incomplete (no footer)
 }
 
 // NewLocalFileReader creates a new local filesystem reader
@@ -97,6 +101,7 @@ func (r *LocalFileReader) tryParseFooterAndIndexes() error {
 		logger.Ctx(context.TODO()).Debug("file too small for footer, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Int64("fileSize", r.size))
+		r.isIncompleteFile = true
 		return r.scanFileForBlocks()
 	}
 
@@ -107,6 +112,7 @@ func (r *LocalFileReader) tryParseFooterAndIndexes() error {
 		logger.Ctx(context.TODO()).Debug("failed to read footer data, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
+		r.isIncompleteFile = true
 		return r.scanFileForBlocks()
 	}
 
@@ -116,6 +122,7 @@ func (r *LocalFileReader) tryParseFooterAndIndexes() error {
 		logger.Ctx(context.TODO()).Debug("failed to decode footer record, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
+		r.isIncompleteFile = true
 		return r.scanFileForBlocks()
 	}
 
@@ -125,11 +132,13 @@ func (r *LocalFileReader) tryParseFooterAndIndexes() error {
 			zap.String("filePath", r.filePath),
 			zap.Uint8("recordType", footerRecord.Type()),
 			zap.Uint8("expectedType", codec.FooterRecordType))
+		r.isIncompleteFile = true
 		return r.scanFileForBlocks()
 	}
 
 	// Successfully found footer, parse using footer method
 	r.footer = footerRecord.(*codec.FooterRecord)
+	r.isIncompleteFile = false
 	logger.Ctx(context.TODO()).Debug("found footer, parsing index records",
 		zap.String("filePath", r.filePath),
 		zap.Int32("totalBlocks", r.footer.TotalBlocks))
@@ -216,7 +225,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 	records, err := codec.DecodeRecordList(fileData)
 	if err != nil {
 		// If decoding fails, the file might be corrupted or incomplete
-		// Try to recover by scanning for valid records
+		// Try to recover by scanning for valid record boundaries
 		logger.Ctx(context.TODO()).Warn("failed to decode all records, attempting partial recovery",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
@@ -360,9 +369,13 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 		return r.blockIndexes[i].BlockNumber < r.blockIndexes[j].BlockNumber
 	})
 
+	// Set the last scanned offset to current file size for incomplete files
+	r.lastScannedOffset = r.size
+
 	logger.Ctx(context.TODO()).Info("completed full file scan",
 		zap.String("filePath", r.filePath),
-		zap.Int("blocksFound", len(r.blockIndexes)))
+		zap.Int("blocksFound", len(r.blockIndexes)),
+		zap.Int64("lastScannedOffset", r.lastScannedOffset))
 
 	return nil
 }
@@ -388,6 +401,177 @@ func (r *LocalFileReader) scanFileForBlocksWithRecovery(fileData []byte) error {
 	logger.Ctx(context.TODO()).Warn("recovery scan completed with basic recovery",
 		zap.String("filePath", r.filePath),
 		zap.Int("blocksFound", len(r.blockIndexes)))
+
+	return nil
+}
+
+// scanForNewBlocks scans for new blocks that may have been written since last scan
+// This is used for incomplete files to detect newly written data
+func (r *LocalFileReader) scanForNewBlocks() error {
+	// Get current file size
+	stat, err := r.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat file for new blocks scan: %w", err)
+	}
+
+	currentSize := stat.Size()
+	if currentSize <= r.lastScannedOffset {
+		// No new data since last scan
+		logger.Ctx(context.TODO()).Debug("no new data since last scan",
+			zap.String("filePath", r.filePath),
+			zap.Int64("currentSize", currentSize),
+			zap.Int64("lastScannedOffset", r.lastScannedOffset))
+		return nil
+	}
+
+	logger.Ctx(context.TODO()).Debug("scanning for new blocks",
+		zap.String("filePath", r.filePath),
+		zap.Int64("lastScannedOffset", r.lastScannedOffset),
+		zap.Int64("currentSize", currentSize),
+		zap.Int64("newDataSize", currentSize-r.lastScannedOffset))
+
+	// Read only the new data since last scan
+	newDataSize := currentSize - r.lastScannedOffset
+	newData, err := r.readAt(r.lastScannedOffset, int(newDataSize))
+	if err != nil {
+		return fmt.Errorf("read new data for scan: %w", err)
+	}
+
+	// Try to decode records from the new data
+	records, err := codec.DecodeRecordList(newData)
+	if err != nil {
+		// If decoding fails, some records might be incomplete
+		// This is expected for files still being written
+		logger.Ctx(context.TODO()).Debug("failed to decode some new records (expected for incomplete files)",
+			zap.String("filePath", r.filePath),
+			zap.Error(err))
+
+		// Update the file size and last scanned offset anyway
+		r.size = currentSize
+		r.lastScannedOffset = currentSize
+		return nil
+	}
+
+	logger.Ctx(context.TODO()).Debug("decoded new records",
+		zap.String("filePath", r.filePath),
+		zap.Int("newRecordCount", len(records)))
+
+	// Process new records to find new blocks
+	var currentBlockNumber int32
+	if len(r.blockIndexes) > 0 {
+		currentBlockNumber = r.blockIndexes[len(r.blockIndexes)-1].BlockNumber + 1
+	}
+
+	var currentBlockStart int64 = r.lastScannedOffset
+	var currentBlockFirstEntryID int64 = -1
+	var currentBlockLastEntryID int64 = -1
+	var currentEntryID int64 = 0
+	var currentOffset int64 = r.lastScannedOffset
+	var inBlock bool = false
+
+	// Calculate the starting entry ID based on existing blocks
+	if len(r.blockIndexes) > 0 {
+		lastBlock := r.blockIndexes[len(r.blockIndexes)-1]
+		currentEntryID = lastBlock.LastEntryID + 1
+	}
+
+	for _, record := range records {
+		// Calculate record size for offset tracking
+		var recordSize int64
+		switch record.Type() {
+		case codec.HeaderRecordType:
+			recordSize = codec.RecordHeaderSize + 16
+			// HeaderRecord should not appear in the middle of file
+			logger.Ctx(context.TODO()).Warn("unexpected HeaderRecord in new data scan")
+
+		case codec.DataRecordType:
+			dataRecord := record.(*codec.DataRecord)
+			recordSize = int64(codec.RecordHeaderSize + len(dataRecord.Payload))
+
+			// If we're not in a block yet, this DataRecord starts a new block
+			if !inBlock {
+				currentBlockStart = currentOffset
+				currentBlockFirstEntryID = currentEntryID
+				inBlock = true
+
+				logger.Ctx(context.TODO()).Debug("found new block start",
+					zap.String("filePath", r.filePath),
+					zap.Int32("blockNumber", currentBlockNumber),
+					zap.Int64("startOffset", currentBlockStart),
+					zap.Int64("firstEntryID", currentEntryID))
+			}
+
+			// Track the last entry ID in current block
+			currentBlockLastEntryID = currentEntryID
+			currentEntryID++
+
+		case codec.BlockLastRecordType:
+			recordSize = codec.RecordHeaderSize + codec.BlockLastRecordSize
+
+			if inBlock {
+				// End of current block, create index record
+				indexRecord := &codec.IndexRecord{
+					BlockNumber:       currentBlockNumber,
+					StartOffset:       currentBlockStart,
+					FirstRecordOffset: 0,
+					FirstEntryID:      currentBlockFirstEntryID,
+					LastEntryID:       currentBlockLastEntryID,
+				}
+				r.blockIndexes = append(r.blockIndexes, indexRecord)
+
+				logger.Ctx(context.TODO()).Debug("found new complete block",
+					zap.String("filePath", r.filePath),
+					zap.Int32("blockNumber", currentBlockNumber),
+					zap.Int64("startOffset", currentBlockStart),
+					zap.Int64("endOffset", currentOffset+recordSize),
+					zap.Int64("firstEntryID", currentBlockFirstEntryID),
+					zap.Int64("lastEntryID", currentBlockLastEntryID))
+
+				// Prepare for next block
+				currentBlockNumber++
+				inBlock = false
+			}
+
+		case codec.IndexRecordType:
+			recordSize = codec.RecordHeaderSize + 36
+		case codec.FooterRecordType:
+			recordSize = codec.RecordHeaderSize + codec.FooterRecordSize
+		default:
+			recordSize = codec.RecordHeaderSize
+		}
+
+		currentOffset += recordSize
+	}
+
+	// Handle case where new data ends with incomplete block
+	if inBlock && currentBlockFirstEntryID != -1 {
+		indexRecord := &codec.IndexRecord{
+			BlockNumber:       currentBlockNumber,
+			StartOffset:       currentBlockStart,
+			FirstRecordOffset: 0,
+			FirstEntryID:      currentBlockFirstEntryID,
+			LastEntryID:       currentBlockLastEntryID,
+		}
+		r.blockIndexes = append(r.blockIndexes, indexRecord)
+
+		logger.Ctx(context.TODO()).Debug("found new incomplete block at end",
+			zap.String("filePath", r.filePath),
+			zap.Int32("blockNumber", currentBlockNumber),
+			zap.Int64("startOffset", currentBlockStart),
+			zap.Int64("endOffset", currentOffset),
+			zap.Int64("firstEntryID", currentBlockFirstEntryID),
+			zap.Int64("lastEntryID", currentBlockLastEntryID))
+	}
+
+	// Update file size and last scanned offset
+	r.size = currentSize
+	r.lastScannedOffset = currentSize
+
+	logger.Ctx(context.TODO()).Debug("completed new blocks scan",
+		zap.String("filePath", r.filePath),
+		zap.Int("totalBlocks", len(r.blockIndexes)),
+		zap.Int64("newSize", r.size),
+		zap.Int64("lastScannedOffset", r.lastScannedOffset))
 
 	return nil
 }
@@ -429,10 +613,19 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	logger.Ctx(ctx).Debug("ReadNextBatch called",
 		zap.Int64("startSequenceNum", opt.StartSequenceNum),
 		zap.Int64("batchSize", opt.BatchSize),
-		zap.Int("blockCount", len(r.blockIndexes)))
+		zap.Int("blockCount", len(r.blockIndexes)),
+		zap.Bool("isIncompleteFile", r.isIncompleteFile))
 
 	if r.closed.Load() {
 		return nil, werr.ErrReaderClosed
+	}
+
+	// For incomplete files, try to scan for new blocks if we don't have enough data
+	if r.isIncompleteFile {
+		if err := r.ensureSufficientBlocks(ctx, opt.StartSequenceNum, opt.BatchSize); err != nil {
+			logger.Ctx(ctx).Warn("failed to scan for new blocks", zap.Error(err))
+			// Continue with existing blocks even if scan fails
+		}
 	}
 
 	if len(r.blockIndexes) == 0 {
@@ -477,6 +670,56 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 			zap.Int64("batchSize", opt.BatchSize))
 		return r.readMultipleBlocks(ctx, r.blockIndexes, startBlockIndex, opt.StartSequenceNum, opt.BatchSize)
 	}
+}
+
+// ensureSufficientBlocks ensures we have scanned enough blocks to satisfy the read request
+// This method checks if we need to scan for new blocks in incomplete files
+func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSequenceNum int64, batchSize int64) error {
+	// Check if we already have the starting block
+	hasStartingBlock := false
+	var lastAvailableEntryID int64 = -1
+
+	for _, block := range r.blockIndexes {
+		if block.FirstEntryID <= startSequenceNum && startSequenceNum <= block.LastEntryID {
+			hasStartingBlock = true
+		}
+		if block.LastEntryID > lastAvailableEntryID {
+			lastAvailableEntryID = block.LastEntryID
+		}
+	}
+
+	// If we don't have the starting block, definitely need to scan
+	needToScan := !hasStartingBlock
+
+	// If we have the starting block but need more data for the batch size
+	if hasStartingBlock && batchSize > 0 {
+		requiredLastEntryID := startSequenceNum + batchSize - 1
+		if lastAvailableEntryID < requiredLastEntryID {
+			needToScan = true
+			logger.Ctx(ctx).Debug("need more blocks for batch size",
+				zap.Int64("startSequenceNum", startSequenceNum),
+				zap.Int64("batchSize", batchSize),
+				zap.Int64("requiredLastEntryID", requiredLastEntryID),
+				zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+		}
+	}
+
+	if needToScan {
+		logger.Ctx(ctx).Debug("scanning for new blocks to satisfy read request",
+			zap.Int64("startSequenceNum", startSequenceNum),
+			zap.Int64("batchSize", batchSize),
+			zap.Bool("hasStartingBlock", hasStartingBlock),
+			zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+
+		return r.scanForNewBlocks()
+	}
+
+	logger.Ctx(ctx).Debug("sufficient blocks available, no scan needed",
+		zap.Int64("startSequenceNum", startSequenceNum),
+		zap.Int64("batchSize", batchSize),
+		zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
+
+	return nil
 }
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID

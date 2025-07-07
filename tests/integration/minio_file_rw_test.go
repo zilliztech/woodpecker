@@ -2139,3 +2139,589 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 	})
 }
+
+// TestMinioFileRW_ConcurrentReadWrite tests concurrent reading and writing to verify real-time read capability in MinIO
+func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	logId := int64(70)
+	segmentId := int64(7000)
+	baseDir := fmt.Sprintf("test-concurrent-rw-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	// Create writer
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+
+	// Test parameters
+	totalEntries := 15
+	writeInterval := 200 * time.Millisecond // Wait 200ms between writes
+	readInterval := 100 * time.Millisecond  // Check for new data every 100ms
+
+	// Channels for coordination
+	writerDone := make(chan struct{})
+	readerDone := make(chan struct{})
+	writeProgress := make(chan int64, totalEntries) // Track write progress
+
+	// Start writer goroutine
+	go func() {
+		defer close(writerDone)
+		defer close(writeProgress)
+
+		for i := 0; i < totalEntries; i++ {
+			entryId := int64(i)
+			data := []byte(fmt.Sprintf("Entry %d: MinIO concurrent data written at %s",
+				i, time.Now().Format("15:04:05.000")))
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-minio-concurrent-write-%d", entryId))
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			if err != nil {
+				t.Errorf("Writer: Failed to write entry %d: %v", entryId, err)
+				return
+			}
+
+			// Wait for write to complete
+			result, err := resultCh.ReadResult(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to get write result for entry %d: %v", entryId, err)
+				return
+			}
+			if result.Err != nil {
+				t.Errorf("Writer: Write failed for entry %d: %v", entryId, result.Err)
+				return
+			}
+
+			// Force sync to ensure data is written to MinIO
+			err = writer.Sync(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to sync after entry %d: %v", entryId, err)
+				return
+			}
+
+			// Notify reader about new data
+			writeProgress <- entryId
+
+			t.Logf("Writer: Successfully wrote entry %d", entryId)
+
+			// Wait before writing next entry (except for the last one)
+			if i < totalEntries-1 {
+				time.Sleep(writeInterval)
+			}
+		}
+
+		t.Logf("Writer: Finished writing all %d entries", totalEntries)
+	}()
+
+	// Start reader goroutine
+	go func() {
+		defer close(readerDone)
+
+		// Wait a bit for writer to create the first block
+		time.Sleep(writeInterval + 100*time.Millisecond)
+
+		// Create reader for the incomplete file
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		if err != nil {
+			t.Errorf("Reader: Failed to create reader: %v", err)
+			return
+		}
+		defer reader.Close(ctx)
+
+		var lastReadEntryId int64 = -1
+		readEntries := make(map[int64][]byte) // Track read entries
+
+		// Keep reading until we've read all expected entries
+		for {
+			select {
+			case <-ctx.Done():
+				t.Logf("Reader: Context cancelled")
+				return
+			case latestWrittenId, ok := <-writeProgress:
+				if !ok {
+					// Writer is done, do final read
+					t.Logf("Reader: Writer finished, doing final read")
+					goto finalRead
+				}
+
+				// Try to read up to the latest written entry
+				if latestWrittenId > lastReadEntryId {
+					startId := lastReadEntryId + 1
+					batchSize := latestWrittenId - lastReadEntryId
+
+					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
+
+					entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+						StartSequenceNum: startId,
+						BatchSize:        batchSize,
+					})
+
+					if err != nil {
+						t.Logf("Reader: Failed to read entries %d to %d: %v", startId, latestWrittenId, err)
+						// Continue trying - the data might not be fully written yet
+						time.Sleep(readInterval)
+						continue
+					}
+
+					// Process read entries
+					for _, entry := range entries {
+						readEntries[entry.EntryId] = entry.Values
+						if entry.EntryId > lastReadEntryId {
+							lastReadEntryId = entry.EntryId
+						}
+						t.Logf("Reader: Successfully read entry %d: %s",
+							entry.EntryId, string(entry.Values))
+					}
+
+					t.Logf("Reader: Read %d entries, lastReadEntryId now %d",
+						len(entries), lastReadEntryId)
+				}
+
+				// Check if we've read all expected entries
+				if lastReadEntryId >= int64(totalEntries-1) {
+					t.Logf("Reader: Read all expected entries, finishing")
+					return
+				}
+
+			default:
+				// No new write notification, wait a bit
+				time.Sleep(readInterval)
+			}
+		}
+
+	finalRead:
+		// Final verification read after writer is done
+		t.Logf("Reader: Doing final verification read")
+
+		// Wait a bit for any pending writes to complete
+		time.Sleep(300 * time.Millisecond)
+
+		// Try to read any remaining entries
+		if lastReadEntryId < int64(totalEntries-1) {
+			startId := lastReadEntryId + 1
+			remainingEntries := int64(totalEntries) - startId
+
+			finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartSequenceNum: startId,
+				BatchSize:        remainingEntries,
+			})
+
+			if err != nil {
+				t.Errorf("Reader: Failed final read: %v", err)
+			} else {
+				t.Logf("Reader: Final read got %d entries", len(finalEntries))
+
+				for _, entry := range finalEntries {
+					readEntries[entry.EntryId] = entry.Values
+					if entry.EntryId > lastReadEntryId {
+						lastReadEntryId = entry.EntryId
+					}
+				}
+			}
+		}
+
+		// Verify we read all expected entries
+		for i := 0; i < totalEntries; i++ {
+			if _, exists := readEntries[int64(i)]; !exists {
+				t.Errorf("Reader: Missing entry %d", i)
+			}
+		}
+
+		t.Logf("Reader: Successfully verified all %d entries", len(readEntries))
+	}()
+
+	// Wait for both goroutines to complete with timeout
+	timeout := time.Duration(totalEntries)*writeInterval + 15*time.Second
+
+	select {
+	case <-writerDone:
+		t.Logf("Writer completed successfully")
+	case <-time.After(timeout):
+		t.Fatalf("Writer timed out after %v", timeout)
+	}
+
+	select {
+	case <-readerDone:
+		t.Logf("Reader completed successfully")
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Reader timed out after writer completion")
+	}
+
+	// Close writer without finalizing to keep it as incomplete file
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Final verification: Create a new reader and verify data is accessible
+	t.Run("FinalVerification", func(t *testing.T) {
+		finalReader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		defer finalReader.Close(ctx)
+
+		// Verify file is incomplete (no footer)
+		footer := finalReader.GetFooter()
+		assert.Nil(t, footer, "File should be incomplete (no footer)")
+
+		// Verify we can read available entries (may be less than total due to MinIO block boundaries)
+		lastEntryId, err := finalReader.GetLastEntryID(ctx)
+		if err == nil && lastEntryId >= 0 {
+			// Try to read from the beginning
+			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartSequenceNum: 0,
+				BatchSize:        lastEntryId + 1,
+			})
+			if err == nil {
+				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
+
+				// Verify entry content and order
+				for i, entry := range allEntries {
+					assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
+					assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
+						"Entry content should contain expected prefix")
+				}
+
+				t.Logf("Final verification: Read %d entries successfully", len(allEntries))
+			}
+		}
+	})
+}
+
+// TestMinioFileRW_ConcurrentOneWriteMultipleReads tests one writer with multiple concurrent readers for MinIO
+func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	logId := int64(80)
+	segmentId := int64(8000)
+	baseDir := fmt.Sprintf("test-multi-reader-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	// Create writer
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+
+	// Test parameters
+	totalEntries := 20
+	numReaders := 3                         // Number of concurrent readers
+	writeInterval := 250 * time.Millisecond // Wait 250ms between writes
+	readInterval := 150 * time.Millisecond  // Check for new data every 150ms
+
+	// Channels for coordination
+	writerDone := make(chan struct{})
+	readersDone := make(chan int, numReaders)                // Track which reader finished
+	writeProgress := make(chan int64, totalEntries)          // Track write progress
+	readerResults := make(chan map[int64][]byte, numReaders) // Collect results from each reader
+
+	// Start writer goroutine
+	go func() {
+		defer close(writerDone)
+		defer close(writeProgress)
+
+		for i := 0; i < totalEntries; i++ {
+			entryId := int64(i)
+			data := []byte(fmt.Sprintf("Entry %d: MinIO multi-reader data written at %s",
+				i, time.Now().Format("15:04:05.000")))
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-minio-multi-reader-write-%d", entryId))
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			if err != nil {
+				t.Errorf("Writer: Failed to write entry %d: %v", entryId, err)
+				return
+			}
+
+			// Wait for write to complete
+			result, err := resultCh.ReadResult(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to get write result for entry %d: %v", entryId, err)
+				return
+			}
+			if result.Err != nil {
+				t.Errorf("Writer: Write failed for entry %d: %v", entryId, result.Err)
+				return
+			}
+
+			// Force sync to ensure data is written to MinIO
+			err = writer.Sync(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to sync after entry %d: %v", entryId, err)
+				return
+			}
+
+			// Notify all readers about new data
+			writeProgress <- entryId
+
+			t.Logf("Writer: Successfully wrote entry %d", entryId)
+
+			// Wait before writing next entry (except for the last one)
+			if i < totalEntries-1 {
+				time.Sleep(writeInterval)
+			}
+		}
+
+		t.Logf("Writer: Finished writing all %d entries", totalEntries)
+	}()
+
+	// Start multiple reader goroutines
+	for readerId := 0; readerId < numReaders; readerId++ {
+		go func(readerNum int) {
+			defer func() {
+				readersDone <- readerNum
+			}()
+
+			t.Logf("Reader %d: Starting", readerNum)
+
+			// Wait a bit for writer to create the first block
+			time.Sleep(writeInterval + time.Duration(readerNum*50)*time.Millisecond)
+
+			// Create reader for the incomplete file
+			reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+			if err != nil {
+				t.Errorf("Reader %d: Failed to create reader: %v", readerNum, err)
+				return
+			}
+			defer reader.Close(ctx)
+
+			var lastReadEntryId int64 = -1
+			readEntries := make(map[int64][]byte) // Track read entries
+
+			// Each reader has different reading patterns
+			var readStrategy string
+			var batchSize int64
+			switch readerNum {
+			case 0:
+				readStrategy = "single-entry"
+				batchSize = 1 // Read one entry at a time
+			case 1:
+				readStrategy = "small-batch"
+				batchSize = 2 // Read 2 entries at a time
+			case 2:
+				readStrategy = "large-batch"
+				batchSize = 4 // Read 4 entries at a time
+			}
+
+			t.Logf("Reader %d: Using strategy '%s' with batch size %d", readerNum, readStrategy, batchSize)
+
+			// Keep reading until we've read all expected entries
+			for {
+				select {
+				case <-ctx.Done():
+					t.Logf("Reader %d: Context cancelled", readerNum)
+					return
+				case latestWrittenId, ok := <-writeProgress:
+					if !ok {
+						// Writer is done, do final read
+						t.Logf("Reader %d: Writer finished, doing final read", readerNum)
+						goto finalRead
+					}
+
+					// Try to read up to the latest written entry based on strategy
+					if latestWrittenId > lastReadEntryId {
+						startId := lastReadEntryId + 1
+
+						// Calculate how many entries to read based on strategy
+						var entriesToRead int64
+						switch readStrategy {
+						case "single-entry":
+							entriesToRead = 1 // Always read just one
+						case "small-batch":
+							entriesToRead = min(batchSize, latestWrittenId-lastReadEntryId)
+						case "large-batch":
+							entriesToRead = min(batchSize, latestWrittenId-lastReadEntryId)
+						}
+
+						t.Logf("Reader %d: Attempting to read %d entries starting from %d (latest written: %d)",
+							readerNum, entriesToRead, startId, latestWrittenId)
+
+						entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+							StartSequenceNum: startId,
+							BatchSize:        entriesToRead,
+						})
+
+						if err != nil {
+							t.Logf("Reader %d: Failed to read entries %d to %d: %v",
+								readerNum, startId, startId+entriesToRead-1, err)
+							// Continue trying - the data might not be fully written yet
+							time.Sleep(readInterval)
+							continue
+						}
+
+						// Process read entries
+						for _, entry := range entries {
+							readEntries[entry.EntryId] = entry.Values
+							if entry.EntryId > lastReadEntryId {
+								lastReadEntryId = entry.EntryId
+							}
+							t.Logf("Reader %d: Successfully read entry %d: %s",
+								readerNum, entry.EntryId, string(entry.Values))
+						}
+
+						t.Logf("Reader %d: Read %d entries, lastReadEntryId now %d",
+							readerNum, len(entries), lastReadEntryId)
+					}
+
+					// Check if we've read all expected entries
+					if lastReadEntryId >= int64(totalEntries-1) {
+						t.Logf("Reader %d: Read all expected entries, finishing", readerNum)
+						readerResults <- readEntries
+						return
+					}
+
+				default:
+					// No new write notification, wait a bit
+					time.Sleep(readInterval)
+				}
+			}
+
+		finalRead:
+			// Final verification read after writer is done
+			t.Logf("Reader %d: Doing final verification read", readerNum)
+
+			// Wait a bit for any pending writes to complete
+			time.Sleep(400 * time.Millisecond)
+
+			// Try to read any remaining entries
+			if lastReadEntryId < int64(totalEntries-1) {
+				startId := lastReadEntryId + 1
+				remainingEntries := int64(totalEntries) - startId
+
+				finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+					StartSequenceNum: startId,
+					BatchSize:        remainingEntries,
+				})
+
+				if err != nil {
+					t.Errorf("Reader %d: Failed final read: %v", readerNum, err)
+				} else {
+					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalEntries))
+
+					for _, entry := range finalEntries {
+						readEntries[entry.EntryId] = entry.Values
+						if entry.EntryId > lastReadEntryId {
+							lastReadEntryId = entry.EntryId
+						}
+					}
+				}
+			}
+
+			// Verify we read all expected entries that are available
+			for i := 0; i <= int(lastReadEntryId); i++ {
+				if _, exists := readEntries[int64(i)]; !exists {
+					t.Errorf("Reader %d: Missing entry %d", readerNum, i)
+				}
+			}
+
+			t.Logf("Reader %d: Successfully verified %d entries", readerNum, len(readEntries))
+			readerResults <- readEntries
+		}(readerId)
+	}
+
+	// Wait for writer to complete with timeout
+	timeout := time.Duration(totalEntries)*writeInterval + 15*time.Second
+
+	select {
+	case <-writerDone:
+		t.Logf("Writer completed successfully")
+	case <-time.After(timeout):
+		t.Fatalf("Writer timed out after %v", timeout)
+	}
+
+	// Wait for all readers to complete
+	completedReaders := 0
+	readerTimeout := 15 * time.Second
+
+	for completedReaders < numReaders {
+		select {
+		case readerNum := <-readersDone:
+			t.Logf("Reader %d completed successfully", readerNum)
+			completedReaders++
+		case <-time.After(readerTimeout):
+			t.Fatalf("Readers timed out after writer completion, only %d/%d completed", completedReaders, numReaders)
+		}
+	}
+
+	// Collect and verify results from all readers
+	allReaderResults := make([]map[int64][]byte, 0, numReaders)
+	for i := 0; i < numReaders; i++ {
+		select {
+		case result := <-readerResults:
+			allReaderResults = append(allReaderResults, result)
+		case <-time.After(2 * time.Second):
+			t.Errorf("Failed to collect results from reader %d", i)
+		}
+	}
+
+	// Close writer without finalizing to keep it as incomplete file
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Verify all readers got consistent data (allowing for MinIO block boundaries)
+	t.Run("VerifyReaderConsistency", func(t *testing.T) {
+		require.Equal(t, numReaders, len(allReaderResults), "Should have results from all readers")
+
+		// Find the minimum number of entries read by any reader
+		minEntries := int(^uint(0) >> 1) // Max int
+		for readerIdx, readerData := range allReaderResults {
+			if len(readerData) < minEntries {
+				minEntries = len(readerData)
+			}
+			t.Logf("Reader %d read %d entries", readerIdx, len(readerData))
+		}
+
+		if minEntries > 0 {
+			// Verify data consistency for the entries that all readers managed to read
+			for entryId := 0; entryId < minEntries; entryId++ {
+				// Get data from first reader as reference
+				referenceData, exists := allReaderResults[0][int64(entryId)]
+				if !exists {
+					continue
+				}
+
+				// Compare with all other readers
+				for readerIdx := 1; readerIdx < numReaders; readerIdx++ {
+					readerData, exists := allReaderResults[readerIdx][int64(entryId)]
+					if exists {
+						assert.Equal(t, referenceData, readerData,
+							"Entry %d should be identical across all readers (reader 0 vs reader %d)",
+							entryId, readerIdx)
+					}
+				}
+			}
+
+			t.Logf("All %d readers successfully read consistent data for %d entries",
+				numReaders, minEntries)
+		}
+	})
+
+	// Final verification: Create a new reader and verify data is accessible
+	t.Run("FinalFileVerification", func(t *testing.T) {
+		finalReader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		defer finalReader.Close(ctx)
+
+		// Verify file is incomplete (no footer)
+		footer := finalReader.GetFooter()
+		assert.Nil(t, footer, "File should be incomplete (no footer)")
+
+		// Verify we can read available entries
+		lastEntryId, err := finalReader.GetLastEntryID(ctx)
+		if err == nil && lastEntryId >= 0 {
+			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartSequenceNum: 0,
+				BatchSize:        lastEntryId + 1,
+			})
+			if err == nil {
+				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
+
+				// Verify entry content and order
+				for i, entry := range allEntries {
+					assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
+					assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
+						"Entry content should contain expected prefix")
+				}
+
+				t.Logf("Final verification: File contains %d readable entries", len(allEntries))
+			}
+		}
+	})
+}

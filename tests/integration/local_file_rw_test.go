@@ -1484,3 +1484,772 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		}
 	})
 }
+
+// TestLocalFileReader_DynamicScanning tests dynamic scanning of incomplete files
+func TestLocalFileReader_DynamicScanning(t *testing.T) {
+	tempDir := setupLocalFileTest(t)
+	ctx := context.Background()
+
+	blockSize := int64(256 * 1024) // 256KB per block
+
+	logId := int64(40)
+	segmentId := int64(4000)
+
+	// Phase 1: Create a writer and write some initial data
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	require.NoError(t, err)
+
+	// Write initial data
+	initialData := [][]byte{
+		[]byte("Entry 0: Initial data"),
+		[]byte("Entry 1: More initial data"),
+	}
+
+	for i, data := range initialData {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-dynamic-initial-%d", i))
+		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+		require.NoError(t, err)
+
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		require.NoError(t, result.Err)
+	}
+
+	// Force sync to ensure data is written to disk
+	err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	// Phase 2: Create reader for incomplete file
+	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+	defer reader.Close(ctx)
+
+	t.Run("ReadInitialData", func(t *testing.T) {
+		// Read initial data
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(entries))
+
+		// Verify content
+		for i, entry := range entries {
+			assert.Equal(t, int64(i), entry.EntryId)
+			assert.Equal(t, initialData[i], entry.Values)
+		}
+	})
+
+	t.Run("TryReadBeyondAvailableData", func(t *testing.T) {
+		// Try to read beyond available data - should return what's available
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 1,
+			BatchSize:        5, // Request more than available
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(entries)) // Should only get entry 1
+
+		assert.Equal(t, int64(1), entries[0].EntryId)
+		assert.Equal(t, initialData[1], entries[0].Values)
+	})
+
+	// Phase 3: Write more data to the same file
+	moreData := [][]byte{
+		[]byte("Entry 2: Additional data after reader creation"),
+		[]byte("Entry 3: Even more data"),
+		generateTestData(1024), // Entry 4: 1KB data
+	}
+
+	for i, data := range moreData {
+		entryId := int64(len(initialData) + i)
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-dynamic-additional-%d", entryId))
+		_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+		require.NoError(t, err)
+
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		require.NoError(t, result.Err)
+	}
+
+	// Force sync to ensure new data is written to disk
+	err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	t.Run("ReadNewDataAfterDynamicScan", func(t *testing.T) {
+		// Now try to read the new data - should trigger dynamic scanning
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 2,
+			BatchSize:        3, // Request the 3 new entries
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, len(entries))
+
+		// Verify new content
+		for i, entry := range entries {
+			expectedId := int64(2 + i)
+			assert.Equal(t, expectedId, entry.EntryId)
+			assert.Equal(t, moreData[i], entry.Values)
+		}
+	})
+
+	t.Run("ReadAllDataAfterDynamicScan", func(t *testing.T) {
+		// Read all data from the beginning
+		allData := append(initialData, moreData...)
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(len(allData)),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(allData), len(entries))
+
+		// Verify all content
+		for i, entry := range entries {
+			assert.Equal(t, int64(i), entry.EntryId)
+			assert.Equal(t, allData[i], entry.Values)
+		}
+	})
+
+	// Phase 4: Write even more data
+	finalData := [][]byte{
+		[]byte("Entry 5: Final batch data 1"),
+		[]byte("Entry 6: Final batch data 2"),
+	}
+
+	for i, data := range finalData {
+		entryId := int64(len(initialData) + len(moreData) + i)
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-dynamic-final-%d", entryId))
+		_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+		require.NoError(t, err)
+
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		require.NoError(t, result.Err)
+	}
+
+	err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	t.Run("ReadFinalDataWithDynamicScan", func(t *testing.T) {
+		// Read the final data
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 5,
+			BatchSize:        2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(entries))
+
+		// Verify final content
+		for i, entry := range entries {
+			expectedId := int64(5 + i)
+			assert.Equal(t, expectedId, entry.EntryId)
+			assert.Equal(t, finalData[i], entry.Values)
+		}
+	})
+
+	t.Run("ReadFromMiddleWithDynamicScan", func(t *testing.T) {
+		// Read from middle, spanning across dynamically scanned blocks
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 3,
+			BatchSize:        4, // Should get entries 3, 4, 5, 6
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 4, len(entries))
+
+		expectedData := append(moreData[1:], finalData...)
+		for i, entry := range entries {
+			expectedId := int64(3 + i)
+			assert.Equal(t, expectedId, entry.EntryId)
+			assert.Equal(t, expectedData[i], entry.Values)
+		}
+	})
+
+	// Close writer without finalizing to keep file incomplete
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+}
+
+// TestLocalFileRW_ConcurrentReadWrite tests concurrent reading and writing to verify real-time read capability
+func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
+	tempDir := setupLocalFileTest(t)
+	ctx := context.Background()
+
+	blockSize := int64(256 * 1024) // 256KB per block
+
+	logId := int64(50)
+	segmentId := int64(5000)
+
+	// Create writer
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+
+	// Test parameters
+	totalEntries := 20
+	writeInterval := 100 * time.Millisecond // Wait 100ms between writes
+	readInterval := 50 * time.Millisecond   // Check for new data every 50ms
+
+	// Channels for coordination
+	writerDone := make(chan struct{})
+	readerDone := make(chan struct{})
+	writeProgress := make(chan int64, totalEntries) // Track write progress
+
+	// Start writer goroutine
+	go func() {
+		defer close(writerDone)
+		defer close(writeProgress)
+
+		for i := 0; i < totalEntries; i++ {
+			entryId := int64(i)
+			data := []byte(fmt.Sprintf("Entry %d: Real-time data written at %s",
+				i, time.Now().Format("15:04:05.000")))
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-concurrent-write-%d", entryId))
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			if err != nil {
+				t.Errorf("Failed to write entry %d: %v", entryId, err)
+				return
+			}
+
+			// Wait for write to complete
+			result, err := resultCh.ReadResult(ctx)
+			if err != nil {
+				t.Errorf("Failed to get write result for entry %d: %v", entryId, err)
+				return
+			}
+			if result.Err != nil {
+				t.Errorf("Write failed for entry %d: %v", entryId, result.Err)
+				return
+			}
+
+			// Force sync to ensure data is written to disk
+			err = writer.Sync(ctx)
+			if err != nil {
+				t.Errorf("Failed to sync after entry %d: %v", entryId, err)
+				return
+			}
+
+			// Notify reader about new data
+			writeProgress <- entryId
+
+			t.Logf("Writer: Successfully wrote entry %d", entryId)
+
+			// Wait before writing next entry (except for the last one)
+			if i < totalEntries-1 {
+				time.Sleep(writeInterval)
+			}
+		}
+
+		t.Logf("Writer: Finished writing all %d entries", totalEntries)
+	}()
+
+	// Start reader goroutine
+	go func() {
+		defer close(readerDone)
+
+		// Create reader for the incomplete file
+		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		if err != nil {
+			t.Errorf("Failed to create reader: %v", err)
+			return
+		}
+		defer reader.Close(ctx)
+
+		var lastReadEntryId int64 = -1
+		readEntries := make(map[int64][]byte) // Track read entries
+
+		// Keep reading until we've read all expected entries
+		for {
+			select {
+			case <-ctx.Done():
+				t.Logf("Reader: Context cancelled")
+				return
+			case latestWrittenId, ok := <-writeProgress:
+				if !ok {
+					// Writer is done, do final read
+					t.Logf("Reader: Writer finished, doing final read")
+					break
+				}
+
+				// Try to read up to the latest written entry
+				if latestWrittenId > lastReadEntryId {
+					startId := lastReadEntryId + 1
+					batchSize := latestWrittenId - lastReadEntryId
+
+					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
+
+					entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+						StartSequenceNum: startId,
+						BatchSize:        batchSize,
+					})
+
+					if err != nil {
+						t.Logf("Reader: Failed to read entries %d to %d: %v", startId, latestWrittenId, err)
+						// Continue trying - the data might not be fully written yet
+						time.Sleep(readInterval)
+						continue
+					}
+
+					// Process read entries
+					for _, entry := range entries {
+						readEntries[entry.EntryId] = entry.Values
+						if entry.EntryId > lastReadEntryId {
+							lastReadEntryId = entry.EntryId
+						}
+						t.Logf("Reader: Successfully read entry %d: %s",
+							entry.EntryId, string(entry.Values))
+					}
+
+					t.Logf("Reader: Read %d entries, lastReadEntryId now %d",
+						len(entries), lastReadEntryId)
+				}
+
+				// Check if we've read all expected entries
+				if lastReadEntryId >= int64(totalEntries-1) {
+					t.Logf("Reader: Read all expected entries, finishing")
+					return
+				}
+
+			default:
+				// No new write notification, wait a bit
+				time.Sleep(readInterval)
+			}
+		}
+
+		// Final verification read after writer is done
+		t.Logf("Reader: Doing final verification read")
+
+		// Wait a bit for any pending writes to complete
+		time.Sleep(200 * time.Millisecond)
+
+		finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(totalEntries),
+		})
+
+		if err != nil {
+			t.Errorf("Reader: Failed final read: %v", err)
+			return
+		}
+
+		t.Logf("Reader: Final read got %d entries", len(finalEntries))
+
+		// Verify all entries were read
+		for i := 0; i < totalEntries; i++ {
+			if i < len(finalEntries) {
+				readEntries[int64(i)] = finalEntries[i].Values
+			}
+		}
+
+		// Verify we read all expected entries
+		for i := 0; i < totalEntries; i++ {
+			if _, exists := readEntries[int64(i)]; !exists {
+				t.Errorf("Reader: Missing entry %d", i)
+			}
+		}
+
+		t.Logf("Reader: Successfully verified all %d entries", len(readEntries))
+	}()
+
+	// Wait for both goroutines to complete with timeout
+	timeout := time.Duration(totalEntries)*writeInterval + 10*time.Second
+
+	select {
+	case <-writerDone:
+		t.Logf("Writer completed successfully")
+	case <-time.After(timeout):
+		t.Fatalf("Writer timed out after %v", timeout)
+	}
+
+	select {
+	case <-readerDone:
+		t.Logf("Reader completed successfully")
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Reader timed out after writer completion")
+	}
+
+	// Close writer without finalizing to keep it as incomplete file
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Final verification: Create a new reader and verify all data is accessible
+	t.Run("FinalVerification", func(t *testing.T) {
+		finalReader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		require.NoError(t, err)
+		defer finalReader.Close(ctx)
+
+		// Verify file is incomplete (no footer)
+		footer := finalReader.GetFooter()
+		assert.Nil(t, footer, "File should be incomplete (no footer)")
+
+		// Verify we can read all entries
+		allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(totalEntries),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, totalEntries, len(allEntries), "Should read all entries")
+
+		// Verify entry content and order
+		for i, entry := range allEntries {
+			assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
+			assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
+				"Entry content should contain expected prefix")
+		}
+
+		// Verify dynamic scanning works by reading from different positions
+		midEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: int64(totalEntries / 2),
+			BatchSize:        5,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 5, len(midEntries), "Should read 5 entries from middle")
+
+		lastEntryId, err := finalReader.GetLastEntryID(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(totalEntries-1), lastEntryId, "Last entry ID should match")
+	})
+}
+
+// TestLocalFileRW_ConcurrentOneWriteMultipleReads tests one writer with multiple concurrent readers
+func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
+	tempDir := setupLocalFileTest(t)
+	ctx := context.Background()
+
+	blockSize := int64(256 * 1024) // 256KB per block
+
+	logId := int64(60)
+	segmentId := int64(6000)
+
+	// Create writer
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	require.NoError(t, err)
+	require.NotNil(t, writer)
+
+	// Test parameters
+	totalEntries := 25
+	numReaders := 3                         // Number of concurrent readers
+	writeInterval := 120 * time.Millisecond // Wait 120ms between writes
+	readInterval := 60 * time.Millisecond   // Check for new data every 60ms
+
+	// Channels for coordination
+	writerDone := make(chan struct{})
+	readersDone := make(chan int, numReaders)                // Track which reader finished
+	writeProgress := make(chan int64, totalEntries)          // Track write progress
+	readerResults := make(chan map[int64][]byte, numReaders) // Collect results from each reader
+
+	// Start writer goroutine
+	go func() {
+		defer close(writerDone)
+		defer close(writeProgress)
+
+		for i := 0; i < totalEntries; i++ {
+			entryId := int64(i)
+			data := []byte(fmt.Sprintf("Entry %d: Multi-reader data written at %s",
+				i, time.Now().Format("15:04:05.000")))
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-multi-reader-write-%d", entryId))
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			if err != nil {
+				t.Errorf("Writer: Failed to write entry %d: %v", entryId, err)
+				return
+			}
+
+			// Wait for write to complete
+			result, err := resultCh.ReadResult(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to get write result for entry %d: %v", entryId, err)
+				return
+			}
+			if result.Err != nil {
+				t.Errorf("Writer: Write failed for entry %d: %v", entryId, result.Err)
+				return
+			}
+
+			// Force sync to ensure data is written to disk
+			err = writer.Sync(ctx)
+			if err != nil {
+				t.Errorf("Writer: Failed to sync after entry %d: %v", entryId, err)
+				return
+			}
+
+			// Notify all readers about new data
+			writeProgress <- entryId
+
+			t.Logf("Writer: Successfully wrote entry %d", entryId)
+
+			// Wait before writing next entry (except for the last one)
+			if i < totalEntries-1 {
+				time.Sleep(writeInterval)
+			}
+		}
+
+		t.Logf("Writer: Finished writing all %d entries", totalEntries)
+	}()
+
+	// Start multiple reader goroutines
+	for readerId := 0; readerId < numReaders; readerId++ {
+		go func(readerNum int) {
+			defer func() {
+				readersDone <- readerNum
+			}()
+
+			t.Logf("Reader %d: Starting", readerNum)
+
+			// Create reader for the incomplete file
+			reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+			if err != nil {
+				t.Errorf("Reader %d: Failed to create reader: %v", readerNum, err)
+				return
+			}
+			defer reader.Close(ctx)
+
+			var lastReadEntryId int64 = -1
+			readEntries := make(map[int64][]byte) // Track read entries
+
+			// Each reader has different reading patterns
+			var readStrategy string
+			var batchSize int64
+			switch readerNum {
+			case 0:
+				readStrategy = "single-entry"
+				batchSize = 1 // Read one entry at a time
+			case 1:
+				readStrategy = "small-batch"
+				batchSize = 3 // Read 3 entries at a time
+			case 2:
+				readStrategy = "large-batch"
+				batchSize = 5 // Read 5 entries at a time
+			}
+
+			t.Logf("Reader %d: Using strategy '%s' with batch size %d", readerNum, readStrategy, batchSize)
+
+			// Keep reading until we've read all expected entries
+			for {
+				select {
+				case <-ctx.Done():
+					t.Logf("Reader %d: Context cancelled", readerNum)
+					return
+				case latestWrittenId, ok := <-writeProgress:
+					if !ok {
+						// Writer is done, do final read
+						t.Logf("Reader %d: Writer finished, doing final read", readerNum)
+						goto finalRead
+					}
+
+					// Try to read up to the latest written entry based on strategy
+					if latestWrittenId > lastReadEntryId {
+						startId := lastReadEntryId + 1
+
+						// Calculate how many entries to read based on strategy
+						var entriesToRead int64
+						switch readStrategy {
+						case "single-entry":
+							entriesToRead = 1 // Always read just one
+						case "small-batch":
+							entriesToRead = min(batchSize, latestWrittenId-lastReadEntryId)
+						case "large-batch":
+							entriesToRead = min(batchSize, latestWrittenId-lastReadEntryId)
+						}
+
+						t.Logf("Reader %d: Attempting to read %d entries starting from %d (latest written: %d)",
+							readerNum, entriesToRead, startId, latestWrittenId)
+
+						entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+							StartSequenceNum: startId,
+							BatchSize:        entriesToRead,
+						})
+
+						if err != nil {
+							t.Logf("Reader %d: Failed to read entries %d to %d: %v",
+								readerNum, startId, startId+entriesToRead-1, err)
+							// Continue trying - the data might not be fully written yet
+							time.Sleep(readInterval)
+							continue
+						}
+
+						// Process read entries
+						for _, entry := range entries {
+							readEntries[entry.EntryId] = entry.Values
+							if entry.EntryId > lastReadEntryId {
+								lastReadEntryId = entry.EntryId
+							}
+							t.Logf("Reader %d: Successfully read entry %d: %s",
+								readerNum, entry.EntryId, string(entry.Values))
+						}
+
+						t.Logf("Reader %d: Read %d entries, lastReadEntryId now %d",
+							readerNum, len(entries), lastReadEntryId)
+					}
+
+					// Check if we've read all expected entries
+					if lastReadEntryId >= int64(totalEntries-1) {
+						t.Logf("Reader %d: Read all expected entries, finishing", readerNum)
+						readerResults <- readEntries
+						return
+					}
+
+				default:
+					// No new write notification, wait a bit
+					time.Sleep(readInterval)
+				}
+			}
+
+		finalRead:
+			// Final verification read after writer is done
+			t.Logf("Reader %d: Doing final verification read", readerNum)
+
+			// Wait a bit for any pending writes to complete
+			time.Sleep(200 * time.Millisecond)
+
+			// Try to read any remaining entries
+			if lastReadEntryId < int64(totalEntries-1) {
+				startId := lastReadEntryId + 1
+				remainingEntries := int64(totalEntries) - startId
+
+				finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+					StartSequenceNum: startId,
+					BatchSize:        remainingEntries,
+				})
+
+				if err != nil {
+					t.Errorf("Reader %d: Failed final read: %v", readerNum, err)
+				} else {
+					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalEntries))
+
+					for _, entry := range finalEntries {
+						readEntries[entry.EntryId] = entry.Values
+						if entry.EntryId > lastReadEntryId {
+							lastReadEntryId = entry.EntryId
+						}
+					}
+				}
+			}
+
+			// Verify we read all expected entries
+			for i := 0; i < totalEntries; i++ {
+				if _, exists := readEntries[int64(i)]; !exists {
+					t.Errorf("Reader %d: Missing entry %d", readerNum, i)
+				}
+			}
+
+			t.Logf("Reader %d: Successfully verified all %d entries", readerNum, len(readEntries))
+			readerResults <- readEntries
+		}(readerId)
+	}
+
+	// Wait for writer to complete with timeout
+	timeout := time.Duration(totalEntries)*writeInterval + 10*time.Second
+
+	select {
+	case <-writerDone:
+		t.Logf("Writer completed successfully")
+	case <-time.After(timeout):
+		t.Fatalf("Writer timed out after %v", timeout)
+	}
+
+	// Wait for all readers to complete
+	completedReaders := 0
+	readerTimeout := 10 * time.Second
+
+	for completedReaders < numReaders {
+		select {
+		case readerNum := <-readersDone:
+			t.Logf("Reader %d completed successfully", readerNum)
+			completedReaders++
+		case <-time.After(readerTimeout):
+			t.Fatalf("Readers timed out after writer completion, only %d/%d completed", completedReaders, numReaders)
+		}
+	}
+
+	// Collect and verify results from all readers
+	allReaderResults := make([]map[int64][]byte, 0, numReaders)
+	for i := 0; i < numReaders; i++ {
+		select {
+		case result := <-readerResults:
+			allReaderResults = append(allReaderResults, result)
+		case <-time.After(1 * time.Second):
+			t.Errorf("Failed to collect results from reader %d", i)
+		}
+	}
+
+	// Close writer without finalizing to keep it as incomplete file
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Verify all readers got the same data
+	t.Run("VerifyReaderConsistency", func(t *testing.T) {
+		require.Equal(t, numReaders, len(allReaderResults), "Should have results from all readers")
+
+		// Check that all readers read all entries
+		for readerIdx, readerData := range allReaderResults {
+			assert.Equal(t, totalEntries, len(readerData),
+				"Reader %d should have read all %d entries", readerIdx, totalEntries)
+
+			// Verify each entry exists and has correct content
+			for entryId := 0; entryId < totalEntries; entryId++ {
+				data, exists := readerData[int64(entryId)]
+				assert.True(t, exists, "Reader %d should have entry %d", readerIdx, entryId)
+				assert.Contains(t, string(data), fmt.Sprintf("Entry %d:", entryId),
+					"Reader %d entry %d should have correct content", readerIdx, entryId)
+			}
+		}
+
+		// Verify data consistency across all readers
+		for entryId := 0; entryId < totalEntries; entryId++ {
+			// Get data from first reader as reference
+			referenceData := allReaderResults[0][int64(entryId)]
+
+			// Compare with all other readers
+			for readerIdx := 1; readerIdx < numReaders; readerIdx++ {
+				readerData := allReaderResults[readerIdx][int64(entryId)]
+				assert.Equal(t, referenceData, readerData,
+					"Entry %d should be identical across all readers (reader 0 vs reader %d)",
+					entryId, readerIdx)
+			}
+		}
+
+		t.Logf("All %d readers successfully read identical data for all %d entries",
+			numReaders, totalEntries)
+	})
+
+	// Final verification: Create a new reader and verify all data is accessible
+	t.Run("FinalFileVerification", func(t *testing.T) {
+		finalReader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		require.NoError(t, err)
+		defer finalReader.Close(ctx)
+
+		// Verify file is incomplete (no footer)
+		footer := finalReader.GetFooter()
+		assert.Nil(t, footer, "File should be incomplete (no footer)")
+
+		// Verify we can read all entries
+		allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartSequenceNum: 0,
+			BatchSize:        int64(totalEntries),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, totalEntries, len(allEntries), "Should read all entries")
+
+		// Verify entry content and order
+		for i, entry := range allEntries {
+			assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
+			assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
+				"Entry content should contain expected prefix")
+		}
+
+		lastEntryId, err := finalReader.GetLastEntryID(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(totalEntries-1), lastEntryId, "Last entry ID should match")
+
+		t.Logf("Final verification: File contains all %d entries and is readable", totalEntries)
+	})
+}
+
+// Helper function for min calculation
+func min(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
