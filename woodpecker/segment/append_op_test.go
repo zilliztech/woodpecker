@@ -438,3 +438,228 @@ func TestAppendOp_receivedAckCallback_Timeout(t *testing.T) {
 	elapsed := time.Since(start)
 	assert.True(t, elapsed < 200*time.Millisecond) // Ensure test doesn't hang
 }
+
+// TestAppendOp_Execute_RetryIdempotency tests that retry operations are idempotent
+// by verifying that result channels are reused across multiple Execute calls
+func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	// Setup expectations - GetQuorumInfo will be called multiple times
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// First execution
+	op.Execute()
+
+	// Verify initial state
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+	assert.NotNil(t, op.resultChannels[1])
+
+	// Store references to original channels
+	originalChannel0 := op.resultChannels[0]
+	originalChannel1 := op.resultChannels[1]
+
+	// Second execution (simulating retry)
+	op.Execute()
+
+	// Verify channels are reused (idempotent)
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on retry")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on retry")
+
+	// Third execution (simulating another retry)
+	op.Execute()
+
+	// Verify channels are still the same
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on multiple retries")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on multiple retries")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize tests idempotency
+// when quorum info is refreshed but maintains the same size
+func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	// Initial quorum with 2 nodes
+	initialQuorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	// Updated quorum with same size but potentially different internal state
+	updatedQuorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"}, // Same nodes
+	}
+
+	// Setup expectations - first call returns initial quorum, second call returns updated quorum
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(initialQuorumInfo, nil).Once()
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(updatedQuorumInfo, nil).Once()
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, 1)
+
+	// First execution with 2 nodes
+	op.Execute()
+
+	// Verify initial state
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+	assert.NotNil(t, op.resultChannels[1])
+
+	// Store references to original channels
+	originalChannel0 := op.resultChannels[0]
+	originalChannel1 := op.resultChannels[1]
+
+	// Second execution with same quorum size (simulating retry with refreshed quorum info)
+	op.Execute()
+
+	// Verify that existing channels are preserved
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be preserved")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be preserved")
+}
+
+// TestAppendOp_sendWriteRequest_ChannelReuse tests that sendWriteRequest
+// creates channels only once per server
+func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
+	// Setup mocks
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"node1"},
+	}
+
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, 1)
+
+	// Initialize result channels slice
+	op.resultChannels = make([]channel.ResultChannel, 1)
+
+	// First call to sendWriteRequest
+	op.sendWriteRequest(context.Background(), mockClient, 0)
+
+	// Verify channel was created
+	assert.NotNil(t, op.resultChannels[0])
+	originalChannel := op.resultChannels[0]
+
+	// Second call to sendWriteRequest for the same server
+	op.sendWriteRequest(context.Background(), mockClient, 0)
+
+	// Verify the same channel is reused
+	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused for the same server")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_WithNilChannels tests behavior when
+// some channels are nil during retry
+func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// Manually set up result channels with one nil channel (simulating partial failure)
+	op.resultChannels = make([]channel.ResultChannel, 2)
+	op.resultChannels[0] = channel.NewLocalResultChannel("test-channel-0")
+	op.resultChannels[1] = nil // This should be recreated
+
+	originalChannel0 := op.resultChannels[0]
+
+	// Execute should handle nil channels correctly
+	op.Execute()
+
+	// Verify that existing non-nil channel is preserved and nil channel is created
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Existing non-nil channel should be preserved")
+	assert.NotNil(t, op.resultChannels[1], "Nil channel should be created")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier tests that
+// channels created for retry use the same identifier
+func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"node1"},
+	}
+
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// First execution
+	op.Execute()
+
+	// Verify channel was created
+	assert.Equal(t, 1, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+
+	// We can't directly access the channel's identifier, but we can verify
+	// that the channel is properly created and reused
+	// The identifier should be consistent with the operation's identifier: "1/2/3"
+	originalChannel := op.resultChannels[0]
+
+	// Second execution (retry)
+	op.Execute()
+
+	// Verify the same channel is reused
+	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused with same identifier")
+}

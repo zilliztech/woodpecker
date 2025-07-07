@@ -79,7 +79,7 @@ type MinioFileWriter struct {
 	// written info
 	firstEntryID     atomic.Int64 // The first entryId of this Segment which already written to object storage
 	lastEntryID      atomic.Int64 // The last entryId of this Segment which already written to object storage
-	lastPartID       atomic.Int64 // The last fragmentId of this Segment which already written to object storage
+	lastPartID       atomic.Int64 // The last blockId of this Segment which already written to object storage
 	blockIndexes     []*codec.IndexRecord
 	footerRecord     *codec.FooterRecord // exists if the segment is finalized
 	headerWritten    atomic.Bool         // 确保写入数据前先写入一条header record
@@ -129,7 +129,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, logId int64, segId int64, s
 		syncPolicyConfig: syncPolicyConfig,
 		fileClose:        make(chan struct{}, 1),
 
-		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single fragment max size) to make pipeline flush soon
+		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
@@ -605,7 +605,7 @@ func (f *MinioFileWriter) ack() {
 				f.fenced.Store(true)
 			}
 			logger.Ctx(context.TODO()).Info("flush error first encountered, trigger fast flush fail",
-				zap.String("firstFlushErrFragment", firstUploadErrTask.flushFuture.Value().part.PartKey))
+				zap.String("firstFlushErrBlock", firstUploadErrTask.flushFuture.Value().part.PartKey))
 			f.fastFlushFailUnsafe(context.TODO(), task.flushData, task.flushFuture.Value().err)
 		}
 		f.flushingBufferSize.Add(-task.flushFuture.Value().part.Size)
@@ -863,10 +863,10 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	}
 
 	// submit async flush task
-	flushResultFutures := f.submitFragmentFlushTaskUnsafe(ctx, currentBuffer, toFlushData, toFlushDataFirstEntryId)
+	flushResultFutures := f.submitBlockFlushTaskUnsafe(ctx, currentBuffer, toFlushData, toFlushDataFirstEntryId)
 	logger.Ctx(ctx).Debug("Sync submitted flush tasks",
 		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("fragments", len(flushResultFutures)),
+		zap.Int("blocks", len(flushResultFutures)),
 		zap.Int64("toFlushDataFirstEntryId", toFlushDataFirstEntryId),
 		zap.Int("toFlushEntries", len(toFlushData)),
 		zap.Int64("restDataFirstEntryId", currentBuffer.GetExpectedNextEntryId()),
@@ -927,13 +927,13 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	return currentBuffer, toFlushData, toFlushDataFirstEntryId, nil
 }
 
-func (f *MinioFileWriter) fastFlushFailUnsafe(ctx context.Context, fragmentData []*cache.BufferEntry, resultErr error) {
-	for _, item := range fragmentData {
+func (f *MinioFileWriter) fastFlushFailUnsafe(ctx context.Context, blockData []*cache.BufferEntry, resultErr error) {
+	for _, item := range blockData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, -1, resultErr)
 	}
 }
 
-func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, partInfo *PartInfo, fragmentData []*cache.BufferEntry) {
+func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, partInfo *PartInfo, blockData []*cache.BufferEntry) {
 	// Calculate cumulative offset from previous blocks
 	var cumulativeOffset int64 = 0
 	for _, indexRecord := range f.blockIndexes {
@@ -948,33 +948,33 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, partInfo *
 		FirstEntryID:      partInfo.FirstEntryID,
 		LastEntryID:       partInfo.LastEntryID,
 	})
-	for _, item := range fragmentData {
+	for _, item := range blockData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId, nil)
 	}
 }
 
-func (f *MinioFileWriter) submitFragmentFlushTaskUnsafe(ctx context.Context, currentBuffer *cache.SequentialBuffer, toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) []*conc.Future[*blockUploadResult] {
-	fragmentDataList, fragmentFirstEntryIdList, fragmentSizeList := f.prepareMultiFragmentDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
+func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, currentBuffer *cache.SequentialBuffer, toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) []*conc.Future[*blockUploadResult] {
+	blockDataList, blockFirstEntryIdList, blockSizeList := f.prepareMultiBlockDataIfNecessary(toFlushData, toFlushDataFirstEntryId)
 	flushResultFutures := make([]*conc.Future[*blockUploadResult], 0, len(toFlushData))
 
 	var waitBuffErr error
-	for i, fragmentData := range fragmentDataList {
-		fragId := f.lastSubmittedUploadingPartID.Add(1) // fragment id
-		fragmentFirstEntryId := fragmentFirstEntryIdList[i]
-		partData := fragmentData
-		fragmentLastEntryId := fragmentFirstEntryId + int64(len(fragmentData)) - 1
-		f.lastSubmittedUploadingEntryID.Store(fragmentLastEntryId)
-		fragmentSize := fragmentSizeList[i] // Capture fragment size for the closure
+	for i, blockData := range blockDataList {
+		blockId := f.lastSubmittedUploadingPartID.Add(1) // block id
+		blockFirstEntryId := blockFirstEntryIdList[i]
+		partData := blockData
+		blockLastEntryId := blockFirstEntryId + int64(len(blockData)) - 1
+		f.lastSubmittedUploadingEntryID.Store(blockLastEntryId)
+		blockSize := blockSizeList[i] // Capture block size for the closure
 
 		if waitBuffErr != nil {
 			// if error exist, fast fail subsequent parts
-			f.fastFlushFailUnsafe(ctx, fragmentData, waitBuffErr)
+			f.fastFlushFailUnsafe(ctx, blockData, waitBuffErr)
 			logger.Ctx(ctx).Warn("fast fail the flush task before submit",
 				zap.Int64("logId", f.logId),
 				zap.Int64("segmentId", f.segmentId),
-				zap.Int64("fragId", fragId),
-				zap.Int64("fragFirstEntryId", fragmentFirstEntryId),
-				zap.Int("count", len(fragmentData)),
+				zap.Int64("blockId", blockId),
+				zap.Int64("blockFirstEntryId", blockFirstEntryId),
+				zap.Int("count", len(blockData)),
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Error(waitBuffErr))
 		}
@@ -983,13 +983,13 @@ func (f *MinioFileWriter) submitFragmentFlushTaskUnsafe(ctx context.Context, cur
 		waitErr := f.waitIfFlushingBufferSizeExceededUnsafe(ctx)
 		if waitErr != nil {
 			// sync interrupted, fast fail and notify all pending append entries
-			f.fastFlushFailUnsafe(ctx, fragmentData, waitErr)
+			f.fastFlushFailUnsafe(ctx, blockData, waitErr)
 			logger.Ctx(ctx).Warn("fast fail the flush task before submit",
 				zap.Int64("logId", f.logId),
 				zap.Int64("segmentId", f.segmentId),
-				zap.Int64("fragId", fragId),
-				zap.Int64("fragFirstEntryId", fragmentFirstEntryId),
-				zap.Int("count", len(fragmentData)),
+				zap.Int64("blockId", blockId),
+				zap.Int64("blockFirstEntryId", blockFirstEntryId),
+				zap.Int("count", len(blockData)),
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Error(waitErr))
 			waitBuffErr = waitErr
@@ -998,11 +998,11 @@ func (f *MinioFileWriter) submitFragmentFlushTaskUnsafe(ctx context.Context, cur
 
 		// try to submit flush task
 		resultFuture := f.pool.Submit(func() (*blockUploadResult, error) {
-			logger.Ctx(ctx).Debug("start flush part of buffer as fragment", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fragId", fragId), zap.Int("count", len(fragmentData)), zap.Int64("fragmentSize", fragmentSize))
-			partKey := getPartKey(f.segmentFileKey, fragId)
+			logger.Ctx(ctx).Debug("start flush part of buffer as block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockData)), zap.Int64("blockSize", blockSize))
+			partKey := getPartKey(f.segmentFileKey, blockId)
 			partRawData := f.serialize(partData)
 			actualDataSize := int64(len(partRawData))
-			logger.Ctx(ctx).Debug("serialized fragment data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fragId", fragId), zap.Int64("originalFragmentSize", fragmentSize), zap.Int64("actualDataSize", actualDataSize))
+			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
 				func() error {
 					_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, partKey, bytes.NewReader(partRawData), actualDataSize)
@@ -1017,34 +1017,34 @@ func (f *MinioFileWriter) submitFragmentFlushTaskUnsafe(ctx context.Context, cur
 				}),
 			)
 			if flushErr != nil {
-				logger.Ctx(ctx).Warn("flush part of buffer as fragment failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fragId", fragId), zap.Error(flushErr))
+				logger.Ctx(ctx).Warn("flush part of buffer as block failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Error(flushErr))
 			}
 			result := &blockUploadResult{
 				part: &PartInfo{
-					FirstEntryID: fragmentFirstEntryId,
-					LastEntryID:  fragmentFirstEntryId + int64(len(fragmentData)) - 1,
+					FirstEntryID: blockFirstEntryId,
+					LastEntryID:  blockFirstEntryId + int64(len(blockData)) - 1,
 					PartKey:      partKey,
-					PartID:       fragId,
+					PartID:       blockId,
 					Size:         actualDataSize,
 				},
 				err: flushErr,
 			}
-			logger.Ctx(ctx).Debug("complete flush part of buffer as fragment", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fragId", fragId), zap.Int("count", len(fragmentData)), zap.Int64("fragmentSize", fragmentSize))
+			logger.Ctx(ctx).Debug("complete flush part of buffer as block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockData)), zap.Int64("blockSize", blockSize))
 			return result, flushErr
 		})
 
 		// update submit flushing size
-		submitFlushingSize := fragmentSizeList[i]
+		submitFlushingSize := blockSizeList[i]
 		f.flushingBufferSize.Add(submitFlushingSize)
 		f.flushingTaskList <- &blockUploadTask{
 			flushData:             partData,
-			flushDataFirstEntryId: fragmentFirstEntryId,
+			flushDataFirstEntryId: blockFirstEntryId,
 			flushFuture:           resultFuture,
 		}
 		flushResultFutures = append(flushResultFutures, resultFuture)
 	}
 
-	logger.Ctx(ctx).Debug("submitted fragment flush tasks", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("fragments", len(fragmentDataList)), zap.Int("submitted", len(flushResultFutures)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+	logger.Ctx(ctx).Debug("submitted block flush tasks", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("blocks", len(blockDataList)), zap.Int("submitted", len(flushResultFutures)), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 	return flushResultFutures
 }
 
@@ -1281,7 +1281,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 				lastBlockID = int64(blocks[len(blocks)-1].BlockNumber)
 				lastEntryID = blocks[len(blocks)-1].LastEntryID
 			}
-			// Get current last fragment ID and create fence object key
+			// Get current last block ID and create fence object key
 			fenceBlockId := lastBlockID + 1
 			fenceObjectKey = getPartKey(f.segmentFileKey, fenceBlockId)
 
@@ -1289,8 +1289,8 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			_, putErr := f.client.PutFencedObject(ctx, f.bucket, fenceObjectKey)
 			if putErr != nil {
 				if werr.ErrFragmentAlreadyExists.Is(putErr) {
-					// Fragment already exists, this might be normal during concurrent operations
-					logger.Ctx(ctx).Debug("Fence object already exists, retrying with next fragment ID",
+					// Block already exists, this might be normal during concurrent operations
+					logger.Ctx(ctx).Debug("Fence object already exists, retrying with next block ID",
 						zap.String("segmentFileKey", f.segmentFileKey),
 						zap.String("fenceObjectKey", fenceObjectKey),
 						zap.Int64("fenceBlockId", fenceBlockId))
@@ -1316,7 +1316,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 		retry.Sleep(100*time.Millisecond), // Initial sleep between retries
 		retry.MaxSleepTime(1*time.Second), // Max sleep time between retries
 		retry.RetryErr(func(err error) bool {
-			// Only retry on fragment already exists error
+			// Only retry on block already exists error
 			return werr.ErrFragmentAlreadyExists.Is(err)
 		}),
 	)
@@ -1352,7 +1352,7 @@ func (f *MinioFileWriter) Recover(ctx context.Context) (int64, int64, error) {
 	return f.lastEntryID.Load(), f.lastModifiedTime, nil
 }
 
-func (f *MinioFileWriter) prepareMultiFragmentDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64, []int64) {
+func (f *MinioFileWriter) prepareMultiBlockDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64, []int64) {
 	if len(toFlushData) == 0 {
 		return nil, nil, nil
 	}

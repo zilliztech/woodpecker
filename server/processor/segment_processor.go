@@ -383,7 +383,7 @@ func (s *segmentProcessor) getInstanceBucket() string {
 }
 
 func (s *segmentProcessor) getSegmentKeyPrefix() string {
-	return fmt.Sprintf("%s/%d/%d", s.cfg.Minio.RootPath, s.logId)
+	return fmt.Sprintf("%s/%d", s.cfg.Minio.RootPath, s.logId)
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
@@ -535,7 +535,7 @@ func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 		zap.Int64("segId", s.segId),
 		zap.Int("cleanupFlag", flag))
 
-	deleteCount, err := impl.DeleteFragments(ctx, flag)
+	deleteCount, err := impl.DeleteFileData(ctx, flag)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Fragment deletion operation failed",
 			zap.Int64("logId", s.logId),

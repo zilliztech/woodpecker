@@ -21,12 +21,12 @@ func (_m *Segment) EXPECT() *Segment_Expecter {
 	return &Segment_Expecter{mock: &_m.Mock}
 }
 
-// DeleteFragments provides a mock function with given fields: ctx, flag
-func (_m *Segment) DeleteFragments(ctx context.Context, flag int) (int, error) {
+// DeleteFileData provides a mock function with given fields: ctx, flag
+func (_m *Segment) DeleteFileData(ctx context.Context, flag int) (int, error) {
 	ret := _m.Called(ctx, flag)
 
 	if len(ret) == 0 {
-		panic("no return value specified for DeleteFragments")
+		panic("no return value specified for DeleteFileData")
 	}
 
 	var r0 int
@@ -49,31 +49,31 @@ func (_m *Segment) DeleteFragments(ctx context.Context, flag int) (int, error) {
 	return r0, r1
 }
 
-// Segment_DeleteFragments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteFragments'
-type Segment_DeleteFragments_Call struct {
+// Segment_DeleteFileData_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteFileData'
+type Segment_DeleteFileData_Call struct {
 	*mock.Call
 }
 
-// DeleteFragments is a helper method to define mock.On call
+// DeleteFileData is a helper method to define mock.On call
 //   - ctx context.Context
 //   - flag int
-func (_e *Segment_Expecter) DeleteFragments(ctx interface{}, flag interface{}) *Segment_DeleteFragments_Call {
-	return &Segment_DeleteFragments_Call{Call: _e.mock.On("DeleteFragments", ctx, flag)}
+func (_e *Segment_Expecter) DeleteFileData(ctx interface{}, flag interface{}) *Segment_DeleteFileData_Call {
+	return &Segment_DeleteFileData_Call{Call: _e.mock.On("DeleteFileData", ctx, flag)}
 }
 
-func (_c *Segment_DeleteFragments_Call) Run(run func(ctx context.Context, flag int)) *Segment_DeleteFragments_Call {
+func (_c *Segment_DeleteFileData_Call) Run(run func(ctx context.Context, flag int)) *Segment_DeleteFileData_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int))
 	})
 	return _c
 }
 
-func (_c *Segment_DeleteFragments_Call) Return(_a0 int, _a1 error) *Segment_DeleteFragments_Call {
+func (_c *Segment_DeleteFileData_Call) Return(_a0 int, _a1 error) *Segment_DeleteFileData_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *Segment_DeleteFragments_Call) RunAndReturn(run func(context.Context, int) (int, error)) *Segment_DeleteFragments_Call {
+func (_c *Segment_DeleteFileData_Call) RunAndReturn(run func(context.Context, int) (int, error)) *Segment_DeleteFileData_Call {
 	_c.Call.Return(run)
 	return _c
 }

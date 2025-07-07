@@ -57,8 +57,8 @@ func TestNewSegmentImpl(t *testing.T) {
 	assert.Equal(t, "test-bucket", segmentImpl.bucket)
 }
 
-// TestDeleteFragments tests the DeleteFragments function.
-func TestDeleteFragments(t *testing.T) {
+// TestDeleteFileData tests the DeleteFileData function.
+func TestDeleteFileData(t *testing.T) {
 	t.Run("SuccessfulDeletion", func(t *testing.T) {
 		client := mocks_minio.NewMinioHandler(t)
 		cfg := &config.Configuration{
@@ -96,8 +96,8 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything).Return(nil)
-		// Call DeleteFragments
-		deleteCount, err := impl.DeleteFragments(context.Background(), 0)
+		// Call DeleteFileData
+		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, deleteCount, 3)
 	})
@@ -134,8 +134,8 @@ func TestDeleteFragments(t *testing.T) {
 		close(errorObjectCh)
 		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(errorObjectCh).Once()
 
-		// Call DeleteFragments
-		deleteCount, err := impl.DeleteFragments(context.Background(), 0)
+		// Call DeleteFileData
+		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.Error(t, err)
 		assert.Equal(t, 0, deleteCount)
 	})
@@ -178,8 +178,8 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything).Return(errors.New("remove error"))
 
-		// Call DeleteFragments
-		deleteCount, err := impl.DeleteFragments(context.Background(), 0)
+		// Call DeleteFileData
+		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.Error(t, err)
 		assert.Equal(t, 1, deleteCount)
 	})
@@ -216,8 +216,8 @@ func TestDeleteFragments(t *testing.T) {
 		// Create the LogFile
 		impl := NewSegmentImpl(context.TODO(), 1, 0, "test-segment/1/0", "test-bucket", client, cfg).(*SegmentImpl)
 
-		// Call DeleteFragments
-		deleteCound, err := impl.DeleteFragments(context.Background(), 0)
+		// Call DeleteFileData
+		deleteCound, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)
 		// Verify internal state is reset
 		assert.Equal(t, 0, deleteCound)
@@ -244,10 +244,10 @@ func TestDeleteFragments(t *testing.T) {
 			},
 		}
 
-		// Create a list of mock objects including non-fragment files
+		// Create a list of mock objects including non-blocks files
 		objectCh := make(chan minio.ObjectInfo, 3)
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
+		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a block
 		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.blk", Size: 4096}
 		close(objectCh)
 
@@ -263,8 +263,8 @@ func TestDeleteFragments(t *testing.T) {
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything).Return(nil)
 		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
-		// Call DeleteFragments
-		deleteCount, err := impl.DeleteFragments(context.Background(), 0)
+		// Call DeleteFileData
+		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 2, deleteCount)
 	})

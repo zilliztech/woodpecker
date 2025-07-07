@@ -25,6 +25,6 @@ import (
 //
 //go:generate mockery --dir=./server/storage --name=Segment --structname=Segment --output=mocks/mocks_server/mocks_storage --filename=mock_Segment.go --with-expecter=true  --outpkg=mocks_storage
 type Segment interface {
-	// DeleteFragments delete the segment log file fragments.
-	DeleteFragments(ctx context.Context, flag int) (int, error)
+	// DeleteFileData delete the segment log file fragments.
+	DeleteFileData(ctx context.Context, flag int) (int, error)
 }

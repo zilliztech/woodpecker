@@ -36,6 +36,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	// Create client
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err, "Failed to create configuration")
+	cfg.Log.Level = "debug"
 
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err, "Failed to create client")
@@ -98,6 +99,10 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	result = newWriter.Write(context.Background(), msg)
 	assert.NoError(t, result.Err, "Write with new writer should succeed")
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
+
+	// wait for sync before read
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	// 6. Verify data integrity with a reader
 	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")

@@ -53,9 +53,9 @@ func TestNewDiskSegmentImpl(t *testing.T) {
 	assert.Equal(t, expectedPath, segmentImpl.segmentFilePath)
 }
 
-// TestDeleteFragments tests the DeleteFragments function focusing on its ability
+// TestDeleteFileData tests the DeleteFileData function focusing on its ability
 // to handle directory and logging operations, rather than actual file operations.
-func TestDeleteFragments(t *testing.T) {
+func TestDeleteFileData(t *testing.T) {
 	t.Run("EmptyDirectory", func(t *testing.T) {
 		// Set up test directory
 		testDir := getTempDir(t)
@@ -73,8 +73,8 @@ func TestDeleteFragments(t *testing.T) {
 		assert.NotNil(t, roSegmentImpl)
 
 		// Execute deletion operation
-		deleteCount, err := roSegmentImpl.DeleteFragments(context.Background(), 0)
-		assert.NoError(t, err, "DeleteFragments should not error with empty directory")
+		deleteCount, err := roSegmentImpl.DeleteFileData(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFileData should not error with empty directory")
 		assert.Equal(t, 0, deleteCount)
 	})
 
@@ -85,8 +85,8 @@ func TestDeleteFragments(t *testing.T) {
 		cfg, _ := config.NewConfiguration()
 		segmentImpl2 := NewDiskSegmentImpl(context.TODO(), 1, 0, nonExistDir, cfg).(*DiskSegmentImpl)
 
-		deleteCount, err := segmentImpl2.DeleteFragments(context.Background(), 0)
-		assert.NoError(t, err, "DeleteFragments should not error when directory doesn't exist")
+		deleteCount, err := segmentImpl2.DeleteFileData(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFileData should not error when directory doesn't exist")
 		assert.Equal(t, 0, deleteCount)
 	})
 
@@ -136,8 +136,8 @@ func TestDeleteFragments(t *testing.T) {
 		require.NotNil(t, segmentImpl)
 
 		// Execute deletion operation
-		deleteCount, err := segmentImpl.DeleteFragments(context.Background(), 0)
-		assert.NoError(t, err, "DeleteFragments should not error")
+		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		assert.NoError(t, err, "DeleteFileData should not error")
 		assert.Equal(t, 2, deleteCount, "Should delete 2 .log files")
 
 		// Verify .log files are deleted
@@ -146,10 +146,10 @@ func TestDeleteFragments(t *testing.T) {
 		_, err = os.Stat(segmentFile2)
 		assert.True(t, os.IsNotExist(err), "segment file 2 should be deleted")
 
-		// Verify lock file and other files are NOT deleted (DeleteFragments only deletes .log files)
+		// Verify lock file and other files are NOT deleted (DeleteFileData only deletes .log files)
 		_, err = os.Stat(lockFile)
-		assert.NoError(t, err, "lock file should NOT be deleted by DeleteFragments")
+		assert.NoError(t, err, "lock file should NOT be deleted by DeleteFileData")
 		_, err = os.Stat(otherFile)
-		assert.NoError(t, err, "other file should NOT be deleted by DeleteFragments")
+		assert.NoError(t, err, "other file should NOT be deleted by DeleteFileData")
 	})
 }

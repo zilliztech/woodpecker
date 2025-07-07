@@ -63,8 +63,8 @@ func NewDiskSegmentImpl(ctx context.Context, logId int64, segId int64, segmentFi
 	return segmentImpl
 }
 
-func (rs *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFragments")
+func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFileData")
 	defer sp.End()
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -72,7 +72,7 @@ func (rs *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, 
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", rs.logId)
 
-	logger.Ctx(ctx).Info("Starting to delete fragments",
+	logger.Ctx(ctx).Info("Starting to delete segment file",
 		zap.String("segmentFileParentDir", rs.segmentFileParentDir),
 		zap.Int("flag", flag))
 
@@ -90,19 +90,19 @@ func (rs *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, 
 	var deleteErrors []error
 	deletedCount := 0
 
-	// Filter and delete fragment files
+	// Filter and delete segment files
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
 			segmentFilePath := filepath.Join(rs.segmentFileParentDir, entry.Name())
 
 			// Delete file
 			if err := os.Remove(segmentFilePath); err != nil {
-				logger.Ctx(ctx).Warn("Failed to delete fragment file",
+				logger.Ctx(ctx).Warn("Failed to delete segment file",
 					zap.String("segmentFilePath", segmentFilePath),
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
-				logger.Ctx(ctx).Info("Successfully deleted fragment file",
+				logger.Ctx(ctx).Info("Successfully deleted segment file",
 					zap.String("segmentFilePath", segmentFilePath))
 				deletedCount++
 			}
@@ -111,11 +111,11 @@ func (rs *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, 
 
 	// Update metrics
 	if len(deleteErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_fragments", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_fragments", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_segment", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_fragments", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_fragments", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_segment", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed fragment deletion",
@@ -124,7 +124,7 @@ func (rs *DiskSegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, 
 		zap.Int("errorCount", len(deleteErrors)))
 
 	if len(deleteErrors) > 0 {
-		return deletedCount, fmt.Errorf("failed to delete %d fragment files: ", len(deleteErrors))
+		return deletedCount, fmt.Errorf("failed to delete %d segment files: ", len(deleteErrors))
 	}
 	return deletedCount, nil
 }

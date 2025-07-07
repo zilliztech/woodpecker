@@ -66,14 +66,14 @@ func (s *SegmentImpl) GetId() int64 {
 	return s.segmentId
 }
 
-func (s *SegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFragments")
+func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "DeleteFileData")
 	defer sp.End()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	logger.Ctx(ctx).Info("starting segment fragments deletion",
+	logger.Ctx(ctx).Info("starting segment file data deletion",
 		zap.String("segmentFileKey", s.segmentFileKey),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
@@ -90,7 +90,7 @@ func (s *SegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, error
 	// Collect all objects to delete
 	for objInfo := range objectCh {
 		if objInfo.Err != nil {
-			logger.Ctx(ctx).Error("error listing objects during deletion",
+			logger.Ctx(ctx).Error("error listing blocks during deletion",
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.Error(objInfo.Err))
 			return deletedCount, objInfo.Err
@@ -137,20 +137,20 @@ func (s *SegmentImpl) DeleteFragments(ctx context.Context, flag int) (int, error
 		err := s.client.RemoveObject(ctx, s.bucket, objectKey, minio.RemoveObjectOptions{})
 		if err != nil {
 			// Log error but continue with other deletions
-			logger.Ctx(ctx).Warn("failed to delete object",
+			logger.Ctx(ctx).Warn("failed to delete block",
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.String("objectKey", objectKey),
 				zap.Error(err))
 			errorCount++
 		} else {
-			logger.Ctx(ctx).Debug("successfully deleted object",
+			logger.Ctx(ctx).Debug("successfully deleted block",
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.String("objectKey", objectKey))
 			deletedCount++
 		}
 	}
 
-	logger.Ctx(ctx).Info("segment fragments deletion completed",
+	logger.Ctx(ctx).Info("segment blocks deletion completed",
 		zap.String("segmentFileKey", s.segmentFileKey),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", errorCount),
