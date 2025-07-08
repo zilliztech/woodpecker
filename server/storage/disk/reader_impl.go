@@ -58,6 +58,12 @@ type LocalFileReader struct {
 
 // NewLocalFileReader creates a new local filesystem reader
 func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId int64) (*LocalFileReader, error) {
+	segmentDir := getSegmentDir(baseDir, logId, segId)
+	// Ensure directory exists
+	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+		return nil, fmt.Errorf("create directory: %w", err)
+	}
+
 	filePath := getSegmentFilePath(baseDir, logId, segId)
 	// Open file for reading
 	file, err := os.Open(filePath)
