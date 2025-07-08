@@ -82,7 +82,7 @@ type MinioFileWriter struct {
 	lastPartID       atomic.Int64 // The last blockId of this Segment which already written to object storage
 	blockIndexes     []*codec.IndexRecord
 	footerRecord     *codec.FooterRecord // exists if the segment is finalized
-	headerWritten    atomic.Bool         // 确保写入数据前先写入一条header record
+	headerWritten    atomic.Bool         // Ensure a header record is written before writing data
 	lastModifiedTime int64               // lastModifiedTime
 
 	// async upload blocks task pool

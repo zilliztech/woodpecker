@@ -781,7 +781,7 @@ func (l *logHandleImpl) adjustPendingReadPointIfTruncated(ctx context.Context, r
 			}
 			// If we're trying to read from a truncated segment that's been completely truncated,
 			// move to the next segment
-			if newPoint.EntryId < truncatedId.SegmentId {
+			if newPoint.SegmentId < truncatedId.SegmentId {
 				newPoint.SegmentId = truncatedId.SegmentId
 				newPoint.EntryId = 0
 			}
@@ -866,8 +866,8 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	// 1. fence segmentHandle
 	// Send fence request to log stores and fail pending append operations
 	lastFlushedEntryId, err := writeableSegmentHandle.Complete(ctx) // fence first, which will wait for all writing request to be done
-	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
-		logger.Ctx(ctx).Info("fence segment failed",
+	if err != nil && !werr.ErrSegmentWriterNotExists.Is(err) {
+		logger.Ctx(ctx).Info("complete segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
 			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
@@ -909,7 +909,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	for _, segmentHandle := range l.SegmentHandles {
 		lastFlushedEntryId, err := segmentHandle.Complete(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Info("fence segment failed when closing logHandle",
+			logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),

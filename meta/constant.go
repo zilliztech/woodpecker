@@ -36,7 +36,7 @@ const (
 	// QuorumIdGeneratorKey is the key for quorum ID generator.
 	QuorumIdGeneratorKey = ServicePrefix + "/quorumidgen"
 	// NodesPrefix is the prefix for logstore instances.
-	NodesPrefix = ServicePrefix + "logstores"
+	NodesPrefix = ServicePrefix + "/logstores"
 	// ReaderTempInfoPrefix is the prefix for reader temporary information.
 	ReaderTempInfoPrefix = ServicePrefix + "/readers"
 	// SegmentCleanupStatusPrefix is the prefix for segment cleanup status.

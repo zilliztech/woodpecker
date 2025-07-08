@@ -206,7 +206,6 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 		callback(s.segmentId, -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] fenced", s.logId, s.segmentId)))
 		return
 	}
-
 	if s.rollingState.Load() {
 		callback(s.segmentId, -1, werr.ErrSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
 		return
@@ -224,7 +223,11 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 	// Double-check fenced state under lock
 	if s.fencedState.Load() {
-		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentFenced)
+		callback(s.segmentId, -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] fenced", s.logId, s.segmentId)))
+		return
+	}
+	if s.rollingState.Load() {
+		callback(s.segmentId, -1, werr.ErrSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
 		return
 	}
 

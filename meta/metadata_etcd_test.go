@@ -553,14 +553,9 @@ func testCreateReaderTempInfo(t *testing.T) {
 	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
 	assert.NoError(t, err)
 
-	// Create etcd session with a short TTL for testing
-	session, err := concurrency.NewSession(etcdCli, concurrency.WithTTL(3))
-	assert.NoError(t, err)
-
 	// Create a metadata provider with the session
 	provider := &metadataProviderEtcd{
 		client:         etcdCli,
-		session:        session,
 		logWriterLocks: make(map[string]*concurrency.Mutex),
 	}
 
@@ -613,11 +608,6 @@ func testCreateReaderTempInfo(t *testing.T) {
 	assert.True(t, leaseInfo.TTL <= 60, "TTL should be 60 seconds or less")
 
 	t.Logf("Reader temp info is created with TTL of %d seconds", leaseInfo.TTL)
-
-	// Close the etcd session to simulate reader disconnection
-	t.Log("Closing the session to simulate reader disconnection...")
-	err = session.Close()
-	assert.NoError(t, err)
 
 	// Wait for the lease to expire (a bit more than the TTL)
 	t.Log("Waiting for session lease to expire...")

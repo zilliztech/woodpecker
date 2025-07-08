@@ -178,9 +178,6 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
 	defer sp.End()
 	start := time.Now()
-	l.Lock()
-	defer l.Unlock()
-
 	ch := make(chan *WriteResult, 1)
 
 	// Check if session is valid

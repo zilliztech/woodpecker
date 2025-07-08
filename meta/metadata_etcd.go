@@ -49,7 +49,6 @@ type metadataProviderEtcd struct {
 	sync.Mutex
 	client *clientv3.Client
 
-	session        *concurrency.Session
 	logWriterLocks map[string]*concurrency.Mutex
 	lockSessions   map[string]*concurrency.Session
 }
@@ -133,8 +132,8 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		return err
 	}
 	// cluster not initialized, initialize it
-	_, initErr := e.client.Txn(ctx).If().Then(initOps...).Commit()
-	if initErr != nil || !resp.Succeeded {
+	initResp, initErr := e.client.Txn(ctx).If().Then(initOps...).Commit()
+	if initErr != nil || !initResp.Succeeded {
 		err = werr.ErrMetadataInit.WithCauseErr(initErr)
 		log.Error("init operation failed", zap.Error(err))
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
@@ -288,18 +287,18 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 	logResp, err := e.client.Get(ctx, BuildLogKey(logName))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "err").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "err").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
 	}
 	logMeta := &proto.LogMeta{}
 	if err = pb.Unmarshal(logResp.Kvs[0].Value, logMeta); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "err").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "success").Inc()
@@ -1111,18 +1110,6 @@ func (e *metadataProviderEtcd) Close() error {
 	// Clear the maps
 	e.logWriterLocks = make(map[string]*concurrency.Mutex)
 	e.lockSessions = make(map[string]*concurrency.Session)
-
-	// Close the main session if it exists (should be removed in the new implementation)
-	if e.session != nil {
-		err := e.session.Close()
-		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to close main etcd session", zap.Error(err))
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("close", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues("close", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			return err
-		}
-		e.session = nil
-	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("close", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
