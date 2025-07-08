@@ -82,7 +82,7 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	reader.closed.Store(false)
 
 	// Try to parse footer and indexes
-	if err := reader.tryParseFooterAndIndexes(); err != nil {
+	if err := reader.tryParseFooterAndIndexes(ctx); err != nil {
 		file.Close()
 		reader.closed.Store(true)
 		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
@@ -94,52 +94,52 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 // tryParseFooterAndIndexes attempts to parse footer and index records
 // If footer exists (finalized file), parse using footer for fast access
 // If no footer exists (file still being written), perform full scan to build block indexes
-func (r *LocalFileReader) tryParseFooterAndIndexes() error {
+func (r *LocalFileReader) tryParseFooterAndIndexes(ctx context.Context) error {
 	// Check if file has minimum size for a footer
 	if r.size < codec.RecordHeaderSize+codec.FooterRecordSize {
 		// File is too small to contain footer, might be empty or still being written
-		logger.Ctx(context.TODO()).Debug("file too small for footer, performing full scan",
+		logger.Ctx(ctx).Debug("file too small for footer, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Int64("fileSize", r.size))
 		r.isIncompleteFile = true
-		return r.scanFileForBlocks()
+		return r.scanFileForBlocks(ctx)
 	}
 
 	// Try to read and parse footer from the end of the file
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
 	footerData, err := r.readAt(r.size-footerRecordSize, int(footerRecordSize))
 	if err != nil {
-		logger.Ctx(context.TODO()).Debug("failed to read footer data, performing full scan",
+		logger.Ctx(ctx).Debug("failed to read footer data, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
 		r.isIncompleteFile = true
-		return r.scanFileForBlocks()
+		return r.scanFileForBlocks(ctx)
 	}
 
 	// Try to decode footer record
 	footerRecord, err := codec.DecodeRecord(footerData)
 	if err != nil {
-		logger.Ctx(context.TODO()).Debug("failed to decode footer record, performing full scan",
+		logger.Ctx(ctx).Debug("failed to decode footer record, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
 		r.isIncompleteFile = true
-		return r.scanFileForBlocks()
+		return r.scanFileForBlocks(ctx)
 	}
 
 	// Check if it's actually a footer record
 	if footerRecord.Type() != codec.FooterRecordType {
-		logger.Ctx(context.TODO()).Debug("no valid footer found, performing full scan",
+		logger.Ctx(ctx).Debug("no valid footer found, performing full scan",
 			zap.String("filePath", r.filePath),
 			zap.Uint8("recordType", footerRecord.Type()),
 			zap.Uint8("expectedType", codec.FooterRecordType))
 		r.isIncompleteFile = true
-		return r.scanFileForBlocks()
+		return r.scanFileForBlocks(ctx)
 	}
 
 	// Successfully found footer, parse using footer method
 	r.footer = footerRecord.(*codec.FooterRecord)
 	r.isIncompleteFile = false
-	logger.Ctx(context.TODO()).Debug("found footer, parsing index records",
+	logger.Ctx(ctx).Debug("found footer, parsing index records",
 		zap.String("filePath", r.filePath),
 		zap.Int32("totalBlocks", r.footer.TotalBlocks))
 
@@ -204,8 +204,8 @@ func (r *LocalFileReader) parseIndexRecords() error {
 
 // scanFileForBlocks performs a full scan of the file to build block indexes
 // This is used when the file doesn't have a footer (still being written)
-func (r *LocalFileReader) scanFileForBlocks() error {
-	logger.Ctx(context.TODO()).Info("starting full file scan to build block indexes",
+func (r *LocalFileReader) scanFileForBlocks(ctx context.Context) error {
+	logger.Ctx(ctx).Info("starting full file scan to build block indexes",
 		zap.String("filePath", r.filePath),
 		zap.Int64("fileSize", r.size))
 
@@ -226,13 +226,13 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 	if err != nil {
 		// If decoding fails, the file might be corrupted or incomplete
 		// Try to recover by scanning for valid record boundaries
-		logger.Ctx(context.TODO()).Warn("failed to decode all records, attempting partial recovery",
+		logger.Ctx(ctx).Warn("failed to decode all records, attempting partial recovery",
 			zap.String("filePath", r.filePath),
+			zap.Int("partialRecords", len(records)),
 			zap.Error(err))
-		return r.scanFileForBlocksWithRecovery(fileData)
 	}
 
-	logger.Ctx(context.TODO()).Debug("decoded records from incomplete file",
+	logger.Ctx(ctx).Debug("decoded records from incomplete file",
 		zap.String("filePath", r.filePath),
 		zap.Int("totalRecords", len(records)))
 
@@ -257,7 +257,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 			recordSize = codec.RecordHeaderSize + 16 // Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
 			fileHasHeader = true
 
-			logger.Ctx(context.TODO()).Debug("found file header",
+			logger.Ctx(ctx).Debug("found file header",
 				zap.String("filePath", r.filePath),
 				zap.Int64("headerOffset", currentOffset))
 
@@ -271,7 +271,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 				currentBlockFirstEntryID = currentEntryID
 				inBlock = true
 
-				logger.Ctx(context.TODO()).Debug("found block start",
+				logger.Ctx(ctx).Debug("found block start",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -296,7 +296,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-				logger.Ctx(context.TODO()).Debug("found complete block during scan",
+				logger.Ctx(ctx).Debug("found complete block during scan",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -332,7 +332,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-		logger.Ctx(context.TODO()).Debug("found incomplete block at end of file during scan",
+		logger.Ctx(ctx).Debug("found incomplete block at end of file during scan",
 			zap.String("filePath", r.filePath),
 			zap.Int32("blockNumber", currentBlockNumber),
 			zap.Int64("startOffset", currentBlockStart),
@@ -356,7 +356,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 			}
 			r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-			logger.Ctx(context.TODO()).Debug("created single block for headerless data",
+			logger.Ctx(ctx).Debug("created single block for headerless data",
 				zap.String("filePath", r.filePath),
 				zap.Int64("startOffset", headerSize),
 				zap.Int64("firstEntryID", int64(0)),
@@ -372,7 +372,7 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 	// Set the last scanned offset to current file size for incomplete files
 	r.lastScannedOffset = r.size
 
-	logger.Ctx(context.TODO()).Info("completed full file scan",
+	logger.Ctx(ctx).Info("completed full file scan",
 		zap.String("filePath", r.filePath),
 		zap.Int("blocksFound", len(r.blockIndexes)),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset))
@@ -380,34 +380,9 @@ func (r *LocalFileReader) scanFileForBlocks() error {
 	return nil
 }
 
-// scanFileForBlocksWithRecovery attempts to recover block indexes from a partially corrupted file
-func (r *LocalFileReader) scanFileForBlocksWithRecovery(fileData []byte) error {
-	logger.Ctx(context.TODO()).Info("attempting recovery scan for corrupted file",
-		zap.String("filePath", r.filePath))
-
-	// For now, create a single block covering the entire file
-	// This is a simple recovery strategy - in the future we could implement
-	// more sophisticated recovery by searching for valid record boundaries
-	r.blockIndexes = []*codec.IndexRecord{
-		{
-			BlockNumber:       0,
-			StartOffset:       0,
-			FirstRecordOffset: 0,
-			FirstEntryID:      0,
-			LastEntryID:       -1, // Unknown, will be determined during read
-		},
-	}
-
-	logger.Ctx(context.TODO()).Warn("recovery scan completed with basic recovery",
-		zap.String("filePath", r.filePath),
-		zap.Int("blocksFound", len(r.blockIndexes)))
-
-	return nil
-}
-
 // scanForNewBlocks scans for new blocks that may have been written since last scan
 // This is used for incomplete files to detect newly written data
-func (r *LocalFileReader) scanForNewBlocks() error {
+func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 	// Get current file size
 	stat, err := r.file.Stat()
 	if err != nil {
@@ -417,14 +392,14 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 	currentSize := stat.Size()
 	if currentSize <= r.lastScannedOffset {
 		// No new data since last scan
-		logger.Ctx(context.TODO()).Debug("no new data since last scan",
+		logger.Ctx(ctx).Debug("no new data since last scan",
 			zap.String("filePath", r.filePath),
 			zap.Int64("currentSize", currentSize),
 			zap.Int64("lastScannedOffset", r.lastScannedOffset))
 		return nil
 	}
 
-	logger.Ctx(context.TODO()).Debug("scanning for new blocks",
+	logger.Ctx(ctx).Debug("scanning for new blocks",
 		zap.String("filePath", r.filePath),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset),
 		zap.Int64("currentSize", currentSize),
@@ -442,7 +417,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 	if err != nil {
 		// If decoding fails, some records might be incomplete
 		// This is expected for files still being written
-		logger.Ctx(context.TODO()).Debug("failed to decode some new records (expected for incomplete files)",
+		logger.Ctx(ctx).Debug("failed to decode some new records (expected for incomplete files)",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
 
@@ -452,7 +427,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 		return nil
 	}
 
-	logger.Ctx(context.TODO()).Debug("decoded new records",
+	logger.Ctx(ctx).Debug("decoded new records",
 		zap.String("filePath", r.filePath),
 		zap.Int("newRecordCount", len(records)))
 
@@ -482,7 +457,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 		case codec.HeaderRecordType:
 			recordSize = codec.RecordHeaderSize + 16
 			// HeaderRecord should not appear in the middle of file
-			logger.Ctx(context.TODO()).Warn("unexpected HeaderRecord in new data scan")
+			logger.Ctx(ctx).Warn("unexpected HeaderRecord in new data scan")
 
 		case codec.DataRecordType:
 			dataRecord := record.(*codec.DataRecord)
@@ -494,7 +469,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 				currentBlockFirstEntryID = currentEntryID
 				inBlock = true
 
-				logger.Ctx(context.TODO()).Debug("found new block start",
+				logger.Ctx(ctx).Debug("found new block start",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -519,7 +494,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-				logger.Ctx(context.TODO()).Debug("found new complete block",
+				logger.Ctx(ctx).Debug("found new complete block",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -554,7 +529,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-		logger.Ctx(context.TODO()).Debug("found new incomplete block at end",
+		logger.Ctx(ctx).Debug("found new incomplete block at end",
 			zap.String("filePath", r.filePath),
 			zap.Int32("blockNumber", currentBlockNumber),
 			zap.Int64("startOffset", currentBlockStart),
@@ -567,7 +542,7 @@ func (r *LocalFileReader) scanForNewBlocks() error {
 	r.size = currentSize
 	r.lastScannedOffset = currentSize
 
-	logger.Ctx(context.TODO()).Debug("completed new blocks scan",
+	logger.Ctx(ctx).Debug("completed new blocks scan",
 		zap.String("filePath", r.filePath),
 		zap.Int("totalBlocks", len(r.blockIndexes)),
 		zap.Int64("newSize", r.size),
@@ -711,7 +686,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 			zap.Bool("hasStartingBlock", hasStartingBlock),
 			zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
 
-		return r.scanForNewBlocks()
+		return r.scanForNewBlocks(ctx)
 	}
 
 	logger.Ctx(ctx).Debug("sufficient blocks available, no scan needed",

@@ -416,7 +416,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			zap.String("objectKey", objectKey),
 			zap.Int("dataSize", len(data)))
 
-		blockLastRecord, err := f.parseBlockLastRecord(data)
+		blockLastRecord, err := f.parseBlockLastRecord(ctx, data)
 		if err != nil {
 			logger.Ctx(ctx).Warn("failed to parse block last record during recovery",
 				zap.String("objectKey", objectKey),
@@ -474,43 +474,43 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 }
 
 // parseBlockLastRecord extracts the BlockLastRecord from the end of block data
-func (f *MinioFileWriter) parseBlockLastRecord(data []byte) (*codec.BlockLastRecord, error) {
+func (f *MinioFileWriter) parseBlockLastRecord(ctx context.Context, data []byte) (*codec.BlockLastRecord, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty data")
 	}
 
-	logger.Ctx(context.TODO()).Info("parsing block data for BlockLastRecord",
+	logger.Ctx(ctx).Info("parsing block data for BlockLastRecord",
 		zap.Int("dataSize", len(data)))
 
 	// Parse all records in the data to find the BlockLastRecord
 	// The BlockLastRecord should be the last record in the block
 	records, err := codec.DecodeRecordList(data)
 	if err != nil {
-		logger.Ctx(context.TODO()).Info("failed to decode records",
+		logger.Ctx(ctx).Info("failed to decode records",
 			zap.Error(err),
 			zap.Int("dataSize", len(data)))
 		return nil, fmt.Errorf("failed to decode records: %w", err)
 	}
 
-	logger.Ctx(context.TODO()).Info("decoded records from block data",
+	logger.Ctx(ctx).Info("decoded records from block data",
 		zap.Int("recordCount", len(records)))
 
 	// Check if the first record is HeaderRecord (to determine if header was written)
 	if len(records) > 0 {
 		if _, ok := records[0].(*codec.HeaderRecord); ok {
-			logger.Ctx(context.TODO()).Info("found HeaderRecord in existing block, marking header as written")
+			logger.Ctx(ctx).Info("found HeaderRecord in existing block, marking header as written")
 			f.headerWritten.Store(true)
 		}
 	}
 
 	// Look for BlockLastRecord from the end
 	for i := len(records) - 1; i >= 0; i-- {
-		logger.Ctx(context.TODO()).Info("checking record type",
+		logger.Ctx(ctx).Info("checking record type",
 			zap.Int("recordIndex", i),
 			zap.String("recordType", fmt.Sprintf("%T", records[i])))
 
 		if blockLastRecord, ok := records[i].(*codec.BlockLastRecord); ok {
-			logger.Ctx(context.TODO()).Info("found BlockLastRecord",
+			logger.Ctx(ctx).Info("found BlockLastRecord",
 				zap.Int64("firstEntryID", blockLastRecord.FirstEntryID),
 				zap.Int64("lastEntryID", blockLastRecord.LastEntryID))
 			return blockLastRecord, nil

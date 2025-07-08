@@ -171,7 +171,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	} else {
 		// Create segment lock file
-		if err := writer.createSegmentLock(context.TODO()); err != nil {
+		if err := writer.createSegmentLock(ctx); err != nil {
 			return nil, errors.Wrap(err, "failed to create segment lock")
 		}
 		// Open file for writing (create if not exists, truncate if exists)

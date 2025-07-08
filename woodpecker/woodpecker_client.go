@@ -18,7 +18,6 @@ package woodpecker
 
 import (
 	"context"
-	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,7 +36,6 @@ import (
 )
 
 type Client interface {
-	io.Closer
 	// CreateLog creates a new log with the specified name.
 	CreateLog(context.Context, string) error
 	// OpenLog opens an existing log with the specified name and returns a log handle.
@@ -52,6 +50,8 @@ type Client interface {
 	GetLogsWithPrefix(context.Context, string) ([]string, error)
 	// GetMetadataProvider returns the metadata provider associated with the client.
 	GetMetadataProvider() meta.MetadataProvider
+	// Close closes the client.
+	Close(context.Context) error
 }
 
 var _ Client = (*woodpeckerClient)(nil)
@@ -266,27 +266,27 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 	return logs, err
 }
 
-func (c *woodpeckerClient) Close() error {
+func (c *woodpeckerClient) Close(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closeState.CompareAndSwap(false, true) {
-		logger.Ctx(context.TODO()).Info("client already closed, skip")
+		logger.Ctx(ctx).Info("client already closed, skip")
 		return werr.ErrClientClosed
 	}
 
 	// close all logHandle
 	for _, logHandle := range c.logHandles {
-		logHandle.Close(context.Background())
+		logHandle.Close(ctx)
 	}
 	// Decrement active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()
 	if closeErr != nil {
-		logger.Ctx(context.TODO()).Info("close metadata failed", zap.Error(closeErr))
+		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
 	closePoolErr := c.clientPool.Close()
 	if closePoolErr != nil {
-		logger.Ctx(context.TODO()).Info("close client pool failed", zap.Error(closePoolErr))
+		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
 	return werr.Combine(closeErr, closePoolErr)
 }

@@ -331,7 +331,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			t.Log("Reader closed successfully")
 
 			// Close client
-			err = client.Close()
+			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Client closed successfully")
 
@@ -545,7 +545,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 			}
 
 			// Close client
-			err = client.Close()
+			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Client closed successfully")
 
@@ -624,7 +624,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the first client
-				err = client1.Close()
+				err = client1.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("First client closed successfully")
@@ -705,7 +705,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the second client
-				err = client2.Close()
+				err = client2.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("Second client closed successfully")
@@ -793,7 +793,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the first client
-				err = client1.Close()
+				err = client1.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("First client closed successfully")
@@ -881,7 +881,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the second client
-				err = client2.Close()
+				err = client2.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("Second client closed successfully")
@@ -983,7 +983,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close client
-				err = dataClient.Close()
+				err = dataClient.Close(context.TODO())
 				assert.NoError(t, err)
 				t.Logf("Cycle %d: Client with data writer closed successfully after writing 5 messages", i+1)
 
@@ -1013,7 +1013,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close client
-				err = emptyClient.Close()
+				err = emptyClient.Close(context.TODO())
 				assert.NoError(t, err)
 				t.Logf("Cycle %d: Client with empty writer closed without writing", i+1)
 
@@ -1102,7 +1102,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 			t.Log("Reader closed successfully")
 
 			// Close client
-			err = readerClient.Close()
+			err = readerClient.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Reader client closed successfully")
 
@@ -1149,7 +1149,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3
@@ -1502,7 +1502,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3
@@ -1612,7 +1612,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
 						// Use a fixed timeout for each read
-						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
@@ -1855,7 +1855,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3

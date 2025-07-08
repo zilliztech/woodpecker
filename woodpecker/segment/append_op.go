@@ -155,7 +155,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		return
 	}
 	// async call error, wait until syncedCh closed
-	subCtx, cancel := context.WithTimeout(context.TODO(), 30*time.Second) // TODO configurable
+	subCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
 	if readChanErr != nil {

@@ -1052,7 +1052,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Wait a bit to let some writes start, then close the entire client
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing client while writes are in progress...")
-			closeErr := client.Close()
+			closeErr := client.Close(context.TODO())
 			assert.NoError(t, closeErr)
 			fmt.Println("Client closed")
 
@@ -1085,7 +1085,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 			defer func() {
-				newClient.Close()
+				newClient.Close(context.TODO())
 			}()
 
 			// Now read all messages and verify
@@ -1268,7 +1268,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			// Wait a bit to let some writes start, then close the entire client
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing client while writes are in progress...")
-			closeErr := client.Close()
+			closeErr := client.Close(context.TODO())
 			assert.NoError(t, closeErr)
 			fmt.Println("Client closed")
 
@@ -1306,7 +1306,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 			defer func() {
-				newClient.Close()
+				newClient.Close(context.TODO())
 			}()
 
 			// Now read all messages and verify
