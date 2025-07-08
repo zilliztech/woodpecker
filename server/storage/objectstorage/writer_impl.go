@@ -709,6 +709,8 @@ func (f *MinioFileWriter) GetLastEntryId(ctx context.Context) int64 {
 }
 
 func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "waitIfFlushingBufferSizeExceededUnsafe")
+	defer sp.End()
 	// Check if current flushing buffer size exceeds the maximum allowed buffer size
 	for {
 		currentFlushingSize := f.flushingBufferSize.Load()
@@ -878,6 +880,8 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 // For example, in a sequence like 1,2,x,3,x,5,6, "1,2" is ready, while "x,3,x,5,6" still needs to wait for missing entries to arrive before it can be flushed
 // Therefore, the toFlush data is "1,2", and the remaining data stays in the buffer for further append operations
 func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.SequentialBuffer, []*cache.BufferEntry, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "rollBufferUnsafe")
+	defer sp.End()
 	startTime := time.Now()
 
 	// wait available buffer size
@@ -1339,6 +1343,8 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 }
 
 func (f *MinioFileWriter) Recover(ctx context.Context) (int64, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Recover")
+	defer sp.End()
 	if f.recovered.Load() {
 		return f.lastEntryID.Load(), f.lastModifiedTime, nil
 	}
@@ -1626,6 +1632,8 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 
 // readBlockData reads the complete data of a block
 func (f *MinioFileWriter) readBlockData(ctx context.Context, blockKey string) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "readBlockData")
+	defer sp.End()
 	obj, err := f.client.GetObject(ctx, f.bucket, blockKey, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object %s: %w", blockKey, err)
@@ -1660,6 +1668,8 @@ func (f *MinioFileWriter) extractDataRecords(blockData []byte) ([]byte, error) {
 
 // uploadSingleMergedBlock uploads a single merged block with m_ prefix
 func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlockData []byte, mergedBlockID int64, firstEntryID int64, isFirstBlock bool) (*codec.IndexRecord, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "uploadSingleMergedBlock")
+	defer sp.End()
 	// Add header record at the beginning if this is the first block
 	var completeBlockData []byte
 	if isFirstBlock {
@@ -1732,6 +1742,8 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 
 // serializeCompactedFooterAndIndexes serializes the footer and indexes for compacted segment
 func (f *MinioFileWriter) serializeCompactedFooterAndIndexes(ctx context.Context, blockIndexes []*codec.IndexRecord, footer *codec.FooterRecord) []byte {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "serializeCompactedFooterAndIndexes")
+	defer sp.End()
 	serializedData := make([]byte, 0)
 
 	// Serialize all block index records

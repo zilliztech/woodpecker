@@ -58,6 +58,8 @@ type LocalFileReader struct {
 
 // NewLocalFileReader creates a new local filesystem reader
 func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId int64) (*LocalFileReader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
+	defer sp.End()
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0755); err != nil {
@@ -101,6 +103,8 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 // If footer exists (finalized file), parse using footer for fast access
 // If no footer exists (file still being written), perform full scan to build block indexes
 func (r *LocalFileReader) tryParseFooterAndIndexes(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseFooterAndIndexes")
+	defer sp.End()
 	// Check if file has minimum size for a footer
 	if r.size < codec.RecordHeaderSize+codec.FooterRecordSize {
 		// File is too small to contain footer, might be empty or still being written
@@ -151,7 +155,7 @@ func (r *LocalFileReader) tryParseFooterAndIndexes(ctx context.Context) error {
 
 	// Parse index records - they are located before the footer
 	if r.footer.TotalBlocks > 0 {
-		if err := r.parseIndexRecords(); err != nil {
+		if err := r.parseIndexRecords(ctx); err != nil {
 			return fmt.Errorf("parse index records: %w", err)
 		}
 	}
@@ -160,7 +164,9 @@ func (r *LocalFileReader) tryParseFooterAndIndexes(ctx context.Context) error {
 }
 
 // parseIndexRecords parses all index records from the file
-func (r *LocalFileReader) parseIndexRecords() error {
+func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseIndexRecords")
+	defer sp.End()
 	// Calculate where index records start
 	// Index records are located before the footer record
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
@@ -211,6 +217,8 @@ func (r *LocalFileReader) parseIndexRecords() error {
 // scanFileForBlocks performs a full scan of the file to build block indexes
 // This is used when the file doesn't have a footer (still being written)
 func (r *LocalFileReader) scanFileForBlocks(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanFileForBlocks")
+	defer sp.End()
 	logger.Ctx(ctx).Info("starting full file scan to build block indexes",
 		zap.String("filePath", r.filePath),
 		zap.Int64("fileSize", r.size))
@@ -389,6 +397,8 @@ func (r *LocalFileReader) scanFileForBlocks(ctx context.Context) error {
 // scanForNewBlocks scans for new blocks that may have been written since last scan
 // This is used for incomplete files to detect newly written data
 func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForNewBlocks")
+	defer sp.End()
 	// Get current file size
 	stat, err := r.file.Stat()
 	if err != nil {
@@ -591,6 +601,8 @@ func (r *LocalFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 
 // ReadNextBatch reads the next batch of entries
 func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
+	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatch called",
 		zap.Int64("startSequenceNum", opt.StartSequenceNum),
 		zap.Int64("batchSize", opt.BatchSize),
@@ -656,6 +668,8 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 // ensureSufficientBlocks ensures we have scanned enough blocks to satisfy the read request
 // This method checks if we need to scan for new blocks in incomplete files
 func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSequenceNum int64, batchSize int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ensureSufficientBlocks")
+	defer sp.End()
 	// Check if we already have the starting block
 	hasStartingBlock := false
 	var lastAvailableEntryID int64 = -1
@@ -705,6 +719,8 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID
 func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startSequenceNum int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
+	defer sp.End()
 	// For files without footer, we treat the entire file as one block
 	// Calculate the end offset of this block
 	var blockEndOffset int64
@@ -777,6 +793,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 // readMultipleBlocks reads across multiple blocks to get the specified number of entries
 func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startSequenceNum int64, batchSize int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
+	defer sp.End()
 	logger.Ctx(ctx).Debug("readMultipleBlocks started",
 		zap.Int("startBlockIndex", startBlockIndex),
 		zap.Int64("startSequenceNum", startSequenceNum),

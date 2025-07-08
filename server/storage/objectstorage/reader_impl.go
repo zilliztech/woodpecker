@@ -62,6 +62,8 @@ type MinioFileReader struct {
 
 // NewMinioFileReader creates a new MinIO reader
 func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler) (*MinioFileReader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewMinioFileReader")
+	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
 	// Get object size
 	reader := &MinioFileReader{
@@ -201,6 +203,8 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 }
 
 func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryReadFooterAndIndex")
+	defer sp.End()
 	// Check if footer.blk exists
 	footerKey := getFooterPartKey(f.segmentFileKey)
 	statInfo, err := f.client.StatObject(ctx, f.bucket, footerKey, minio.StatObjectOptions{})
@@ -423,6 +427,8 @@ func (f *MinioFileReader) getBlockLastRecord(ctx context.Context, blockKey strin
 
 // get the Block for the entryId
 func (f *MinioFileReader) getBlock(ctx context.Context, entryId int64) (*codec.IndexRecord, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "getBlock")
+	defer sp.End()
 	logger.Ctx(ctx).Debug("get block for entryId", zap.Int64("entryId", entryId))
 
 	// find from normal block
@@ -474,6 +480,8 @@ func (f *MinioFileReader) findBlock(entryId int64) (*codec.IndexRecord, error) {
 }
 
 func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "GetLastEntryID")
+	defer sp.End()
 	if !f.isCompleted.Load() {
 		_, lastBlockInfo, err := f.prefetchIncrementalBlockInfo(ctx)
 		if err != nil {
@@ -563,6 +571,8 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 // ensureSufficientBlocks ensures we have scanned enough blocks to satisfy the read request
 // This method checks if we need to scan for new blocks in incomplete files
 func (f *MinioFileReader) ensureSufficientBlocks(ctx context.Context, startSequenceNum int64, batchSize int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ensureSufficientBlocks")
+	defer sp.End()
 	// Check if we already have the starting block
 	hasStartingBlock := false
 	var lastAvailableEntryID int64 = -1
@@ -623,6 +633,8 @@ func (f *MinioFileReader) getBlockObjectKey(blockNumber int64) string {
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID
 func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startSequenceNum int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
+	defer sp.End()
 	blockObjKey := f.getBlockObjectKey(int64(blockInfo.BlockNumber))
 
 	// Get object info to determine the actual size
@@ -694,6 +706,8 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 // readMultipleBlocks reads across multiple blocks to get the specified number of entries
 func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startSequenceNum int64, batchSize int64) ([]*proto.LogEntry, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
+	defer sp.End()
 	entries := make([]*proto.LogEntry, 0, batchSize)
 	entriesCollected := int64(0)
 

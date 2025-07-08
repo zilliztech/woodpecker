@@ -109,6 +109,8 @@ func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmen
 
 // NewLocalFileWriterWithMode creates a new local filesystem writer with recovery mode option
 func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, blockSize int64, recoveryMode bool) (*LocalFileWriter, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
+	defer sp.End()
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0755); err != nil {
@@ -160,7 +162,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 
 	if recoveryMode {
 		// Try to recover from existing file
-		if err := writer.recoverFromExistingFile(); err != nil {
+		if err := writer.recoverFromExistingFile(ctx); err != nil {
 			runCancel()
 			return nil, fmt.Errorf("recover from existing file: %w", err)
 		}
@@ -242,6 +244,8 @@ func (w *LocalFileWriter) run() {
 
 // Sync forces immediate sync of all buffered data
 func (w *LocalFileWriter) Sync(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
+	defer sp.End()
 	if w.closed.Load() {
 		return nil
 	}
@@ -287,6 +291,8 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 
 // rollBufferAndFlushUnsafe rolls the current buffer and flushes it to disk (must be called with syncMu held)
 func (w *LocalFileWriter) rollBufferAndFlushUnsafe(ctx context.Context) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
+	defer sp.End()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil || currentBuffer.GetExpectedNextEntryId() <= currentBuffer.GetFirstEntryId() {
 		return
@@ -354,6 +360,8 @@ func (w *LocalFileWriter) rollBufferAndFlushUnsafe(ctx context.Context) {
 
 // processFlushTask processes a flush task by writing data to disk
 func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
+	defer sp.End()
 	// Add nil check for safety
 	if task == nil {
 		return
@@ -475,6 +483,8 @@ func (w *LocalFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
 
 // WriteDataAsync writes data asynchronously using buffer
 func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "WriteDataAsync")
+	defer sp.End()
 	logger.Ctx(ctx).Debug("WriteDataAsync called",
 		zap.Int64("entryId", entryId),
 		zap.Int("dataLen", len(data)))
@@ -599,6 +609,8 @@ func (w *LocalFileWriter) writeRecord(record codec.Record) error {
 
 // Finalize finalizes the writer and writes the footer
 func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
+	defer sp.End()
 	if w.closed.Load() {
 		return w.lastEntryID.Load(), werr.ErrWriterClosed
 	}
@@ -668,6 +680,8 @@ func (w *LocalFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 
 // Close closes the writer
 func (w *LocalFileWriter) Close(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Close")
+	defer sp.End()
 	w.closeOnce.Do(func() {
 		w.closed.Store(true)
 		// Cancel async operations
@@ -762,11 +776,13 @@ func (w *LocalFileWriter) Compact(ctx context.Context) ([]int64, error) {
 
 // Recover recovers writer state from existing file
 func (w *LocalFileWriter) Recover(ctx context.Context) (int64, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Recover")
+	defer sp.End()
 	if w.recovered.Load() {
 		return w.lastEntryID.Load(), w.lastModifiedTime.UnixMilli(), nil
 	}
 
-	recoverErr := w.recoverFromExistingFile()
+	recoverErr := w.recoverFromExistingFile(ctx)
 	if recoverErr != nil {
 		return -1, -1, recoverErr
 	}
@@ -775,7 +791,9 @@ func (w *LocalFileWriter) Recover(ctx context.Context) (int64, int64, error) {
 }
 
 // recoverFromExistingFile attempts to recover state from an existing incomplete file
-func (w *LocalFileWriter) recoverFromExistingFile() error {
+func (w *LocalFileWriter) recoverFromExistingFile(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverFromExistingFile")
+	defer sp.End()
 	// Check if file exists
 	stat, err := os.Stat(w.segmentFilePath)
 	if err != nil {
@@ -823,7 +841,7 @@ func (w *LocalFileWriter) recoverFromExistingFile() error {
 	}
 
 	// File is incomplete, try to recover blocks from whole file scan
-	if err := w.recoverBlocksFromFullScan(file); err != nil {
+	if err := w.recoverBlocksFromFullScan(ctx, file); err != nil {
 		return fmt.Errorf("recover blocks: %w", err)
 	}
 	// Mark as recovered
@@ -832,6 +850,8 @@ func (w *LocalFileWriter) recoverFromExistingFile() error {
 }
 
 func (w *LocalFileWriter) recoverBlocksFromFooter(ctx context.Context, file *os.File, footerRecord *codec.FooterRecord) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFooter")
+	defer sp.End()
 	logger.Ctx(ctx).Info("Recovering blocks from footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int64("logId", w.logId),
@@ -941,7 +961,9 @@ func (w *LocalFileWriter) recoverBlocksFromFooter(ctx context.Context, file *os.
 }
 
 // recoverBlocks recovers block information from an incomplete file
-func (w *LocalFileWriter) recoverBlocksFromFullScan(file *os.File) error {
+func (w *LocalFileWriter) recoverBlocksFromFullScan(ctx context.Context, file *os.File) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFullScan")
+	defer sp.End()
 	// Read the entire file content
 	data := make([]byte, w.writtenBytes)
 	_, err := file.ReadAt(data, 0)

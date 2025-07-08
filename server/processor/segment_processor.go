@@ -137,7 +137,7 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 }
 
 func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Complete")
 	defer sp.End()
 	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
@@ -240,6 +240,8 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 }
 
 func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.Segment, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "getOrCreateSegmentImpl")
+	defer sp.End()
 	// First check with read lock to avoid data race
 	s.RLock()
 	if s.currentSegmentImpl != nil {
@@ -282,6 +284,8 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 }
 
 func (s *segmentProcessor) getNewSegmentReader(ctx context.Context) (storage.Reader, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "getNewSegmentReader")
+	defer sp.End()
 	// First check with read lock to avoid data race
 	//Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
@@ -321,6 +325,8 @@ func (s *segmentProcessor) getSegmentWriter(ctx context.Context) (storage.Writer
 }
 
 func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recoverMode bool) (storage.Writer, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "getOrCreateSegmentWriter")
+	defer sp.End()
 	// First check with read lock to avoid data race
 	s.RLock()
 	if s.currentSegmentWriter != nil {
