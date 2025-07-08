@@ -18,7 +18,6 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -146,8 +145,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 
 			// client1 release, client 2 get writer
 			releaseErr := logWriter1.Close(context.Background())
-			assert.Error(t, releaseErr)
-			assert.True(t, errors.Is(releaseErr, werr.ErrSegmentWriterNotExists))
+			assert.NoError(t, releaseErr)
 			logWriter3, openWriterErr3 := logHandle2.OpenLogWriter(context.Background())
 			assert.NoError(t, openWriterErr3)
 			assert.NotNil(t, logWriter3)

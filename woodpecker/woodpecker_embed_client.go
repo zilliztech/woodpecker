@@ -59,7 +59,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, min
 
 	initError := embedLogStore.Start()
 	if initError != nil {
-		return takeControlOfClients, initError
+		return false, initError
 	}
 
 	isLogStoreRunning = true

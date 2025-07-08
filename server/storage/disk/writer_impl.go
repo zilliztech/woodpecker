@@ -717,7 +717,7 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 	// Create fence flag file
 	fenceFile, err := os.Create(fenceFlagPath)
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to create fence flag file",
+		logger.Ctx(ctx).Warn("Failed to create fence flag file",
 			zap.String("fenceFlagPath", fenceFlagPath),
 			zap.Int64("logId", w.logId),
 			zap.Int64("segmentId", w.segmentId),
@@ -872,7 +872,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooter(ctx context.Context, file *os.
 		// Decode the record
 		record, err := codec.DecodeRecord(indexData[offset:])
 		if err != nil {
-			logger.Ctx(ctx).Error("Failed to decode index record",
+			logger.Ctx(ctx).Warn("Failed to decode index record",
 				zap.Int("offset", offset),
 				zap.Error(err))
 			return fmt.Errorf("failed to decode index record at offset %d: %w", offset, err)
@@ -880,7 +880,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooter(ctx context.Context, file *os.
 
 		// Verify it's an index record
 		if record.Type() != codec.IndexRecordType {
-			logger.Ctx(ctx).Error("Unexpected record type in index section",
+			logger.Ctx(ctx).Warn("Unexpected record type in index section",
 				zap.Int("offset", offset),
 				zap.Uint8("expectedType", codec.IndexRecordType),
 				zap.Uint8("actualType", record.Type()))
@@ -1047,14 +1047,14 @@ func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
 	// Try to acquire exclusive lock (non-blocking)
 	locked, err := s.lockFile.TryLock()
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to try lock file",
+		logger.Ctx(ctx).Warn("Failed to try lock file",
 			zap.String("lockFilePath", s.lockFilePath),
 			zap.Error(err))
 		return errors.Wrapf(err, "failed to try lock file: %s", s.lockFilePath)
 	}
 
 	if !locked {
-		logger.Ctx(ctx).Error("Failed to acquire exclusive lock - file is already locked",
+		logger.Ctx(ctx).Warn("Failed to acquire exclusive lock - file is already locked",
 			zap.String("lockFilePath", s.lockFilePath))
 		return errors.Errorf("failed to acquire exclusive lock on file: %s (already locked by another process)", s.lockFilePath)
 	}

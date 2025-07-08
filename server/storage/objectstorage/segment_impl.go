@@ -91,7 +91,7 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 	// Collect all objects to delete
 	for objInfo := range objectCh {
 		if objInfo.Err != nil {
-			logger.Ctx(ctx).Error("error listing blocks during deletion",
+			logger.Ctx(ctx).Warn("error listing blocks during deletion",
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.Error(objInfo.Err))
 			return deletedCount, objInfo.Err

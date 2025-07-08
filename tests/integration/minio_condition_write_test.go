@@ -323,6 +323,21 @@ func TestMinioHandlePutIfNotMatchWithFencedObject(t *testing.T) {
 	require.True(t, werr.ErrSegmentFenced.Is(err), "Should return ErrSegmentFenced for fenced object")
 	t.Logf("Expected fenced error: %v", err)
 
+	listResult := minioCli.ListObjects(ctx, bucketName, objectName, true, minio.ListObjectsOptions{
+		WithMetadata: true,
+	})
+	for objInfo := range listResult {
+		if objInfo.Key == objectName {
+			// api does not support list objects with metadata, even if WithMetadata is set
+			// Here checking this api does not meet the requirements yet.
+			assert.False(t, minioHandler.IsFencedObject(objInfo))
+			// only statObject api will return UseMetadata correctly
+			objInfoStat, statErr := minioCli.StatObject(ctx, bucketName, objectName, minio.GetObjectOptions{})
+			assert.NoError(t, statErr)
+			assert.True(t, minioHandler.IsFencedObject(objInfoStat))
+		}
+	}
+
 	// Cleanup
 	err = minioCli.RemoveObject(ctx, bucketName, objectName, minio.RemoveObjectOptions{})
 	assert.NoError(t, err)

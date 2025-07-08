@@ -629,7 +629,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	}
 
 	if len(r.blockIndexes) == 0 {
-		logger.Ctx(ctx).Error("no block indexes available")
+		logger.Ctx(ctx).Warn("no block indexes available")
 		return nil, werr.ErrEntryNotFound
 	}
 
@@ -653,7 +653,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	}
 
 	if startBlockIndex == -1 {
-		logger.Ctx(ctx).Error("no block found for start sequence number",
+		logger.Ctx(ctx).Warn("no block found for start sequence number",
 			zap.Int64("startSequenceNum", opt.StartSequenceNum),
 			zap.Int("totalBlocks", len(r.blockIndexes)))
 		return nil, werr.ErrEntryNotFound

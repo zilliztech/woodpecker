@@ -172,7 +172,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 
 		// Create segment file writer lock object
 		if err := segmentFileWriter.createSegmentLock(ctx); err != nil {
-			logger.Ctx(ctx).Error("Failed to create segment lock",
+			logger.Ctx(ctx).Warn("Failed to create segment lock",
 				zap.String("segmentFileKey", segmentFileKey),
 				zap.Error(err))
 			return nil, err // Return nil to indicate creation failure
@@ -192,10 +192,7 @@ func (f *MinioFileWriter) recoverFromStorage(ctx context.Context) error {
 	footerPartKey := getFooterPartKey(f.segmentFileKey)
 	footerPartObjInfo, err := f.client.StatObject(ctx, f.bucket, footerPartKey, minio.StatObjectOptions{})
 	if err != nil && minioHandler.IsObjectNotExists(err) {
-		if minioHandler.IsObjectNotExists(err) {
-			return f.recoverFromFullListing(ctx)
-		}
-		return err
+		return f.recoverFromFullListing(ctx)
 	}
 	return f.recoverFromFooter(ctx, footerPartKey, footerPartObjInfo)
 }
@@ -261,7 +258,7 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerKey strin
 
 		record, err := codec.DecodeRecord(indexData[offset:])
 		if err != nil {
-			logger.Ctx(ctx).Error("failed to decode index record",
+			logger.Ctx(ctx).Warn("failed to decode index record",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int("offset", offset),
 				zap.Error(err))
@@ -395,6 +392,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			continue
 		}
 
+		// TODO only read blocks last record
 		// Read the object to get block information
 		obj, err := f.client.GetObject(ctx, f.bucket, objectKey, minio.GetObjectOptions{})
 		if err != nil {
@@ -768,7 +766,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 
 	// Ensure segment is finalized before compaction
 	if f.footerRecord == nil {
-		logger.Ctx(ctx).Error("segment must be finalized before compaction",
+		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
 			zap.String("segmentFileKey", f.segmentFileKey))
 		return nil, fmt.Errorf("segment must be finalized before compaction")
 	}
@@ -782,7 +780,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 	// Stream merge and upload blocks
 	newBlockIndexes, uploadedBlockIDs, err := f.streamMergeAndUploadBlocks(ctx, targetBlockSize)
 	if err != nil {
-		logger.Ctx(ctx).Error("failed to stream merge and upload blocks",
+		logger.Ctx(ctx).Warn("failed to stream merge and upload blocks",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to stream merge and upload blocks: %w", err)
@@ -811,7 +809,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 	footerKey := getFooterPartKey(f.segmentFileKey)
 	_, putErr := f.client.PutObject(ctx, f.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), minio.PutObjectOptions{})
 	if putErr != nil {
-		logger.Ctx(ctx).Error("failed to upload compacted footer",
+		logger.Ctx(ctx).Warn("failed to upload compacted footer",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(putErr))
 		return nil, fmt.Errorf("failed to upload compacted footer: %w", putErr)
@@ -1183,7 +1181,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 
 	_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, partKey, bytes.NewReader(partRawData), int64(len(partRawData)))
 	if putErr != nil {
-		logger.Ctx(ctx).Error("failed to put finalization object",
+		logger.Ctx(ctx).Warn("failed to put finalization object",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("partKey", partKey),
 			zap.Error(putErr))
@@ -1298,7 +1296,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 					return putErr // This will trigger a retry
 				}
 				// Other errors are not retryable
-				logger.Ctx(ctx).Error("Failed to create fence object",
+				logger.Ctx(ctx).Warn("Failed to create fence object",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("fenceBlockId", fenceBlockId),
 					zap.Error(putErr))
@@ -1323,7 +1321,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 	)
 
 	if err != nil {
-		logger.Ctx(ctx).Error("Failed to create fence object after retries",
+		logger.Ctx(ctx).Warn("Failed to create fence object after retries",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("fenceObjectKey", fenceObjectKey),
 			zap.Error(err))
@@ -1422,11 +1420,11 @@ func (f *MinioFileWriter) createSegmentLock(ctx context.Context) error {
 		strings.NewReader(lockInfo), int64(len(lockInfo)))
 	if err != nil {
 		if werr.ErrFragmentAlreadyExists.Is(err) {
-			logger.Ctx(ctx).Error("Lock object already exists - segment is already locked by another process",
+			logger.Ctx(ctx).Warn("Lock object already exists - segment is already locked by another process",
 				zap.String("lockObjectKey", f.lockObjectKey))
 			return fmt.Errorf("segment is already locked by another process: %s", f.lockObjectKey)
 		}
-		logger.Ctx(ctx).Error("Failed to create lock object",
+		logger.Ctx(ctx).Warn("Failed to create lock object",
 			zap.String("lockObjectKey", f.lockObjectKey),
 			zap.Error(err))
 		return fmt.Errorf("failed to create lock object %s: %w", f.lockObjectKey, err)
@@ -1575,7 +1573,7 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 		blockKey := getPartKey(f.segmentFileKey, int64(blockIndex.BlockNumber))
 		blockData, err := f.readBlockData(ctx, blockKey)
 		if err != nil {
-			logger.Ctx(ctx).Error("failed to read block data",
+			logger.Ctx(ctx).Warn("failed to read block data",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("blockKey", blockKey),
 				zap.Error(err))
@@ -1585,7 +1583,7 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 		// Extract only data records (skip header and block last records)
 		dataRecords, err := f.extractDataRecords(blockData)
 		if err != nil {
-			logger.Ctx(ctx).Error("failed to extract data records",
+			logger.Ctx(ctx).Warn("failed to extract data records",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("blockKey", blockKey),
 				zap.Error(err))
@@ -1706,7 +1704,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 	_, putErr := f.client.PutObject(ctx, f.bucket, mergedBlockKey,
 		bytes.NewReader(completeBlockData), int64(len(completeBlockData)), minio.PutObjectOptions{})
 	if putErr != nil {
-		logger.Ctx(ctx).Error("failed to upload merged block",
+		logger.Ctx(ctx).Warn("failed to upload merged block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("mergedBlockKey", mergedBlockKey),
 			zap.Error(putErr))
