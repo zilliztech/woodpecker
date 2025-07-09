@@ -24,23 +24,23 @@ import (
 )
 
 const (
-	PartSize            = 2 * 1024 * 1024 // 2MB per part (MinIO minimum)
-	MaxRecordSize       = 2 * 1024 * 1024 // 2MB max record size (within part)
-	RecordHeaderSize    = 9               // CRC32(4) + Type(1) + Length(4)
-	BlockLastRecordSize = 16              // FirstEntryID(8) + LastEntryID(8)
-	FooterRecordSize    = 28              // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
-	FormatVersion       = 2
-	MaxRetries          = 3
-	RetryDelay          = time.Second
+	PartSize              = 2 * 1024 * 1024 // 2MB per part (MinIO minimum)
+	MaxRecordSize         = 2 * 1024 * 1024 // 2MB max record size (within part)
+	RecordHeaderSize      = 9               // CRC32(4) + Type(1) + Length(4)
+	BlockHeaderRecordSize = 16              // FirstEntryID(8) + LastEntryID(8)
+	FooterRecordSize      = 28              // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+	FormatVersion         = 2
+	MaxRetries            = 3
+	RetryDelay            = time.Second
 )
 
 // Record types
 const (
-	HeaderRecordType    byte = 1
-	DataRecordType      byte = 2
-	IndexRecordType     byte = 3
-	FooterRecordType    byte = 4
-	BlockLastRecordType byte = 5
+	HeaderRecordType      byte = 1
+	DataRecordType        byte = 2
+	IndexRecordType       byte = 3
+	FooterRecordType      byte = 4
+	BlockHeaderRecordType byte = 5
 )
 
 // Magic numbers
@@ -77,15 +77,15 @@ type DataRecord struct {
 
 func (d *DataRecord) Type() byte { return DataRecordType }
 
-// BlockLastRecord represents block metadata at the end of each block
+// BlockHeaderRecord represents block metadata at the end of each block
 // This record is placed at the end of each 2MB block to facilitate
 // efficient recovery in object storage scenarios
-type BlockLastRecord struct {
+type BlockHeaderRecord struct {
 	FirstEntryID int64 // First entry ID in this block
 	LastEntryID  int64 // Last entry ID in this block
 }
 
-func (b *BlockLastRecord) Type() byte { return BlockLastRecordType }
+func (b *BlockHeaderRecord) Type() byte { return BlockHeaderRecordType }
 
 // IndexRecord represents block-level index (one entry per 2MB block)
 type IndexRecord struct {

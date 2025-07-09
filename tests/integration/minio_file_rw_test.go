@@ -540,18 +540,24 @@ func TestMinioFileWriter_BlockLastRecordVerification(t *testing.T) {
 
 		t.Logf("Object contains %d records", len(records))
 
-		// Check if last record is BlockLastRecord
-		lastRecord := records[len(records)-1]
-		if lastRecord.Type() == 5 { // BlockLastRecordType
-			blockLastRecord := lastRecord.(*codec.BlockLastRecord)
-			t.Logf("Found BlockLastRecord: FirstEntryID=%d, LastEntryID=%d",
-				blockLastRecord.FirstEntryID, blockLastRecord.LastEntryID)
+		// Check if first record is BlockHeaderRecord (after optional HeaderRecord)
+		var blockHeaderRecord *codec.BlockHeaderRecord
+		for _, record := range records {
+			if record.Type() == codec.BlockHeaderRecordType {
+				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+				break
+			}
+		}
+
+		if blockHeaderRecord != nil {
+			t.Logf("Found BlockHeaderRecord: FirstEntryID=%d, LastEntryID=%d",
+				blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID)
 
 			// Verify the entry IDs are valid
-			assert.GreaterOrEqual(t, blockLastRecord.FirstEntryID, int64(0))
-			assert.GreaterOrEqual(t, blockLastRecord.LastEntryID, blockLastRecord.FirstEntryID)
+			assert.GreaterOrEqual(t, blockHeaderRecord.FirstEntryID, int64(0))
+			assert.GreaterOrEqual(t, blockHeaderRecord.LastEntryID, blockHeaderRecord.FirstEntryID)
 		} else {
-			t.Logf("Last record type: %d (not BlockLastRecord)", lastRecord.Type())
+			t.Logf("No BlockHeaderRecord found in this object")
 		}
 	}
 }
@@ -910,17 +916,21 @@ func testSerialize(entries []*cache.BufferEntry) []byte {
 		serializedData = append(serializedData, encodedRecord...)
 	}
 
-	// Add BlockLastRecord at the end of the block
+	// Add BlockHeaderRecord at the beginning of the block
 	firstEntryID := entries[0].EntryId
 	lastEntryID := entries[len(entries)-1].EntryId
 
-	blockLastRecord := &codec.BlockLastRecord{
+	blockHeaderRecord := &codec.BlockHeaderRecord{
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
 	}
 
-	encodedBlockLastRecord := codec.EncodeRecord(blockLastRecord)
-	serializedData = append(serializedData, encodedBlockLastRecord...)
+	encodedBlockHeaderRecord := codec.EncodeRecord(blockHeaderRecord)
+	// Insert at the beginning instead of appending at the end
+	finalData := make([]byte, 0, len(serializedData)+len(encodedBlockHeaderRecord))
+	finalData = append(finalData, encodedBlockHeaderRecord...)
+	finalData = append(finalData, serializedData...)
+	return finalData
 
 	return serializedData
 }
@@ -945,26 +955,26 @@ func TestSerializeDecodeCompatibility(t *testing.T) {
 	// Print record types
 	for i, record := range records {
 		t.Logf("Record %d: type=%T", i, record)
-		if blockLastRecord, ok := record.(*codec.BlockLastRecord); ok {
-			t.Logf("  BlockLastRecord: FirstEntryID=%d, LastEntryID=%d", blockLastRecord.FirstEntryID, blockLastRecord.LastEntryID)
+		if blockHeaderRecord, ok := record.(*codec.BlockHeaderRecord); ok {
+			t.Logf("  BlockHeaderRecord: FirstEntryID=%d, LastEntryID=%d", blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID)
 		}
 	}
 
 	// Verify we have the expected records
 	assert.Greater(t, len(records), 0, "Should have at least one record")
 
-	// Look for BlockLastRecord
-	var blockLastRecord *codec.BlockLastRecord
+	// Look for BlockHeaderRecord
+	var blockHeaderRecord *codec.BlockHeaderRecord
 	for _, record := range records {
-		if blr, ok := record.(*codec.BlockLastRecord); ok {
-			blockLastRecord = blr
+		if bhr, ok := record.(*codec.BlockHeaderRecord); ok {
+			blockHeaderRecord = bhr
 			break
 		}
 	}
 
-	require.NotNil(t, blockLastRecord, "Should find BlockLastRecord")
-	assert.Equal(t, int64(0), blockLastRecord.FirstEntryID)
-	assert.Equal(t, int64(1), blockLastRecord.LastEntryID)
+	require.NotNil(t, blockHeaderRecord, "Should find BlockHeaderRecord")
+	assert.Equal(t, int64(0), blockHeaderRecord.FirstEntryID)
+	assert.Equal(t, int64(1), blockHeaderRecord.LastEntryID)
 }
 
 // TestMinioFileWriter_VerifyBlockLastRecord tests that written data contains BlockLastRecord
@@ -1049,17 +1059,17 @@ func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 			t.Logf("Decoded %d records from object %s", len(records), object.Key)
 
 			// Print record types
-			foundBlockLastRecord := false
+			foundBlockHeaderRecord := false
 			for i, record := range records {
 				t.Logf("  Record %d: type=%T", i, record)
-				if blockLastRecord, ok := record.(*codec.BlockLastRecord); ok {
-					foundBlockLastRecord = true
-					t.Logf("    BlockLastRecord: FirstEntryID=%d, LastEntryID=%d",
-						blockLastRecord.FirstEntryID, blockLastRecord.LastEntryID)
+				if blockHeaderRecord, ok := record.(*codec.BlockHeaderRecord); ok {
+					foundBlockHeaderRecord = true
+					t.Logf("    BlockHeaderRecord: FirstEntryID=%d, LastEntryID=%d",
+						blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID)
 				}
 			}
 
-			assert.True(t, foundBlockLastRecord, "Should find BlockLastRecord in object %s", object.Key)
+			assert.True(t, foundBlockHeaderRecord, "Should find BlockHeaderRecord in object %s", object.Key)
 		}
 	}
 }

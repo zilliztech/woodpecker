@@ -410,14 +410,14 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			continue
 		}
 
-		// Parse the data to find BlockLastRecord
-		logger.Ctx(ctx).Info("attempting to parse block last record during recovery",
+		// Parse the data to find blockHeaderRecord
+		logger.Ctx(ctx).Info("attempting to parse block header record during recovery",
 			zap.String("objectKey", objectKey),
 			zap.Int("dataSize", len(data)))
 
-		blockLastRecord, err := f.parseBlockLastRecord(ctx, data)
+		blockHeaderRecord, err := f.parseBlockHeaderRecord(ctx, data)
 		if err != nil {
-			logger.Ctx(ctx).Warn("failed to parse block last record during recovery",
+			logger.Ctx(ctx).Warn("failed to parse block header record during recovery",
 				zap.String("objectKey", objectKey),
 				zap.Int("dataSize", len(data)),
 				zap.Error(err))
@@ -429,24 +429,24 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			BlockNumber:       int32(partID),
 			StartOffset:       partID,
 			FirstRecordOffset: 0,
-			FirstEntryID:      blockLastRecord.FirstEntryID,
-			LastEntryID:       blockLastRecord.LastEntryID,
+			FirstEntryID:      blockHeaderRecord.FirstEntryID,
+			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}
 
 		f.blockIndexes = append(f.blockIndexes, indexRecord)
 
-		if firstEntryID == -1 || blockLastRecord.FirstEntryID < firstEntryID {
-			firstEntryID = blockLastRecord.FirstEntryID
+		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
+			firstEntryID = blockHeaderRecord.FirstEntryID
 		}
-		if blockLastRecord.LastEntryID > lastEntryID {
-			lastEntryID = blockLastRecord.LastEntryID
+		if blockHeaderRecord.LastEntryID > lastEntryID {
+			lastEntryID = blockHeaderRecord.LastEntryID
 		}
 
 		logger.Ctx(ctx).Debug("recovered block during recovery",
 			zap.String("objectKey", objectKey),
 			zap.Int64("partID", partID),
-			zap.Int64("firstEntryID", blockLastRecord.FirstEntryID),
-			zap.Int64("lastEntryID", blockLastRecord.LastEntryID))
+			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
+			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
 	}
 
 	// Update writer state
@@ -472,17 +472,17 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	return nil
 }
 
-// parseBlockLastRecord extracts the BlockLastRecord from the end of block data
-func (f *MinioFileWriter) parseBlockLastRecord(ctx context.Context, data []byte) (*codec.BlockLastRecord, error) {
+// parseBlockHeaderRecord extracts the BlockHeaderRecord from the end of block data
+func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, data []byte) (*codec.BlockHeaderRecord, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty data")
 	}
 
-	logger.Ctx(ctx).Info("parsing block data for BlockLastRecord",
+	logger.Ctx(ctx).Info("parsing block data for BlockHeaderRecord",
 		zap.Int("dataSize", len(data)))
 
-	// Parse all records in the data to find the BlockLastRecord
-	// The BlockLastRecord should be the last record in the block
+	// Parse all records in the data to find the BlockHeaderRecord
+	// The BlockHeaderRecord should be at the beginning of the block
 	records, err := codec.DecodeRecordList(data)
 	if err != nil {
 		logger.Ctx(ctx).Info("failed to decode records",
@@ -502,21 +502,21 @@ func (f *MinioFileWriter) parseBlockLastRecord(ctx context.Context, data []byte)
 		}
 	}
 
-	// Look for BlockLastRecord from the end
-	for i := len(records) - 1; i >= 0; i-- {
+	// Look for BlockHeaderRecord from the beginning (after optional HeaderRecord)
+	for i := 0; i < len(records); i++ {
 		logger.Ctx(ctx).Info("checking record type",
 			zap.Int("recordIndex", i),
 			zap.String("recordType", fmt.Sprintf("%T", records[i])))
 
-		if blockLastRecord, ok := records[i].(*codec.BlockLastRecord); ok {
-			logger.Ctx(ctx).Info("found BlockLastRecord",
-				zap.Int64("firstEntryID", blockLastRecord.FirstEntryID),
-				zap.Int64("lastEntryID", blockLastRecord.LastEntryID))
-			return blockLastRecord, nil
+		if blockHeaderRecord, ok := records[i].(*codec.BlockHeaderRecord); ok {
+			logger.Ctx(ctx).Info("found BlockHeaderRecord",
+				zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
+				zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
+			return blockHeaderRecord, nil
 		}
 	}
 
-	return nil, errors.New("BlockLastRecord not found")
+	return nil, errors.New("BlockHeaderRecord not found")
 }
 
 // Like OS file fsync dirty pageCache periodically, objectStoreFile will sync buffer to object storage periodically
@@ -1498,24 +1498,22 @@ func (f *MinioFileWriter) serialize(entries []*cache.BufferEntry) []byte {
 		f.headerWritten.Store(true)
 	}
 
+	// Add BlockHeaderRecord at the start of the block
+	firstEntryID := entries[0].EntryId
+	lastEntryID := entries[len(entries)-1].EntryId
+	blockHeaderRecord := &codec.BlockHeaderRecord{
+		FirstEntryID: firstEntryID,
+		LastEntryID:  lastEntryID,
+	}
+	encodedBlockHeaderRecord := codec.EncodeRecord(blockHeaderRecord)
+	serializedData = append(serializedData, encodedBlockHeaderRecord...)
+
 	// Serialize all data records
 	for _, entry := range entries {
 		dataRecord, _ := codec.ParseData(entry.Data)
 		encodedRecord := codec.EncodeRecord(dataRecord)
 		serializedData = append(serializedData, encodedRecord...)
 	}
-
-	// Add BlockLastRecord at the end of the block
-	firstEntryID := entries[0].EntryId
-	lastEntryID := entries[len(entries)-1].EntryId
-
-	blockLastRecord := &codec.BlockLastRecord{
-		FirstEntryID: firstEntryID,
-		LastEntryID:  lastEntryID,
-	}
-
-	encodedBlockLastRecord := codec.EncodeRecord(blockLastRecord)
-	serializedData = append(serializedData, encodedBlockLastRecord...)
 
 	return serializedData
 }
@@ -1645,7 +1643,7 @@ func (f *MinioFileWriter) readBlockData(ctx context.Context, blockKey string) ([
 	return data, nil
 }
 
-// extractDataRecords extracts only data records from a block, skipping header and block last records
+// extractDataRecords extracts only data records from a block, skipping header and block header records
 func (f *MinioFileWriter) extractDataRecords(blockData []byte) ([]byte, error) {
 	records, err := codec.DecodeRecordList(blockData)
 	if err != nil {
@@ -1667,21 +1665,6 @@ func (f *MinioFileWriter) extractDataRecords(blockData []byte) ([]byte, error) {
 func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlockData []byte, mergedBlockID int64, firstEntryID int64, isFirstBlock bool) (*codec.IndexRecord, int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "uploadSingleMergedBlock")
 	defer sp.End()
-	// Add header record at the beginning if this is the first block
-	var completeBlockData []byte
-	if isFirstBlock {
-		headerRecord := &codec.HeaderRecord{
-			Version:      codec.FormatVersion,
-			Flags:        0,
-			FirstEntryID: firstEntryID,
-		}
-		encodedHeader := codec.EncodeRecord(headerRecord)
-		completeBlockData = append(completeBlockData, encodedHeader...)
-	}
-
-	// Add the merged data records
-	completeBlockData = append(completeBlockData, mergedBlockData...)
-
 	// Count data records to calculate entry range
 	records, err := codec.DecodeRecordList(mergedBlockData)
 	if err != nil {
@@ -1698,13 +1681,31 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 	blockFirstEntryID := firstEntryID
 	blockLastEntryID := firstEntryID + int64(dataRecordCount) - 1
 
-	// Add block last record
-	blockLastRecord := &codec.BlockLastRecord{
+	// Add block header record
+	blockHeaderRecord := &codec.BlockHeaderRecord{
 		FirstEntryID: blockFirstEntryID,
 		LastEntryID:  blockLastEntryID,
 	}
-	encodedBlockLast := codec.EncodeRecord(blockLastRecord)
-	completeBlockData = append(completeBlockData, encodedBlockLast...)
+	encodedBlockHeader := codec.EncodeRecord(blockHeaderRecord)
+
+	// Build the complete block data
+	var completeBlockData []byte
+	if isFirstBlock {
+		// For first block: header + blockHeader + data
+		headerRecord := &codec.HeaderRecord{
+			Version:      codec.FormatVersion,
+			Flags:        0,
+			FirstEntryID: firstEntryID,
+		}
+		encodedHeader := codec.EncodeRecord(headerRecord)
+		completeBlockData = append(completeBlockData, encodedHeader...)
+		completeBlockData = append(completeBlockData, encodedBlockHeader...)
+		completeBlockData = append(completeBlockData, mergedBlockData...)
+	} else {
+		// For other blocks: blockHeader + data
+		completeBlockData = append(completeBlockData, encodedBlockHeader...)
+		completeBlockData = append(completeBlockData, mergedBlockData...)
+	}
 
 	// Upload merged block with m_ prefix (use PutObject for idempotent overwrites)
 	mergedBlockKey := getMergedPartKey(f.segmentFileKey, mergedBlockID)

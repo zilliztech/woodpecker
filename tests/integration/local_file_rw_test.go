@@ -960,7 +960,7 @@ func BenchmarkLocalFileReader_ReadNextBatch(b *testing.B) {
 	}
 }
 
-func TestLocalFileRW_BlockLastRecordVerification(t *testing.T) {
+func TestLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 

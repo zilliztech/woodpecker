@@ -48,8 +48,8 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint64(payload[20:], uint64(record.FirstEntryID))
 		binary.LittleEndian.PutUint64(payload[28:], uint64(record.LastEntryID))
 
-	case *BlockLastRecord:
-		payload = make([]byte, BlockLastRecordSize) // FirstEntryID(8) + LastEntryID(8)
+	case *BlockHeaderRecord:
+		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8)
 		binary.LittleEndian.PutUint64(payload[0:], uint64(record.FirstEntryID))
 		binary.LittleEndian.PutUint64(payload[8:], uint64(record.LastEntryID))
 
@@ -167,8 +167,8 @@ func ParseRecord(recordType byte, payload []byte) (Record, error) {
 		return ParseData(payload)
 	case IndexRecordType:
 		return ParseBlockIndex(payload)
-	case BlockLastRecordType:
-		return ParseBlockLast(payload)
+	case BlockHeaderRecordType:
+		return ParseBlockHeader(payload)
 	case FooterRecordType:
 		return ParseFooter(payload)
 	default:
@@ -257,12 +257,12 @@ func ParseFooter(payload []byte) (*FooterRecord, error) {
 	return f, nil
 }
 
-func ParseBlockLast(payload []byte) (*BlockLastRecord, error) {
-	if len(payload) != BlockLastRecordSize {
-		return nil, errors.Errorf("invalid block last payload length: %d", len(payload))
+func ParseBlockHeader(payload []byte) (*BlockHeaderRecord, error) {
+	if len(payload) != BlockHeaderRecordSize {
+		return nil, errors.Errorf("invalid block header payload length: %d", len(payload))
 	}
 
-	b := &BlockLastRecord{
+	b := &BlockHeaderRecord{
 		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[0:])),
 		LastEntryID:  int64(binary.LittleEndian.Uint64(payload[8:])),
 	}

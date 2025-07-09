@@ -108,8 +108,8 @@ func TestIndexRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	assert.Equal(t, original.LastEntryID, indexRecord.LastEntryID)
 }
 
-func TestBlockLastRecord_EncodeDecodeRoundTrip(t *testing.T) {
-	original := &BlockLastRecord{
+func TestBlockHeaderRecord_EncodeDecodeRoundTrip(t *testing.T) {
+	original := &BlockHeaderRecord{
 		FirstEntryID: 1000,
 		LastEntryID:  2000,
 	}
@@ -123,7 +123,7 @@ func TestBlockLastRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify type and content
-	blockLastRecord, ok := decoded.(*BlockLastRecord)
+	blockLastRecord, ok := decoded.(*BlockHeaderRecord)
 	require.True(t, ok)
 	assert.Equal(t, original.FirstEntryID, blockLastRecord.FirstEntryID)
 	assert.Equal(t, original.LastEntryID, blockLastRecord.LastEntryID)
@@ -164,7 +164,7 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
-		&BlockLastRecord{FirstEntryID: 1000, LastEntryID: 1010},
+		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010},
 		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
 	}
 
@@ -201,8 +201,8 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 			assert.Equal(t, original.FirstRecordOffset, indexRecord.FirstRecordOffset)
 			assert.Equal(t, original.FirstEntryID, indexRecord.FirstEntryID)
 			assert.Equal(t, original.LastEntryID, indexRecord.LastEntryID)
-		case *BlockLastRecord:
-			blockLastRecord, ok := decoded.(*BlockLastRecord)
+		case *BlockHeaderRecord:
+			blockLastRecord, ok := decoded.(*BlockHeaderRecord)
 			require.True(t, ok)
 			assert.Equal(t, original.FirstEntryID, blockLastRecord.FirstEntryID)
 			assert.Equal(t, original.LastEntryID, blockLastRecord.LastEntryID)
@@ -390,7 +390,7 @@ func TestRecordTypes(t *testing.T) {
 		{"HeaderRecord", &HeaderRecord{}, HeaderRecordType},
 		{"DataRecord", &DataRecord{}, DataRecordType},
 		{"IndexRecord", &IndexRecord{}, IndexRecordType},
-		{"BlockLastRecord", &BlockLastRecord{}, BlockLastRecordType},
+		{"BlockHeaderRecord", &BlockHeaderRecord{}, BlockHeaderRecordType},
 		{"FooterRecord", &FooterRecord{}, FooterRecordType},
 	}
 
@@ -628,7 +628,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
-		{"BlockLastRecord", &BlockLastRecord{FirstEntryID: 1000, LastEntryID: 2000}},
+		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000}},
 		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
@@ -651,7 +651,7 @@ func BenchmarkDecodeRecord(b *testing.B) {
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
-		{"BlockLastRecord", &BlockLastRecord{FirstEntryID: 1000, LastEntryID: 2000}},
+		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000}},
 		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
@@ -672,7 +672,7 @@ func BenchmarkDecodeRecordList(b *testing.B) {
 		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
-		&BlockLastRecord{FirstEntryID: 1000, LastEntryID: 1010},
+		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010},
 		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
 	}
 

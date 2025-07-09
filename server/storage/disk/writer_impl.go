@@ -281,14 +281,14 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 	if needSync {
 		logger.Ctx(ctx).Info("Sync: triggering rollBufferAndFlush")
 		// Add global writer lock to prevent race conditions with WriteDataAsync
-		w.rollBufferAndFlushUnsafe(ctx)
+		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
 	}
 
 	return nil
 }
 
-// rollBufferAndFlushUnsafe rolls the current buffer and flushes it to disk (must be called with mu held)
-func (w *LocalFileWriter) rollBufferAndFlushUnsafe(ctx context.Context) {
+// rollBufferAndSubmitFlushTaskUnsafe rolls the current buffer and flushes it to disk (must be called with mu held)
+func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
 	currentBuffer := w.buffer.Load()
@@ -398,8 +398,22 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		w.headerWritten.Store(true)
 	}
 
-	// Write all data records
+	// Record block start offset before writing block header
 	blockStartOffset := w.writtenBytes
+
+	// Write block header record
+	blockHeaderRecord := &codec.BlockHeaderRecord{
+		FirstEntryID: task.firstEntryId,
+		LastEntryID:  task.lastEntryId,
+	}
+	if err := w.writeRecord(blockHeaderRecord); err != nil {
+		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		w.storageWritable.Store(false)
+		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+		return
+	}
+
+	// Write all data records
 	for _, entry := range task.entries {
 		dataRecord := &codec.DataRecord{
 			Payload: entry.Data,
@@ -410,18 +424,6 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 			return
 		}
-	}
-
-	// Write BlockLastRecord
-	blockLastRecord := &codec.BlockLastRecord{
-		FirstEntryID: task.firstEntryId,
-		LastEntryID:  task.lastEntryId,
-	}
-	if err := w.writeRecord(blockLastRecord); err != nil {
-		logger.Ctx(ctx).Warn("write block last record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
-		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
-		return
 	}
 
 	// Sync to disk
@@ -1051,6 +1053,9 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 	currentBlockNumber := int64(0)
 	var headerFound bool
 	currentEntryId := int64(0)
+	var currentBlockFirstEntryID int64 = -1
+	var currentBlockLastEntryID int64 = -1
+	var inBlock bool = false
 
 	for offset < len(data) {
 		// Check if we have enough data for a record header
@@ -1071,7 +1076,6 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 			headerFound = true
 			w.headerWritten.Store(true)
 			recordSize += 16 // HeaderRecord size: Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
-			currentBlockStart = int64(offset + recordSize)
 
 			// Set first entry ID from header
 			headerRecord := record.(*codec.HeaderRecord)
@@ -1084,27 +1088,44 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 			dataRecord := record.(*codec.DataRecord)
 			recordSize += len(dataRecord.Payload)
 
-			// Update last entry ID
+			// If we're not in a block yet, this shouldn't happen in normal files
+			// but we can handle it for legacy compatibility
+			if !inBlock {
+				// Start a new block with this DataRecord
+				currentBlockStart = int64(offset)
+				currentBlockFirstEntryID = currentEntryId
+				inBlock = true
+			}
+
+			// Update last entry ID for current block
+			currentBlockLastEntryID = currentEntryId
+			// Update global last entry ID
 			w.lastEntryID.Store(currentEntryId)
 			currentEntryId++
 
-		case codec.BlockLastRecordType:
-			blockLastRecord := record.(*codec.BlockLastRecord)
-			recordSize += codec.BlockLastRecordSize
+		case codec.BlockHeaderRecordType:
+			blockHeaderRecord := record.(*codec.BlockHeaderRecord)
+			recordSize += codec.BlockHeaderRecordSize
 
-			// Create index record for this completed block
-			indexRecord := &codec.IndexRecord{
-				BlockNumber:       int32(currentBlockNumber),
-				StartOffset:       currentBlockStart,
-				FirstRecordOffset: currentBlockStart,
-				FirstEntryID:      blockLastRecord.FirstEntryID,
-				LastEntryID:       blockLastRecord.LastEntryID,
+			// If we were in a previous block, finalize it first
+			if inBlock {
+				// Create index record for the previous block
+				indexRecord := &codec.IndexRecord{
+					BlockNumber:       int32(currentBlockNumber),
+					StartOffset:       currentBlockStart,
+					FirstRecordOffset: currentBlockStart,
+					FirstEntryID:      currentBlockFirstEntryID,
+					LastEntryID:       currentBlockLastEntryID,
+				}
+				w.blockIndexes = append(w.blockIndexes, indexRecord)
+				currentBlockNumber++
 			}
-			w.blockIndexes = append(w.blockIndexes, indexRecord)
 
-			// Move to next block
-			currentBlockNumber++
-			currentBlockStart = int64(offset + recordSize)
+			// Start new block with this BlockHeaderRecord
+			currentBlockStart = int64(offset)
+			currentBlockFirstEntryID = blockHeaderRecord.FirstEntryID
+			currentBlockLastEntryID = blockHeaderRecord.LastEntryID
+			inBlock = true
 
 		default:
 			// Unknown record type, might be corrupted
@@ -1112,6 +1133,19 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 		}
 
 		offset += recordSize
+	}
+
+	// Handle the last block if we were still in one
+	if inBlock {
+		indexRecord := &codec.IndexRecord{
+			BlockNumber:       int32(currentBlockNumber),
+			StartOffset:       currentBlockStart,
+			FirstRecordOffset: currentBlockStart,
+			FirstEntryID:      currentBlockFirstEntryID,
+			LastEntryID:       currentBlockLastEntryID,
+		}
+		w.blockIndexes = append(w.blockIndexes, indexRecord)
+		currentBlockNumber++
 	}
 
 	w.currentBlockNumber.Store(currentBlockNumber)

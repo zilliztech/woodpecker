@@ -2,7 +2,9 @@
 
 ## Overview
 
-Codec is a streaming storage format designed for efficient data storage and retrieval across different backends (local filesystem, S3, MinIO). It implements a block-based architecture with sparse indexing and block metadata for optimal performance and recovery.
+Codec is a streaming storage format designed for efficient data storage and retrieval across different backends (local
+filesystem, S3, MinIO). It implements a block-based architecture with sparse indexing and block metadata for optimal
+performance and recovery.
 
 ## Key Features
 
@@ -17,15 +19,18 @@ Codec is a streaming storage format designed for efficient data storage and retr
 ## Architecture
 
 ### Logical File Structure
+
 ```
 [HeaderRecord] [DataRecord...] [BlockLastRecord] [DataRecord...] [BlockLastRecord] ... [IndexRecord...] [FooterRecord]
 ```
 
 ### Physical Storage
+
 - **Local FS**: Single file containing all data
 - **S3/MinIO**: Multi objects where each 2MB block is a separate part
 
 ### Record Format
+
 ```
 [CRC32:4][Type:1][Length:4][Payload:variable]
 ```
@@ -36,27 +41,29 @@ Codec is a streaming storage format designed for efficient data storage and retr
 2. **DataRecord** (Type 2): Actual data payload
 3. **IndexRecord** (Type 3): Block-level index information
 4. **FooterRecord** (Type 4): File summary and index location
-5. **BlockLastRecord** (Type 5): Block metadata at the end of each block
+5. **BlockHeaderRecord** (Type 5): Block metadata at the start of each block
 
 ## Block Management
 
 - Data is organized in 2MB blocks
 - When a record would exceed the 2MB boundary, a new block is started
 - Each block ends with a **BlockLastRecord** containing:
-  - First and last entry IDs in the block
-  - Block number can be inferred from the block sequence (0, 1, 2, ...)
-  - Start offset can be calculated as: BlockNumber * 2MB (for traditional storage)
-  - Block length can be calculated from the BlockLastRecord position
+    - First and last entry IDs in the block
+    - Block number can be inferred from the block sequence (0, 1, 2, ...)
+    - Start offset can be calculated as: BlockNumber * 2MB (for traditional storage)
+    - Block length can be calculated from the BlockLastRecord position
 
 ## Recovery Optimization
 
 ### Object Storage (S3/MinIO)
+
 1. **Efficient Block Recovery**: Read only the last few bytes of each object to get BlockLastRecord
 2. **No Cross-Object Reads**: Each object is self-contained with its metadata
 3. **Parallel Recovery**: Can recover multiple blocks concurrently
 4. **Minimal Data Transfer**: Only read metadata, not entire blocks
 
 ### Traditional Storage
+
 1. **Footer First**: Read footer from end of file to get metadata
 2. **Block Indexing**: Use sparse indexes to locate approximate data position
 3. **Sequential Access**: Blocks are accessed sequentially within the file
@@ -64,11 +71,11 @@ Codec is a streaming storage format designed for efficient data storage and retr
 ## Query Optimization
 
 1. **Footer First**: Read footer from end of file to get metadata
-2. **Block Metadata**: Use BlockLastRecord to quickly identify block boundaries and entry ranges
-3. **S3/MinIO Optimization**: 
-   - List objects to determine number of logical file parts
-   - Read last part to get footer
-   - Read block metadata from object tails for efficient range queries
+2. **Block Metadata**: Use BlockHeaderRecord to quickly identify block boundaries and entry ranges
+3. **S3/MinIO Optimization**:
+    - List objects to determine number of logical file parts
+    - Read last part to get footer
+    - Read block metadata from object tails for efficient range queries
 
 ## Benefits
 
@@ -84,16 +91,17 @@ Codec is a streaming storage format designed for efficient data storage and retr
 
 ```
 Offset 0:     [HeaderRecord]
-Offset 25:    [DataRecord 1]
+Offset 16:    [BlockHeaderRecord]
+Offset 42:    [DataRecord 1]
 Offset 50:    [DataRecord 2]
 ...
-Offset 2MB-25: [BlockLastRecord Block 0] (16 bytes + 9 header = 25 bytes)
-Offset 2MB:   [DataRecord N] (starts new block)
+Offset 2MB-25: [BlockHeaderRecord]
+Offset 2MB:    [DataRecord N] (starts new block)
 ...
-Offset 4MB-25: [BlockLastRecord Block 1]
+Offset 4MB-25: [BlockHeaderRecord]
 ...
-Offset 20MB:  [IndexRecord Block 0]
-Offset 20MB+29: [IndexRecord Block 1]
+Offset 20MB:   [IndexRecord Block 0]
+Offset 20MB+29:[IndexRecord Block 1]
 ...
 Offset 21MB:  [FooterRecord]
 ```
@@ -101,10 +109,11 @@ Offset 21MB:  [FooterRecord]
 ## Object Storage Layout
 
 For S3/MinIO, each 2MB block becomes a separate object:
+
 ```
-Object 1: [HeaderRecord] [DataRecord...] [BlockLastRecord Block 0]
-Object 2: [DataRecord...] [BlockLastRecord Block 1]
-Object 3: [DataRecord...] [BlockLastRecord Block 2]
+Object 1: [HeaderRecord] [BlockHeaderRecord][DataRecord][DataRecord][DataRecord]
+Object 2: [BlockHeaderRecord][DataRecord][DataRecord][DataRecord][DataRecord][DataRecord]
+Object 3: [BlockHeaderRecord][DataRecord][DataRecord][DataRecord]
 ...
 Object N: [IndexRecord...] [FooterRecord]
 ```

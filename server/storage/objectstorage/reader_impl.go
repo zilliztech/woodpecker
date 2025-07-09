@@ -148,8 +148,8 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 			zap.Int64("blockID", blockId),
 			zap.Bool("isMerged", isMerged))
 
-		// get block last record
-		blockLastRecord, getErr := f.getBlockLastRecord(ctx, objInfo.Key)
+		// get block header record
+		blockHeaderRecord, getErr := f.getBlockHeaderRecord(ctx, blockId, objInfo.Key)
 		if getErr != nil && werr.ErrSegmentFenced.Is(getErr) {
 			continue
 		}
@@ -164,8 +164,8 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 				BlockNumber:       int32(blockId),
 				StartOffset:       blockId,
 				FirstRecordOffset: 0,
-				FirstEntryID:      blockLastRecord.FirstEntryID,
-				LastEntryID:       blockLastRecord.LastEntryID,
+				FirstEntryID:      blockHeaderRecord.FirstEntryID,
+				LastEntryID:       blockHeaderRecord.LastEntryID,
 			})
 		}
 	}
@@ -338,7 +338,7 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 			return existsNewBlock, nil, err
 		}
 
-		blockLastRecord, getErr := f.getBlockLastRecord(ctx, blockKey)
+		blockHeaderRecord, getErr := f.getBlockHeaderRecord(ctx, blockID, blockKey)
 		if getErr != nil {
 			return existsNewBlock, nil, getErr
 		}
@@ -347,8 +347,8 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 			BlockNumber:       int32(blockID),
 			StartOffset:       blockID,
 			FirstRecordOffset: 0,
-			FirstEntryID:      blockLastRecord.FirstEntryID,
-			LastEntryID:       blockLastRecord.LastEntryID,
+			FirstEntryID:      blockHeaderRecord.FirstEntryID,
+			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}
 		f.blocks = append(f.blocks, fetchedLastBlock)
 		existsNewBlock = true
@@ -360,39 +360,51 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 	return existsNewBlock, fetchedLastBlock, nil
 }
 
-func (f *MinioFileReader) getBlockLastRecord(ctx context.Context, blockKey string) (*codec.BlockLastRecord, error) {
-	// get block last record
-	getBlockLastRecordOpt := minio.GetObjectOptions{}
-	setOptErr := getBlockLastRecordOpt.SetRange(0, -codec.RecordHeaderSize-codec.BlockLastRecordSize)
+func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int64, blockKey string) (*codec.BlockHeaderRecord, error) {
+	// For the first block (block 0), we need to read more data to account for the HeaderRecord
+	// For other blocks, we only need to read the BlockHeaderRecord
+	readSize := int64(codec.RecordHeaderSize + codec.BlockHeaderRecordSize)
+
+	// Check if this is the first block (block 0)
+	if blockID == 0 {
+		// First block has HeaderRecord + BlockHeaderRecord, so we need to read more
+		// HeaderRecord payload is 16 bytes: Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
+		headerRecordSize := int64(16)
+		readSize = int64(codec.RecordHeaderSize) + headerRecordSize + int64(codec.RecordHeaderSize+codec.BlockHeaderRecordSize)
+	}
+
+	// get block header record from the beginning of the block
+	getBlockHeaderRecordOpt := minio.GetObjectOptions{}
+	setOptErr := getBlockHeaderRecordOpt.SetRange(0, readSize-1)
 	if setOptErr != nil {
-		logger.Ctx(ctx).Warn("Error setting range for block last record",
+		logger.Ctx(ctx).Warn("Error setting range for block header record",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", blockKey),
 			zap.Error(setOptErr))
 		return nil, setOptErr
 	}
-	lastRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, getBlockLastRecordOpt)
+	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, getBlockHeaderRecordOpt)
 	if getErr != nil {
-		logger.Ctx(ctx).Warn("Error getting block last record",
+		logger.Ctx(ctx).Warn("Error getting block header record",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", blockKey),
 			zap.Error(getErr))
 		return nil, getErr
 	}
 
-	data, err := minioHandler.ReadObjectFull(ctx, lastRecordObj, codec.RecordHeaderSize+codec.BlockLastRecordSize)
+	data, err := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Error reading block last record",
+		logger.Ctx(ctx).Warn("Error reading block header record",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", blockKey),
 			zap.Error(err))
 		return nil, err
 	}
 	// check if it is a fence object
-	if len(data) != codec.RecordHeaderSize+codec.BlockLastRecordSize {
-		objStat, stateErr := lastRecordObj.Stat()
+	if int64(len(data)) != readSize {
+		objStat, stateErr := headerRecordObj.Stat()
 		if stateErr != nil {
-			logger.Ctx(ctx).Warn("Error getting block last record",
+			logger.Ctx(ctx).Warn("Error getting block header record",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("blockKey", blockKey),
 				zap.Error(stateErr))
@@ -406,23 +418,30 @@ func (f *MinioFileReader) getBlockLastRecord(ctx context.Context, blockKey strin
 		}
 	}
 
-	lastRecord, err := codec.DecodeRecord(data)
+	// Parse records to find the BlockHeaderRecord
+	records, err := codec.DecodeRecordList(data)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Error decoding block last record",
+		logger.Ctx(ctx).Warn("Error decoding records",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", blockKey),
 			zap.Error(err))
 		return nil, err
 	}
-	if lastRecord.Type() != codec.BlockLastRecordType {
-		logger.Ctx(ctx).Warn("Error decoding block last record",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.String("blockKey", blockKey),
-			zap.Error(err))
-		return nil, err
+
+	// Look for BlockHeaderRecord (skip HeaderRecord if present)
+	for _, record := range records {
+		if record.Type() == codec.BlockHeaderRecordType {
+			blockHeaderRecord := record.(*codec.BlockHeaderRecord)
+			return blockHeaderRecord, nil
+		}
 	}
-	blockLastRecord := lastRecord.(*codec.BlockLastRecord)
-	return blockLastRecord, nil
+
+	typeErr := fmt.Errorf("BlockHeaderRecord not found in block")
+	logger.Ctx(ctx).Warn("Error finding block header record",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.String("blockKey", blockKey),
+		zap.Error(typeErr))
+	return nil, typeErr
 }
 
 // get the Block for the entryId
