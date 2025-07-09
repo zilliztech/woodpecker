@@ -479,10 +479,10 @@ func (l *logHandleImpl) doCloseAndCreateWritableSegmentHandleUnsafe(ctx context.
 		zap.Int64("logId", l.GetId()),
 		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
 	// 1. close segmentHandle,
-	//  it will send fence request to logStores
+	//  it will send complete request to logStores
 	//  and error out all pendingAppendOps with segmentCloseError
-	logger.Ctx(ctx).Debug("start to fence segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	lastFlushedEntryId, err := oldSegmentHandle.Fence(ctx)
+	logger.Ctx(ctx).Debug("start to complete segment", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
+	lastFlushedEntryId, err := oldSegmentHandle.Complete(ctx)
 	if err != nil && !werr.ErrSegmentNotFound.Is(err) {
 		return nil, err
 	}

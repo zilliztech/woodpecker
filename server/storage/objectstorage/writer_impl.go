@@ -98,7 +98,6 @@ type MinioFileWriter struct {
 
 	// writing state
 	fileClose     chan struct{} // Close signal
-	closeOnce     sync.Once
 	closed        atomic.Bool
 	recovered     atomic.Bool
 	fenced        atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
@@ -558,7 +557,7 @@ func (f *MinioFileWriter) run() {
 func (f *MinioFileWriter) ack() {
 	var firstUploadErrTask *blockUploadTask
 	for task := range f.flushingTaskList {
-		if task.flushFuture == nil {
+		if task.flushData == nil {
 			logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
 				zap.String("segmentFileKey", f.segmentFileKey))
 			f.allUploadingTaskDone.Store(true)
@@ -1051,7 +1050,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 	return flushResultFutures
 }
 
-func (f *MinioFileWriter) awaitSuccessfulFlushes(ctx context.Context) error {
+func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	logger.Ctx(ctx).Info("wait for all parts of buffer to be flushed", zap.String("segmentFileKey", f.segmentFileKey))
 
 	// First, wait for all upload tasks to complete
@@ -1162,7 +1161,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 			zap.Error(err))
 	}
 	// wait all flush
-	waitErr := f.awaitSuccessfulFlushes(ctx)
+	waitErr := f.awaitAllFlushTasks(ctx)
 	if waitErr != nil {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -1214,7 +1213,7 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 	}
 
 	// wait all flush
-	waitErr := f.awaitSuccessfulFlushes(ctx)
+	waitErr := f.awaitAllFlushTasks(ctx)
 	if waitErr != nil {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -1230,11 +1229,9 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 	}
 
 	// close file
-	f.closeOnce.Do(func() {
-		f.fileClose <- struct{}{}
-		close(f.fileClose)
-		close(f.flushingTaskList)
-	})
+	f.fileClose <- struct{}{}
+	close(f.fileClose)
+	close(f.flushingTaskList)
 	return nil
 }
 

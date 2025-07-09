@@ -90,7 +90,7 @@ func TestE2EWrite(t *testing.T) {
 
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
-			err = client.Close()
+			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 
 			// stop embed LogStore singleton
@@ -233,7 +233,7 @@ func TestEmptyRuntime(t *testing.T) {
 			if err != nil {
 				fmt.Println(err)
 			}
-			defer client.Close()
+			defer client.Close(context.TODO())
 			for {
 				time.Sleep(5 * time.Second)
 				t.Logf("sleep 5 second")
