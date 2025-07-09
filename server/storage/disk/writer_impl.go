@@ -459,7 +459,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 }
 
 func (f *LocalFileWriter) awaitAllFlushTasks(ctx context.Context) error {
-	logger.Ctx(ctx).Info("wait for all parts of buffer to be flushed", zap.String("segmentFilePath", f.segmentFilePath))
+	logger.Ctx(ctx).Info("awaiting completion of all block flush tasks", zap.String("segmentFilePath", f.segmentFilePath))
 
 	// Now wait for the ack goroutine to process all completed tasks
 	// This ensures that blockIndexes are properly populated

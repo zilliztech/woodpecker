@@ -133,7 +133,7 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 			continue
 		}
 
-		blockId, isMerged, parseErr := parseFilePartName(objInfo.Key)
+		blockId, isMerged, parseErr := parseBlockIdFromBlockKey(objInfo.Key)
 		if parseErr != nil {
 			logger.Ctx(ctx).Warn("Error parsing segment file block id from block key",
 				zap.String("segmentFileKey", f.segmentFileKey),
@@ -206,7 +206,7 @@ func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryReadFooterAndIndex")
 	defer sp.End()
 	// Check if footer.blk exists
-	footerKey := getFooterPartKey(f.segmentFileKey)
+	footerKey := getFooterBlockKey(f.segmentFileKey)
 	statInfo, err := f.client.StatObject(ctx, f.bucket, footerKey, minio.StatObjectOptions{})
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
@@ -325,7 +325,7 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 	}
 	existsNewBlock := false
 	for {
-		blockKey := getPartKey(f.segmentFileKey, blockID)
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
 
 		// check if the block exists in object storage
 		_, err := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
@@ -644,9 +644,9 @@ func (f *MinioFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 
 func (f *MinioFileReader) getBlockObjectKey(blockNumber int64) string {
 	if f.isCompacted.Load() {
-		return getMergedPartKey(f.segmentFileKey, blockNumber)
+		return getMergedBlockKey(f.segmentFileKey, blockNumber)
 	} else {
-		return getPartKey(f.segmentFileKey, blockNumber)
+		return getBlockKey(f.segmentFileKey, blockNumber)
 	}
 }
 
@@ -732,7 +732,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 	for i := startBlockIndex; i < len(allBlocks) && entriesCollected < batchSize; i++ {
 		blockInfo := allBlocks[i]
-		blockObjKey := getPartKey(f.segmentFileKey, int64(blockInfo.BlockNumber))
+		blockObjKey := f.getBlockObjectKey(int64(blockInfo.BlockNumber))
 
 		// Get object info to determine the actual size
 		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})

@@ -25,9 +25,9 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"github.com/zilliztech/woodpecker/common/logger"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
