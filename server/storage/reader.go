@@ -55,6 +55,6 @@ type ReaderOpt struct {
 	// EndSequenceNum is the fileLastOffset to stop reading at.
 	EndSequenceNum int64
 
-	// BatchSize is the number of entries to read in a batch.
+	// BatchSize is the maxSize of entries to read in a batch.
 	BatchSize int64
 }

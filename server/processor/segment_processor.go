@@ -182,11 +182,11 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	return bufferedSeqNo, nil
 }
 
-func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, size int64) ([]*SegmentEntry, error) {
+func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, maxSize int64) ([]*SegmentEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("size", size))
+	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize))
 	reader, err := s.getNewSegmentReader(ctx)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 	batchEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
 		StartSequenceNum: fromEntryId,
 		EndSequenceNum:   0, // means no stop point
-		BatchSize:        size,
+		BatchSize:        maxSize,
 	})
 	if err != nil {
 		if werr.ErrEntryNotFound.Is(err) {

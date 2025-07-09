@@ -683,12 +683,16 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		return nil, werr.ErrEntryNotFound
 	}
 
-	if opt.BatchSize == -1 {
+	// if completed file or auto batch size=-1, default read 100 entries as a batch
+	if r.isIncompleteFile && opt.BatchSize == -1 {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
 		logger.Ctx(ctx).Debug("using single block mode")
 		return r.readSingleBlock(ctx, r.blockIndexes[startBlockIndex], opt.StartSequenceNum)
 	} else {
-		// Specified batch size mode: read across multiple blocks if necessary
+		// Specified batch size mode: read across multiple blocks if necessary to get the requested number of entries
+		if opt.BatchSize == -1 {
+			opt.BatchSize = 100
+		}
 		logger.Ctx(ctx).Debug("using multiple blocks mode",
 			zap.Int("startBlockIndex", startBlockIndex),
 			zap.Int64("batchSize", opt.BatchSize))

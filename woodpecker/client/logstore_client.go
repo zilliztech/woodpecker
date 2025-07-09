@@ -30,7 +30,7 @@ type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	// ReadEntriesBatch reads a batch of entries from the specified log segment and returns the entries and an error if any.
-	ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error)
+	ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
 	CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
@@ -61,8 +61,8 @@ func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entr
 	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
 }
 
-func (l *logStoreClientLocal) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
-	return l.store.GetBatchEntries(ctx, logId, segmentId, fromEntryId, size)
+func (l *logStoreClientLocal) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {
+	return l.store.GetBatchEntries(ctx, logId, segmentId, fromEntryId, maxSize)
 }
 
 func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
@@ -104,7 +104,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, ent
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
+func (l *logStoreClientRemote) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
 }
 
