@@ -195,6 +195,8 @@ func TestMultiErrors_ErrorChaining(t *testing.T) {
 	assert.True(t, errors.IsAny(multiErr, err2, newErr))
 	assert.False(t, errors.IsAny(multiErr, newErr))
 	assert.True(t, errors.IsAny(multiErr, err1, err3))
+
+	assert.False(t, ErrSegmentHandleSegmentClosed.Is(nil))
 }
 
 // Helper function to check if a string contains a substring

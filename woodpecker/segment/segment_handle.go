@@ -334,11 +334,13 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 		// found the triggerEntryId
 		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
 			(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
-			!werr.ErrSegmentHandleSegmentClosed.Is(err) && !werr.ErrSegmentFenced.Is(err) {
+			(err == nil || !werr.ErrSegmentHandleSegmentClosed.Is(err) && !werr.ErrSegmentFenced.Is(err)) {
+			logger.Ctx(ctx).Debug("appendOp should retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.attempt), zap.Error(err))
 			op.attempt++
 			elementsToRetry = append(elementsToRetry, element)
 		} else {
 			// retry max times, or encounter non-retryable error
+			logger.Ctx(ctx).Debug("appendOp should remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.attempt), zap.Error(err))
 			elementsToRemove = append(elementsToRemove, element)
 			if minRemoveId == math.MaxInt64 || op.entryId < minRemoveId {
 				minRemoveId = op.entryId

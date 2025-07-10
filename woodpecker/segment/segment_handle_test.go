@@ -381,12 +381,13 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
 	for i := 0; i < 20; i++ {
+		entryIndex := i // Capture the loop variable by value
 		callback := func(segmentId int64, entryId int64, err error) {
 			callbackCalledNum++
 			assert.Equal(t, int64(1), segmentId)
-			assert.Equal(t, int64(i), entryId)
+			assert.Equal(t, int64(entryIndex), entryId)
 			assert.Nil(t, err)
-			t.Logf("=====exec callback %d %d \n\n", segmentId, entryId)
+			t.Logf("=====exec callback segID:%d entryID:%d entryIdx:%d callNum:%d \n\n", segmentId, entryId, entryIndex, callbackCalledNum)
 			syncedIds = append(syncedIds, entryId)
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)

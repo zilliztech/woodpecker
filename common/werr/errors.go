@@ -369,7 +369,10 @@ func (e woodpeckerError) Is(err error) bool {
 	if target, ok := err.(woodpeckerError); ok {
 		return e.errCode == target.errCode
 	}
-
+	// cause is nil, so no underlying error to check
+	if e.cause == nil {
+		return false
+	}
 	// Use the standard library's Is function for error chain traversal
 	return errors.Is(e.cause, err)
 }
