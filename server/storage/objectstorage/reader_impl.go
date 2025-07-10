@@ -507,7 +507,7 @@ func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 			return -1, err
 		}
 		if lastBlockInfo == nil {
-			return -1, werr.ErrNoBlockFound
+			return -1, werr.ErrFileReaderNoBlockFound
 		}
 		return lastBlockInfo.LastEntryID, nil
 	}

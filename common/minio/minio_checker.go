@@ -89,7 +89,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, minioHandler MinioHandl
 		panic("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for existing object, " +
 			"but it succeeded. This indicates conditional write protection is not working properly.")
 	}
-	if !werr.ErrFragmentAlreadyExists.Is(err) {
+	if !werr.ErrObjectAlreadyExists.Is(err) {
 		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrFragmentAlreadyExists "+
 			"for existing object, but got: %v. This indicates the error handling for conditional writes is incorrect.", err))
 	}

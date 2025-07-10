@@ -627,7 +627,7 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	if f.closed.Load() {
 		// quick fail and return a close Err, which indicate than it is also not retriable
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment writer is closed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrLogFileClosed
+		return -1, werr.ErrFileWriterAlreadyClosed
 	}
 	if f.fenced.Load() {
 		// quick fail and return a fenced Err
@@ -739,7 +739,7 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 			// Segment is being closed, return immediately
 			logger.Ctx(ctx).Debug("Segment close signal received while waiting for flushing buffer space",
 				zap.String("segmentFileKey", f.segmentFileKey))
-			return werr.ErrLogFileClosed
+			return werr.ErrFileWriterAlreadyClosed
 		case <-time.After(10 * time.Millisecond):
 			// Continue checking after a short delay
 			continue
@@ -1152,7 +1152,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 	defer sp.End()
 	if !f.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrSegmentClosed
+		return -1, werr.ErrFileWriterAlreadyClosed
 	}
 	err := f.Sync(context.Background()) // manual sync all pending append operation
 	if err != nil {
@@ -1288,7 +1288,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			// Try to create fence object
 			_, putErr := f.client.PutFencedObject(ctx, f.bucket, fenceBlockKey)
 			if putErr != nil {
-				if werr.ErrFragmentAlreadyExists.Is(putErr) {
+				if werr.ErrObjectAlreadyExists.Is(putErr) {
 					// Block already exists, this might be normal during concurrent operations
 					logger.Ctx(ctx).Debug("Fence object already exists, retrying with next block ID",
 						zap.String("segmentFileKey", f.segmentFileKey),
@@ -1317,7 +1317,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 		retry.MaxSleepTime(1*time.Second), // Max sleep time between retries
 		retry.RetryErr(func(err error) bool {
 			// Only retry on block already exists error
-			return werr.ErrFragmentAlreadyExists.Is(err)
+			return werr.ErrObjectAlreadyExists.Is(err)
 		}),
 	)
 
@@ -1422,7 +1422,7 @@ func (f *MinioFileWriter) createSegmentLock(ctx context.Context) error {
 	_, err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.lockObjectKey,
 		strings.NewReader(lockInfo), int64(len(lockInfo)))
 	if err != nil {
-		if werr.ErrFragmentAlreadyExists.Is(err) {
+		if werr.ErrObjectAlreadyExists.Is(err) {
 			logger.Ctx(ctx).Warn("Lock object already exists - segment is already locked by another process",
 				zap.String("lockObjectKey", f.lockObjectKey))
 			return fmt.Errorf("segment is already locked by another process: %s", f.lockObjectKey)

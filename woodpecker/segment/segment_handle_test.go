@@ -386,6 +386,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			assert.Equal(t, int64(1), segmentId)
 			assert.Equal(t, int64(i), entryId)
 			assert.Nil(t, err)
+			t.Logf("=====exec callback %d %d \n\n", segmentId, entryId)
 			syncedIds = append(syncedIds, entryId)
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
@@ -402,9 +403,6 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 				appendOp := e.Value.(*AppendOp)
 				// when chan ready
 				if len(appendOp.resultChannels) > 0 {
-					if appendOp.entryId == 2 {
-						fmt.Sprintf("debug")
-					}
 					if appendOp.entryId%2 == 0 && appendOp.attempt <= 1 {
 						// if attempt=1 and entryId is even, mock fail in this attempt
 						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
@@ -412,7 +410,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 							SyncedId: -1,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
 					} else {
 						// otherwise, mock success
 						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
@@ -420,7 +418,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 							SyncedId: appendOp.entryId,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
 						processedCount++
 					}
 				}
@@ -597,7 +595,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		if i == 5 {
 			// fail
 			ops[i].attempt = 3
-			segmentHandle.SendAppendErrorCallbacks(context.TODO(), int64(i), werr.ErrSegmentWriteException)
+			segmentHandle.SendAppendErrorCallbacks(context.TODO(), int64(i), werr.ErrSegmentHandleWriteFailed)
 		} else {
 			// success
 			ops[i].ackSet.Set(0)

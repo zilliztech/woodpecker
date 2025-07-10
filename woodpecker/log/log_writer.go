@@ -127,7 +127,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
-			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+			Err:          werr.ErrLogWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 	}
 
@@ -185,7 +185,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
-			Err:          werr.ErrWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
+			Err:          werr.ErrLogWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 		close(ch)
 		logger.Ctx(ctx).Warn("Writer lock session has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))

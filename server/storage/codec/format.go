@@ -19,8 +19,6 @@ package codec
 
 import (
 	"time"
-
-	"github.com/cockroachdb/errors"
 )
 
 const (
@@ -47,13 +45,6 @@ const (
 var (
 	HeaderMagic = [4]byte{0x48, 0x44, 0x52, 0x01} // HDR\x01
 	FooterMagic = [4]byte{0x46, 0x54, 0x52, 0x01} // FTR\x01
-)
-
-var (
-	ErrCorruptedRecord = errors.New("corrupted record")
-	ErrInvalidSeek     = errors.New("invalid seek position")
-	ErrRecordTooLarge  = errors.New("record too large")
-	ErrWriterClosed    = errors.New("writer closed")
 )
 
 // Record interface

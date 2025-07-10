@@ -53,7 +53,7 @@ func (l *LocalResultChannel) GetIdentifier() string {
 func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = werr.ErrResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
+			err = werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
 			return
 		}
 	}()
@@ -80,10 +80,12 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 	case r, ok := <-l.ch:
 		if !ok {
 			// Channel was closed externally
-			return nil, werr.ErrResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
+			return nil, werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
 		}
 		logger.Ctx(ctx).Debug("read result from local channel",
 			zap.String("identifier", l.identifier),
+			zap.Int64("identifier", r.SyncedId),
+			zap.Error(r.Err),
 		)
 		return r, nil
 	case <-ctx.Done():

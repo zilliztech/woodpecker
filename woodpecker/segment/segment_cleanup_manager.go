@@ -266,7 +266,7 @@ func (s *segmentCleanupManagerImpl) createNewCleanupTask(
 			zap.Int64("logId", logId),
 			zap.Int64("segmentId", segmentId),
 			zap.Error(err))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	logger.Ctx(ctx).Info("Successfully created segment cleanup status in metadata",

@@ -188,13 +188,13 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataRead.WithCauseErr(err)
+		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 
 	if len(resp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("%s key not found", LogIdGeneratorKey))
+		return werr.ErrMetadataCreateLog.WithCauseErrMsg(fmt.Sprintf("%s key not found", LogIdGeneratorKey))
 	}
 
 	// check if logName exists
@@ -203,12 +203,12 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataRead.WithCauseErr(err)
+		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	if exists {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrLogAlreadyExists.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
+		return werr.ErrMetadataCreateLog.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 
 	// create a New Log with default Options
@@ -217,7 +217,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataDecode.WithCauseErr(err)
+		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	nextID := currentID + 1
 	logMeta := &proto.LogMeta{
@@ -236,7 +236,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrCreateLogMetadata.WithCauseErr(err)
+		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	// Start a transaction
 	txn := e.client.Txn(ctx)
@@ -255,13 +255,13 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrCreateLogMetadata.WithCauseErr(err)
+		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrCreateLogMetadataTxn.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
+		return werr.ErrMetadataCreateLog.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
 	}
 	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "success").Inc()
@@ -593,13 +593,13 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrCreateSegmentMetadata.WithCauseErr(err)
+		return werr.ErrMetadataCreateSegment.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrCreateSegmentMetadata.WithCauseErrMsg(
+		return werr.ErrMetadataCreateSegment.WithCauseErrMsg(
 			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, metadata.SegNo))
 	}
 
@@ -642,7 +642,7 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrUpdateSegmentMetadata.WithCauseErrMsg(
+		return werr.ErrMetadataUpdateSegment.WithCauseErrMsg(
 			fmt.Sprintf("segment metadata not found for logName:%s segmentId:%d", logName, metadata.SegNo))
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "success").Inc()
@@ -802,13 +802,13 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrUpdateQuorumInfoMetadata.WithCauseErr(err)
+		return werr.ErrMetadataUpdateQuorum.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrUpdateQuorumInfoMetadata.WithCauseErrMsg(
+		return werr.ErrMetadataUpdateQuorum.WithCauseErrMsg(
 			fmt.Sprintf("quorum info already exists for id:%d", info.Id))
 	}
 

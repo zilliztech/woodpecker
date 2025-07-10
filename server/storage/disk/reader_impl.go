@@ -618,7 +618,7 @@ func (r *LocalFileReader) readAt(offset int64, length int) ([]byte, error) {
 // GetLastEntryID returns the last entry ID in the file
 func (r *LocalFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 	if r.closed.Load() {
-		return -1, werr.ErrReaderClosed
+		return -1, werr.ErrFileReaderAlreadyClosed
 	}
 
 	if len(r.blockIndexes) == 0 {
@@ -641,7 +641,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		zap.Bool("isIncompleteFile", r.isIncompleteFile))
 
 	if r.closed.Load() {
-		return nil, werr.ErrReaderClosed
+		return nil, werr.ErrFileReaderAlreadyClosed
 	}
 
 	// For incomplete files, try to scan for new blocks if we don't have enough data

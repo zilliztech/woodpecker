@@ -194,7 +194,7 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
 		logger.Ctx(ctx).Info("fragment already exists, idempotent flush success", zap.String("fragmentObjectKey", objectName))
-		return info, werr.ErrFragmentAlreadyExists
+		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "error").Inc()
@@ -230,7 +230,7 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 			return info, nil
 		}
 		// return normal err
-		return info, werr.ErrFragmentAlreadyExists
+		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "error").Inc()

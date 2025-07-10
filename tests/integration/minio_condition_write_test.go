@@ -280,7 +280,7 @@ func TestMinioHandlePutIfNotMatch(t *testing.T) {
 	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(newData), int64(len(newData)))
 	require.Error(t, err)
-	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Should return ErrFragmentAlreadyExists for existing object")
+	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Should return ErrFragmentAlreadyExists for existing object")
 	t.Logf("Expected error for existing object: %v", err)
 
 	// 3. Verify original content is unchanged
@@ -380,7 +380,7 @@ func TestMinioHandlePutIfNotMatchConcurrency(t *testing.T) {
 	for err := range results {
 		if err == nil {
 			successCount++
-		} else if werr.ErrFragmentAlreadyExists.Is(err) {
+		} else if werr.ErrObjectAlreadyExists.Is(err) {
 			fragmentExistsCount++
 		} else {
 			otherErrorCount++
@@ -427,14 +427,14 @@ func TestMinioHandlePutIfNotMatchIdempotency(t *testing.T) {
 	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(testData), int64(len(testData)))
 	require.Error(t, err)
-	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Second upload should return ErrFragmentAlreadyExists")
+	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Second upload should return ErrFragmentAlreadyExists")
 
 	// 3. Third upload with different content should also return ErrFragmentAlreadyExists
 	differentData := []byte("different content")
 	_, err = minioCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
 		bytes.NewReader(differentData), int64(len(differentData)))
 	require.Error(t, err)
-	require.True(t, werr.ErrFragmentAlreadyExists.Is(err), "Upload with different content should also return ErrFragmentAlreadyExists")
+	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Upload with different content should also return ErrFragmentAlreadyExists")
 
 	// 4. Verify original content is preserved
 	obj, err := minioCli.GetObject(ctx, bucketName, objectName, minio.GetObjectOptions{})

@@ -201,7 +201,7 @@ func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.S
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
-		return -1, werr.ErrSegmentWriteException.WithCauseErr(err)
+		return -1, err
 	}
 
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "success").Inc()

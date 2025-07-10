@@ -86,8 +86,8 @@ func TestDoCheckIfConditionWriteSupport_Success(t *testing.T) {
 				// First call should succeed
 				return minio.UploadInfo{ETag: "test-etag"}, nil
 			} else if callCount == 2 {
-				// Second call should return ErrFragmentAlreadyExists
-				return minio.UploadInfo{}, werr.ErrFragmentAlreadyExists
+				// Second call should return ErrObjectAlreadyExists
+				return minio.UploadInfo{}, werr.ErrObjectAlreadyExists
 			} else if callCount == 3 {
 				// Third call (with fenced object) should return ErrSegmentFenced
 				return minio.UploadInfo{}, werr.ErrSegmentFenced
@@ -145,7 +145,7 @@ func TestDoCheckIfConditionWriteSupport_UnsupportedPutFencedObject(t *testing.T)
 			if callCount == 1 {
 				return minio.UploadInfo{ETag: "test-etag"}, nil
 			} else if callCount == 2 {
-				return minio.UploadInfo{}, werr.ErrFragmentAlreadyExists
+				return minio.UploadInfo{}, werr.ErrObjectAlreadyExists
 			}
 			return minio.UploadInfo{}, nil
 		},
@@ -266,7 +266,7 @@ func TestCheckIfConditionWriteSupportWithSyncOnce(t *testing.T) {
 			if callCount == 1 {
 				return minio.UploadInfo{ETag: "test-etag"}, nil
 			} else if callCount == 2 {
-				return minio.UploadInfo{}, werr.ErrFragmentAlreadyExists
+				return minio.UploadInfo{}, werr.ErrObjectAlreadyExists
 			} else if callCount == 3 {
 				return minio.UploadInfo{}, werr.ErrSegmentFenced
 			}

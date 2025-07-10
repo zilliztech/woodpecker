@@ -207,7 +207,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 		return
 	}
 	if s.rollingState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
+		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
 		return
 	}
 
@@ -217,7 +217,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 	// Check segment state
 	if currentSegmentMeta.State != proto.SegmentState_Active {
-		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentStateInvalid)
+		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentHandleSegmentStateInvalid)
 		return
 	}
 
@@ -227,7 +227,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 		return
 	}
 	if s.rollingState.Load() {
-		callback(s.segmentId, -1, werr.ErrSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
+		callback(s.segmentId, -1, werr.ErrSegmentHandleSegmentRolling.WithCauseErrMsg(fmt.Sprintf("segmentHandle[%d/%d] rolling", s.logId, s.segmentId)))
 		return
 	}
 
@@ -236,7 +236,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 	// Try to submit first, only add to queue if successful
 	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
-		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
+		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentHandleSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
 		return
 	}
 
@@ -334,7 +334,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 		// found the triggerEntryId
 		if op.attempt < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
 			(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
-			!werr.ErrSegmentClosed.Is(err) && !werr.ErrSegmentFenced.Is(err) {
+			!werr.ErrSegmentHandleSegmentClosed.Is(err) && !werr.ErrSegmentFenced.Is(err) {
 			op.attempt++
 			elementsToRetry = append(elementsToRetry, element)
 		} else {
@@ -407,7 +407,7 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, maxSize i
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return nil, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
+		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
@@ -416,7 +416,7 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, maxSize i
 	}
 
 	if maxSize != -1 {
-		return nil, werr.ErrNotSupport.WithCauseErrMsg("support maxSize=-1 as auto batch size currently")
+		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("support maxSize=-1 as auto batch size currently")
 	}
 
 	segmentEntryList, err := cli.ReadEntriesBatch(ctx, s.logId, s.segmentId, from, maxSize)
@@ -445,7 +445,7 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return -1, werr.ErrNotSupport.WithCauseErrMsg("Currently only support embed standalone mode")
+		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
 	}
 
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
@@ -539,7 +539,7 @@ func (s *segmentHandleImpl) CloseWritingAndUpdateMetaIfNecessary(ctx context.Con
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	// fast fail all pending append operations
-	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentClosed)
+	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
 
 	// shutdown segment executor
 	s.executor.Stop(ctx)
@@ -622,7 +622,7 @@ func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
 		return err
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+		return werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	_, err = s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
@@ -667,7 +667,7 @@ func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int64("quorumId", quorumInfo.Id),
 			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return -1, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
@@ -735,7 +735,7 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int64("quorumId", quorumInfo.Id),
 			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return -1, werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
@@ -893,7 +893,7 @@ func (s *segmentHandleImpl) RecoveryOrCompact(ctx context.Context) error {
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.String("currentState", currentSegmentMeta.State.String()))
-	return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
+	return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
 }
 
 func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
@@ -917,7 +917,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.String("actualState", currentSegmentMeta.State.String()))
-		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
+		return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in InProgress. logName:%s logId:%d, segId:%d", s.logName, s.logId, s.segmentId))
 	}
 	// only one recovery operation at the same time
 	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
@@ -952,7 +952,7 @@ func (s *segmentHandleImpl) recoveryFromInProgress(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int64("quorumId", quorumInfo.Id),
 			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+		return werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
@@ -1068,7 +1068,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 
 	if currentSegmentMeta.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		return werr.ErrSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
+		return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
 	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Info("Recovery or compact operation already in progress, skipping compaction",
@@ -1103,7 +1103,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 			zap.Int64("segmentId", s.segmentId),
 			zap.Int64("quorumId", quorumInfo.Id),
 			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return werr.ErrNotSupport.WithCauseErrMsg("currently only support embed standalone mode")
+		return werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
 	}
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {

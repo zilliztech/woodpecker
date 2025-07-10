@@ -96,12 +96,12 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 
 	// Validate if entryId is outside the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId < b.FirstEntryId {
-		return -1, werr.ErrInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
+		return -1, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
 	}
 
 	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId >= b.FirstEntryId+b.MaxEntries {
-		return -1, werr.ErrWriteBufferFull.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
+		return -1, werr.ErrFileWriterBufferFull.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	relatedIdx := entryId - b.FirstEntryId
@@ -265,12 +265,12 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 
 func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([]*BufferEntry, error) {
 	if len(b.Entries) == 0 {
-		return nil, werr.ErrBufferIsEmpty
+		return nil, werr.ErrLogWriterBufferEmpty
 	}
 
 	// the valid range [firstEntryId, firstEntryId + maxEntries)
 	if fromEntryId < b.FirstEntryId || fromEntryId > b.FirstEntryId+b.MaxEntries {
-		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+		return nil, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(
 			fmt.Sprintf("fromId:%d not in [%d,%d)", fromEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 
@@ -287,12 +287,12 @@ func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64
 	defer b.mu.Unlock()
 
 	if startEntryId >= b.FirstEntryId+b.MaxEntries || startEntryId < b.FirstEntryId {
-		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+		return nil, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(
 			fmt.Sprintf("startEntryId:%d not in [%d,%d)", startEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	if endEntryId > b.FirstEntryId+b.MaxEntries || endEntryId <= startEntryId {
-		return nil, werr.ErrInvalidEntryId.WithCauseErrMsg(
+		return nil, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(
 			fmt.Sprintf("endEntryId:%d not in [%d,%d)", endEntryId, startEntryId, b.FirstEntryId+b.MaxEntries))
 	}
 

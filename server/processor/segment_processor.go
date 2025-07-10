@@ -321,7 +321,7 @@ func (s *segmentProcessor) getSegmentWriter(ctx context.Context) (storage.Writer
 		writer := s.currentSegmentWriter
 		return writer, nil
 	}
-	return nil, werr.ErrSegmentWriterNotExists.WithCauseErrMsg("current segment writer not exists")
+	return nil, werr.ErrSegmentProcessorNoWriter.WithCauseErrMsg("current segment writer not exists")
 }
 
 func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recoverMode bool) (storage.Writer, error) {

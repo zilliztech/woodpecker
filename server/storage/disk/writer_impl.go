@@ -346,7 +346,7 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 		case <-w.runCtx.Done():
 			logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task")
 			// Notify entries of cancellation
-			w.notifyFlushError(flushTask.entries, werr.ErrWriterClosed)
+			w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
 		}
 	}()
 }
@@ -377,7 +377,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
-		w.notifyFlushError(task.entries, werr.ErrSegmentClosed)
+		w.notifyFlushError(task.entries, werr.ErrFileWriterFinalized)
 		return
 	}
 
@@ -537,17 +537,17 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	if w.closed.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
-		return entryId, werr.ErrWriterClosed
+		return entryId, werr.ErrFileWriterAlreadyClosed
 	}
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
-		return entryId, werr.ErrWriterFinalized
+		return entryId, werr.ErrFileWriterFinalized
 	}
 
 	if !w.storageWritable.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrWriterClosed
+		return entryId, werr.ErrFileWriterAlreadyClosed
 	}
 
 	// Validate empty payload
@@ -556,7 +556,7 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	}
 
 	if len(data) > codec.MaxRecordSize {
-		return entryId, werr.ErrRecordTooLarge
+		return entryId, werr.ErrLogWriterRecordTooLarge
 	}
 
 	// Check for duplicates
@@ -577,7 +577,7 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
 		w.mu.Unlock()
-		return entryId, werr.ErrWriterClosed
+		return entryId, werr.ErrFileWriterAlreadyClosed
 	}
 
 	// Try to add to buffer
@@ -657,11 +657,9 @@ func (w *LocalFileWriter) writeRecord(record codec.Record) error {
 func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
-	if !w.closed.CompareAndSwap(false, true) {
-		return w.lastEntryID.Load(), werr.ErrWriterClosed
-	}
 
-	if w.finalized.Load() {
+	if !w.finalized.CompareAndSwap(false, true) {
+		// if already finalized, return fast
 		return w.lastEntryID.Load(), nil
 	}
 

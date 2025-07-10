@@ -176,7 +176,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		return
 	}
 
-	if syncedResult.SyncedId == -1 {
+	if syncedResult.SyncedId == -1 || syncedResult.Err != nil {
 		op.err = syncedResult.Err
 		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, syncedResult.Err)
 		return

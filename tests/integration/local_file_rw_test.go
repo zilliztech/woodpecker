@@ -279,7 +279,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		resultCh2 := channel.NewLocalResultChannel("test-after-finalize")
 		_, err = writer.WriteDataAsync(ctx, 1, []byte("should fail"), resultCh2)
 		assert.Error(t, err)
-		assert.True(t, werr.ErrWriterFinalized.Is(err))
+		assert.True(t, werr.ErrFileWriterFinalized.Is(err))
 	})
 
 	t.Run("WriteAfterClose", func(t *testing.T) {
@@ -296,7 +296,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		resultCh := channel.NewLocalResultChannel("test-write-after-close")
 		_, err = writer.WriteDataAsync(ctx, 1, []byte("should fail"), resultCh)
 		assert.Error(t, err)
-		assert.True(t, werr.ErrWriterClosed.Is(err))
+		assert.True(t, werr.ErrFileWriterAlreadyClosed.Is(err))
 	})
 
 	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
@@ -396,7 +396,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
 		//require.NoError(t, err) // TODO maybe handle this notify gracefully
 		require.Error(t, err)
-		assert.True(t, werr.ErrInvalidEntryId.Is(err))
+		assert.True(t, werr.ErrFileWriterInvalidEntryId.Is(err))
 
 		// Wait for first write with timeout
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -425,7 +425,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		resultCh := channel.NewLocalResultChannel("test-large-payload")
 		_, err = writer.WriteDataAsync(ctx, 0, largePayload, resultCh)
 		require.Error(t, err)
-		assert.True(t, werr.ErrRecordTooLarge.Is(err))
+		assert.True(t, werr.ErrLogWriterRecordTooLarge.Is(err))
 	})
 }
 
@@ -710,7 +710,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 			BatchSize:        1,
 		})
 		assert.Error(t, err)
-		assert.True(t, werr.ErrReaderClosed.Is(err))
+		assert.True(t, werr.ErrFileReaderAlreadyClosed.Is(err))
 		assert.Nil(t, entries)
 	})
 }

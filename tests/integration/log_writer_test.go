@@ -44,7 +44,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -81,7 +81,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrLogWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())
@@ -131,7 +131,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -171,7 +171,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrLogWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())

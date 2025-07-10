@@ -244,7 +244,7 @@ func TestLocalResultChannel_ReadResultDeadlock(t *testing.T) {
 
 	// Should timeout, not deadlock
 	assert.Error(t, readError)
-	assert.True(t, werr.ErrResultChannelClosed.Is(readError))
+	assert.True(t, werr.ErrAppendOpResultChannelClosed.Is(readError))
 }
 
 // Test to expose race condition in SendResult

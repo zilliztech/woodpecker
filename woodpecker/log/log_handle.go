@@ -582,7 +582,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_reader", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("open log reader failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName), zap.Error(err))
-		return nil, werr.ErrReaderTempInfoError.WithCauseErr(err)
+		return nil, werr.ErrLogReaderTempInfoError.WithCauseErr(err)
 	}
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "success").Inc()
@@ -611,7 +611,7 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "truncate", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "truncate", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	// 2. Check if the requested truncation point is valid
@@ -641,7 +641,7 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "truncate", "segment_error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "truncate", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("Requested truncation failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	// 4. Validate entry ID is within valid range
@@ -655,7 +655,7 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 			zap.Int64("requestedTruncEntryId", recordId.EntryId))
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "truncate", "invalid_entry_id").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "truncate", "error").Observe(float64(time.Since(start).Milliseconds()))
-		invalidErr := werr.ErrTruncateLog.WithCauseErrMsg(
+		invalidErr := werr.ErrLogHandleTruncateFailed.WithCauseErrMsg(
 			fmt.Sprintf("truncation entry ID %d exceeds last entry ID %d for segment %d",
 				recordId.EntryId, segMeta.LastEntryId, recordId.SegmentId))
 		return invalidErr
@@ -678,7 +678,7 @@ func (l *logHandleImpl) Truncate(ctx context.Context, recordId *LogMessageId) er
 			zap.Int64("requestedTruncSegId", recordId.SegmentId),
 			zap.Int64("requestedTruncEntryId", recordId.EntryId),
 			zap.Error(err))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	// 7. Update logMetaCache
@@ -704,7 +704,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("check segment truncated state failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	// 2. Check if the requested truncation point is set
@@ -720,7 +720,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "check_segment_truncated", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "check_segment_truncated", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return werr.ErrTruncateLog.WithCauseErr(err)
+		return werr.ErrLogHandleTruncateFailed.WithCauseErr(err)
 	}
 
 	segmentsTruncated := 0
@@ -832,7 +832,7 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_truncated_record_id", "error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "get_truncated_record_id", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return nil, werr.ErrGetTruncationPoint.WithCauseErr(err)
+		return nil, werr.ErrLogHandleGetTruncationPointFailed.WithCauseErr(err)
 	}
 
 	// Return the truncation point
@@ -866,7 +866,7 @@ func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Conte
 	// 1. fence segmentHandle
 	// Send fence request to log stores and fail pending append operations
 	lastFlushedEntryId, err := writeableSegmentHandle.Complete(ctx) // fence first, which will wait for all writing request to be done
-	if err != nil && !werr.ErrSegmentWriterNotExists.Is(err) {
+	if err != nil && !werr.ErrSegmentProcessorNoWriter.Is(err) {
 		logger.Ctx(ctx).Info("complete segment failed",
 			zap.String("logName", l.Name),
 			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
