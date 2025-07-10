@@ -518,14 +518,12 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*proto.Segmen
 		return nil, err
 	}
 	newSegmentMeta := &proto.SegmentMetadata{
-		SegNo:          segmentNo,
-		CreateTime:     time.Now().UnixMilli(),
-		QuorumId:       -1,
-		State:          proto.SegmentState_Active,
-		LastEntryId:    -1,
-		Size:           0,
-		EntryOffset:    make([]int32, 0),
-		FragmentOffset: make([]int32, 0),
+		SegNo:       segmentNo,
+		CreateTime:  time.Now().UnixMilli(),
+		QuorumId:    -1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+		Size:        0,
 	}
 	// create segment metadata
 	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, newSegmentMeta)

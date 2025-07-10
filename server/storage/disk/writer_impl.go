@@ -843,9 +843,9 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 }
 
 // Compact performs compaction (placeholder for future implementation)
-func (w *LocalFileWriter) Compact(ctx context.Context) ([]int64, error) {
+func (w *LocalFileWriter) Compact(ctx context.Context) (int64, error) {
 	// Purpose: merge small blocks into larger blocks for more efficient indexing
-	return nil, werr.ErrSegmentNotFound.WithCauseErrMsg("not need to compact local file currently")
+	return -1, werr.ErrSegmentNotFound.WithCauseErrMsg("not need to compact local file currently")
 }
 
 // Recover recovers writer state from existing file

@@ -747,7 +747,7 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 	}
 }
 
-func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
+func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Compact")
 	defer sp.End()
 
@@ -762,14 +762,14 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 	if f.footerRecord != nil && codec.IsCompacted(f.footerRecord.Flags) {
 		logger.Ctx(ctx).Info("segment is already compacted, skipping",
 			zap.String("segmentFileKey", f.segmentFileKey))
-		return []int64{}, nil
+		return -1, nil
 	}
 
 	// Ensure segment is finalized before compaction
 	if f.footerRecord == nil {
 		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
 			zap.String("segmentFileKey", f.segmentFileKey))
-		return nil, fmt.Errorf("segment must be finalized before compaction")
+		return -1, fmt.Errorf("segment must be finalized before compaction")
 	}
 
 	// Get target block size for compaction (use maxFlushSize as target)
@@ -779,18 +779,18 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 	}
 
 	// Stream merge and upload blocks
-	newBlockIndexes, uploadedBlockIDs, err := f.streamMergeAndUploadBlocks(ctx, targetBlockSize)
+	newBlockIndexes, fileSizeAfterCompact, err := f.streamMergeAndUploadBlocks(ctx, targetBlockSize)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to stream merge and upload blocks",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(err))
-		return nil, fmt.Errorf("failed to stream merge and upload blocks: %w", err)
+		return -1, fmt.Errorf("failed to stream merge and upload blocks: %w", err)
 	}
 
 	if len(newBlockIndexes) == 0 {
 		logger.Ctx(ctx).Info("no blocks to compact",
 			zap.String("segmentFileKey", f.segmentFileKey))
-		return []int64{}, nil
+		return -1, nil
 	}
 
 	// Create new footer with compacted flag
@@ -813,7 +813,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 		logger.Ctx(ctx).Warn("failed to upload compacted footer",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(putErr))
-		return nil, fmt.Errorf("failed to upload compacted footer: %w", putErr)
+		return -1, fmt.Errorf("failed to upload compacted footer: %w", putErr)
 	}
 
 	// Update internal state
@@ -825,9 +825,9 @@ func (f *MinioFileWriter) Compact(ctx context.Context) ([]int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
-		zap.Int("uploadedBlocks", len(uploadedBlockIDs)))
+		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact))
 
-	return uploadedBlockIDs, nil
+	return fileSizeAfterCompact, nil
 }
 
 // Sync Implement sync logic, e.g., flush to persistent storage
@@ -1519,9 +1519,9 @@ func (f *MinioFileWriter) serialize(entries []*cache.BufferEntry) []byte {
 }
 
 // streamMergeAndUploadBlocks streams through blocks, merges them and uploads immediately
-func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, targetBlockSize int64) ([]*codec.IndexRecord, []int64, error) {
+func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, targetBlockSize int64) ([]*codec.IndexRecord, int64, error) {
 	if len(f.blockIndexes) == 0 {
-		return nil, nil, nil
+		return nil, -1, nil
 	}
 
 	// Sort blocks by block number to ensure correct order
@@ -1530,7 +1530,6 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 	})
 
 	var newBlockIndexes []*codec.IndexRecord
-	var uploadedBlockIDs []int64
 	var currentMergedBlock []byte
 	var currentMergedSize int64
 	var currentEntryID int64
@@ -1544,19 +1543,22 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 		currentEntryID = 0
 	}
 
+	// Track file size after compact
+	fileSizeAfterCompact := int64(0)
+
 	// Helper function to upload current merged block
 	uploadCurrentBlock := func() error {
 		if len(currentMergedBlock) == 0 {
 			return nil
 		}
 
-		blockIndex, blockID, err := f.uploadSingleMergedBlock(ctx, currentMergedBlock, mergedBlockID, currentEntryID, isFirstMergedBlock)
+		blockIndex, blockSizeAfterCompact, err := f.uploadSingleMergedBlock(ctx, currentMergedBlock, mergedBlockID, currentEntryID, isFirstMergedBlock)
 		if err != nil {
 			return err
 		}
 
 		newBlockIndexes = append(newBlockIndexes, blockIndex)
-		uploadedBlockIDs = append(uploadedBlockIDs, blockID)
+		fileSizeAfterCompact += blockSizeAfterCompact
 
 		// Update for next block
 		currentEntryID = blockIndex.LastEntryID + 1
@@ -1578,7 +1580,7 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("blockKey", blockKey),
 				zap.Error(err))
-			return nil, nil, fmt.Errorf("failed to read block %d: %w", blockIndex.BlockNumber, err)
+			return nil, -1, fmt.Errorf("failed to read block %d: %w", blockIndex.BlockNumber, err)
 		}
 
 		// Extract only data records (skip header and block last records)
@@ -1588,14 +1590,14 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("blockKey", blockKey),
 				zap.Error(err))
-			return nil, nil, fmt.Errorf("failed to extract data records from block %d: %w", blockIndex.BlockNumber, err)
+			return nil, -1, fmt.Errorf("failed to extract data records from block %d: %w", blockIndex.BlockNumber, err)
 		}
 
 		// Check if adding this block would exceed target size
 		if currentMergedSize+int64(len(dataRecords)) > targetBlockSize && len(currentMergedBlock) > 0 {
 			// Upload current merged block before continuing
 			if err := uploadCurrentBlock(); err != nil {
-				return nil, nil, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, err)
+				return nil, -1, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, err)
 			}
 		}
 
@@ -1613,16 +1615,17 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 	// Upload the last merged block if it has data
 	if len(currentMergedBlock) > 0 {
 		if err := uploadCurrentBlock(); err != nil {
-			return nil, nil, fmt.Errorf("failed to upload final merged block %d: %w", mergedBlockID, err)
+			return nil, -1, fmt.Errorf("failed to upload final merged block %d: %w", mergedBlockID, err)
 		}
 	}
 
 	logger.Ctx(ctx).Info("completed streaming merge and upload",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", len(f.blockIndexes)),
-		zap.Int("mergedBlockCount", len(newBlockIndexes)))
+		zap.Int("mergedBlockCount", len(newBlockIndexes)),
+		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact))
 
-	return newBlockIndexes, uploadedBlockIDs, nil
+	return newBlockIndexes, fileSizeAfterCompact, nil
 }
 
 // readBlockData reads the complete data of a block
@@ -1668,7 +1671,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 	// Count data records to calculate entry range
 	records, err := codec.DecodeRecordList(mergedBlockData)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to decode merged block data: %w", err)
+		return nil, -1, fmt.Errorf("failed to decode merged block data: %w", err)
 	}
 
 	dataRecordCount := 0
@@ -1716,7 +1719,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("mergedBlockKey", mergedBlockKey),
 			zap.Error(putErr))
-		return nil, 0, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, putErr)
+		return nil, -1, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, putErr)
 	}
 
 	// Create index record for the merged block
@@ -1735,7 +1738,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 		zap.Int64("blockLastEntryID", blockLastEntryID),
 		zap.Int("blockSize", len(completeBlockData)))
 
-	return indexRecord, mergedBlockID, nil
+	return indexRecord, int64(len(completeBlockData)), nil
 }
 
 // serializeCompactedFooterAndIndexes serializes the footer and indexes for compacted segment

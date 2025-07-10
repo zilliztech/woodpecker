@@ -1136,20 +1136,14 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.Int64("compactedLastEntryId", compactSegMetaInfo.LastEntryId),
 		zap.Int64("compactedSize", compactSegMetaInfo.Size),
-		zap.Int64("completionTime", compactSegMetaInfo.CompletionTime),
-		zap.Int("entryOffsetCount", len(compactSegMetaInfo.EntryOffset)),
-		zap.Int("fragmentOffsetCount", len(compactSegMetaInfo.FragmentOffset)))
+		zap.Int64("completionTime", compactSegMetaInfo.SealedTime))
 
 	// update segment state and meta
 	newSegmentMeta := currentSegmentMeta.CloneVT()
 	newSegmentMeta.State = proto.SegmentState_Sealed
-	newSegmentMeta.LastEntryId = compactSegMetaInfo.LastEntryId
-	newSegmentMeta.CompletionTime = compactSegMetaInfo.CompletionTime
+	newSegmentMeta.SealedTime = compactSegMetaInfo.CompletionTime
 	newSegmentMeta.Size = compactSegMetaInfo.Size
-	newSegmentMeta.EntryOffset = compactSegMetaInfo.EntryOffset       // sparse index
-	newSegmentMeta.FragmentOffset = compactSegMetaInfo.FragmentOffset //
 	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after compaction",

@@ -19,7 +19,6 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path"
 	"sync"
@@ -408,7 +407,7 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId))
 
-	entryOffset, mergedErr := writer.Compact(ctx)
+	segmentSizeAfterCompact, mergedErr := writer.Compact(ctx)
 	if mergedErr != nil {
 		logger.Ctx(ctx).Warn("Segment merge operation failed",
 			zap.Int64("logId", s.logId),
@@ -418,44 +417,18 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 		return nil, mergedErr
 	}
 
-	if len(entryOffset) == 0 {
-		logger.Ctx(ctx).Info("No fragments found to merge during compaction",
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segId),
-			zap.Duration("duration", time.Since(start)))
-		return nil, errors.New("no frags to merge")
-	}
-
-	logger.Ctx(ctx).Info("Segment merge completed, processing merged fragments",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId),
-		zap.Int("entryOffsetCount", len(entryOffset)))
-
-	totalSize := int64(0)
-
-	logger.Ctx(ctx).Info("Compact segment merge completed",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId),
-		zap.Int64("totalSize", totalSize))
-
 	compactionDuration := time.Since(start)
 	logger.Ctx(ctx).Info("Segment processor compact operation completed successfully",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
 		zap.Duration("totalDuration", compactionDuration),
-		zap.Int64("finalSize", totalSize),
+		zap.Int64("segmentSizeAfterCompact", segmentSizeAfterCompact),
 		zap.String("finalState", "Sealed"))
 
-	// TODO 可能要移除meta中的offset信息,meta不需要记录这些信息
-	offsets := make([]int32, len(entryOffset))
-	for i, offset := range entryOffset {
-		offsets[i] = int32(offset)
-	}
 	return &proto.SegmentMetadata{
-		State:       proto.SegmentState_Sealed,
-		SealedTime:  time.Now().UnixMilli(),
-		Size:        totalSize,
-		EntryOffset: offsets,
+		State:      proto.SegmentState_Sealed,
+		SealedTime: time.Now().UnixMilli(),
+		Size:       segmentSizeAfterCompact,
 	}, nil
 }
 
