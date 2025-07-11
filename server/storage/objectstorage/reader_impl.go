@@ -525,14 +525,14 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	defer sp.End()
 
 	logger.Ctx(ctx).Debug("ReadNextBatch called",
-		zap.Int64("startSequenceNum", opt.StartSequenceNum),
+		zap.Int64("startEntryID", opt.StartEntryID),
 		zap.Int64("batchSize", opt.BatchSize),
 		zap.Bool("isCompleted", f.isCompleted.Load()),
 		zap.Bool("isFenced", f.isFenced.Load()))
 
 	// For incomplete files, try to scan for new blocks if we don't have enough data
 	if !f.isCompleted.Load() && !f.isFenced.Load() {
-		if err := f.ensureSufficientBlocks(ctx, opt.StartSequenceNum, opt.BatchSize); err != nil {
+		if err := f.ensureSufficientBlocks(ctx, opt.StartEntryID, opt.BatchSize); err != nil {
 			logger.Ctx(ctx).Warn("failed to scan for new blocks", zap.Error(err))
 			// Continue with existing blocks even if scan fails
 		}
@@ -556,9 +556,9 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 			zap.Int32("blockNumber", block.BlockNumber),
 			zap.Int64("blockFirstEntryID", block.FirstEntryID),
 			zap.Int64("blockLastEntryID", block.LastEntryID),
-			zap.Int64("startSequenceNum", opt.StartSequenceNum))
+			zap.Int64("startEntryID", opt.StartEntryID))
 
-		if block.FirstEntryID <= opt.StartSequenceNum && opt.StartSequenceNum <= block.LastEntryID {
+		if block.FirstEntryID <= opt.StartEntryID && opt.StartEntryID <= block.LastEntryID {
 			startBlockIndex = i
 			logger.Ctx(ctx).Debug("found matching block",
 				zap.Int("startBlockIndex", startBlockIndex),
@@ -569,7 +569,7 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 
 	if startBlockIndex == -1 {
 		logger.Ctx(ctx).Warn("no block found for start sequence number",
-			zap.Int64("startSequenceNum", opt.StartSequenceNum),
+			zap.Int64("startEntryID", opt.StartEntryID),
 			zap.Int("totalBlocks", len(allBlocks)))
 		return nil, werr.ErrEntryNotFound
 	}
@@ -577,13 +577,13 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	if opt.BatchSize == -1 || f.isCompacted.Load() {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
 		logger.Ctx(ctx).Debug("using single block mode")
-		return f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartSequenceNum)
+		return f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartEntryID)
 	} else {
 		// Specified batch size mode: read across multiple blocks if necessary to get the requested number of entries
 		logger.Ctx(ctx).Debug("using multiple blocks mode",
 			zap.Int("startBlockIndex", startBlockIndex),
 			zap.Int64("batchSize", opt.BatchSize))
-		return f.readMultipleBlocks(ctx, allBlocks, startBlockIndex, opt.StartSequenceNum, opt.BatchSize)
+		return f.readMultipleBlocks(ctx, allBlocks, startBlockIndex, opt.StartEntryID, opt.BatchSize)
 	}
 }
 
@@ -651,7 +651,7 @@ func (f *MinioFileReader) getBlockObjectKey(blockNumber int64) string {
 }
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID
-func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startSequenceNum int64) ([]*proto.LogEntry, error) {
+func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startEntryID int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
 	blockObjKey := f.getBlockObjectKey(int64(blockInfo.BlockNumber))
@@ -703,7 +703,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 			continue
 		}
 		// Only include entries from the start sequence number onwards
-		if currentEntryID >= startSequenceNum {
+		if currentEntryID >= startEntryID {
 			r := records[j].(*codec.DataRecord)
 			entry := &proto.LogEntry{
 				EntryId: currentEntryID,
@@ -717,7 +717,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	logger.Ctx(ctx).Debug("read single block completed",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-		zap.Int64("startSequenceNum", startSequenceNum),
+		zap.Int64("startEntryID", startEntryID),
 		zap.Int("entriesReturned", len(entries)))
 
 	return entries, nil

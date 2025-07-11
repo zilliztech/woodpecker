@@ -865,12 +865,12 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 }
 
 // readMultipleBlocks reads across multiple blocks to get the specified number of entries
-func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startSequenceNum int64, batchSize int64) ([]*proto.LogEntry, error) {
+func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startEntryID int64, batchSize int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("readMultipleBlocks started",
 		zap.Int("startBlockIndex", startBlockIndex),
-		zap.Int64("startSequenceNum", startSequenceNum),
+		zap.Int64("startEntryID", startEntryID),
 		zap.Int64("batchSize", batchSize),
 		zap.Int("totalBlocks", len(allBlocks)))
 
@@ -945,7 +945,7 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				zap.Int("recordIndex", recordIndex),
 				zap.Uint8("recordType", record.Type()),
 				zap.Int64("currentEntryID", currentEntryID),
-				zap.Int64("startSequenceNum", startSequenceNum),
+				zap.Int64("startEntryID", startEntryID),
 				zap.Int64("entriesCollected", entriesCollected),
 				zap.Int64("batchSize", batchSize))
 
@@ -959,7 +959,7 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 			if record.Type() == codec.DataRecordType {
 				// Check if this entry should be included
-				if currentEntryID >= startSequenceNum && entriesCollected < batchSize {
+				if currentEntryID >= startEntryID && entriesCollected < batchSize {
 					dataRecord := record.(*codec.DataRecord)
 					entry := &proto.LogEntry{
 						EntryId: currentEntryID,
