@@ -291,7 +291,7 @@ func (l *logWriterImpl) runAuditor() {
 					continue
 				}
 				stateBefore := seg.State
-				if stateBefore == proto.SegmentState_Completed || stateBefore == proto.SegmentState_Active {
+				if stateBefore == proto.SegmentState_Completed {
 					segmentsProcessed++
 					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.SegNo)
 					if getRecoverySegmentHandleErr != nil {
@@ -299,7 +299,7 @@ func (l *logWriterImpl) runAuditor() {
 						segmentsFailed++
 						continue
 					}
-					maintainErr := recoverySegmentHandle.RecoveryOrCompact(context.TODO())
+					maintainErr := recoverySegmentHandle.Compact(context.TODO())
 					if maintainErr != nil {
 						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.SegNo), zap.Error(maintainErr))
 						segmentsFailed++
@@ -552,11 +552,11 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	l.writerClose <- struct{}{}
 	close(l.writerClose)
 	status := "success"
-	closeErr := l.logHandle.CloseAndCompleteCurrentWritableSegment(ctx)
+	closeErr := l.logHandle.Close(ctx)
 	if closeErr != nil {
 		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
 		status = "error"
-		if werr.ErrSegmentNotFound.Is(closeErr) {
+		if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
 			closeErr = nil
 			status = "success"
 		}

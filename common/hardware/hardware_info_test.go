@@ -13,12 +13,12 @@ package hardware
 
 import (
 	"context"
-	"github.com/zilliztech/woodpecker/common/config"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 

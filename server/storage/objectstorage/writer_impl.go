@@ -1339,21 +1339,6 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 	return f.lastEntryID.Load(), nil
 }
 
-func (f *MinioFileWriter) Recover(ctx context.Context) (int64, int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Recover")
-	defer sp.End()
-	if f.recovered.Load() {
-		return f.lastEntryID.Load(), f.lastModifiedTime, nil
-	}
-
-	recoverErr := f.recoverFromStorage(ctx)
-	if recoverErr != nil {
-		return -1, -1, recoverErr
-	}
-
-	return f.lastEntryID.Load(), f.lastModifiedTime, nil
-}
-
 func (f *MinioFileWriter) prepareMultiBlockDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64, []int64) {
 	if len(toFlushData) == 0 {
 		return nil, nil, nil

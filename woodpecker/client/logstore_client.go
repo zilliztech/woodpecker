@@ -37,8 +37,6 @@ type LogStoreClient interface {
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
 	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
-	// SegmentRecoveryFromInProgress recovers the specified log segment from the InProgress state and returns the updated metadata and an error if any.
-	SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
 	SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
@@ -75,10 +73,6 @@ func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int
 
 func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	return l.store.CompactSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.RecoverySegmentFromInProgress(ctx, logId, segmentId)
 }
 
 func (l *logStoreClientLocal) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
@@ -124,11 +118,6 @@ func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId in
 }
 
 func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
 	//TODO implement me
 	panic("implement me")
 }

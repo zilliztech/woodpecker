@@ -260,9 +260,9 @@ func (_c *LogStoreClient_GetLastAddConfirmed_Call) RunAndReturn(run func(context
 	return _c
 }
 
-// ReadEntriesBatch provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, size
-func (_m *LogStoreClient) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64) ([]*processor.SegmentEntry, error) {
-	ret := _m.Called(ctx, logId, segmentId, fromEntryId, size)
+// ReadEntriesBatch provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, maxSize
+func (_m *LogStoreClient) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {
+	ret := _m.Called(ctx, logId, segmentId, fromEntryId, maxSize)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadEntriesBatch")
@@ -271,10 +271,10 @@ func (_m *LogStoreClient) ReadEntriesBatch(ctx context.Context, logId int64, seg
 	var r0 []*processor.SegmentEntry
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)); ok {
-		return rf(ctx, logId, segmentId, fromEntryId, size)
+		return rf(ctx, logId, segmentId, fromEntryId, maxSize)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64) []*processor.SegmentEntry); ok {
-		r0 = rf(ctx, logId, segmentId, fromEntryId, size)
+		r0 = rf(ctx, logId, segmentId, fromEntryId, maxSize)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*processor.SegmentEntry)
@@ -282,7 +282,7 @@ func (_m *LogStoreClient) ReadEntriesBatch(ctx context.Context, logId int64, seg
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId, fromEntryId, size)
+		r1 = rf(ctx, logId, segmentId, fromEntryId, maxSize)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -300,12 +300,12 @@ type LogStoreClient_ReadEntriesBatch_Call struct {
 //   - logId int64
 //   - segmentId int64
 //   - fromEntryId int64
-//   - size int64
-func (_e *LogStoreClient_Expecter) ReadEntriesBatch(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, size interface{}) *LogStoreClient_ReadEntriesBatch_Call {
-	return &LogStoreClient_ReadEntriesBatch_Call{Call: _e.mock.On("ReadEntriesBatch", ctx, logId, segmentId, fromEntryId, size)}
+//   - maxSize int64
+func (_e *LogStoreClient_Expecter) ReadEntriesBatch(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxSize interface{}) *LogStoreClient_ReadEntriesBatch_Call {
+	return &LogStoreClient_ReadEntriesBatch_Call{Call: _e.mock.On("ReadEntriesBatch", ctx, logId, segmentId, fromEntryId, maxSize)}
 }
 
-func (_c *LogStoreClient_ReadEntriesBatch_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, size int64)) *LogStoreClient_ReadEntriesBatch_Call {
+func (_c *LogStoreClient_ReadEntriesBatch_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64)) *LogStoreClient_ReadEntriesBatch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64))
 	})
@@ -427,66 +427,6 @@ func (_c *LogStoreClient_SegmentCompact_Call) Return(_a0 *proto.SegmentMetadata,
 }
 
 func (_c *LogStoreClient_SegmentCompact_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentCompact_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SegmentRecoveryFromInProgress provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) SegmentRecoveryFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx, logId, segmentId)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SegmentRecoveryFromInProgress")
-	}
-
-	var r0 *proto.SegmentMetadata
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx, logId, segmentId)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx, logId, segmentId)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*proto.SegmentMetadata)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// LogStoreClient_SegmentRecoveryFromInProgress_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SegmentRecoveryFromInProgress'
-type LogStoreClient_SegmentRecoveryFromInProgress_Call struct {
-	*mock.Call
-}
-
-// SegmentRecoveryFromInProgress is a helper method to define mock.On call
-//   - ctx context.Context
-//   - logId int64
-//   - segmentId int64
-func (_e *LogStoreClient_Expecter) SegmentRecoveryFromInProgress(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_SegmentRecoveryFromInProgress_Call {
-	return &LogStoreClient_SegmentRecoveryFromInProgress_Call{Call: _e.mock.On("SegmentRecoveryFromInProgress", ctx, logId, segmentId)}
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInProgress_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_SegmentRecoveryFromInProgress_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
-	})
-	return _c
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInProgress_Call) Return(_a0 *proto.SegmentMetadata, _a1 error) *LogStoreClient_SegmentRecoveryFromInProgress_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *LogStoreClient_SegmentRecoveryFromInProgress_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentRecoveryFromInProgress_Call {
 	_c.Call.Return(run)
 	return _c
 }

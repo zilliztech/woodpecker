@@ -54,7 +54,6 @@ type LogStore interface {
 	FenceSegment(context.Context, int64, int64) (int64, error)
 	CompleteSegment(context.Context, int64, int64) (int64, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
-	RecoverySegmentFromInProgress(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
 	CleanSegment(context.Context, int64, int64, int) error
 }
@@ -368,33 +367,6 @@ func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId in
 
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "compact_segment", "success").Inc()
 	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "compact_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
-	return metadata, nil
-}
-
-// RecoverySegmentFromInProgress read logFiles to get meta info
-func (l *logStore) RecoverySegmentFromInProgress(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "RecoverySegmentFromInProgress")
-	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
-
-	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
-	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "recovery_segment", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "recovery_segment", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("recover segment in-progress failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
-		return nil, err
-	}
-	metadata, err := segmentProcessor.Recover(ctx)
-	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "recovery_segment", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "recovery_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("recover segment in-progress failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
-		return nil, err
-	}
-
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "recovery_segment", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "recovery_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return metadata, nil
 }
 

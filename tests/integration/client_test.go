@@ -1805,7 +1805,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 				emptyWriter, createEmptyWriterErr := logHandle.OpenLogWriter(ctx)
 				assert.NoError(t, createEmptyWriterErr)
 				closeEmptyWriterErr := emptyWriter.Close(ctx)
-				assert.NoError(t, closeEmptyWriterErr)
+				assert.NoError(t, closeEmptyWriterErr, fmt.Sprintf("%v", closeEmptyWriterErr))
 
 				t.Logf("====== Completed Test Cycle %d/%d Successfully ======", cycle+1, testCycles)
 			}

@@ -59,17 +59,17 @@ func (_c *SegmentHandle_AppendAsync_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
-// CloseWritingAndUpdateMetaIfNecessary provides a mock function with given fields: _a0, _a1
-func (_m *SegmentHandle) CloseWritingAndUpdateMetaIfNecessary(_a0 context.Context, _a1 int64) error {
-	ret := _m.Called(_a0, _a1)
+// Compact provides a mock function with given fields: _a0
+func (_m *SegmentHandle) Compact(_a0 context.Context) error {
+	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
-		panic("no return value specified for CloseWritingAndUpdateMetaIfNecessary")
+		panic("no return value specified for Compact")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -77,31 +77,30 @@ func (_m *SegmentHandle) CloseWritingAndUpdateMetaIfNecessary(_a0 context.Contex
 	return r0
 }
 
-// SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CloseWritingAndUpdateMetaIfNecessary'
-type SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call struct {
+// SegmentHandle_Compact_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Compact'
+type SegmentHandle_Compact_Call struct {
 	*mock.Call
 }
 
-// CloseWritingAndUpdateMetaIfNecessary is a helper method to define mock.On call
+// Compact is a helper method to define mock.On call
 //   - _a0 context.Context
-//   - _a1 int64
-func (_e *SegmentHandle_Expecter) CloseWritingAndUpdateMetaIfNecessary(_a0 interface{}, _a1 interface{}) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
-	return &SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call{Call: _e.mock.On("CloseWritingAndUpdateMetaIfNecessary", _a0, _a1)}
+func (_e *SegmentHandle_Expecter) Compact(_a0 interface{}) *SegmentHandle_Compact_Call {
+	return &SegmentHandle_Compact_Call{Call: _e.mock.On("Compact", _a0)}
 }
 
-func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) Run(run func(_a0 context.Context, _a1 int64)) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
+func (_c *SegmentHandle_Compact_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Compact_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64))
+		run(args[0].(context.Context))
 	})
 	return _c
 }
 
-func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) Return(_a0 error) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
+func (_c *SegmentHandle_Compact_Call) Return(_a0 error) *SegmentHandle_Compact_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call) RunAndReturn(run func(context.Context, int64) error) *SegmentHandle_CloseWritingAndUpdateMetaIfNecessary_Call {
+func (_c *SegmentHandle_Compact_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_Compact_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -214,6 +213,52 @@ func (_c *SegmentHandle_Fence_Call) Return(_a0 int64, _a1 error) *SegmentHandle_
 }
 
 func (_c *SegmentHandle_Fence_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentHandle_Fence_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ForceCompleteAndClose provides a mock function with given fields: ctx
+func (_m *SegmentHandle) ForceCompleteAndClose(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ForceCompleteAndClose")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// SegmentHandle_ForceCompleteAndClose_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ForceCompleteAndClose'
+type SegmentHandle_ForceCompleteAndClose_Call struct {
+	*mock.Call
+}
+
+// ForceCompleteAndClose is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) ForceCompleteAndClose(ctx interface{}) *SegmentHandle_ForceCompleteAndClose_Call {
+	return &SegmentHandle_ForceCompleteAndClose_Call{Call: _e.mock.On("ForceCompleteAndClose", ctx)}
+}
+
+func (_c *SegmentHandle_ForceCompleteAndClose_Call) Run(run func(ctx context.Context)) *SegmentHandle_ForceCompleteAndClose_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_ForceCompleteAndClose_Call) Return(_a0 error) *SegmentHandle_ForceCompleteAndClose_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *SegmentHandle_ForceCompleteAndClose_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_ForceCompleteAndClose_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -618,62 +663,6 @@ func (_c *SegmentHandle_GetSize_Call) RunAndReturn(run func(context.Context) int
 	return _c
 }
 
-// IsFence provides a mock function with given fields: _a0
-func (_m *SegmentHandle) IsFence(_a0 context.Context) (bool, error) {
-	ret := _m.Called(_a0)
-
-	if len(ret) == 0 {
-		panic("no return value specified for IsFence")
-	}
-
-	var r0 bool
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
-		return rf(_a0)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
-		r0 = rf(_a0)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentHandle_IsFence_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsFence'
-type SegmentHandle_IsFence_Call struct {
-	*mock.Call
-}
-
-// IsFence is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) IsFence(_a0 interface{}) *SegmentHandle_IsFence_Call {
-	return &SegmentHandle_IsFence_Call{Call: _e.mock.On("IsFence", _a0)}
-}
-
-func (_c *SegmentHandle_IsFence_Call) Run(run func(_a0 context.Context)) *SegmentHandle_IsFence_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_IsFence_Call) Return(_a0 bool, _a1 error) *SegmentHandle_IsFence_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentHandle_IsFence_Call) RunAndReturn(run func(context.Context) (bool, error)) *SegmentHandle_IsFence_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // IsForceRollingReady provides a mock function with given fields: _a0
 func (_m *SegmentHandle) IsForceRollingReady(_a0 context.Context) bool {
 	ret := _m.Called(_a0)
@@ -832,52 +821,6 @@ func (_c *SegmentHandle_ReadBatch_Call) Return(_a0 []*processor.SegmentEntry, _a
 }
 
 func (_c *SegmentHandle_ReadBatch_Call) RunAndReturn(run func(context.Context, int64, int64) ([]*processor.SegmentEntry, error)) *SegmentHandle_ReadBatch_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RecoveryOrCompact provides a mock function with given fields: _a0
-func (_m *SegmentHandle) RecoveryOrCompact(_a0 context.Context) error {
-	ret := _m.Called(_a0)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RecoveryOrCompact")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(_a0)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// SegmentHandle_RecoveryOrCompact_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RecoveryOrCompact'
-type SegmentHandle_RecoveryOrCompact_Call struct {
-	*mock.Call
-}
-
-// RecoveryOrCompact is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) RecoveryOrCompact(_a0 interface{}) *SegmentHandle_RecoveryOrCompact_Call {
-	return &SegmentHandle_RecoveryOrCompact_Call{Call: _e.mock.On("RecoveryOrCompact", _a0)}
-}
-
-func (_c *SegmentHandle_RecoveryOrCompact_Call) Run(run func(_a0 context.Context)) *SegmentHandle_RecoveryOrCompact_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_RecoveryOrCompact_Call) Return(_a0 error) *SegmentHandle_RecoveryOrCompact_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *SegmentHandle_RecoveryOrCompact_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_RecoveryOrCompact_Call {
 	_c.Call.Return(run)
 	return _c
 }

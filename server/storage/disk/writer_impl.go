@@ -848,24 +848,6 @@ func (w *LocalFileWriter) Compact(ctx context.Context) (int64, error) {
 	return -1, werr.ErrSegmentNotFound.WithCauseErrMsg("not need to compact local file currently")
 }
 
-// Recover recovers writer state from existing file
-func (w *LocalFileWriter) Recover(ctx context.Context) (int64, int64, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Recover")
-	defer sp.End()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.recovered.Load() {
-		return w.lastEntryID.Load(), w.lastModifiedTime.UnixMilli(), nil
-	}
-
-	recoverErr := w.recoverFromExistingFileUnsafe(ctx)
-	if recoverErr != nil {
-		return -1, -1, recoverErr
-	}
-
-	return w.lastEntryID.Load(), w.lastModifiedTime.UnixMilli(), nil
-}
-
 // recoverFromExistingFile attempts to recover state from an existing incomplete file
 func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverFromExistingFile")

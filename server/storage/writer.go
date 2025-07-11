@@ -46,9 +46,6 @@ type Writer interface {
 	// Fence returns the last entry ID
 	Fence(ctx context.Context) (int64, error)
 
-	// Recover returns file size and last modified time
-	Recover(ctx context.Context) (int64, int64, error)
-
 	// Compact small blocks into larger blocks, return size after compacted
 	Compact(ctx context.Context) (int64, error)
 }

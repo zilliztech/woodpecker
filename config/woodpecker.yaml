@@ -40,10 +40,10 @@ woodpecker:
       maxBytes: 256000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
-      maxFlushSize: 4000000 # Maximum size of a fragment in bytes to flush, default is 4MB, which is the best practice for cloud storage
+      maxFlushSize: 4000000 # Maximum size of a block in bytes to flush, default is 4MB, which is the best practice for cloud storage
       maxFlushThreads: 64 # Maximum number of threads to flush data
     segmentCompactionPolicy:
-      maxBytes: 4000000 # Maximum size of a merged file in bytes after compact, default is 4M
+      maxBytes: 4000000 # Maximum size of a merged block in bytes after compact, default is 4M
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

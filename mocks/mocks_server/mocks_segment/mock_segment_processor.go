@@ -599,64 +599,6 @@ func (_c *SegmentProcessor_ReadBatchEntries_Call) RunAndReturn(run func(context.
 	return _c
 }
 
-// Recover provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Recover")
-	}
-
-	var r0 *proto.SegmentMetadata
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*proto.SegmentMetadata)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// SegmentProcessor_Recover_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Recover'
-type SegmentProcessor_Recover_Call struct {
-	*mock.Call
-}
-
-// Recover is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *SegmentProcessor_Expecter) Recover(ctx interface{}) *SegmentProcessor_Recover_Call {
-	return &SegmentProcessor_Recover_Call{Call: _e.mock.On("Recover", ctx)}
-}
-
-func (_c *SegmentProcessor_Recover_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Recover_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentProcessor_Recover_Call) Return(_a0 *proto.SegmentMetadata, _a1 error) *SegmentProcessor_Recover_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *SegmentProcessor_Recover_Call) RunAndReturn(run func(context.Context) (*proto.SegmentMetadata, error)) *SegmentProcessor_Recover_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // NewSegmentProcessor creates a new instance of SegmentProcessor. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewSegmentProcessor(t interface {

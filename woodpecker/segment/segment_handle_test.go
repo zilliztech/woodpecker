@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,12 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
 )
+
+func init() {
+	cfg, _ := config.NewConfiguration()
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+}
 
 func TestNewSegmentHandle(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
@@ -189,6 +196,8 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
 		ch := make(chan int64, 1)
@@ -437,8 +446,8 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
-	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), mock.Anything).Return(0, nil)
-	//mockClient.EXPECT().IsSegmentFenced(mock.Anything, int64(1), mock.Anything).Return(true, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(0, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(0, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -471,7 +480,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // Give some time for the async operation to complete
 	assert.True(t, callbackCalled)
 
-	closeErr := segmentHandle.CloseWritingAndUpdateMetaIfNecessary(context.Background(), lastEntryId)
+	closeErr := segmentHandle.ForceCompleteAndClose(context.Background())
 	assert.NoError(t, closeErr)
 }
 
@@ -544,6 +553,8 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 func TestSendAppendErrorCallbacks(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -591,6 +602,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		testQueue.PushBack(op)
 	}
 
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(4, nil)
 	// success 3-9, but 0-2 is not finish
 	for i := 0; i < 10; i++ {
 		if i == 5 {
@@ -770,4 +782,507 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	assert.False(t, failCallbacks[0], "Entry 0 should not fail")
 	assert.False(t, failCallbacks[1], "Entry 1 should not fail")
 	assert.False(t, successCallbacks[2], "Entry 2 should not succeed")
+}
+
+// TestSegmentHandle_SetRollingReady_RejectNewAppends tests that once segment is marked as rolling,
+// new append operations are rejected with ErrSegmentHandleSegmentRolling
+func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	// Mark segment as rolling
+	segmentHandle.SetRollingReady(context.Background())
+
+	// Verify that IsForceRollingReady returns true
+	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
+
+	// Try to append after rolling - should be rejected
+	callbackCalled := false
+	var receivedErr error
+	callback := func(segmentId int64, entryId int64, err error) {
+		callbackCalled = true
+		receivedErr = err
+	}
+
+	segmentHandle.AppendAsync(context.Background(), []byte("test"), callback)
+
+	// Give some time for the callback to be called
+	time.Sleep(100 * time.Millisecond)
+
+	assert.True(t, callbackCalled)
+	assert.Error(t, receivedErr)
+	assert.True(t, werr.ErrSegmentHandleSegmentRolling.Is(receivedErr))
+}
+
+// TestSegmentHandle_Rolling_AutoCompleteAndClose tests that when segment is marked as rolling
+// and all pending appendOps are completed, the segment automatically calls doCompleteAndCloseUnsafe
+func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+
+	testQueue := list.New()
+	segmentHandle := NewSegmentHandleWithAppendOpsQueueWithWritable(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true)
+
+	// Add some pending append operations
+	callbackResults := make([]bool, 3)
+	for i := 0; i < 3; i++ {
+		entryIndex := i
+		callback := func(segmentId int64, entryId int64, opErr error) {
+			callbackResults[entryIndex] = (opErr == nil)
+		}
+
+		op := NewAppendOp(
+			1,
+			1,
+			int64(entryIndex),
+			[]byte(fmt.Sprintf("test_%d", entryIndex)),
+			callback,
+			mockClientPool,
+			segmentHandle,
+			nil,
+			1)
+		testQueue.PushBack(op)
+	}
+
+	// Verify we have pending operations
+	assert.Equal(t, 3, testQueue.Len())
+
+	// Check if segment is writable - before auto completeAndClose
+	writable, _ := segmentHandle.IsWritable(context.Background())
+	assert.True(t, writable)
+
+	// Mark segment as rolling
+	segmentHandle.SetRollingReady(context.Background())
+
+	// Complete all pending operations by marking them as completed and triggering callbacks
+	for i := 0; i < 3; i++ {
+		entryIndex := i
+		// Find the operation in the queue
+		for e := testQueue.Front(); e != nil; e = e.Next() {
+			op := e.Value.(*AppendOp)
+			if op.entryId == int64(entryIndex) {
+				op.ackSet.Set(0)
+				op.completed.Store(true)
+				break
+			}
+		}
+		// Trigger success callback - this should trigger auto-close when queue becomes empty
+		segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(i))
+	}
+
+	// Give some time for the segment to auto-close
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify all callbacks were successful
+	for i := 0; i < 3; i++ {
+		assert.True(t, callbackResults[i], fmt.Sprintf("Entry %d should succeed", i))
+	}
+
+	// Verify the queue is empty (this is the key indicator that auto-close happened)
+	assert.Equal(t, 0, testQueue.Len())
+
+	// Check if segment is not writable - because it is successfully CompleteAndClose
+	writable, _ = segmentHandle.IsWritable(context.Background())
+	assert.False(t, writable)
+}
+
+// TestSegmentHandle_Rolling_CompleteFlow tests the complete rolling flow:
+// 1. Add appendOps to queue
+// 2. Mark rolling (should reject new appends)
+// 3. Complete existing appendOps
+// 4. Verify auto-close when queue becomes empty
+func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+
+	testQueue := list.New()
+	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+
+	// Step 1: Add some pending append operations to the queue
+	callbackResults := make([]error, 3)
+	for i := 0; i < 3; i++ {
+		entryIndex := i
+		callback := func(segmentId int64, entryId int64, err error) {
+			callbackResults[entryIndex] = err
+		}
+
+		op := NewAppendOp(
+			1,
+			1,
+			int64(i),
+			[]byte(fmt.Sprintf("test_%d", i)),
+			callback,
+			mockClientPool,
+			segmentHandle,
+			nil,
+			1)
+		testQueue.PushBack(op)
+	}
+
+	// Verify we have pending operations
+	assert.Equal(t, 3, testQueue.Len())
+	assert.False(t, segmentHandle.IsForceRollingReady(context.Background()))
+
+	// Step 2: Mark segment as rolling (should reject new appends)
+	segmentHandle.SetRollingReady(context.Background())
+	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
+
+	// Try to add a new append - should be rejected
+	newAppendRejected := false
+	segmentHandle.AppendAsync(context.Background(), []byte("new_append"), func(segmentId int64, entryId int64, err error) {
+		newAppendRejected = (err != nil && werr.ErrSegmentHandleSegmentRolling.Is(err))
+	})
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, newAppendRejected, "New append after rolling should be rejected")
+
+	// Step 3: Complete existing appendOps one by one
+	for i := 0; i < 3; i++ {
+		// Find the operation in the queue and mark it as completed
+		for e := testQueue.Front(); e != nil; e = e.Next() {
+			op := e.Value.(*AppendOp)
+			if op.entryId == int64(i) {
+				op.ackSet.Set(0)
+				op.completed.Store(true)
+				break
+			}
+		}
+		// Trigger success callback - this should trigger auto-close when queue becomes empty
+		segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(i))
+	}
+
+	// Give some time for the auto-close to happen
+	time.Sleep(200 * time.Millisecond)
+
+	// Step 4: Verify all callbacks were successful
+	for i := 0; i < 3; i++ {
+		assert.NoError(t, callbackResults[i], fmt.Sprintf("Entry %d should succeed", i))
+	}
+
+	// Verify the queue is empty (this is the key indicator that auto-close happened)
+	assert.Equal(t, 0, testQueue.Len())
+}
+
+// TestSegmentHandle_Rolling_ErrorTriggersRolling tests that an error in appendOp can trigger rolling
+func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+
+	testQueue := list.New()
+	segmentHandle := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+
+	// Add operations to the queue
+	callbackResults := make([]error, 3)
+	for i := 0; i < 3; i++ {
+		entryIndex := i
+		callback := func(segmentId int64, entryId int64, err error) {
+			callbackResults[entryIndex] = err
+		}
+
+		// Set attempt for entry 1 to ensure it fails
+		// attempt represents current retry count: 1=first try, 2=first retry, etc.
+		// MaxRetries=2 means: attempt < 2 can retry, attempt >= 2 will be removed
+		attempt := 1
+		if i == 1 {
+			attempt = 2 // This will be >= MaxRetries (2), so it will be removed
+		}
+
+		op := NewAppendOp(
+			1,
+			1,
+			int64(i),
+			[]byte(fmt.Sprintf("test_%d", i)),
+			callback,
+			mockClientPool,
+			segmentHandle,
+			nil,
+			attempt)
+		testQueue.PushBack(op)
+	}
+
+	// Initially not rolling
+	assert.False(t, segmentHandle.IsForceRollingReady(context.Background()))
+	assert.Equal(t, 3, testQueue.Len())
+
+	// Trigger error for entry 1 - this should trigger rolling and remove entry 1,2 but keep entry 0
+	segmentHandle.SendAppendErrorCallbacks(context.Background(), int64(1), werr.ErrSegmentHandleWriteFailed)
+
+	// Give some time for processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify rolling was triggered
+	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
+
+	// Verify entry 0 is still in queue (should be 1 remaining)
+	assert.Equal(t, 1, testQueue.Len())
+
+	// Verify callbacks were called for entry 1 and 2 (should fail)
+	for i := 1; i < 3; i++ {
+		assert.Error(t, callbackResults[i], fmt.Sprintf("Entry %d should fail", i))
+	}
+
+	// Now complete entry 0 successfully - this should trigger auto-close since rolling is active
+	for e := testQueue.Front(); e != nil; e = e.Next() {
+		op := e.Value.(*AppendOp)
+		if op.entryId == 0 {
+			op.ackSet.Set(0)
+			op.completed.Store(true)
+			break
+		}
+	}
+	segmentHandle.SendAppendSuccessCallbacks(context.Background(), int64(0))
+
+	// Give some time for auto-close to happen
+	time.Sleep(200 * time.Millisecond)
+
+	// Now the queue should be empty (auto-close happened)
+	assert.Equal(t, 0, testQueue.Len())
+
+	// Entry 0 should have succeeded
+	assert.NoError(t, callbackResults[0], "Entry 0 should succeed")
+}
+
+// TestSegmentHandle_ForceCompleteAndClose_WithRollingState tests ForceCompleteAndClose behavior
+// when segment is in rolling state
+func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+
+	// Create a writable segment handle (canWrite=true is needed for ForceCompleteAndClose to work)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	// Verify initial state
+	writable, err := segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, writable)
+
+	// Mark segment as rolling
+	segmentHandle.SetRollingReady(context.Background())
+	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
+
+	// Force complete and close - this should work regardless of rolling state
+	err = segmentHandle.ForceCompleteAndClose(context.Background())
+	assert.NoError(t, err)
+
+	// Verify the segment is no longer writable after ForceCompleteAndClose
+	writable, err = segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.False(t, writable)
+
+	// Subsequent calls to ForceCompleteAndClose should be safe (no-op for readonly segments)
+	err = segmentHandle.ForceCompleteAndClose(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestSegmentHandle_Rolling_ConcurrentAppends tests rolling behavior with concurrent append attempts
+func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	// First mark segment as rolling
+	segmentHandle.SetRollingReady(context.Background())
+
+	// Then start multiple goroutines trying to append - they should all be rejected
+	numGoroutines := 5
+	results := make([]error, numGoroutines)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			callback := func(segmentId int64, entryId int64, err error) {
+				results[index] = err
+			}
+			segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", index)), callback)
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+
+	// Give some time for callbacks
+	time.Sleep(100 * time.Millisecond)
+
+	// Count how many operations were rejected due to rolling
+	rollingErrors := 0
+	for i := 0; i < numGoroutines; i++ {
+		if results[i] != nil && werr.ErrSegmentHandleSegmentRolling.Is(results[i]) {
+			rollingErrors++
+		}
+	}
+
+	// All operations should be rejected due to rolling since we marked it as rolling first
+	assert.Equal(t, numGoroutines, rollingErrors, "All operations should be rejected due to rolling state")
+}
+
+// TestSegmentHandle_Rolling_StateTransitions tests the state transitions during rolling
+func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &proto.SegmentMetadata{
+		SegNo:       1,
+		State:       proto.SegmentState_Active,
+		LastEntryId: -1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	// Initial state
+	assert.False(t, segmentHandle.IsForceRollingReady(context.Background()))
+	writable, err := segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, writable)
+
+	// Mark as rolling
+	segmentHandle.SetRollingReady(context.Background())
+
+	// Verify rolling state
+	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
+	// Should still be writable until ForceCompleteAndClose is called
+	writable, err = segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, writable)
+
+	// Force complete and close
+	err = segmentHandle.ForceCompleteAndClose(context.Background())
+	assert.NoError(t, err)
+
+	// Verify final state
+	writable, err = segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.False(t, writable)
 }

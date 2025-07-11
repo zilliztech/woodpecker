@@ -43,6 +43,7 @@ const (
 	LogHandleInvalidState
 	LogHandleTruncateFailed
 	LogHandleGetTruncationPointFailed
+	LogHandleFenceFailed
 
 	// segment_handle errors
 	SegmentHandleSegmentFenced
@@ -199,6 +200,7 @@ var (
 	ErrLogHandleInvalidState             = newWoodpeckerError("log handle is in invalid state", LogHandleInvalidState, false)
 	ErrLogHandleTruncateFailed           = newWoodpeckerError("failed to truncate log", LogHandleTruncateFailed, true)
 	ErrLogHandleGetTruncationPointFailed = newWoodpeckerError("failed to get truncation point", LogHandleGetTruncationPointFailed, true)
+	ErrLogHandleFenceFailed              = newWoodpeckerError("failed to fence log", LogHandleFenceFailed, true)
 
 	// segment_handle errors
 	ErrSegmentHandleSegmentClosed       = newWoodpeckerError("segment is closed", SegmentHandleSegmentClosed, true)

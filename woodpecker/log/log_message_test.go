@@ -21,9 +21,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/zilliztech/woodpecker/common/werr"
 	pb "github.com/zilliztech/woodpecker/proto"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestMarshalMessage(t *testing.T) {

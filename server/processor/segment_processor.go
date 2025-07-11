@@ -53,7 +53,6 @@ type SegmentProcessor interface {
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
-	Recover(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
 	GetLastAccessTime() int64
 	Clean(ctx context.Context, flag int) error
@@ -110,6 +109,7 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId))
 
+	// open a writer in recover mode if necessary
 	writer, err := s.getOrCreateSegmentWriter(ctx, true)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to get segment reader for recovery",
@@ -118,7 +118,9 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 			zap.Error(err))
 		return -1, err
 	}
-	lastEntryId, fenceErr := writer.Fence(ctx)
+
+	// fence
+	_, fenceErr := writer.Fence(ctx)
 	if fenceErr != nil {
 		logger.Ctx(ctx).Warn("Failed to fence segment",
 			zap.Int64("logId", s.logId),
@@ -126,13 +128,24 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 			zap.Error(fenceErr))
 		return -1, fenceErr
 	}
+
+	// finalize
+	lastEntryID, finalizeErr := writer.Finalize(ctx)
+	if finalizeErr != nil {
+		logger.Ctx(ctx).Warn("Failed to finalize segment when fencing",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Error(finalizeErr))
+		return -1, finalizeErr
+	}
+
 	s.fenced.CompareAndSwap(false, true)
 	logger.Ctx(ctx).Info("Segment processor fence operation completed successfully",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
-		zap.Int64("lastEntryId", lastEntryId),
+		zap.Int64("lastEntryID", lastEntryID),
 		zap.Duration("duration", time.Since(start)))
-	return lastEntryId, nil
+	return lastEntryID, nil
 }
 
 func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
@@ -434,53 +447,6 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 
 func (s *segmentProcessor) GetLastAccessTime() int64 {
 	return s.lastAccessTime.Load()
-}
-
-func (s *segmentProcessor) Recover(ctx context.Context) (*proto.SegmentMetadata, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Recover")
-	defer sp.End()
-	s.updateAccessTime()
-	start := time.Now()
-	logger.Ctx(ctx).Info("Starting segment processor recovery operation",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId))
-
-	writer, err := s.getOrCreateSegmentWriter(ctx, true)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get segment reader for recovery",
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segId),
-			zap.Error(err))
-		return nil, err
-	}
-
-	logger.Ctx(ctx).Info("Starting segment load operation for recovery",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId))
-
-	lastEntryId, lastModifiedTime, err := writer.Recover(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Segment load operation failed during recovery",
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segId),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return nil, err
-	}
-
-	recoveryDuration := time.Since(start)
-	logger.Ctx(ctx).Info("Segment processor recovery operation completed successfully",
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId),
-		zap.Duration("totalDuration", recoveryDuration),
-		zap.Int64("finalLastEntryId", lastEntryId),
-		zap.String("finalState", "Completed"),
-		zap.Int64("completionTime", lastModifiedTime))
-	return &proto.SegmentMetadata{
-		State:          proto.SegmentState_Completed,
-		LastEntryId:    lastEntryId,
-		CompletionTime: lastModifiedTime,
-	}, nil
 }
 
 func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {

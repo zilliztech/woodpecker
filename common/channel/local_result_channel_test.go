@@ -3,13 +3,14 @@ package channel
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 func TestLocalResultChannel_Basic(t *testing.T) {
