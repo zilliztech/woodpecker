@@ -49,11 +49,11 @@ type Reader interface {
 
 // ReaderOpt represents the options for creating a reader. which read entries in [start,end).
 type ReaderOpt struct {
-	// StartSequenceNum is the fileLastOffset to start reading from.
-	StartSequenceNum int64
+	// StartEntryID is the entryID to start reading from.
+	StartEntryID int64
 
-	// EndSequenceNum is the fileLastOffset to stop reading at.
-	EndSequenceNum int64
+	// EndEntryID is the entryID to stop reading at.
+	EndEntryID int64
 
 	// BatchSize is the maxSize of entries to read in a batch.
 	BatchSize int64

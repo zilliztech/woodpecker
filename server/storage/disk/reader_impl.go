@@ -635,7 +635,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatch called",
-		zap.Int64("startSequenceNum", opt.StartSequenceNum),
+		zap.Int64("startEntryID", opt.StartEntryID),
 		zap.Int64("batchSize", opt.BatchSize),
 		zap.Int("blockCount", len(r.blockIndexes)),
 		zap.Bool("isIncompleteFile", r.isIncompleteFile))
@@ -646,7 +646,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 
 	// For incomplete files, try to scan for new blocks if we don't have enough data
 	if r.isIncompleteFile {
-		if err := r.ensureSufficientBlocks(ctx, opt.StartSequenceNum, opt.BatchSize); err != nil {
+		if err := r.ensureSufficientBlocks(ctx, opt.StartEntryID, opt.BatchSize); err != nil {
 			logger.Ctx(ctx).Warn("failed to scan for new blocks", zap.Error(err))
 			// Continue with existing blocks even if scan fails
 		}
@@ -665,20 +665,25 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 			zap.Int32("blockNumber", block.BlockNumber),
 			zap.Int64("blockFirstEntryID", block.FirstEntryID),
 			zap.Int64("blockLastEntryID", block.LastEntryID),
-			zap.Int64("startSequenceNum", opt.StartSequenceNum))
+			zap.Int64("readStartEntryID", opt.StartEntryID))
 
-		if block.FirstEntryID <= opt.StartSequenceNum && opt.StartSequenceNum <= block.LastEntryID {
+		if block.FirstEntryID <= opt.StartEntryID && opt.StartEntryID <= block.LastEntryID {
 			startBlockIndex = i
 			logger.Ctx(ctx).Debug("found matching block",
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
 				zap.Int("startBlockIndex", startBlockIndex),
-				zap.Int32("blockNumber", block.BlockNumber))
+				zap.Int32("blockNumber", block.BlockNumber),
+				zap.Int64("blockFirstEntryID", block.FirstEntryID),
+				zap.Int64("blockLastEntryID", block.LastEntryID),
+				zap.Any("readStartEntryID", opt.StartEntryID))
 			break
 		}
 	}
 
 	if startBlockIndex == -1 {
 		logger.Ctx(ctx).Warn("no block found for start sequence number",
-			zap.Int64("startSequenceNum", opt.StartSequenceNum),
+			zap.Int64("startEntryID", opt.StartEntryID),
 			zap.Int("totalBlocks", len(r.blockIndexes)))
 		return nil, werr.ErrEntryNotFound
 	}
@@ -687,7 +692,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	if r.isIncompleteFile && opt.BatchSize == -1 {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
 		logger.Ctx(ctx).Debug("using single block mode")
-		return r.readSingleBlock(ctx, r.blockIndexes[startBlockIndex], opt.StartSequenceNum)
+		return r.readSingleBlock(ctx, r.blockIndexes[startBlockIndex], opt.StartEntryID)
 	} else {
 		// Specified batch size mode: read across multiple blocks if necessary to get the requested number of entries
 		if opt.BatchSize == -1 {
@@ -696,13 +701,13 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		logger.Ctx(ctx).Debug("using multiple blocks mode",
 			zap.Int("startBlockIndex", startBlockIndex),
 			zap.Int64("batchSize", opt.BatchSize))
-		return r.readMultipleBlocks(ctx, r.blockIndexes, startBlockIndex, opt.StartSequenceNum, opt.BatchSize)
+		return r.readMultipleBlocks(ctx, r.blockIndexes, startBlockIndex, opt.StartEntryID, opt.BatchSize)
 	}
 }
 
 // ensureSufficientBlocks ensures we have scanned enough blocks to satisfy the read request
 // This method checks if we need to scan for new blocks in incomplete files
-func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSequenceNum int64, batchSize int64) error {
+func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startEntryID int64, batchSize int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ensureSufficientBlocks")
 	defer sp.End()
 	// Check if we already have the starting block
@@ -710,7 +715,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 	var lastAvailableEntryID int64 = -1
 
 	for _, block := range r.blockIndexes {
-		if block.FirstEntryID <= startSequenceNum && startSequenceNum <= block.LastEntryID {
+		if block.FirstEntryID <= startEntryID && startEntryID <= block.LastEntryID {
 			hasStartingBlock = true
 		}
 		if block.LastEntryID > lastAvailableEntryID {
@@ -723,11 +728,11 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 
 	// If we have the starting block but need more data for the batch size
 	if hasStartingBlock && batchSize > 0 {
-		requiredLastEntryID := startSequenceNum + batchSize - 1
+		requiredLastEntryID := startEntryID + batchSize - 1
 		if lastAvailableEntryID < requiredLastEntryID {
 			needToScan = true
 			logger.Ctx(ctx).Debug("need more blocks for batch size",
-				zap.Int64("startSequenceNum", startSequenceNum),
+				zap.Int64("startEntryID", startEntryID),
 				zap.Int64("batchSize", batchSize),
 				zap.Int64("requiredLastEntryID", requiredLastEntryID),
 				zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
@@ -736,7 +741,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 
 	if needToScan {
 		logger.Ctx(ctx).Debug("scanning for new blocks to satisfy read request",
-			zap.Int64("startSequenceNum", startSequenceNum),
+			zap.Int64("startEntryID", startEntryID),
 			zap.Int64("batchSize", batchSize),
 			zap.Bool("hasStartingBlock", hasStartingBlock),
 			zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
@@ -745,7 +750,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 	}
 
 	logger.Ctx(ctx).Debug("sufficient blocks available, no scan needed",
-		zap.Int64("startSequenceNum", startSequenceNum),
+		zap.Int64("startEntryID", startEntryID),
 		zap.Int64("batchSize", batchSize),
 		zap.Int64("lastAvailableEntryID", lastAvailableEntryID))
 
@@ -753,7 +758,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 }
 
 // readSingleBlock reads all data records from a single block starting from the specified entry ID
-func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startSequenceNum int64) ([]*proto.LogEntry, error) {
+func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startEntryID int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
 	// For files without footer, we treat the entire file as one block
@@ -777,8 +782,10 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		zap.Int32("blockNumber", blockInfo.BlockNumber),
 		zap.Int64("startOffset", blockInfo.StartOffset),
 		zap.Int64("endOffset", blockEndOffset),
+		zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
+		zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
 		zap.Int64("blockSize", blockSize),
-		zap.Int64("startSequenceNum", startSequenceNum))
+		zap.Int64("startEntryID", startEntryID))
 
 	if blockSize <= 0 {
 		return []*proto.LogEntry{}, nil
@@ -816,9 +823,16 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 			continue
 		}
 
+		if record.Type() == codec.BlockHeaderRecordType && skipHeaderRecord {
+			// Skip the BlockHeaderRecord when processing entries
+			logger.Ctx(ctx).Debug("skipping BlockHeaderRecord in block",
+				zap.Int32("blockNumber", blockInfo.BlockNumber))
+			continue
+		}
+
 		if record.Type() == codec.DataRecordType {
 			// Only include entries starting from the specified sequence number
-			if currentEntryID >= startSequenceNum {
+			if currentEntryID >= startEntryID {
 				dataRecord := record.(*codec.DataRecord)
 				entry := &proto.LogEntry{
 					EntryId: currentEntryID,
@@ -830,9 +844,22 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		}
 	}
 
-	logger.Ctx(ctx).Debug("extracted entries from single block",
-		zap.Int32("blockNumber", blockInfo.BlockNumber),
-		zap.Int("entryCount", len(entries)))
+	if len(entries) == 0 {
+		// return entry not found yet, wp client retry later
+		logger.Ctx(ctx).Debug("no record extracted from the ongoing block",
+			zap.Int32("blockNumber", blockInfo.BlockNumber),
+			zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
+			zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
+			zap.Int64("startEntryID", startEntryID))
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record has been written to the ongoing block")
+	} else {
+		logger.Ctx(ctx).Debug("extracted entries from single block",
+			zap.Int32("blockNumber", blockInfo.BlockNumber),
+			zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
+			zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
+			zap.Int64("startEntryID", startEntryID),
+			zap.Int("readEntryCount", len(entries)))
+	}
 
 	return entries, nil
 }

@@ -194,9 +194,9 @@ func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int
 
 	// read batch entries
 	batchEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-		StartSequenceNum: fromEntryId,
-		EndSequenceNum:   0, // means no stop point
-		BatchSize:        maxSize,
+		StartEntryID: fromEntryId,
+		EndEntryID:   0, // means no stop point
+		BatchSize:    maxSize,
 	})
 	if err != nil {
 		if werr.ErrEntryNotFound.Is(err) {

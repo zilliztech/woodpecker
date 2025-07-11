@@ -813,8 +813,8 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 		// Verify we can read data from the beginning
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 0,
-			BatchSize:        20, // Read all entries
+			StartEntryID: 0,
+			BatchSize:    20, // Read all entries
 		})
 		require.NoError(t, err)
 		t.Logf("Read %d entries", len(entries))
@@ -1127,8 +1127,8 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	t.Run("AutoBatchMode_BatchSizeNegativeOne", func(t *testing.T) {
 		// Test auto batch mode (BatchSize = -1): should return only entries from one block
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 2,  // Start from entry 2 (which should be in block 2)
-			BatchSize:        -1, // Auto batch mode
+			StartEntryID: 2,  // Start from entry 2 (which should be in block 2)
+			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
 
@@ -1143,8 +1143,8 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	t.Run("SpecifiedBatchMode_BatchSize3", func(t *testing.T) {
 		// Test specified batch size mode: should return exactly 3 entries across multiple blocks
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 1, // Start from entry 1
-			BatchSize:        3, // Request exactly 3 entries
+			StartEntryID: 1, // Start from entry 1
+			BatchSize:    3, // Request exactly 3 entries
 		})
 		require.NoError(t, err)
 
@@ -1164,8 +1164,8 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	t.Run("SpecifiedBatchMode_BatchSize2", func(t *testing.T) {
 		// Test specified batch size mode: should return exactly 2 entries
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 3, // Start from entry 3
-			BatchSize:        2, // Request exactly 2 entries
+			StartEntryID: 3, // Start from entry 3
+			BatchSize:    2, // Request exactly 2 entries
 		})
 		require.NoError(t, err)
 
@@ -1183,8 +1183,8 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	t.Run("AutoBatchMode_StartFromFirstEntry", func(t *testing.T) {
 		// Test auto batch mode starting from first entry
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 0,  // Start from entry 0 (first entry)
-			BatchSize:        -1, // Auto batch mode
+			StartEntryID: 0,  // Start from entry 0 (first entry)
+			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
 
@@ -1263,8 +1263,8 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 
 	// Read all entries
 	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-		StartSequenceNum: 0,
-		BatchSize:        int64(len(testCases)),
+		StartEntryID: 0,
+		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, len(testCases), len(entries))
@@ -1332,8 +1332,8 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 
 	t.Run("ReadFromBeginning", func(t *testing.T) {
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 0,
-			BatchSize:        int64(totalEntries),
+			StartEntryID: 0,
+			BatchSize:    int64(totalEntries),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, totalEntries, len(entries))
@@ -1350,8 +1350,8 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 		expectedCount := totalEntries - int(startId)
 
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: startId,
-			BatchSize:        int64(expectedCount),
+			StartEntryID: startId,
+			BatchSize:    int64(expectedCount),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, expectedCount, len(entries))
@@ -1369,8 +1369,8 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 		startId := int64(5)
 
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: startId,
-			BatchSize:        batchSize,
+			StartEntryID: startId,
+			BatchSize:    batchSize,
 		})
 		require.NoError(t, err)
 		assert.Equal(t, int(batchSize), len(entries))
@@ -1389,8 +1389,8 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 
 		for _, startId := range testCases {
 			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-				StartSequenceNum: startId,
-				BatchSize:        -1, // Auto batch mode
+				StartEntryID: startId,
+				BatchSize:    -1, // Auto batch mode
 			})
 			require.NoError(t, err)
 			assert.Greater(t, len(entries), 0)
@@ -1488,8 +1488,8 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 		defer reader.Close(ctx)
 
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 0,
-			BatchSize:        int64(initialEntries),
+			StartEntryID: 0,
+			BatchSize:    int64(initialEntries),
 		})
 		if err != nil {
 			errors <- err
@@ -1530,8 +1530,8 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-		StartSequenceNum: 0,
-		BatchSize:        int64(initialEntries + 10),
+		StartEntryID: 0,
+		BatchSize:    int64(initialEntries + 10),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, initialEntries+10, len(entries))
@@ -1557,8 +1557,8 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 
 		// But reading should fail gracefully
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 0,
-			BatchSize:        10,
+			StartEntryID: 0,
+			BatchSize:    10,
 		})
 		assert.Error(t, err)
 		assert.Nil(t, entries)
@@ -1603,16 +1603,16 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 
 		// Test reading from non-existent entry ID
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: 100, // Way beyond available entries
-			BatchSize:        10,
+			StartEntryID: 100, // Way beyond available entries
+			BatchSize:    10,
 		})
 		assert.Error(t, err)
 		assert.Nil(t, entries)
 
 		// Test reading from negative entry ID
 		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: -1,
-			BatchSize:        10,
+			StartEntryID: -1,
+			BatchSize:    10,
 		})
 		assert.Error(t, err)
 		assert.Nil(t, entries)
@@ -1690,8 +1690,8 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	require.NoError(t, err)
 
 	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-		StartSequenceNum: 0,
-		BatchSize:        int64(len(testCases)),
+		StartEntryID: 0,
+		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, len(testCases), len(entries))
@@ -1874,8 +1874,8 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		startId := int64(i % 900) // Ensure we don't go beyond available entries
 		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartSequenceNum: startId,
-			BatchSize:        10,
+			StartEntryID: startId,
+			BatchSize:    10,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -2263,8 +2263,8 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
 
 					entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-						StartSequenceNum: startId,
-						BatchSize:        batchSize,
+						StartEntryID: startId,
+						BatchSize:    batchSize,
 					})
 
 					if err != nil {
@@ -2313,8 +2313,8 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 			remainingEntries := int64(totalEntries) - startId
 
 			finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-				StartSequenceNum: startId,
-				BatchSize:        remainingEntries,
+				StartEntryID: startId,
+				BatchSize:    remainingEntries,
 			})
 
 			if err != nil {
@@ -2377,8 +2377,8 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 		if err == nil && lastEntryId >= 0 {
 			// Try to read from the beginning
 			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
-				StartSequenceNum: 0,
-				BatchSize:        lastEntryId + 1,
+				StartEntryID: 0,
+				BatchSize:    lastEntryId + 1,
 			})
 			if err == nil {
 				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
@@ -2544,8 +2544,8 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 							readerNum, entriesToRead, startId, latestWrittenId)
 
 						entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-							StartSequenceNum: startId,
-							BatchSize:        entriesToRead,
+							StartEntryID: startId,
+							BatchSize:    entriesToRead,
 						})
 
 						if err != nil {
@@ -2596,8 +2596,8 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				remainingEntries := int64(totalEntries) - startId
 
 				finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-					StartSequenceNum: startId,
-					BatchSize:        remainingEntries,
+					StartEntryID: startId,
+					BatchSize:    remainingEntries,
 				})
 
 				if err != nil {
@@ -2717,8 +2717,8 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 		lastEntryId, err := finalReader.GetLastEntryID(ctx)
 		if err == nil && lastEntryId >= 0 {
 			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
-				StartSequenceNum: 0,
-				BatchSize:        lastEntryId + 1,
+				StartEntryID: 0,
+				BatchSize:    lastEntryId + 1,
 			})
 			if err == nil {
 				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
