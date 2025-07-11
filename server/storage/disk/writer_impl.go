@@ -20,6 +20,7 @@ package disk
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"sync"
@@ -401,10 +402,26 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	// Record block start offset before writing block header
 	blockStartOffset := w.writtenBytes
 
-	// Write block header record
+	// First, serialize all data records to calculate block length and CRC
+	var blockDataBuffer []byte
+	for _, entry := range task.entries {
+		dataRecord := &codec.DataRecord{
+			Payload: entry.Data,
+		}
+		encodedRecord := codec.EncodeRecord(dataRecord)
+		blockDataBuffer = append(blockDataBuffer, encodedRecord...)
+	}
+
+	// Calculate block length and CRC
+	blockLength := uint32(len(blockDataBuffer))
+	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
+
+	// Write block header record with calculated values
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		FirstEntryID: task.firstEntryId,
 		LastEntryID:  task.lastEntryId,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
 	}
 	if err := w.writeRecord(blockHeaderRecord); err != nil {
 		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
@@ -413,18 +430,21 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		return
 	}
 
-	// Write all data records
-	for _, entry := range task.entries {
-		dataRecord := &codec.DataRecord{
-			Payload: entry.Data,
-		}
-		if err := w.writeRecord(dataRecord); err != nil {
-			logger.Ctx(ctx).Warn("write data record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
-			w.storageWritable.Store(false)
-			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
-			return
-		}
+	// Write the pre-serialized data records
+	n, err := w.file.Write(blockDataBuffer)
+	if err != nil {
+		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		w.storageWritable.Store(false)
+		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+		return
 	}
+	if n != len(blockDataBuffer) {
+		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
+		w.storageWritable.Store(false)
+		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(fmt.Errorf("incomplete write: wrote %d of %d bytes", n, len(blockDataBuffer))))
+		return
+	}
+	w.writtenBytes += int64(n)
 
 	// Sync to disk
 	if err := w.file.Sync(); err != nil {

@@ -807,6 +807,45 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		zap.Int32("blockNumber", blockInfo.BlockNumber),
 		zap.Int("recordCount", len(records)))
 
+	// Find BlockHeaderRecord and verify data integrity
+	var blockHeaderRecord *codec.BlockHeaderRecord
+	var dataRecordsStart int
+	for i, record := range records {
+		if record.Type() == codec.BlockHeaderRecordType {
+			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+			dataRecordsStart = i + 1
+			break
+		}
+	}
+
+	// If we found a BlockHeaderRecord, verify the block data integrity
+	if blockHeaderRecord != nil {
+		// Extract only the data records part for verification
+		var dataRecordsBuffer []byte
+		for i := dataRecordsStart; i < len(records); i++ {
+			if records[i].Type() == codec.DataRecordType {
+				encodedRecord := codec.EncodeRecord(records[i])
+				dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+			}
+		}
+
+		// Verify block data integrity
+		if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+			logger.Ctx(ctx).Warn("block data integrity verification failed",
+				zap.Int32("blockNumber", blockInfo.BlockNumber),
+				zap.Error(err))
+			// Currently, we only log a warning, but each data record can still be read independently
+			// because each data record's integrity is verified individually. Additionally, during writing,
+			// the data records that are successfully written to disk are readable, and block-level atomicity
+			// is not enforced.
+		} else {
+			logger.Ctx(ctx).Debug("block data integrity verified successfully",
+				zap.Int32("blockNumber", blockInfo.BlockNumber),
+				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
+		}
+	}
+
 	// Extract data records and convert to LogEntry
 	entries := make([]*proto.LogEntry, 0)
 	currentEntryID := blockInfo.FirstEntryID
@@ -931,6 +970,47 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		logger.Ctx(ctx).Debug("decoded records from block",
 			zap.Int("blockIndex", i),
 			zap.Int("recordCount", len(records)))
+
+		// Find BlockHeaderRecord and verify data integrity
+		var blockHeaderRecord *codec.BlockHeaderRecord
+		var dataRecordsStart int
+		for j, record := range records {
+			if record.Type() == codec.BlockHeaderRecordType {
+				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+				dataRecordsStart = j + 1
+				break
+			}
+		}
+
+		// If we found a BlockHeaderRecord, verify the block data integrity
+		if blockHeaderRecord != nil {
+			// Extract only the data records part for verification
+			var dataRecordsBuffer []byte
+			for j := dataRecordsStart; j < len(records); j++ {
+				if records[j].Type() == codec.DataRecordType {
+					encodedRecord := codec.EncodeRecord(records[j])
+					dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+				}
+			}
+
+			// Verify block data integrity
+			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+				logger.Ctx(ctx).Warn("block data integrity verification failed",
+					zap.Int("blockIndex", i),
+					zap.Int32("blockNumber", blockInfo.BlockNumber),
+					zap.Error(err))
+				// Currently, we only log a warning, but each data record can still be read independently
+				// because each data record's integrity is verified individually. Additionally, during writing,
+				// the data records that are successfully written to disk are readable, and block-level atomicity
+				// is not enforced.
+			} else {
+				logger.Ctx(ctx).Debug("block data integrity verified successfully",
+					zap.Int("blockIndex", i),
+					zap.Int32("blockNumber", blockInfo.BlockNumber),
+					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
+			}
+		}
 
 		// Process records in this block
 		currentEntryID := blockInfo.FirstEntryID

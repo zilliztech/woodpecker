@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"testing"
 
+	"hash/crc32"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +114,8 @@ func TestBlockHeaderRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	original := &BlockHeaderRecord{
 		FirstEntryID: 1000,
 		LastEntryID:  2000,
+		BlockLength:  4096,
+		BlockCrc:     0x12345678,
 	}
 
 	// Test encoding
@@ -127,6 +131,8 @@ func TestBlockHeaderRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, original.FirstEntryID, blockLastRecord.FirstEntryID)
 	assert.Equal(t, original.LastEntryID, blockLastRecord.LastEntryID)
+	assert.Equal(t, original.BlockLength, blockLastRecord.BlockLength)
+	assert.Equal(t, original.BlockCrc, blockLastRecord.BlockCrc)
 }
 
 func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
@@ -164,7 +170,7 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
-		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010},
+		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
 		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
 	}
 
@@ -206,6 +212,8 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, original.FirstEntryID, blockLastRecord.FirstEntryID)
 			assert.Equal(t, original.LastEntryID, blockLastRecord.LastEntryID)
+			assert.Equal(t, original.BlockLength, blockLastRecord.BlockLength)
+			assert.Equal(t, original.BlockCrc, blockLastRecord.BlockCrc)
 		case *FooterRecord:
 			footerRecord, ok := decoded.(*FooterRecord)
 			require.True(t, ok)
@@ -628,7 +636,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
-		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000}},
+		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
 		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
@@ -651,7 +659,7 @@ func BenchmarkDecodeRecord(b *testing.B) {
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
-		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000}},
+		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
 		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
@@ -672,7 +680,7 @@ func BenchmarkDecodeRecordList(b *testing.B) {
 		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
-		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010},
+		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
 		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
 	}
 
@@ -716,4 +724,117 @@ func BenchmarkParseBlockIndexList(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = ParseBlockIndexList(data)
 	}
+}
+
+func TestVerifyBlockDataIntegrity(t *testing.T) {
+	// Create test data
+	testData := []byte("test block data content")
+	blockLength := uint32(len(testData))
+	blockCrc := crc32.ChecksumIEEE(testData)
+
+	t.Run("ValidBlockData", func(t *testing.T) {
+		blockHeaderRecord := &BlockHeaderRecord{
+			FirstEntryID: 1,
+			LastEntryID:  10,
+			BlockLength:  blockLength,
+			BlockCrc:     blockCrc,
+		}
+
+		err := VerifyBlockDataIntegrity(blockHeaderRecord, testData)
+		assert.NoError(t, err)
+	})
+
+	t.Run("InvalidBlockLength", func(t *testing.T) {
+		blockHeaderRecord := &BlockHeaderRecord{
+			FirstEntryID: 1,
+			LastEntryID:  10,
+			BlockLength:  blockLength + 1, // Wrong length
+			BlockCrc:     blockCrc,
+		}
+
+		err := VerifyBlockDataIntegrity(blockHeaderRecord, testData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "block length mismatch")
+	})
+
+	t.Run("InvalidBlockCrc", func(t *testing.T) {
+		blockHeaderRecord := &BlockHeaderRecord{
+			FirstEntryID: 1,
+			LastEntryID:  10,
+			BlockLength:  blockLength,
+			BlockCrc:     blockCrc + 1, // Wrong CRC
+		}
+
+		err := VerifyBlockDataIntegrity(blockHeaderRecord, testData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "block CRC mismatch")
+	})
+
+	t.Run("EmptyBlockData", func(t *testing.T) {
+		emptyData := []byte{}
+		blockHeaderRecord := &BlockHeaderRecord{
+			FirstEntryID: 1,
+			LastEntryID:  1,
+			BlockLength:  0,
+			BlockCrc:     crc32.ChecksumIEEE(emptyData),
+		}
+
+		err := VerifyBlockDataIntegrity(blockHeaderRecord, emptyData)
+		assert.NoError(t, err)
+	})
+}
+
+func TestBlockHeaderRecordWithIntegrity(t *testing.T) {
+	// Test the complete flow: create block data, calculate CRC, encode/decode, verify
+	originalData := [][]byte{
+		[]byte("first record data"),
+		[]byte("second record data"),
+		[]byte("third record data"),
+	}
+
+	// Create data records and serialize them
+	var blockDataBuffer []byte
+	for _, data := range originalData {
+		dataRecord := &DataRecord{Payload: data}
+		encodedRecord := EncodeRecord(dataRecord)
+		blockDataBuffer = append(blockDataBuffer, encodedRecord...)
+	}
+
+	// Calculate block length and CRC
+	blockLength := uint32(len(blockDataBuffer))
+	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
+
+	// Create block header record
+	blockHeaderRecord := &BlockHeaderRecord{
+		FirstEntryID: 100,
+		LastEntryID:  102,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
+	}
+
+	// Encode and decode the block header record
+	encoded := EncodeRecord(blockHeaderRecord)
+	decoded, err := DecodeRecord(encoded)
+	require.NoError(t, err)
+
+	decodedBlockHeader := decoded.(*BlockHeaderRecord)
+	assert.Equal(t, blockHeaderRecord.FirstEntryID, decodedBlockHeader.FirstEntryID)
+	assert.Equal(t, blockHeaderRecord.LastEntryID, decodedBlockHeader.LastEntryID)
+	assert.Equal(t, blockHeaderRecord.BlockLength, decodedBlockHeader.BlockLength)
+	assert.Equal(t, blockHeaderRecord.BlockCrc, decodedBlockHeader.BlockCrc)
+
+	// Verify block data integrity
+	err = VerifyBlockDataIntegrity(decodedBlockHeader, blockDataBuffer)
+	assert.NoError(t, err)
+
+	// Test with corrupted data
+	corruptedData := make([]byte, len(blockDataBuffer))
+	copy(corruptedData, blockDataBuffer)
+	if len(corruptedData) > 0 {
+		corruptedData[0] ^= 0xFF // Corrupt first byte
+	}
+
+	err = VerifyBlockDataIntegrity(decodedBlockHeader, corruptedData)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "block CRC mismatch")
 }

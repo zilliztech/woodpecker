@@ -694,6 +694,44 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		return nil, decodeErr
 	}
 
+	// Find BlockHeaderRecord and verify data integrity
+	var blockHeaderRecord *codec.BlockHeaderRecord
+	var dataRecordsStart int
+	for j, record := range records {
+		if record.Type() == codec.BlockHeaderRecordType {
+			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+			dataRecordsStart = j + 1
+			break
+		}
+	}
+
+	// If we found a BlockHeaderRecord, verify the block data integrity
+	if blockHeaderRecord != nil {
+		// Extract only the data records part for verification
+		var dataRecordsBuffer []byte
+		for j := dataRecordsStart; j < len(records); j++ {
+			if records[j].Type() == codec.DataRecordType {
+				encodedRecord := codec.EncodeRecord(records[j])
+				dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+			}
+		}
+
+		// Verify block data integrity
+		if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+			logger.Ctx(ctx).Warn("block data integrity verification failed",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+				zap.Error(err))
+			return nil, fmt.Errorf("block data integrity verification failed: %w", err)
+		}
+
+		logger.Ctx(ctx).Debug("block data integrity verified successfully",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+			zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+			zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
+	}
+
 	entries := make([]*proto.LogEntry, 0, 32)
 	currentEntryID := blockInfo.FirstEntryID
 
@@ -771,6 +809,44 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 				zap.Error(decodeErr))
 			break // Stop reading on error, return what we have so far
+		}
+
+		// Find BlockHeaderRecord and verify data integrity
+		var blockHeaderRecord *codec.BlockHeaderRecord
+		var dataRecordsStart int
+		for j, record := range records {
+			if record.Type() == codec.BlockHeaderRecordType {
+				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+				dataRecordsStart = j + 1
+				break
+			}
+		}
+
+		// If we found a BlockHeaderRecord, verify the block data integrity
+		if blockHeaderRecord != nil {
+			// Extract only the data records part for verification
+			var dataRecordsBuffer []byte
+			for j := dataRecordsStart; j < len(records); j++ {
+				if records[j].Type() == codec.DataRecordType {
+					encodedRecord := codec.EncodeRecord(records[j])
+					dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+				}
+			}
+
+			// Verify block data integrity
+			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+				logger.Ctx(ctx).Warn("block data integrity verification failed",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+					zap.Error(err))
+				break // Stop reading on error, return what we have so far
+			}
+
+			logger.Ctx(ctx).Debug("block data integrity verified successfully",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 		}
 
 		currentEntryID := blockInfo.FirstEntryID

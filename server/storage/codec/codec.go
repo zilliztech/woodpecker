@@ -49,9 +49,11 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint64(payload[28:], uint64(record.LastEntryID))
 
 	case *BlockHeaderRecord:
-		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8)
+		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
 		binary.LittleEndian.PutUint64(payload[0:], uint64(record.FirstEntryID))
 		binary.LittleEndian.PutUint64(payload[8:], uint64(record.LastEntryID))
+		binary.LittleEndian.PutUint32(payload[16:], record.BlockLength)
+		binary.LittleEndian.PutUint32(payload[20:], record.BlockCrc)
 
 	case *FooterRecord:
 		payload = make([]byte, FooterRecordSize) // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
@@ -265,9 +267,29 @@ func ParseBlockHeader(payload []byte) (*BlockHeaderRecord, error) {
 	b := &BlockHeaderRecord{
 		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[0:])),
 		LastEntryID:  int64(binary.LittleEndian.Uint64(payload[8:])),
+		BlockLength:  binary.LittleEndian.Uint32(payload[16:]),
+		BlockCrc:     binary.LittleEndian.Uint32(payload[20:]),
 	}
 
 	return b, nil
+}
+
+// VerifyBlockDataIntegrity verifies the integrity of block data using BlockHeaderRecord
+func VerifyBlockDataIntegrity(blockHeaderRecord *BlockHeaderRecord, blockData []byte) error {
+	// Verify block length
+	if uint32(len(blockData)) != blockHeaderRecord.BlockLength {
+		return errors.Errorf("block length mismatch: expected %d, got %d",
+			blockHeaderRecord.BlockLength, len(blockData))
+	}
+
+	// Verify block CRC
+	calculatedCrc := crc32.ChecksumIEEE(blockData)
+	if calculatedCrc != blockHeaderRecord.BlockCrc {
+		return errors.Errorf("block CRC mismatch: expected %x, got %x",
+			blockHeaderRecord.BlockCrc, calculatedCrc)
+	}
+
+	return nil
 }
 
 // 16 bits Flags

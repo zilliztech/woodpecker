@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -1483,22 +1484,32 @@ func (f *MinioFileWriter) serialize(entries []*cache.BufferEntry) []byte {
 		f.headerWritten.Store(true)
 	}
 
-	// Add BlockHeaderRecord at the start of the block
+	// First, serialize all data records to calculate block length and CRC
+	var blockDataBuffer []byte
+	for _, entry := range entries {
+		dataRecord, _ := codec.ParseData(entry.Data)
+		encodedRecord := codec.EncodeRecord(dataRecord)
+		blockDataBuffer = append(blockDataBuffer, encodedRecord...)
+	}
+
+	// Calculate block length and CRC
+	blockLength := uint32(len(blockDataBuffer))
+	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
+
+	// Add BlockHeaderRecord at the start of the block with calculated values
 	firstEntryID := entries[0].EntryId
 	lastEntryID := entries[len(entries)-1].EntryId
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
 	}
 	encodedBlockHeaderRecord := codec.EncodeRecord(blockHeaderRecord)
 	serializedData = append(serializedData, encodedBlockHeaderRecord...)
 
-	// Serialize all data records
-	for _, entry := range entries {
-		dataRecord, _ := codec.ParseData(entry.Data)
-		encodedRecord := codec.EncodeRecord(dataRecord)
-		serializedData = append(serializedData, encodedRecord...)
-	}
+	// Append the pre-serialized data records
+	serializedData = append(serializedData, blockDataBuffer...)
 
 	return serializedData
 }
@@ -1669,10 +1680,16 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 	blockFirstEntryID := firstEntryID
 	blockLastEntryID := firstEntryID + int64(dataRecordCount) - 1
 
-	// Add block header record
+	// Calculate block length and CRC for the merged block data
+	blockLength := uint32(len(mergedBlockData))
+	blockCrc := crc32.ChecksumIEEE(mergedBlockData)
+
+	// Add block header record with calculated values
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		FirstEntryID: blockFirstEntryID,
 		LastEntryID:  blockLastEntryID,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
 	}
 	encodedBlockHeader := codec.EncodeRecord(blockHeaderRecord)
 

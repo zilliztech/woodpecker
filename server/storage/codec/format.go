@@ -25,7 +25,7 @@ const (
 	PartSize              = 2 * 1024 * 1024 // 2MB per part (MinIO minimum)
 	MaxRecordSize         = 2 * 1024 * 1024 // 2MB max record size (within part)
 	RecordHeaderSize      = 9               // CRC32(4) + Type(1) + Length(4)
-	BlockHeaderRecordSize = 16              // FirstEntryID(8) + LastEntryID(8)
+	BlockHeaderRecordSize = 24              // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
 	FooterRecordSize      = 28              // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
 	FormatVersion         = 2
 	MaxRetries            = 3
@@ -72,8 +72,10 @@ func (d *DataRecord) Type() byte { return DataRecordType }
 // This record is placed at the end of each 2MB block to facilitate
 // efficient recovery in object storage scenarios
 type BlockHeaderRecord struct {
-	FirstEntryID int64 // First entry ID in this block
-	LastEntryID  int64 // Last entry ID in this block
+	FirstEntryID int64  // First entry ID in this block
+	LastEntryID  int64  // Last entry ID in this block
+	BlockLength  uint32 // Length of the block data (excluding this header record)
+	BlockCrc     uint32 // CRC32 checksum of the block data (excluding this header record)
 }
 
 func (b *BlockHeaderRecord) Type() byte { return BlockHeaderRecordType }
