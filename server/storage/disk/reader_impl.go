@@ -70,6 +70,10 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	// Open file for reading
 	file, err := os.Open(filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist yet, return entry not found
+			return nil, werr.ErrEntryNotFound
+		}
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 
