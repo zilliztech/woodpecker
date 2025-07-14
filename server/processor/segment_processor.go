@@ -365,7 +365,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize,
+			s.cfg,
 			recoverMode)
 		s.currentSegmentWriter = writerFile
 		logger.Ctx(ctx).Info("create segment local writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))

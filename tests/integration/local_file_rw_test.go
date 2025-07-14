@@ -66,12 +66,15 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
-	blockSize := int64(256 * 1024) // 256KB per block for testing
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Create LocalFileWriter
 	logId := int64(1)
 	segmentId := int64(100)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -130,11 +133,14 @@ func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(128 * 1024) // 128KB per block to test multi-block scenario
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(2)
 	segmentId := int64(200)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -174,11 +180,14 @@ func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
-	blockSize := int64(256 * 1024) // 256KB per block
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	blockSize := int64(256 * 1024)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(3)
 	segmentId := int64(300)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -242,10 +251,15 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	blockSize := int64(256 * 1024)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+
 	t.Run("EmptyPayloadValidation", func(t *testing.T) {
 		logId := int64(4)
 		segmentId := int64(400)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -259,7 +273,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("WriteAfterFinalize", func(t *testing.T) {
 		logId := int64(5)
 		segmentId := int64(500)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -285,7 +299,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("WriteAfterClose", func(t *testing.T) {
 		logId := int64(6)
 		segmentId := int64(600)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 
 		// Close writer
@@ -302,7 +316,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
 		logId := int64(7)
 		segmentId := int64(700)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -338,7 +352,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("DuplicateEntryIdInBuffer", func(t *testing.T) {
 		logId := int64(8)
 		segmentId := int64(800)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -378,7 +392,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 
 		logId := int64(9)
 		segmentId := int64(900)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -416,7 +430,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("LargePayloadValidation", func(t *testing.T) {
 		logId := int64(10)
 		segmentId := int64(1000)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -433,7 +447,10 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// First, create a file with test data
 	testData := [][]byte{
@@ -447,7 +464,7 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	// Write test data
 	logId := int64(11)
 	segmentId := int64(1100)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -545,6 +562,9 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	ctx := context.Background()
 
 	blockSize := int64(100 * 1024) // Small 100KB blocks to force multiple blocks
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Create test data that will span multiple blocks
 	totalEntries := 20
@@ -556,7 +576,7 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	// Write test data
 	logId := int64(12)
 	segmentId := int64(1200)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -630,6 +650,11 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	blockSize := int64(256 * 1024)
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+
 	t.Run("NonExistentFile", func(t *testing.T) {
 		nonExistentPath := filepath.Join(tempDir, "non-existent.log")
 		reader, err := disk.NewLocalFileReader(context.TODO(), nonExistentPath, 1000, 2000)
@@ -641,7 +666,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		// Create a valid file first
 		logId := int64(13)
 		segmentId := int64(1300)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 
 		// Write a few entries
@@ -680,7 +705,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 	t.Run("ReadAfterClose", func(t *testing.T) {
 		logId := int64(14)
 		segmentId := int64(1400)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 
 		// Write and finalize
@@ -720,6 +745,9 @@ func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	ctx := context.Background()
 
 	blockSize := int64(512 * 1024) // 512KB blocks
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Test various data sizes
 	testCases := []struct {
@@ -736,7 +764,7 @@ func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	// Write data
 	logId := int64(15)
 	segmentId := int64(1500)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 
 	for i, tc := range testCases {
@@ -790,9 +818,14 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	blockSize := int64(256 * 1024)
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+
 	logId := int64(16)
 	segmentId := int64(1600)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, 256*1024)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -862,10 +895,12 @@ func BenchmarkLocalFileWriter_WriteDataAsync(b *testing.B) {
 
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
+	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(17)
 	segmentId := int64(1700)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -902,11 +937,13 @@ func BenchmarkLocalFileReader_ReadNextBatch(b *testing.B) {
 
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
+	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Prepare test data
 	logId := int64(18)
 	segmentId := int64(1800)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -965,11 +1002,14 @@ func TestLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	ctx := context.Background()
 
 	blockSize := int64(200) // Very small to force block creation
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Create writer
 	logId := int64(19)
 	segmentId := int64(1900)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1021,14 +1061,17 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Phase 1: Write some data and simulate interruption
 	t.Run("WriteDataAndInterrupt", func(t *testing.T) {
 		// Create first writer and write some data
 		logId := int64(20)
 		segmentId := int64(2000)
-		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		require.NotNil(t, writer1)
 
@@ -1077,7 +1120,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Create a new writer in recovery mode
 		logId := int64(20)
 		segmentId := int64(2000)
-		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
+		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer2)
 
@@ -1191,7 +1234,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Try to create a recovery writer from the finalized file
 		logId := int64(20)
 		segmentId := int64(2000)
-		_, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
+		_, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
 		require.NoError(t, err, "Should be able to recover from a finalized file")
 	})
 
@@ -1207,7 +1250,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, err)
 		emptyFile.Close()
 
-		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
+		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 
@@ -1236,7 +1279,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Try to recover from non-existent file
 		logId := int64(24)
 		segmentId := int64(2400)
-		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
+		writer, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 
@@ -1267,7 +1310,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		segmentId := int64(2500)
 		corruptedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 
-		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 
 		// Write some data
@@ -1298,7 +1341,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		t.Logf("Corrupted file by truncating from %d to %d bytes", stat.Size(), truncatedSize)
 
 		// Try to recover from corrupted file using the same logId and segmentId
-		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, blockSize, true)
+		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
 		require.NoError(t, err)
 		require.NotNil(t, writer2)
 
@@ -1334,13 +1377,16 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(30)
 	segmentId := int64(3000)
 
 	// Create a writer and write some data without finalizing
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 
 	// Write test data but don't finalize (so no footer will be written)
@@ -1430,7 +1476,7 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		// Create another writer and write the same data, but finalize it
 		logId2 := int64(31)
 		segmentId2 := int64(3100)
-		writer2, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId2, segmentId2, blockSize)
+		writer2, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId2, segmentId2, cfg)
 		require.NoError(t, err)
 
 		for i, data := range testData {
@@ -1490,13 +1536,16 @@ func TestLocalFileReader_DynamicScanning(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(40)
 	segmentId := int64(4000)
 
 	// Phase 1: Create a writer and write some initial data
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 
 	// Write initial data
@@ -1674,13 +1723,16 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(50)
 	segmentId := int64(5000)
 
 	// Create writer
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -1916,13 +1968,16 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	logId := int64(60)
 	segmentId := int64(6000)
 
 	// Create writer
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, blockSize)
+	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 

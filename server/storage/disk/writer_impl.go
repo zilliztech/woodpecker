@@ -32,6 +32,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -102,20 +103,24 @@ type LocalFileWriter struct {
 }
 
 // NewLocalFileWriter creates a new local filesystem writer
-func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmentId int64, blockSize int64) (*LocalFileWriter, error) {
-	return NewLocalFileWriterWithMode(ctx, baseDir, logId, segmentId, blockSize, false)
+func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration) (*LocalFileWriter, error) {
+	return NewLocalFileWriterWithMode(ctx, baseDir, logId, segmentId, cfg, false)
 }
 
 // NewLocalFileWriterWithMode creates a new local filesystem writer with recovery mode option
-func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, blockSize int64, recoveryMode bool) (*LocalFileWriter, error) {
+func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
 	defer sp.End()
-
+	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize
+	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
+	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
 	logger.Ctx(ctx).Debug("creating new local file writer",
 		zap.String("baseDir", baseDir),
 		zap.Int64("logId", logId),
 		zap.Int64("segmentId", segmentId),
-		zap.Int64("blockSize", blockSize),
+		zap.Int64("maxBlockSize", blockSize),
+		zap.Int("maxBufferEntries", maxBufferEntries),
+		zap.Int("maxInterval", maxInterval),
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
@@ -143,8 +148,8 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,
-		maxBufferEntries: 1000,                            // Default max entries per buffer
-		maxIntervalMs:    200,                             // 200ms default sync interval for more responsive syncing
+		maxBufferEntries: int64(maxBufferEntries),         // Default max entries per buffer
+		maxIntervalMs:    maxInterval,                     // 10ms default sync interval for more responsive syncing
 		flushTaskChan:    make(chan *blockFlushTask, 100), // Increased buffer size to reduce blocking
 		runCtx:           runCtx,
 		runCancel:        runCancel,
