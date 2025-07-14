@@ -60,6 +60,12 @@ type LocalFileReader struct {
 func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId int64) (*LocalFileReader, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
+
+	logger.Ctx(ctx).Debug("creating new local file reader",
+		zap.String("baseDir", baseDir),
+		zap.Int64("logId", logId),
+		zap.Int64("segId", segId))
+
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0755); err != nil {
@@ -67,13 +73,21 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	}
 
 	filePath := getSegmentFilePath(baseDir, logId, segId)
+	logger.Ctx(ctx).Debug("attempting to open file for reading",
+		zap.String("filePath", filePath))
+
 	// Open file for reading
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist yet, return entry not found
+			logger.Ctx(ctx).Debug("file does not exist, returning ErrEntryNotFound",
+				zap.String("filePath", filePath))
 			return nil, werr.ErrEntryNotFound
 		}
+		logger.Ctx(ctx).Warn("failed to open file for reading",
+			zap.String("filePath", filePath),
+			zap.Error(err))
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 
@@ -81,8 +95,15 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	stat, err := file.Stat()
 	if err != nil {
 		file.Close()
+		logger.Ctx(ctx).Warn("failed to stat file",
+			zap.String("filePath", filePath),
+			zap.Error(err))
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
+
+	logger.Ctx(ctx).Debug("file opened successfully",
+		zap.String("filePath", filePath),
+		zap.Int64("fileSize", stat.Size()))
 
 	reader := &LocalFileReader{
 		logId:    logId,
@@ -97,8 +118,17 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	if err := reader.tryParseFooterAndIndexesUnsafe(ctx); err != nil {
 		file.Close()
 		reader.closed.Store(true)
+		logger.Ctx(ctx).Warn("failed to parse footer and indexes",
+			zap.String("filePath", filePath),
+			zap.Error(err))
 		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
 	}
+
+	logger.Ctx(ctx).Debug("local file reader created successfully",
+		zap.String("filePath", filePath),
+		zap.Int64("fileSize", reader.size),
+		zap.Bool("isIncompleteFile", reader.isIncompleteFile),
+		zap.Int("blockIndexesCount", len(reader.blockIndexes)))
 
 	return reader, nil
 }
@@ -121,7 +151,7 @@ func (r *LocalFileReader) tryParseFooterAndIndexesUnsafe(ctx context.Context) er
 
 	// Try to read and parse footer from the end of the file
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
-	footerData, err := r.readAt(r.size-footerRecordSize, int(footerRecordSize))
+	footerData, err := r.readAt(ctx, r.size-footerRecordSize, int(footerRecordSize))
 	if err != nil {
 		logger.Ctx(ctx).Debug("failed to read footer data, performing full scan",
 			zap.String("filePath", r.filePath),
@@ -180,7 +210,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 	indexStartOffset := r.size - footerRecordSize - totalIndexSize
 
 	// Read all index data
-	indexData, err := r.readAt(indexStartOffset, int(totalIndexSize))
+	indexData, err := r.readAt(ctx, indexStartOffset, int(totalIndexSize))
 	if err != nil {
 		return fmt.Errorf("read index data: %w", err)
 	}
@@ -234,7 +264,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 	}
 
 	// Read the entire file content
-	fileData, err := r.readAt(0, int(r.size))
+	fileData, err := r.readAt(ctx, 0, int(r.size))
 	if err != nil {
 		return fmt.Errorf("read entire file for scan: %w", err)
 	}
@@ -444,7 +474,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 
 	// Read only the new data since last scan
 	newDataSize := currentSize - r.lastScannedOffset
-	newData, err := r.readAt(r.lastScannedOffset, int(newDataSize))
+	newData, err := r.readAt(ctx, r.lastScannedOffset, int(newDataSize))
 	if err != nil {
 		return fmt.Errorf("read new data for scan: %w", err)
 	}
@@ -603,7 +633,13 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 }
 
 // readAt reads data from the file at the specified offset
-func (r *LocalFileReader) readAt(offset int64, length int) ([]byte, error) {
+func (r *LocalFileReader) readAt(ctx context.Context, offset int64, length int) ([]byte, error) {
+	logger.Ctx(ctx).Debug("reading data from file",
+		zap.Int64("offset", offset),
+		zap.Int("length", length),
+		zap.Int64("fileSize", r.size),
+		zap.String("filePath", r.filePath))
+
 	// Seek to offset
 	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek to offset %d: %w", offset, err)
@@ -613,8 +649,18 @@ func (r *LocalFileReader) readAt(offset int64, length int) ([]byte, error) {
 	data := make([]byte, length)
 	n, err := io.ReadFull(r.file, data)
 	if err != nil && err != io.ErrUnexpectedEOF {
+		logger.Ctx(ctx).Warn("failed to read data from file",
+			zap.Int64("offset", offset),
+			zap.Int("requestedLength", length),
+			zap.Int("actualRead", n),
+			zap.Error(err))
 		return nil, fmt.Errorf("read data: %w", err)
 	}
+
+	logger.Ctx(ctx).Debug("data read successfully",
+		zap.Int64("offset", offset),
+		zap.Int("requestedLength", length),
+		zap.Int("actualRead", n))
 
 	return data[:n], nil
 }
@@ -792,18 +838,29 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		zap.Int64("startEntryID", startEntryID))
 
 	if blockSize <= 0 {
+		logger.Ctx(ctx).Debug("block size is zero or negative, returning empty entries",
+			zap.Int64("blockSize", blockSize))
 		return []*proto.LogEntry{}, nil
 	}
 
 	// Read the block data
-	blockData, err := r.readAt(blockInfo.StartOffset, int(blockSize))
+	blockData, err := r.readAt(ctx, blockInfo.StartOffset, int(blockSize))
 	if err != nil {
+		logger.Ctx(ctx).Warn("failed to read block data",
+			zap.Int32("blockNumber", blockInfo.BlockNumber),
+			zap.Int64("startOffset", blockInfo.StartOffset),
+			zap.Int64("blockSize", blockSize),
+			zap.Error(err))
 		return nil, fmt.Errorf("read block data: %w", err)
 	}
 
 	// Decode all records from the block
 	records, err := codec.DecodeRecordList(blockData)
 	if err != nil {
+		logger.Ctx(ctx).Warn("failed to decode block records",
+			zap.Int32("blockNumber", blockInfo.BlockNumber),
+			zap.Int("blockDataSize", len(blockData)),
+			zap.Error(err))
 		return nil, fmt.Errorf("decode block records: %w", err)
 	}
 
@@ -960,7 +1017,7 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		}
 
 		// Read the block data
-		blockData, err := r.readAt(blockInfo.StartOffset, int(blockSize))
+		blockData, err := r.readAt(ctx, blockInfo.StartOffset, int(blockSize))
 		if err != nil {
 			return nil, fmt.Errorf("read block data: %w", err)
 		}

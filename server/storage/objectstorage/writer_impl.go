@@ -112,7 +112,7 @@ func NewMinioFileWriter(ctx context.Context, bucket string, baseDir string, logI
 
 func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration, recoveryMode bool) (storage.Writer, error) {
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
-	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentFileKey", segmentFileKey))
+	logger.Ctx(ctx).Debug("creating new minio file writer", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.SegmentSyncPolicy
 	maxBufferEntries := int64(syncPolicyConfig.MaxEntries)
 	segmentFileWriter := &MinioFileWriter{
@@ -181,6 +181,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 
 	go segmentFileWriter.run()
 	go segmentFileWriter.ack()
+	logger.Ctx(ctx).Info("create new minio file writer finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	return segmentFileWriter, nil
 }
 
@@ -1243,6 +1244,7 @@ func (f *MinioFileWriter) IsFenced(ctx context.Context) (bool, error) {
 func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Fence")
 	defer sp.End()
+	logger.Ctx(ctx).Info("start to fence segment", zap.String("segmentFileKey", f.segmentFileKey))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
