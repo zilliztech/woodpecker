@@ -684,3 +684,338 @@ func TestLogHandle_Rolling_ConcurrentAccess(t *testing.T) {
 	mockOldSegment.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
 }
+
+// TestLogHandle_CompleteAllActiveSegmentIfExists_DataRaceProtection tests that CompleteAllActiveSegmentIfExists
+// properly handles concurrent access with GetExistsReadonlySegmentHandle to prevent data races
+func TestLogHandle_CompleteAllActiveSegmentIfExists_DataRaceProtection(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Create mock segment handles
+	mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+	mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
+
+	// Set up segments
+	logHandle.SegmentHandles[1] = mockSegment1
+	logHandle.SegmentHandles[2] = mockSegment2
+	logHandle.WritableSegmentId = 2
+
+	// Mock GetId calls for logging
+	mockSegment1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+	mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
+
+	// Mock ForceCompleteAndClose calls
+	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+	mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+
+	// Mock GetSegmentMetadata for potential segment lookup during race condition
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", mock.AnythingOfType("int64")).Return(nil, werr.ErrSegmentNotFound).Maybe()
+
+	// Start concurrent operations
+	var wg sync.WaitGroup
+	var completeErr error
+	var getErr error
+	var getResult interface{}
+
+	// Goroutine 1: CompleteAllActiveSegmentIfExists (simulates logWriter.Close())
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		completeErr = logHandle.CompleteAllActiveSegmentIfExists(ctx)
+	}()
+
+	// Goroutine 2: GetExistsReadonlySegmentHandle (simulates concurrent reader)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Try to get a segment handle concurrently
+		getResult, getErr = logHandle.GetExistsReadonlySegmentHandle(ctx, 1)
+	}()
+
+	// Wait for both operations to complete
+	wg.Wait()
+
+	// Verify that CompleteAllActiveSegmentIfExists completed successfully
+	assert.NoError(t, completeErr)
+
+	// Verify that segments were cleared
+	assert.Len(t, logHandle.SegmentHandles, 0)
+	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
+
+	// GetExistsReadonlySegmentHandle should either:
+	// 1. Return the segment handle if it got the lock first, OR
+	// 2. Return nil if CompleteAllActiveSegmentIfExists cleared the map first
+	// Both are valid outcomes due to the race condition
+	if getErr == nil {
+		// If no error, result should be either the segment handle or nil
+		t.Logf("GetExistsReadonlySegmentHandle result: %v", getResult)
+	} else {
+		// If there's an error, it should be a valid error (not a panic)
+		t.Logf("GetExistsReadonlySegmentHandle error: %v", getErr)
+	}
+
+	// Verify all expectations
+	mockSegment1.AssertExpectations(t)
+	mockSegment2.AssertExpectations(t)
+	mockMeta.AssertExpectations(t)
+}
+
+// TestLogHandle_Close_vs_GetExistsReadonlySegmentHandle_DataRaceProtection tests that Close
+// properly handles concurrent access with GetExistsReadonlySegmentHandle to prevent data races
+func TestLogHandle_Close_vs_GetExistsReadonlySegmentHandle_DataRaceProtection(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Create mock segment handles
+	mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+	mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
+
+	// Set up segments
+	logHandle.SegmentHandles[1] = mockSegment1
+	logHandle.SegmentHandles[2] = mockSegment2
+	logHandle.WritableSegmentId = 2
+
+	// Mock GetId calls for logging
+	mockSegment1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+	mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
+
+	// Mock ForceCompleteAndClose calls
+	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+	mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+
+	// Start concurrent operations
+	var wg sync.WaitGroup
+	var closeErr error
+	var getErr error
+	var getResult interface{}
+
+	// Goroutine 1: Close (simulates logHandle.Close())
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		closeErr = logHandle.Close(ctx)
+	}()
+
+	// Goroutine 2: GetExistsReadonlySegmentHandle (simulates concurrent reader)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Try to get a segment handle concurrently
+		getResult, getErr = logHandle.GetExistsReadonlySegmentHandle(ctx, 1)
+	}()
+
+	// Wait for both operations to complete
+	wg.Wait()
+
+	// Verify that Close completed successfully
+	assert.NoError(t, closeErr)
+
+	// Verify that segments were cleared
+	assert.Len(t, logHandle.SegmentHandles, 0)
+	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
+
+	// GetExistsReadonlySegmentHandle should either:
+	// 1. Return the segment handle if it got the lock first, OR
+	// 2. Return nil if Close cleared the map first
+	// Both are valid outcomes due to the race condition
+	if getErr == nil {
+		// If no error, result should be either the segment handle or nil
+		t.Logf("GetExistsReadonlySegmentHandle result: %v", getResult)
+	} else {
+		// If there's an error, it should be a valid error (not a panic)
+		t.Logf("GetExistsReadonlySegmentHandle error: %v", getErr)
+	}
+
+	// Verify all expectations
+	mockSegment1.AssertExpectations(t)
+	mockSegment2.AssertExpectations(t)
+}
+
+// TestLogHandle_ConcurrentSegmentHandleAccess tests concurrent access to segment handles
+// from multiple goroutines to ensure thread safety
+func TestLogHandle_ConcurrentSegmentHandleAccess(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Create mock segment handle
+	mockSegment := mocks_segment_handle.NewSegmentHandle(t)
+
+	// Set up initial segment
+	logHandle.SegmentHandles[1] = mockSegment
+
+	// Mock metadata operations for potential segment creation
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", mock.AnythingOfType("int64")).Return(nil, werr.ErrSegmentNotFound).Maybe()
+
+	// Start multiple goroutines trying to access segment handles
+	numGoroutines := 10
+	results := make([]interface{}, numGoroutines)
+	errors := make([]error, numGoroutines)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			// Half try to get existing segment, half try to get non-existent segment
+			segmentId := int64(1)
+			if index%2 == 1 {
+				segmentId = int64(999) // Non-existent segment
+			}
+			handle, err := logHandle.GetExistsReadonlySegmentHandle(ctx, segmentId)
+			results[index] = handle
+			errors[index] = err
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+
+	// Verify results
+	for i := 0; i < numGoroutines; i++ {
+		if i%2 == 0 {
+			// Should get existing segment
+			assert.NoError(t, errors[i], "Goroutine %d should not have error", i)
+			assert.Equal(t, mockSegment, results[i], "Goroutine %d should get existing segment", i)
+		} else {
+			// Should get error for non-existent segment
+			assert.Error(t, errors[i], "Goroutine %d should have error for non-existent segment", i)
+			assert.Nil(t, results[i], "Goroutine %d should get nil for non-existent segment", i)
+		}
+	}
+
+	// Verify expectations
+	mockMeta.AssertExpectations(t)
+}
+
+// TestLogHandle_CompleteAllActiveSegmentIfExists_vs_Close_Behavior tests the difference
+// between CompleteAllActiveSegmentIfExists and Close methods
+func TestLogHandle_CompleteAllActiveSegmentIfExists_vs_Close_Behavior(t *testing.T) {
+	// Test CompleteAllActiveSegmentIfExists
+	t.Run("CompleteAllActiveSegmentIfExists", func(t *testing.T) {
+		logHandle, _ := createMockLogHandle(t)
+		ctx := context.Background()
+
+		// Create mock segment handles
+		mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+		mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
+
+		// Set up segments
+		logHandle.SegmentHandles[1] = mockSegment1
+		logHandle.SegmentHandles[2] = mockSegment2
+		logHandle.WritableSegmentId = 2
+
+		// Mock GetId calls for logging
+		mockSegment1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+		mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
+
+		// Mock ForceCompleteAndClose calls
+		mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+		mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+
+		// Call CompleteAllActiveSegmentIfExists
+		err := logHandle.CompleteAllActiveSegmentIfExists(ctx)
+
+		// Verify
+		assert.NoError(t, err)
+		assert.Len(t, logHandle.SegmentHandles, 0)              // Segments should be cleared
+		assert.Equal(t, int64(-1), logHandle.WritableSegmentId) // WritableSegmentId should be reset
+
+		// Verify expectations
+		mockSegment1.AssertExpectations(t)
+		mockSegment2.AssertExpectations(t)
+	})
+
+	// Test Close
+	t.Run("Close", func(t *testing.T) {
+		logHandle, _ := createMockLogHandle(t)
+		ctx := context.Background()
+
+		// Create mock segment handles
+		mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+		mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
+
+		// Set up segments
+		logHandle.SegmentHandles[1] = mockSegment1
+		logHandle.SegmentHandles[2] = mockSegment2
+		logHandle.WritableSegmentId = 2
+
+		// Mock GetId calls for logging
+		mockSegment1.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+		mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
+
+		// Mock ForceCompleteAndClose calls
+		mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+		mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Once()
+
+		// Call Close
+		err := logHandle.Close(ctx)
+
+		// Verify
+		assert.NoError(t, err)
+		assert.Len(t, logHandle.SegmentHandles, 0)              // Segments should be cleared
+		assert.Equal(t, int64(-1), logHandle.WritableSegmentId) // WritableSegmentId should be reset
+
+		// Verify expectations
+		mockSegment1.AssertExpectations(t)
+		mockSegment2.AssertExpectations(t)
+	})
+}
+
+// TestLogHandle_BackgroundCleanup_DataRaceProtection tests that background cleanup
+// properly handles concurrent access to prevent data races
+func TestLogHandle_BackgroundCleanup_DataRaceProtection(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Create mock segment handles
+	mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+	mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
+
+	// Set up segments
+	logHandle.SegmentHandles[1] = mockSegment1
+	logHandle.SegmentHandles[2] = mockSegment2
+	logHandle.WritableSegmentId = 2
+
+	// Mock GetLastAccessTime for cleanup logic
+	oldTime := time.Now().Add(-2 * time.Minute).UnixMilli()
+	mockSegment1.EXPECT().GetLastAccessTime().Return(oldTime).Maybe()
+	mockSegment2.EXPECT().GetLastAccessTime().Return(time.Now().UnixMilli()).Maybe()
+
+	// Mock ForceCompleteAndClose for cleanup
+	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Maybe()
+
+	// Start concurrent operations
+	var wg sync.WaitGroup
+	var getErr error
+	var getResult interface{}
+
+	// Goroutine 1: Background cleanup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logHandle.cleanupIdleSegmentHandlesUnsafe(ctx, 1*time.Minute)
+	}()
+
+	// Goroutine 2: GetExistsReadonlySegmentHandle
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Try to get a segment handle concurrently
+		getResult, getErr = logHandle.GetExistsReadonlySegmentHandle(ctx, 1)
+	}()
+
+	// Wait for both operations to complete
+	wg.Wait()
+
+	// The test should complete without data races
+	// The exact outcome depends on timing, but both operations should complete safely
+	if getErr == nil {
+		t.Logf("GetExistsReadonlySegmentHandle result: %v", getResult)
+	} else {
+		t.Logf("GetExistsReadonlySegmentHandle error: %v", getErr)
+	}
+
+	// Verify expectations
+	mockSegment1.AssertExpectations(t)
+	mockSegment2.AssertExpectations(t)
+}

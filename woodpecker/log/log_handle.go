@@ -66,6 +66,8 @@ type LogHandle interface {
 	GetExistsReadonlySegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
 	// GetRecoverableSegmentHandle returns the segment handle for the specified segment ID if it exists and is in recovery state.
 	GetRecoverableSegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
+	// CompleteAllActiveSegmentIfExists completes all active segment handles for the log.
+	CompleteAllActiveSegmentIfExists(ctx context.Context) error
 	// Close closes the log handle.
 	Close(context.Context) error
 }
@@ -890,107 +892,40 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 
 }
 
-//// Deprecated, should call Close(ctx) to completeAndClose all active segments
-//func (l *logHandleImpl) CloseAndCompleteCurrentWritableSegment(ctx context.Context) error {
-//	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CloseAndCompleteCurrentWritableSegment")
-//	defer sp.End()
-//	start := time.Now()
-//	logIdStr := fmt.Sprintf("%d", l.Id)
-//
-//	l.Lock()
-//	defer l.Unlock()
-//	defer func() {
-//		// finally clear writable segment index
-//		l.WritableSegmentId = -1
-//	}()
-//
-//	writeableSegmentHandle, writableExists := l.SegmentHandles[l.WritableSegmentId]
-//	if !writableExists {
-//		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
-//		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
-//		return nil
-//	}
-//	// 1. fence segmentHandle
-//	// Send fence request to log stores and fail pending append operations
-//	lastFlushedEntryId, err := writeableSegmentHandle.Complete(ctx) // fence first, which will wait for all writing request to be done
-//	if err != nil && !werr.ErrSegmentProcessorNoWriter.Is(err) {
-//		logger.Ctx(ctx).Info("complete segment failed",
-//			zap.String("logName", l.Name),
-//			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
-//			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-//			zap.Error(err))
-//		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
-//		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
-//		return err
-//	}
-//	// 2. close segmentHandle,
-//	err = writeableSegmentHandle.CloseWritingAndUpdateMetaIfNecessary(ctx, lastFlushedEntryId)
-//	if err != nil {
-//		logger.Ctx(ctx).Warn("close segment failed",
-//			zap.String("logName", l.Name),
-//			zap.Int64("segId", writeableSegmentHandle.GetId(ctx)),
-//			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-//			zap.Error(err))
-//		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "error").Inc()
-//		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
-//		return err
-//	}
-//	//
-//	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "close_writable_segment", "success").Inc()
-//	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "close_writable_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
-//	return nil
-//}
+func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
+	defer sp.End()
+	l.Lock()
+	defer l.Unlock()
 
-// Deprecated
-//func (l *logHandleImpl) CloseDeprecated(ctx context.Context) error {
-//	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
-//	defer sp.End()
-//
-//	// Stop background cleanup first
-//	l.stopBackgroundCleanup()
-//
-//	// Cancel the context to signal shutdown
-//	l.cancel()
-//
-//	var lastError error
-//	// close all segment handles
-//	for _, segmentHandle := range l.SegmentHandles {
-//		lastFlushedEntryId, err := segmentHandle.Complete(ctx)
-//		if err != nil {
-//			logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
-//				zap.String("logName", l.Name),
-//				zap.Int64("logId", l.Id),
-//				zap.Int64("segId", segmentHandle.GetId(ctx)),
-//				zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-//				zap.Error(err))
-//			if lastError == nil {
-//				lastError = err
-//			}
-//		}
-//		err = segmentHandle.CloseWritingAndUpdateMetaIfNecessary(ctx, lastFlushedEntryId)
-//		if err != nil {
-//			logger.Ctx(ctx).Info("close segment failed when closing logHandle",
-//				zap.String("logName", l.Name),
-//				zap.Int64("logId", l.Id),
-//				zap.Int64("segId", segmentHandle.GetId(ctx)),
-//				zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-//				zap.Error(err))
-//			if lastError == nil {
-//				lastError = err
-//			}
-//		}
-//	}
-//
-//	// Clear the segment handles map to prevent memory leaks
-//	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
-//	l.WritableSegmentId = -1
-//
-//	return lastError
-//}
+	var lastError error
+	// close all segment handles
+	for _, segmentHandle := range l.SegmentHandles {
+		err := segmentHandle.ForceCompleteAndClose(ctx)
+		if err != nil {
+			logger.Ctx(ctx).Info("Complete active segment failed when closing logHandle",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.Id),
+				zap.Int64("segId", segmentHandle.GetId(ctx)),
+				zap.Error(err))
+			if lastError == nil {
+				lastError = err
+			}
+		}
+	}
+
+	// Clear the segment handles map to prevent memory leaks
+	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
+	l.WritableSegmentId = -1
+
+	return lastError
+}
 
 func (l *logHandleImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
 	defer sp.End()
+	l.Lock()
+	defer l.Unlock()
 
 	// Stop background cleanup first
 	l.stopBackgroundCleanup()

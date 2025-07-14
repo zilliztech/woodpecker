@@ -120,6 +120,52 @@ func (_c *LogHandle_Close_Call) RunAndReturn(run func(context.Context) error) *L
 	return _c
 }
 
+// CompleteAllActiveSegmentIfExists provides a mock function with given fields: ctx
+func (_m *LogHandle) CompleteAllActiveSegmentIfExists(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompleteAllActiveSegmentIfExists")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogHandle_CompleteAllActiveSegmentIfExists_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompleteAllActiveSegmentIfExists'
+type LogHandle_CompleteAllActiveSegmentIfExists_Call struct {
+	*mock.Call
+}
+
+// CompleteAllActiveSegmentIfExists is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *LogHandle_Expecter) CompleteAllActiveSegmentIfExists(ctx interface{}) *LogHandle_CompleteAllActiveSegmentIfExists_Call {
+	return &LogHandle_CompleteAllActiveSegmentIfExists_Call{Call: _e.mock.On("CompleteAllActiveSegmentIfExists", ctx)}
+}
+
+func (_c *LogHandle_CompleteAllActiveSegmentIfExists_Call) Run(run func(ctx context.Context)) *LogHandle_CompleteAllActiveSegmentIfExists_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *LogHandle_CompleteAllActiveSegmentIfExists_Call) Return(_a0 error) *LogHandle_CompleteAllActiveSegmentIfExists_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogHandle_CompleteAllActiveSegmentIfExists_Call) RunAndReturn(run func(context.Context) error) *LogHandle_CompleteAllActiveSegmentIfExists_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetExistsReadonlySegmentHandle provides a mock function with given fields: _a0, _a1
 func (_m *LogHandle) GetExistsReadonlySegmentHandle(_a0 context.Context, _a1 int64) (segment.SegmentHandle, error) {
 	ret := _m.Called(_a0, _a1)

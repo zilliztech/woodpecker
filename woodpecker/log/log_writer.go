@@ -552,7 +552,7 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	l.writerClose <- struct{}{}
 	close(l.writerClose)
 	status := "success"
-	closeErr := l.logHandle.Close(ctx)
+	closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
 	if closeErr != nil {
 		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
 		status = "error"
