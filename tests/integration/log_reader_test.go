@@ -40,7 +40,7 @@ import (
 
 // One active segment#0 with entries 0,1
 func TestActiveSegmentRead(t *testing.T) {
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	// mock metadata
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
@@ -183,7 +183,7 @@ func TestSegmentInExceptionState(t *testing.T) {
 	// Test LogReader read entries 0,1 from segment#1, bypass segment#0
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, mockSegmentHandle, &earliest, "TestSegmentInExceptionState", cfg)
 	assert.NoError(t, newReaderErr)
@@ -270,7 +270,7 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 	// Test LogReader read entries 0,1 from segment#2
 	ctx := context.Background()
 	earliest := log.EarliestLogMessageID()
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &earliest, "TestReadFromEarlyNotExistsPoint", cfg)
 	assert.NoError(t, newReaderErr)
@@ -335,7 +335,7 @@ func TestReadFromSeekPoint(t *testing.T) {
 
 	// Test LogReader read entries 1 from segment#2
 	ctx := context.Background()
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &log.LogMessageId{
 		SegmentId: int64(2),
@@ -380,7 +380,7 @@ func TestReadFromLatestWhenLatestIsCompleted(t *testing.T) {
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsCompleted", cfg)
 	assert.NoError(t, newReaderErr)
@@ -426,7 +426,7 @@ func TestReadFromLatestWhenLatestIsActive(t *testing.T) {
 	// Test LogReader read latest should block
 	ctx := context.Background()
 	latest := log.LatestLogMessageID()
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	logReader, newReaderErr := log.NewLogBatchReader(ctx, mockLogHandle, nil, &latest, "TestReadFromLatestWhenLatestIsActive", cfg)
 	assert.NoError(t, newReaderErr)

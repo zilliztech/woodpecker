@@ -14,12 +14,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package codec
+package generic
 
-import "encoding/binary"
+import "reflect"
 
-func Int64ToBytes(value int64) []byte {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, uint64(value))
-	return buf
+func Zero[T any]() T {
+	var zero T
+	return zero
+}
+
+func IsZero[T any](v T) bool {
+	return reflect.ValueOf(&v).Elem().IsZero()
+}
+
+func Equal(v1, v2 any) bool {
+	return v1 == v2
 }

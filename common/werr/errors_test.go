@@ -17,71 +17,201 @@
 package werr
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestWoodpeckerError tests the custom woodpeckerError type
-func TestWoodpeckerError(t *testing.T) {
-	// Create a new woodpeckerError instance
-	errMsg := "test error"
-	errCode := int32(1001)
-	retryable := true
-	testErr := newWoodpeckerError(errMsg, errCode, retryable)
-
-	// Test Error() method
-	assert.Equal(t, errMsg, testErr.Error())
-
-	// Test Code() method
-	assert.Equal(t, errCode, testErr.Code())
-
-	// Test IsRetryable() method
-	assert.Equal(t, retryable, testErr.IsRetryable())
-
-	// Test Is() method
-	sameErr := newWoodpeckerError("test error 2", errCode, retryable)
-	assert.True(t, testErr.Is(sameErr))
-	differentErr := newWoodpeckerError("different error", int32(2002), retryable)
-	assert.False(t, testErr.Is(differentErr))
-
-	// Test IsRetryableErr function
-	assert.True(t, IsRetryableErr(testErr))
-	assert.False(t, IsRetryableErr(errors.New("standard error")))
-
-	// Test errors.Is
-	assert.True(t, errors.Is(testErr, sameErr))
-	assert.False(t, errors.Is(testErr, differentErr))
-	assert.False(t, errors.Is(testErr, errors.New("standard error")))
-}
-
-func TestMultiErrors_Is(t *testing.T) {
-	err1 := errors.New("error 1")
-	err2 := ErrEntryNotFound
-	err3 := ErrSegmentNotFound
-
-	multiErr := Combine(err1, err2, err3)
-
-	assert.True(t, multiErr.(*multiErrors).Is(err1))
-	assert.True(t, multiErr.(*multiErrors).Is(err2))
-	assert.True(t, multiErr.(*multiErrors).Is(err3))
-
-	assert.Equal(t, fmt.Sprintf("%s: %s: %s", err1.Error(), err2.Error(), err3.Error()), multiErr.Error())
-}
-
-// TestMultiErrors_Error 测试 multiErrors 的 Error 方法
-func TestMultiErrors_Error(t *testing.T) {
-	err1 := errors.New("error 1")
-	err2 := errors.New("error 2")
-	err3 := errors.New("error 3")
-
-	multiErr := Combine(err1, err2, err3)
-
-	expected := "error 1: error 2: error 3"
-	actual := multiErr.Error()
-	if actual != expected {
-		t.Errorf("Expected %v, got %v", expected, actual)
+func TestWoodpeckerError_ErrorChaining(t *testing.T) {
+	// Test basic error creation
+	baseErr := ErrWoodpeckerClientConnectionFailed
+	if baseErr.Error() != "failed to create connection" {
+		t.Errorf("Expected 'failed to create connection', got '%s'", baseErr.Error())
 	}
+
+	// Test error chaining with WithCauseErr
+	originalErr := errors.New("network timeout")
+	wrappedErr := baseErr.WithCauseErr(originalErr)
+
+	// Check that the wrapped error contains both messages
+	expectedMsg := "failed to create connection: network timeout"
+	if wrappedErr.Error() != expectedMsg {
+		t.Errorf("Expected '%s', got '%s'", expectedMsg, wrappedErr.Error())
+	}
+
+	// Test error unwrapping
+	unwrapped := errors.Unwrap(wrappedErr)
+	if unwrapped == nil {
+		t.Error("Expected unwrapped error to not be nil")
+	}
+	if unwrapped.Error() != "network timeout" {
+		t.Errorf("Expected 'network timeout', got '%s'", unwrapped.Error())
+	}
+
+	// Test errors.Is functionality
+	if !errors.Is(wrappedErr, originalErr) {
+		t.Error("Expected errors.Is to return true for original error")
+	}
+
+	// Test errors.Is with woodpecker error
+	if !errors.Is(wrappedErr, baseErr) {
+		t.Error("Expected errors.Is to return true for base woodpecker error")
+	}
+
+	// Test errors.As functionality
+	var wpErr woodpeckerError
+	if !errors.As(wrappedErr, &wpErr) {
+		t.Error("Expected errors.As to return true for woodpeckerError")
+	}
+	if wpErr.Code() != WoodpeckerClientConnectionFailed {
+		t.Errorf("Expected error code %d, got %d", WoodpeckerClientConnectionFailed, wpErr.Code())
+	}
+}
+
+func TestWoodpeckerError_WithContext(t *testing.T) {
+	baseErr := ErrLogWriterClosed
+	contextErr := baseErr.WithContext("during flush operation")
+
+	expectedMsg := "during flush operation: log writer is closed"
+	if contextErr.Error() != expectedMsg {
+		t.Errorf("Expected '%s', got '%s'", expectedMsg, contextErr.Error())
+	}
+
+	// Test that the error code is preserved
+	var wpErr woodpeckerError
+	if !errors.As(contextErr, &wpErr) {
+		t.Error("Expected errors.As to return true for woodpeckerError")
+	}
+	if wpErr.Code() != LogWriterClosed {
+		t.Errorf("Expected error code %d, got %d", LogWriterClosed, wpErr.Code())
+	}
+}
+
+func TestWoodpeckerError_MultiLevelChaining(t *testing.T) {
+	// Create a multi-level error chain
+	rootErr := errors.New("disk full")
+	level1Err := ErrFileWriterNoSpace.WithCauseErr(rootErr)
+	level2Err := ErrLogWriterBufferFull.WithCauseErr(level1Err)
+
+	// Test that we can traverse the entire chain
+	if !errors.Is(level2Err, rootErr) {
+		t.Error("Expected errors.Is to find root error in chain")
+	}
+
+	if !errors.Is(level2Err, ErrFileWriterNoSpace) {
+		t.Error("Expected errors.Is to find level1 error in chain")
+	}
+
+	if !errors.Is(level2Err, ErrLogWriterBufferFull) {
+		t.Error("Expected errors.Is to find level2 error in chain")
+	}
+
+	// Test error message contains all levels
+	expectedSubstrings := []string{
+		"log writer buffer is full",
+		"writer no space available",
+		"disk full",
+	}
+
+	errorMsg := level2Err.Error()
+	for _, substring := range expectedSubstrings {
+		if !contains(errorMsg, substring) {
+			t.Errorf("Expected error message to contain '%s', got '%s'", substring, errorMsg)
+		}
+	}
+}
+
+func TestWoodpeckerError_RetryableProperty(t *testing.T) {
+	// Test retryable error
+	retryableErr := ErrWoodpeckerClientConnectionFailed // This is retryable
+	if !IsRetryableErr(retryableErr) {
+		t.Error("Expected IsRetryableErr to return true for retryable error")
+	}
+
+	// Test non-retryable error
+	nonRetryableErr := ErrWoodpeckerClientClosed // This is not retryable
+	if IsRetryableErr(nonRetryableErr) {
+		t.Error("Expected IsRetryableErr to return false for non-retryable error")
+	}
+
+	// Test retryable property is preserved through chaining
+	originalErr := errors.New("network issue")
+	wrappedErr := retryableErr.WithCauseErr(originalErr)
+	if !IsRetryableErr(wrappedErr) {
+		t.Error("Expected IsRetryableErr to return true for wrapped retryable error")
+	}
+}
+
+func TestWoodpeckerError_WithCauseErrMsg(t *testing.T) {
+	baseErr := ErrInternalError
+	msgErr := baseErr.WithCauseErrMsg("custom error message")
+
+	if msgErr.Error() != "custom error message" {
+		t.Errorf("Expected 'custom error message', got '%s'", msgErr.Error())
+	}
+
+	// Test that there's no underlying cause for message-only wrapping
+	if errors.Unwrap(msgErr) != nil {
+		t.Error("Expected no underlying cause for message-only wrapping")
+	}
+
+	// Test that the error code is preserved
+	var wpErr woodpeckerError
+	if !errors.As(msgErr, &wpErr) {
+		t.Error("Expected errors.As to return true for woodpeckerError")
+	}
+	if wpErr.Code() != InternalError {
+		t.Errorf("Expected error code %d, got %d", InternalError, wpErr.Code())
+	}
+}
+
+func TestMultiErrors_ErrorChaining(t *testing.T) {
+	err1 := ErrLogWriterClosed
+	err2 := ErrStorageNotWritable
+	err3 := errors.New("custom error")
+
+	multiErr := Combine(err1, err2, err3)
+
+	// Test that errors.Is works with multiErrors
+	if !errors.Is(multiErr, err1) {
+		t.Error("Expected errors.Is to find err1 in multiErrors")
+	}
+	if !errors.Is(multiErr, err2) {
+		t.Error("Expected errors.Is to find err2 in multiErrors")
+	}
+	if !errors.Is(multiErr, err3) {
+		t.Error("Expected errors.Is to find err3 in multiErrors")
+	}
+
+	// Test that the error message contains information about all errors
+	errorMsg := multiErr.Error()
+	if !contains(errorMsg, "log writer is closed") {
+		t.Errorf("Expected error message to contain err1, got '%s'", errorMsg)
+	}
+
+	newErr := fmt.Errorf("test")
+	assert.True(t, errors.IsAny(multiErr, err2, newErr))
+	assert.False(t, errors.IsAny(multiErr, newErr))
+	assert.True(t, errors.IsAny(multiErr, err1, err3))
+
+	assert.False(t, ErrSegmentHandleSegmentClosed.Is(nil))
+	assert.False(t, ErrSegmentHandleSegmentClosed.Is(fmt.Errorf("test error")))
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+			containsSubstring(s, substr))))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

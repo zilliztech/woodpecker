@@ -153,12 +153,12 @@ func TestContextCancel(t *testing.T) {
 }
 
 func TestWrap(t *testing.T) {
-	err := werr.ErrSegmentNotFound.WithCauseErrMsg("failed to get Segment")
-	assert.True(t, errors.Is(err, werr.ErrSegmentNotFound))
+	err := werr.ErrTimeoutError.WithCauseErrMsg("timeout to process")
+	assert.True(t, errors.Is(err, werr.ErrTimeoutError))
 	assert.True(t, IsRecoverable(err))
 	err2 := Unrecoverable(err)
 	fmt.Println(err2)
-	assert.True(t, errors.Is(err2, werr.ErrSegmentNotFound))
+	assert.True(t, errors.Is(err2, werr.ErrTimeoutError))
 	assert.False(t, IsRecoverable(err2))
 }
 

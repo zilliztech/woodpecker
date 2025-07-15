@@ -19,13 +19,14 @@ package integration
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -63,7 +64,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -242,7 +243,7 @@ func TestReadWriteLoop(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -323,7 +324,7 @@ func testWrite(t *testing.T, client woodpecker.Client, logName string, count int
 	}
 	closeErr := logWriter.Close(context.Background())
 	assert.NoError(t, closeErr)
-	fmt.Printf("Test Write finished %v,%v \n", successIds[0], successIds[count-1])
+	t.Logf("Test Write finished %v,%v \n", successIds[0], successIds[count-1])
 	return successIds
 }
 
@@ -359,7 +360,7 @@ func testRead(t *testing.T, client woodpecker.Client, logName string, writtenIds
 
 	closeReaderErr := logReader.Close(context.Background())
 	assert.NoError(t, closeReaderErr)
-	fmt.Printf("Test Read finished %v,%v \n", readMsgs[0].Id, readMsgs[count-1].Id)
+	t.Logf("Test Read finished %v,%v \n", readMsgs[0].Id, readMsgs[count-1].Id)
 }
 
 func TestMultiAppendSyncLoop(t *testing.T) {
@@ -384,7 +385,7 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -445,9 +446,9 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 			//resultList = append(resultList, writeResult)
 			resultList[no] = writeResult
 			if writeResult.Err != nil {
-				fmt.Printf("write failed %v \n", writeResult.Err)
+				t.Logf("write failed %v \n", writeResult.Err)
 			} else {
-				fmt.Printf("write %d %d success \n", writeResult.LogMessageId.SegmentId, writeResult.LogMessageId.EntryId)
+				t.Logf("write %d %d success \n", writeResult.LogMessageId.SegmentId, writeResult.LogMessageId.EntryId)
 			}
 			<-concurrency
 			wg.Done()
@@ -467,13 +468,13 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 	assert.Equal(t, 0, len(failedIds))
 	assert.Equal(t, count, len(successIds))
 	if count != len(successIds) {
-		fmt.Printf("unexpected success num")
+		t.Logf("unexpected success num")
 	}
-	fmt.Printf("success: ")
+	t.Logf("success: ")
 	for _, msgId := range successIds {
-		fmt.Printf("%d:%d ,", msgId.SegmentId, msgId.EntryId)
+		t.Logf("%d:%d ,", msgId.SegmentId, msgId.EntryId)
 	}
-	fmt.Printf("\n")
+	t.Logf("\n")
 	sort.Slice(successIds, func(i, j int) bool {
 		if successIds[i].SegmentId < successIds[j].SegmentId {
 			return true
@@ -483,19 +484,19 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 			return successIds[i].EntryId < successIds[j].EntryId
 		}
 	})
-	fmt.Printf("success order: ")
+	t.Logf("success order: ")
 	for _, msgId := range successIds {
-		fmt.Printf("%d:%d ,", msgId.SegmentId, msgId.EntryId)
+		t.Logf("%d:%d ,", msgId.SegmentId, msgId.EntryId)
 	}
-	fmt.Printf("\n")
-	fmt.Printf("successIds:%v \n", successIds)
+	t.Logf("\n")
+	t.Logf("successIds:%v \n", successIds)
 	for idx, msgId := range successIds {
 		if idx == 0 {
 			continue
 		}
 		if msgId.SegmentId == successIds[idx-1].SegmentId {
 			if msgId.EntryId != successIds[idx-1].EntryId+1 {
-				fmt.Printf("idx:%d,msgId:%v,successIds:%v \n", idx, msgId, successIds)
+				t.Logf("idx:%d,msgId:%v,successIds:%v \n", idx, msgId, successIds)
 			}
 			assert.Equal(t, msgId.EntryId, successIds[idx-1].EntryId+1, fmt.Sprintf("expected:%d actual:%d ", msgId.EntryId, successIds[idx-1].EntryId+1))
 		} else {
@@ -529,7 +530,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -573,7 +574,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 					readCh <- msg
 					readMessages = append(readMessages, msg)
-					fmt.Printf("Read message seg:%d entry:%d payload:%v props:%v\n", msg.Id.SegmentId, msg.Id.EntryId, msg.Payload, msg.Properties)
+					t.Logf("Read message seg:%d entry:%d payload:%v props:%v\n", msg.Id.SegmentId, msg.Id.EntryId, msg.Payload, msg.Properties)
 
 					// If we've read enough messages, signal completion
 					if len(readMessages) == totalMessages {
@@ -606,7 +607,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 
 					assert.NoError(t, result.Err)
 					writeMessages = append(writeMessages, result.LogMessageId)
-					fmt.Printf("Written message %d: %v\n", idx, result.LogMessageId)
+					t.Logf("Written message %d: %v\n", idx, result.LogMessageId)
 				}
 
 				// Sleep between batches to simulate time-delayed writes
@@ -677,7 +678,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
 			if tc.storageType != "" {
@@ -722,7 +723,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 
 					assert.NoError(t, result.Err)
 					writeMessages = append(writeMessages, result.LogMessageId)
-					fmt.Printf("Written message %d: %v\n", idx, result.LogMessageId)
+					t.Logf("Written message %d: %v\n", idx, result.LogMessageId)
 				}
 			}
 
@@ -734,7 +735,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			assert.True(t, strings.Contains(newErr.Error(), context.DeadlineExceeded.Error()))
 			assert.Nil(t, newMessage)
 
 			// Clean up
@@ -773,7 +774,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 
@@ -833,9 +834,9 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 					writeMutex.Unlock()
 
 					if result.Err != nil {
-						fmt.Printf("Write %d failed: %v\n", idx, result.Err)
+						t.Logf("Write %d failed: %v\n", idx, result.Err)
 					} else {
-						fmt.Printf("Write %d succeeded: seg:%d entry:%d\n",
+						t.Logf("Write %d succeeded: seg:%d entry:%d\n",
 							idx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 					}
 				}(i)
@@ -860,16 +861,16 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			for i, result := range writeResults {
 				if result.Err != nil {
 					failedWrites++
-					fmt.Printf("Write %d failed with error: %v\n", i, result.Err)
+					t.Logf("Write %d failed with error: %v\n", i, result.Err)
 				} else {
 					successfulWrites++
 					successfulIds = append(successfulIds, result.LogMessageId)
-					fmt.Printf("Write %d succeeded with ID: seg:%d entry:%d\n",
+					t.Logf("Write %d succeeded with ID: seg:%d entry:%d\n",
 						i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 				}
 			}
 
-			fmt.Printf("Summary: %d writes succeeded, %d writes failed\n",
+			t.Logf("Summary: %d writes succeeded, %d writes failed\n",
 				successfulWrites, failedWrites)
 
 			// Now read all messages and verify
@@ -890,7 +891,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 						break
 					}
 					readMessages = append(readMessages, msg)
-					fmt.Printf("Read message: seg:%d entry:%d payload:%s\n",
+					t.Logf("Read message: seg:%d entry:%d payload:%s\n",
 						msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 				}
 
@@ -979,7 +980,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create initial configuration
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 
@@ -1040,9 +1041,9 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 					writeMutex.Unlock()
 
 					if result.Err != nil {
-						fmt.Printf("Write %d failed: %v\n", idx, result.Err)
+						t.Logf("Write %d failed: %v\n", idx, result.Err)
 					} else {
-						fmt.Printf("Write %d succeeded: seg:%d entry:%d\n",
+						t.Logf("Write %d succeeded: seg:%d entry:%d\n",
 							idx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 					}
 				}(i)
@@ -1051,7 +1052,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Wait a bit to let some writes start, then close the entire client
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing client while writes are in progress...")
-			closeErr := client.Close()
+			closeErr := client.Close(context.TODO())
 			assert.NoError(t, closeErr)
 			fmt.Println("Client closed")
 
@@ -1067,16 +1068,16 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			for i, result := range writeResults {
 				if result.Err != nil {
 					failedWrites++
-					fmt.Printf("Write %d failed with error: %v\n", i, result.Err)
+					t.Logf("Write %d failed with error: %v\n", i, result.Err)
 				} else {
 					successfulWrites++
 					successfulIds = append(successfulIds, result.LogMessageId)
-					fmt.Printf("Write %d succeeded with ID: seg:%d entry:%d\n",
+					t.Logf("Write %d succeeded with ID: seg:%d entry:%d\n",
 						i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 				}
 			}
 
-			fmt.Printf("Summary: %d writes succeeded, %d writes failed\n",
+			t.Logf("Summary: %d writes succeeded, %d writes failed\n",
 				successfulWrites, failedWrites)
 
 			// Now create a new client to read the data
@@ -1084,7 +1085,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 			defer func() {
-				newClient.Close()
+				newClient.Close(context.TODO())
 			}()
 
 			// Now read all messages and verify
@@ -1110,7 +1111,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 						break
 					}
 					readMessages = append(readMessages, msg)
-					fmt.Printf("Read message: seg:%d entry:%d payload:%s\n",
+					t.Logf("Read message: seg:%d entry:%d payload:%s\n",
 						msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 				}
 
@@ -1195,7 +1196,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create initial configuration
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 
@@ -1256,9 +1257,9 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 					writeMutex.Unlock()
 
 					if result.Err != nil {
-						fmt.Printf("Write %d failed: %v\n", idx, result.Err)
+						t.Logf("Write %d failed: %v\n", idx, result.Err)
 					} else {
-						fmt.Printf("Write %d succeeded: seg:%d entry:%d\n",
+						t.Logf("Write %d succeeded: seg:%d entry:%d\n",
 							idx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 					}
 				}(i)
@@ -1267,7 +1268,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			// Wait a bit to let some writes start, then close the entire client
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing client while writes are in progress...")
-			closeErr := client.Close()
+			closeErr := client.Close(context.TODO())
 			assert.NoError(t, closeErr)
 			fmt.Println("Client closed")
 
@@ -1288,16 +1289,16 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			for i, result := range writeResults {
 				if result.Err != nil {
 					failedWrites++
-					fmt.Printf("Write %d failed with error: %v\n", i, result.Err)
+					t.Logf("Write %d failed with error: %v\n", i, result.Err)
 				} else {
 					successfulWrites++
 					successfulIds = append(successfulIds, result.LogMessageId)
-					fmt.Printf("Write %d succeeded with ID: seg:%d entry:%d\n",
+					t.Logf("Write %d succeeded with ID: seg:%d entry:%d\n",
 						i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 				}
 			}
 
-			fmt.Printf("Summary: %d writes succeeded, %d writes failed\n",
+			t.Logf("Summary: %d writes succeeded, %d writes failed\n",
 				successfulWrites, failedWrites)
 
 			// Now create a new client to read the data
@@ -1305,7 +1306,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 			defer func() {
-				newClient.Close()
+				newClient.Close(context.TODO())
 			}()
 
 			// Now read all messages and verify
@@ -1331,7 +1332,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 						break
 					}
 					readMessages = append(readMessages, msg)
-					fmt.Printf("Read message: seg:%d entry:%d payload:%s\n",
+					t.Logf("Read message: seg:%d entry:%d payload:%s\n",
 						msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 				}
 

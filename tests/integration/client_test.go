@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -55,7 +56,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -70,7 +71,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 			logName := "test_log_single_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(context.Background(), logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
 			}
 			logHandle, openErr := client.OpenLog(context.Background(), logName)
 			assert.NoError(t, openErr)
@@ -111,7 +112,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -127,7 +128,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			logName := "test_log_multi_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client1.CreateLog(context.Background(), logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
 			}
 
 			logHandle1, openErr := client1.OpenLog(context.Background(), logName)
@@ -180,7 +181,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -197,7 +198,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			logName := "test_repeated_open_close" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+				assert.True(t, errors.IsAny(createErr, werr.ErrMetadataCreateLog, werr.ErrLogHandleLogAlreadyExists))
 			}
 
 			// Open log handle
@@ -331,7 +332,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			t.Log("Reader closed successfully")
 
 			// Close client
-			err = client.Close()
+			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Client closed successfully")
 
@@ -365,7 +366,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -382,7 +383,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 			logName := "test_writer_close_without_write" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
 			}
 
 			// Open log handle
@@ -545,7 +546,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 			}
 
 			// Close client
-			err = client.Close()
+			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Client closed successfully")
 
@@ -579,7 +580,7 @@ func TestClientRecreation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -599,7 +600,7 @@ func TestClientRecreation(t *testing.T) {
 				// Create a log or use existing one
 				createErr := client1.CreateLog(ctx, logName)
 				if createErr != nil {
-					assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+					assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
 				}
 
 				// Open the log
@@ -624,7 +625,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the first client
-				err = client1.Close()
+				err = client1.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("First client closed successfully")
@@ -705,7 +706,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the second client
-				err = client2.Close()
+				err = client2.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("Second client closed successfully")
@@ -742,7 +743,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -768,7 +769,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				// Create a log or use existing one
 				createErr := client1.CreateLog(ctx, logName)
 				if createErr != nil {
-					assert.True(t, werr.ErrLogAlreadyExists.Is(createErr))
+					assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
 				}
 
 				// Open the log
@@ -793,7 +794,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the first client
-				err = client1.Close()
+				err = client1.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("First client closed successfully")
@@ -881,7 +882,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close the second client
-				err = client2.Close()
+				err = client2.Close(context.TODO())
 				assert.NoError(t, err)
 
 				t.Log("Second client closed successfully")
@@ -932,7 +933,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				t.Logf("Cycle %d: Creating client with data writer", i+1)
 
 				// Create new client for writing data
-				cfg, err := config.NewConfiguration()
+				cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 				assert.NoError(t, err)
 				if tc.storageType != "" {
 					cfg.Woodpecker.Storage.Type = tc.storageType
@@ -983,7 +984,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close client
-				err = dataClient.Close()
+				err = dataClient.Close(context.TODO())
 				assert.NoError(t, err)
 				t.Logf("Cycle %d: Client with data writer closed successfully after writing 5 messages", i+1)
 
@@ -994,7 +995,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				t.Logf("Cycle %d: Creating client with empty writer", i+1)
 
 				// Create new client for empty writer
-				emptyClientCfg, err := config.NewConfiguration()
+				emptyClientCfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 				assert.NoError(t, err)
 				emptyClient, err := woodpecker.NewEmbedClientFromConfig(ctx, emptyClientCfg)
 				assert.NoError(t, err)
@@ -1013,7 +1014,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Close client
-				err = emptyClient.Close()
+				err = emptyClient.Close(context.TODO())
 				assert.NoError(t, err)
 				t.Logf("Cycle %d: Client with empty writer closed without writing", i+1)
 
@@ -1025,7 +1026,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 
 			// Create final client to read and verify all data
 			t.Log("Creating reader client to verify all messages")
-			readerCfg, err := config.NewConfiguration()
+			readerCfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			readerClient, err := woodpecker.NewEmbedClientFromConfig(ctx, readerCfg)
 			assert.NoError(t, err)
@@ -1102,7 +1103,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 			t.Log("Reader closed successfully")
 
 			// Close client
-			err = readerClient.Close()
+			err = readerClient.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Reader client closed successfully")
 
@@ -1136,7 +1137,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {
@@ -1149,7 +1150,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3
@@ -1451,7 +1452,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 				emptyWriter, createEmptyWriterErr := logHandle.OpenLogWriter(ctx)
 				assert.NoError(t, createEmptyWriterErr)
 				closeEmptyWriterErr := emptyWriter.Close(ctx)
-				assert.NoError(t, closeEmptyWriterErr)
+				assert.NoError(t, closeEmptyWriterErr, fmt.Sprintf("%v", closeEmptyWriterErr))
 
 				t.Logf("====== Completed Test Cycle %d/%d Successfully ======", cycle+1, testCycles)
 			}
@@ -1487,7 +1488,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {
@@ -1502,7 +1503,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3
@@ -1612,7 +1613,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
 						// Use a fixed timeout for each read
-						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
@@ -1804,7 +1805,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 				emptyWriter, createEmptyWriterErr := logHandle.OpenLogWriter(ctx)
 				assert.NoError(t, createEmptyWriterErr)
 				closeEmptyWriterErr := emptyWriter.Close(ctx)
-				assert.NoError(t, closeEmptyWriterErr)
+				assert.NoError(t, closeEmptyWriterErr, fmt.Sprintf("%v", closeEmptyWriterErr))
 
 				t.Logf("====== Completed Test Cycle %d/%d Successfully ======", cycle+1, testCycles)
 			}
@@ -1840,7 +1841,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
 			if tc.storageType != "" {
@@ -1855,7 +1856,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
-			defer client.Close()
+			defer client.Close(context.TODO())
 
 			// Number of overall test cycles to run
 			const testCycles = 3
@@ -2243,6 +2244,320 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 			}
 
 			t.Logf("====== Final Verification Completed Successfully: Read and verified %d messages ======", len(finalMessages))
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+func TestConcurrentReaderWriterWithHangingBehavior(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestConcurrentReaderWriterWithHangingBehavior")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			cfg.Log.Level = "debug"
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			// Create a new embed client
+			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+			assert.NoError(t, err)
+			defer client.Close(context.TODO())
+
+			// Create a test log with timestamp to ensure uniqueness
+			logName := "test_concurrent_reader_writer_hanging_" + tc.name + time.Now().Format("20060102150405")
+			createErr := client.CreateLog(ctx, logName)
+			assert.NoError(t, createErr)
+
+			// Open log handle
+			logHandle, err := client.OpenLog(ctx, logName)
+			assert.NoError(t, err)
+
+			t.Logf("Created test log: %s", logName)
+
+			// Phase 1: Create empty writer (no data written)
+			t.Log("Phase 1: Creating empty writer without writing data")
+			emptyWriter, err := logHandle.OpenLogWriter(ctx)
+			assert.NoError(t, err)
+			assert.NotNil(t, emptyWriter)
+
+			// Phase 2: Start reader in goroutine - should hang until writer writes data
+			t.Log("Phase 2: Starting reader - should hang until writer writes data")
+			readerMessages := make(chan string, 15) // Buffer for 10 + 1 messages
+			readerErrors := make(chan error, 15)
+			readerDone := make(chan struct{})
+			readerStarted := make(chan struct{}) // Signal when reader actually starts
+
+			// Arrays to collect messages consumed during hang checks
+			var collectedMessages []string
+			var collectedErrors []error
+
+			go func() {
+				defer close(readerDone)
+
+				// Start reading from the beginning
+				startPoint := &log.LogMessageId{
+					SegmentId: 0,
+					EntryId:   0,
+				}
+
+				reader, err := logHandle.OpenLogReader(ctx, startPoint, "hanging-behavior-reader")
+				if err != nil {
+					readerErrors <- err
+					return
+				}
+				defer reader.Close(ctx)
+
+				t.Log("Reader started, waiting for data...")
+				close(readerStarted) // Signal that reader has started
+
+				// Read messages one by one - should hang until data is available
+				for i := 0; i < 11; i++ { // Expect 10 + 1 messages total
+					t.Logf("Reader: Attempting to read message %d", i+1)
+
+					// Use a longer timeout to allow for the hanging behavior
+					readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					msg, err := reader.ReadNext(readCtx)
+					cancel()
+
+					if err != nil {
+						t.Logf("Reader: Error reading message %d: %v", i+1, err)
+						readerErrors <- err
+						return
+					}
+
+					if msg == nil {
+						t.Logf("Reader: Received nil message at position %d", i+1)
+						readerErrors <- fmt.Errorf("received nil message at position %d", i+1)
+						return
+					}
+
+					t.Logf("Reader: Successfully read message %d: seg:%d,entry:%d payload:%s",
+						i+1, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+					readerMessages <- string(msg.Payload)
+				}
+
+				t.Log("Reader: Completed reading all expected messages")
+			}()
+
+			// Wait for reader to start
+			<-readerStarted
+
+			// Phase 3: Wait a bit to ensure reader is hanging
+			t.Log("Phase 3: Waiting to ensure reader is hanging...")
+			time.Sleep(2 * time.Second)
+
+			// Verify reader hasn't received any messages yet (non-blocking check)
+			select {
+			case msg := <-readerMessages:
+				t.Errorf("Reader should be hanging but received message: %s", msg)
+				// Collect the message instead of putting it back
+				collectedMessages = append(collectedMessages, msg)
+			case err := <-readerErrors:
+				t.Errorf("Reader should be hanging but received error: %v", err)
+				// Collect the error instead of putting it back
+				collectedErrors = append(collectedErrors, err)
+			default:
+				t.Log("✓ Reader is correctly hanging, no messages received yet")
+			}
+
+			// Phase 4: Close empty writer and start writing data
+			t.Log("Phase 4: Closing empty writer and starting to write data")
+			err = emptyWriter.Close(ctx)
+			assert.NoError(t, err)
+
+			// Open a new writer for writing data
+			dataWriter, err := logHandle.OpenLogWriter(ctx)
+			assert.NoError(t, err)
+			assert.NotNil(t, dataWriter)
+
+			// Phase 5: Write 10 messages, one per second
+			t.Log("Phase 5: Writing 10 messages, one per second")
+			for i := 0; i < 10; i++ {
+				message := &log.WriterMessage{
+					Payload: []byte(fmt.Sprintf("Message %d", i+1)),
+					Properties: map[string]string{
+						"index": fmt.Sprintf("%d", i+1),
+						"type":  "hanging-test",
+					},
+				}
+
+				result := dataWriter.Write(ctx, message)
+				assert.NoError(t, result.Err)
+				assert.NotNil(t, result.LogMessageId)
+
+				t.Logf("Writer: Written message %d with ID: segment=%d, entry=%d",
+					i+1, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+				// Wait 1 second before writing next message
+				time.Sleep(1 * time.Second)
+
+				// Check if reader received the message
+				select {
+				case receivedMsg := <-readerMessages:
+					t.Logf("✓ Reader received message %d: %s", i+1, receivedMsg)
+					assert.Equal(t, fmt.Sprintf("Message %d", i+1), receivedMsg)
+					collectedMessages = append(collectedMessages, receivedMsg)
+				case err := <-readerErrors:
+					t.Errorf("Reader error while reading message %d: %v", i+1, err)
+				case <-time.After(2 * time.Second):
+					t.Errorf("Reader did not receive message %d within timeout", i+1)
+				}
+			}
+
+			// Phase 6: Close the data writer
+			t.Log("Phase 6: Closing data writer")
+			err = dataWriter.Close(ctx)
+			assert.NoError(t, err)
+
+			// Phase 7: Wait a bit to ensure reader is hanging again
+			t.Log("Phase 7: Waiting to ensure reader is hanging again after writer closed...")
+			time.Sleep(2 * time.Second)
+
+			// Verify reader is hanging again (no new messages) - non-blocking check
+			select {
+			case msg := <-readerMessages:
+				t.Errorf("Reader should be hanging but received unexpected message: %s", msg)
+				// Collect the message instead of putting it back
+				collectedMessages = append(collectedMessages, msg)
+			case err := <-readerErrors:
+				t.Errorf("Reader should be hanging but received error: %v", err)
+				// Collect the error instead of putting it back
+				collectedErrors = append(collectedErrors, err)
+			default:
+				t.Log("✓ Reader is correctly hanging again after writer closed")
+			}
+
+			// Phase 8: Open a new writer and write one more message
+			t.Log("Phase 8: Opening new writer and writing one more message")
+			newWriter, err := logHandle.OpenLogWriter(ctx)
+			assert.NoError(t, err)
+			assert.NotNil(t, newWriter)
+
+			finalMessage := &log.WriterMessage{
+				Payload: []byte("Final Message"),
+				Properties: map[string]string{
+					"index": "11",
+					"type":  "hanging-test-final",
+				},
+			}
+
+			result := newWriter.Write(ctx, finalMessage)
+			assert.NoError(t, result.Err)
+			assert.NotNil(t, result.LogMessageId)
+
+			t.Logf("Writer: Written final message with ID: segment=%d, entry=%d",
+				result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+			// Phase 9: Verify reader receives the final message
+			t.Log("Phase 9: Verifying reader receives the final message")
+			select {
+			case receivedMsg := <-readerMessages:
+				t.Logf("✓ Reader received final message: %s", receivedMsg)
+				assert.Equal(t, "Final Message", receivedMsg)
+				collectedMessages = append(collectedMessages, receivedMsg)
+			case err := <-readerErrors:
+				t.Errorf("Reader error while reading final message: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Errorf("Reader did not receive final message within timeout")
+			}
+
+			// Phase 10: Close the new writer
+			t.Log("Phase 10: Closing new writer")
+			err = newWriter.Close(ctx)
+			assert.NoError(t, err)
+
+			// Phase 11: Wait for reader goroutine to complete
+			t.Log("Phase 11: Waiting for reader goroutine to complete")
+			select {
+			case <-readerDone:
+				t.Log("✓ Reader goroutine completed successfully")
+			case <-time.After(10 * time.Second):
+				t.Error("Reader goroutine did not complete within timeout")
+			}
+
+			// Phase 12: Verify all messages were received in correct order
+			t.Log("Phase 12: Verifying all messages were received in correct order")
+
+			// Wait a bit to ensure all messages are processed
+			time.Sleep(500 * time.Millisecond)
+
+			// Drain remaining messages from channel to count them
+			var allMessages []string
+			var allErrors []error
+
+			// First add any messages collected during hang checks
+			allMessages = append(allMessages, collectedMessages...)
+			allErrors = append(allErrors, collectedErrors...)
+
+			// Then collect all remaining messages from channel
+			for {
+				select {
+				case msg := <-readerMessages:
+					allMessages = append(allMessages, msg)
+				case err := <-readerErrors:
+					allErrors = append(allErrors, err)
+				default:
+					// No more messages, break the loop
+					goto done
+				}
+			}
+
+		done:
+			receivedCount := len(allMessages)
+			t.Logf("Total messages received: %d", receivedCount)
+
+			// Should have received exactly 11 messages (10 + 1 final)
+			assert.Equal(t, 11, receivedCount, "Should have received exactly 11 messages")
+
+			// Verify message content
+			expectedMessages := []string{
+				"Message 1", "Message 2", "Message 3", "Message 4", "Message 5",
+				"Message 6", "Message 7", "Message 8", "Message 9", "Message 10",
+				"Final Message",
+			}
+
+			for i, expectedMsg := range expectedMessages {
+				if i < len(allMessages) {
+					assert.Equal(t, expectedMsg, allMessages[i], "Message %d content mismatch", i+1)
+				}
+			}
+
+			// Verify no errors occurred
+			errorCount := len(allErrors)
+			assert.Equal(t, 0, errorCount, "Should have no reader errors")
+
+			if errorCount > 0 {
+				t.Logf("Errors encountered: %v", allErrors)
+			}
+
+			t.Log("✓ Test completed successfully - reader hanging behavior verified")
 
 			// stop embed LogStore singleton
 			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()

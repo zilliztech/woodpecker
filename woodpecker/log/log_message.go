@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	pb "github.com/zilliztech/woodpecker/proto"
 )
 
@@ -80,6 +81,10 @@ type WriterMessage struct {
 }
 
 func MarshalMessage(m *WriterMessage) ([]byte, error) {
+	if invalidErr := ValidateMsg(m); invalidErr != nil {
+		return nil, invalidErr
+	}
+
 	msgLayout := &pb.LogMessageLayout{
 		Payload:    m.Payload,
 		Properties: m.Properties,
@@ -102,4 +107,16 @@ func UnmarshalMessage(data []byte) (*LogMessage, error) {
 		Properties: msgLayout.Properties,
 	}
 	return m, nil
+}
+
+func ValidateMsg(msg *WriterMessage) error {
+	if msg == nil {
+		return werr.ErrInvalidMessage.WithCauseErrMsg("message is nil")
+	}
+
+	if len(msg.Properties) == 0 && len(msg.Payload) == 0 {
+		return werr.ErrInvalidMessage.WithCauseErrMsg("can not set Properties and Payload both")
+	}
+
+	return nil
 }

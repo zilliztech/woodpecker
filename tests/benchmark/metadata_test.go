@@ -134,7 +134,7 @@ func TestClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fatal %v", err)
 	}
-	fmt.Printf("clear finished")
+	t.Logf("clear finished")
 }
 
 func TestAcquireLogWriterLockPerformance(t *testing.T) {

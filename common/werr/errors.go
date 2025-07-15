@@ -24,188 +24,310 @@ import (
 const (
 	// Ok means no errors
 	Ok = iota
-	// UnknownError means unknown error happened on broker
-	UnknownError
-	// InternalError means internal error
-	InternalError
-	// InvalidConfiguration means invalid configuration
-	InvalidConfiguration
-	// TimeoutError means operation timed out
-	TimeoutError
-	// ConnectError means failed to connect to broker
-	ConnectError
-	// ClientInitError means failed to initialize client
-	ClientInitError
-	// ClientClosedError means client is closed
-	ClientClosedError
-	// ReadError means failed to read from socket
-	ReadError
-	// MetadataInitError failed to initialize service metadata
+
+	// ---------------------------------------------
+	// Client Layer Error Codes
+	// ---------------------------------------------
+
+	// woodpecker_client errors
+	WoodpeckerClientConnectionFailed
+	WoodpeckerClientInitFailed
+	WoodpeckerClientClosed
+	WoodpeckerClientConfigInvalid
+
+	// log_handle errors
+	LogHandleLogAlreadyExists
+	LogHandleLogNotFound
+	LogHandleInvalidLogName
+	LogHandleWriterLockFailed
+	LogHandleInvalidState
+	LogHandleTruncateFailed
+	LogHandleGetTruncationPointFailed
+	LogHandleFenceFailed
+
+	// segment_handle errors
+	SegmentHandleSegmentFenced
+	SegmentHandleSegmentClosed
+	SegmentHandleSegmentRolling
+	SegmentHandleSegmentStateInvalid
+	SegmentHandleReadFailed
+	SegmentHandleWriteFailed
+	SegmentHandleCompactionFailed
+	SegmentHandleRecoveryFailed
+
+	// append_op errors
+	AppendOpResultChannelClosed
+	AppendOpMaxConcurrentOpsReached
+	AppendOpQuorumFailed
+	AppendOpTimeout
+
+	// log_writer errors
+	LogWriterClosed
+	LogWriterFinalized
+	LogWriterBufferFull
+	LogWriterBufferEmpty
+	LogWriterRecordTooLarge
+	LogWriterLockLost
+
+	// log_reader errors
+	LogReaderClosed
+	LogReaderEntryNotFound
+	LogReaderBufferEmpty
+	LogReaderInvalidEntryId
+	LogReaderTempInfoError
+	LogReaderReadFailed
+
+	// ---------------------------------------------
+	// Server Layer Error Codes
+	// ---------------------------------------------
+
+	// logstore errors
+	LogStoreNotStarted
+	LogStoreAlreadyStarted
+	LogStoreShutdown
+	LogStoreRegisterFailed
+	LogStoreInvalidAddress
+
+	// segment_processor errors
+	SegmentProcessorNotFound
+	SegmentProcessorAlreadyExists
+	SegmentProcessorFenced
+	SegmentProcessorClosed
+	SegmentProcessorNoWriter
+	SegmentProcessorWriteFailed
+	SegmentProcessorReadFailed
+	SegmentProcessorCompactionFailed
+	SegmentProcessorRecoveryFailed
+	SegmentProcessorCleanupFailed
+
+	// file writer_impl errors (disk/object storage)
+	FileWriterBufferFull
+	FileWriterSyncFailed
+	FileWriterFinalizeFailed
+	FileWriterFenceFailed
+	FileWriterRecoveryFailed
+	FileWriterCloseFailed
+	FileWriterLockFailed
+	FileWriterNoSpace
+	FileWriterCorrupted
+	FileWriterInvalidRecord
+	FileWriterCodecNotFound
+	FileWriterUnknownRecordType
+	FileWriterUnexpectedRecordType
+	FileWriterInvalidMagicCode
+	FileWriterCRCMismatch
+	FileWriterInvalidEntryId
+	FileWriterFinalized
+	FileWriterAlreadyClosed
+
+	// file reader_impl errors (disk/object storage)
+	FileReaderNotFound
+	FileReaderCorrupted
+	FileReaderInvalidRecord
+	FileReaderCodecNotFound
+	FileReaderUnknownRecordType
+	FileReaderUnexpectedRecordType
+	FileReaderInvalidMagicCode
+	FileReaderCRCMismatch
+	FileReaderCloseFailed
+	FileReaderAlreadyClosed
+	FileReaderNoBlockFound
+
+	// ---------------------------------------------
+	// Metadata Layer Error Codes
+	// ---------------------------------------------
+
+	// Metadata operations
 	MetadataInitError
-	// MetadataEncodeError failed in encode metadata
-	MetadataEncodeError
-	// MetadataDecodeError failed in decode metadata
-	MetadataDecodeError
-	// MetadataReadError failed in decode metadata
 	MetadataReadError
-	// MetadataWriteError failed in write metadata
 	MetadataWriteError
-	// MetadataCreateLogError failed in create log metadata
+	MetadataEncodeError
+	MetadataDecodeError
 	MetadataCreateLogError
-	// MetadataCreateLogTxnError failed execute create log metadata txn
 	MetadataCreateLogTxnError
-	// MetadataCreateSegmentError failed in create segment metadata
 	MetadataCreateSegmentError
-	// MetadataUpdateSegmentError failed in update segment metadata
 	MetadataUpdateSegmentError
-	// MetadataUpdateQuorumError failed in update quorum metadata
 	MetadataUpdateQuorumError
-	// MetadataCreateReaderError failed in create reader temp info
 	MetadataCreateReaderError
-	// LogAlreadyExists means log already exists
-	LogAlreadyExists
-	// MetadataSegmentNotFound means segment not found
-	MetadataSegmentNotFound
-	// PersistenceError failed to persist entry
-	PersistenceError
-	// ChecksumError corrupt message checksum failure
-	ChecksumError
-	// NotConnectedError producer/consumer is not currently connected to broker
-	NotConnectedError
-	// AlreadyClosedError producer/consumer is already closed and not accepting any operation
-	AlreadyClosedError
-	// InvalidEntryId entry id is invalid
-	InvalidEntryId
-	// ReaderNotInitialized reader is not initialized
-	ReaderNotInitialized
-	// WriterNotInitialized writer is not initialized
-	WriterNotInitialized
-	// TooManyAppendOpsException too many concurrent AppendOps
-	TooManyAppendOpsException
-	// InvalidLogName means invalid Log name
-	InvalidLogName
-	// InvalidURL means Client Initialized with Invalid LogStore Url
-	InvalidURL
-	// OperationNotSupported operation not supported
-	OperationNotSupported
-	// WriterBlockedQuotaExceededException writer is getting exception
-	WriterBlockedQuotaExceededException
-	// WriterQueueIsFull producer queue is full
-	WriterQueueIsFull
-	// MessageTooBig trying to send a messages exceeding the max size
-	MessageTooBig
-	// EntryNotFound entry not found
-	EntryNotFound
-	// UnsupportedVersionError when an older client/version doesn't support a required feature
-	UnsupportedVersionError
-	// ReaderClosed means reader already been closed
-	ReaderClosed
-	// WriterClosed means writer already been closed
-	WriterClosed
-	// InvalidStatus means the component status is not as expected.
-	InvalidStatus
-	// MemoryBufferIsFull limited buffer is full
-	MemoryBufferIsFull
-	// MemoryBufferIsEmpty buffer is empty
-	MemoryBufferIsEmpty
-	// SegmentFenced When a segment asks and fail to get exclusive writer access,
-	// or loses the exclusive status after a reconnection, the segmentHandle will
-	// use this error to indicate that this segment is now permanently
-	// fenced.
-	SegmentFenced
-	// SegmentNoWritingFragment when a segment is not writing a fragment, this error
-	SegmentNoWritingFragment
-	// SegmentStateInvalid indicates that the segment is in an invalid state for current Operation.
-	SegmentStateInvalid
-	// SegmentClosed indicates that the segment is closed.
-	SegmentClosed
-	// SegmentReadException indicates that an exception occurred while reading a segment.
-	SegmentReadException
-	// SegmentWriteException indicates that an exception occurred while writing a segment.
-	SegmentWriteException
-	// SegmentWriteError indicates that an error occurred while writing a segment.
-	SegmentWriteError
-	// LogFileClosed indicates that the log file is closed.
-	LogFileClosed
-	// FragmentEmpty indicates that the fragment is empty.
-	FragmentEmpty
-	// FragmentNotFound indicates that the fragment is not found.
-	FragmentNotFound
-	// FragmentInfoNotFetched indicates that the fragment info is not fetched.
-	FragmentInfoNotFetched
-	// FragmentNotLoaded indicates that the fragment is not loaded.
-	FragmentNotLoaded
-	// FragmentNotUploaded indicates that the fragment is not uploaded.
-	FragmentNotUploaded
-	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
-	// has been reached. This means that no additional operations can be started until some
-	// of the current operations complete.
-	MaxConcurrentOperationsReached
-	// ConfigError indicates that an error occurred while reading the configuration.
+
+	// ---------------------------------------------
+	// Common/Utility Error Codes
+	// ---------------------------------------------
+
+	// General errors
+	InternalError
 	ConfigError
-	// DiskFragmentNoSpace indicates that the disk fragment is full.
-	DiskFragmentNoSpace
-	// TruncateLogError indicates an error occurred during log truncation
-	TruncateLogError
-	// GetTruncationPointError indicates an error occurred when retrieving truncation point
-	GetTruncationPointError
-	// WriterLockLost indicates the writer has lost its exclusive lock
-	WriterLockLost
+	TimeoutError
+	OperationNotSupported
+	InvalidConfiguration
+	UnsupportedVersionError
+	ChecksumError
+	PersistenceError
+	InvalidMessage
+	EmptyPayload
+	EntryNotFound
+	StorageNotWritable
+	SegmentFenced
+	SegmentNotFound
+	ObjectAlreadyExists
+
+	// ---------------------------------------------
+	// Fragment-related Error Codes (still in use)
+	// ---------------------------------------------
+
+	// Fragment errors
+	FragmentAlreadyExists
+
+	// LogFile errors (still in use)
+	LogFileClosed
 )
 
 var (
-	// Metadata related
-	ErrMetadataInit             = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
-	ErrMetadataRead             = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
-	ErrMetadataWrite            = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
-	ErrMetadataEncode           = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
-	ErrMetadataDecode           = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
-	ErrCreateLogMetadata        = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
-	ErrCreateLogMetadataTxn     = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
-	ErrCreateSegmentMetadata    = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
-	ErrUpdateSegmentMetadata    = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
-	ErrUpdateQuorumInfoMetadata = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
+	// ---------------------------------------------
+	// Client Layer Errors
+	// ---------------------------------------------
 
-	// Client related
-	ErrCreateConnection = newWoodpeckerError("failed to create connection", ConnectError, true)
-	ErrInitClient       = newWoodpeckerError("failed to init client", ClientInitError, true)
-	ErrClientClosed     = newWoodpeckerError("Client is closed", ClientClosedError, false)
+	// woodpecker_client errors
+	ErrWoodpeckerClientConnectionFailed = newWoodpeckerError("failed to create connection", WoodpeckerClientConnectionFailed, true)
+	ErrWoodpeckerClientInitFailed       = newWoodpeckerError("failed to init client", WoodpeckerClientInitFailed, true)
+	ErrWoodpeckerClientClosed           = newWoodpeckerError("client is closed", WoodpeckerClientClosed, false)
+	ErrWoodpeckerClientConfigInvalid    = newWoodpeckerError("invalid client configuration", WoodpeckerClientConfigInvalid, false)
 
-	// log&segment related
-	ErrLogAlreadyExists         = newWoodpeckerError("Log already exists", LogAlreadyExists, false)
-	ErrSegmentNotFound          = newWoodpeckerError("Segment not found", MetadataSegmentNotFound, false)
-	ErrSegmentReadException     = newWoodpeckerError("failed to read segment", SegmentReadException, true)
-	ErrSegmentWriteException    = newWoodpeckerError("failed to write segment", SegmentWriteException, true)
-	ErrSegmentWriteError        = newWoodpeckerError("failed to write segment error", SegmentWriteError, false)
-	ErrSegmentClosed            = newWoodpeckerError("Segment is closed", SegmentClosed, true)
-	ErrSegmentFenced            = newWoodpeckerError("Segment is fenced", SegmentFenced, false)
-	ErrSegmentStateInvalid      = newWoodpeckerError("Segment state is invalid", SegmentStateInvalid, false)
-	ErrSegmentNoWritingFragment = newWoodpeckerError("Segment is not writing", SegmentNoWritingFragment, false)
+	// log_handle errors
+	ErrLogHandleLogAlreadyExists         = newWoodpeckerError("log already exists", LogHandleLogAlreadyExists, false)
+	ErrLogHandleLogNotFound              = newWoodpeckerError("log not found", LogHandleLogNotFound, false)
+	ErrLogHandleInvalidLogName           = newWoodpeckerError("invalid log name", LogHandleInvalidLogName, false)
+	ErrLogHandleWriterLockFailed         = newWoodpeckerError("failed to acquire writer lock", LogHandleWriterLockFailed, true)
+	ErrLogHandleInvalidState             = newWoodpeckerError("log handle is in invalid state", LogHandleInvalidState, false)
+	ErrLogHandleTruncateFailed           = newWoodpeckerError("failed to truncate log", LogHandleTruncateFailed, true)
+	ErrLogHandleGetTruncationPointFailed = newWoodpeckerError("failed to get truncation point", LogHandleGetTruncationPointFailed, true)
+	ErrLogHandleFenceFailed              = newWoodpeckerError("failed to fence log", LogHandleFenceFailed, true)
 
-	// LogFile & Fragment related
-	ErrLogFileClosed          = newWoodpeckerError("LogFile is closed", LogFileClosed, true)
-	ErrFragmentEmpty          = newWoodpeckerError("Fragment is empty", FragmentEmpty, false)
-	ErrFragmentNotFound       = newWoodpeckerError("Fragment is not found", FragmentNotFound, false)
-	ErrFragmentInfoNotFetched = newWoodpeckerError("Fragment info is not fetched", FragmentInfoNotFetched, false)
-	ErrFragmentNotLoaded      = newWoodpeckerError("Fragment is not loaded", FragmentNotLoaded, false)
-	ErrFragmentNotUploaded    = newWoodpeckerError("Fragment is not uploaded", FragmentNotUploaded, false)
+	// segment_handle errors
+	ErrSegmentHandleSegmentClosed       = newWoodpeckerError("segment is closed", SegmentHandleSegmentClosed, true)
+	ErrSegmentHandleSegmentRolling      = newWoodpeckerError("segment is rolling", SegmentHandleSegmentRolling, true)
+	ErrSegmentHandleSegmentStateInvalid = newWoodpeckerError("segment state is invalid", SegmentHandleSegmentStateInvalid, false)
+	ErrSegmentHandleReadFailed          = newWoodpeckerError("failed to read segment", SegmentHandleReadFailed, true)
+	ErrSegmentHandleWriteFailed         = newWoodpeckerError("failed to write segment", SegmentHandleWriteFailed, true)
+	ErrSegmentHandleCompactionFailed    = newWoodpeckerError("failed to compact segment", SegmentHandleCompactionFailed, true)
+	ErrSegmentHandleRecoveryFailed      = newWoodpeckerError("failed to recover segment", SegmentHandleRecoveryFailed, true)
 
-	// Reader&Writer related
-	ErrInvalidEntryId      = newWoodpeckerError("Invalid Entry Id", InvalidEntryId, false)
-	ErrBufferIsEmpty       = newWoodpeckerError("Buffer is empty", MemoryBufferIsEmpty, true)
-	ErrEntryNotFound       = newWoodpeckerError("Entry is not found", EntryNotFound, false)
-	ErrNotSupport          = newWoodpeckerError("Operation not supported", OperationNotSupported, false)
-	ErrInternalError       = newWoodpeckerError("internal error", InternalError, true)
-	ErrConfigError         = newWoodpeckerError("config error", ConfigError, false)
-	ErrReaderTempInfoError = newWoodpeckerError("reader temp info error", MetadataCreateReaderError, true)
-	ErrWriterLockLost      = newWoodpeckerError("writer lock has been lost", WriterLockLost, false)
+	// append_op errors
+	ErrAppendOpResultChannelClosed     = newWoodpeckerError("result channel is closed", AppendOpResultChannelClosed, false)
+	ErrAppendOpMaxConcurrentOpsReached = newWoodpeckerError("maximum concurrent operations reached", AppendOpMaxConcurrentOpsReached, true)
+	ErrAppendOpQuorumFailed            = newWoodpeckerError("quorum write failed", AppendOpQuorumFailed, true)
+	ErrAppendOpTimeout                 = newWoodpeckerError("append operation timeout", AppendOpTimeout, true)
 
-	// Storage Related
-	ErrDiskFragmentNoSpace = newWoodpeckerError("disk fragment no space", DiskFragmentNoSpace, false)
+	// log_writer errors
+	ErrLogWriterClosed         = newWoodpeckerError("log writer is closed", LogWriterClosed, false)
+	ErrLogWriterFinalized      = newWoodpeckerError("log writer is finalized", LogWriterFinalized, false)
+	ErrLogWriterBufferFull     = newWoodpeckerError("log writer buffer is full", LogWriterBufferFull, true)
+	ErrLogWriterBufferEmpty    = newWoodpeckerError("log writer buffer is empty", LogWriterBufferEmpty, true)
+	ErrLogWriterRecordTooLarge = newWoodpeckerError("record is too large", LogWriterRecordTooLarge, false)
+	ErrLogWriterLockLost       = newWoodpeckerError("writer lock lost", LogWriterLockLost, false)
 
-	// Truncation related
-	ErrTruncateLog        = newWoodpeckerError("failed to truncate log", TruncateLogError, true)
-	ErrGetTruncationPoint = newWoodpeckerError("failed to get truncation point", GetTruncationPointError, true)
+	// log_reader errors
+	ErrLogReaderClosed         = newWoodpeckerError("log reader is closed", LogReaderClosed, false)
+	ErrLogReaderBufferEmpty    = newWoodpeckerError("reader buffer is empty", LogReaderBufferEmpty, true)
+	ErrLogReaderInvalidEntryId = newWoodpeckerError("invalid entry id", LogReaderInvalidEntryId, false)
+	ErrLogReaderTempInfoError  = newWoodpeckerError("reader temp info error", LogReaderTempInfoError, true)
+	ErrLogReaderReadFailed     = newWoodpeckerError("failed to read entry", LogReaderReadFailed, true)
+
+	// ---------------------------------------------
+	// Server Layer Errors
+	// ---------------------------------------------
+
+	// logstore errors
+	ErrLogStoreNotStarted     = newWoodpeckerError("logstore not started", LogStoreNotStarted, false)
+	ErrLogStoreAlreadyStarted = newWoodpeckerError("logstore already started", LogStoreAlreadyStarted, false)
+	ErrLogStoreShutdown       = newWoodpeckerError("logstore is shutting down", LogStoreShutdown, false)
+	ErrLogStoreRegisterFailed = newWoodpeckerError("failed to register logstore", LogStoreRegisterFailed, true)
+	ErrLogStoreInvalidAddress = newWoodpeckerError("invalid logstore address", LogStoreInvalidAddress, false)
+
+	// segment_processor errors
+	ErrSegmentProcessorNotFound         = newWoodpeckerError("segment processor not found", SegmentProcessorNotFound, false)
+	ErrSegmentProcessorAlreadyExists    = newWoodpeckerError("segment processor already exists", SegmentProcessorAlreadyExists, false)
+	ErrSegmentProcessorFenced           = newWoodpeckerError("segment processor is fenced", SegmentProcessorFenced, false)
+	ErrSegmentProcessorClosed           = newWoodpeckerError("segment processor is closed", SegmentProcessorClosed, false)
+	ErrSegmentProcessorNoWriter         = newWoodpeckerError("segment processor no writer", SegmentProcessorNoWriter, false)
+	ErrSegmentProcessorWriteFailed      = newWoodpeckerError("segment processor write failed", SegmentProcessorWriteFailed, true)
+	ErrSegmentProcessorReadFailed       = newWoodpeckerError("segment processor read failed", SegmentProcessorReadFailed, true)
+	ErrSegmentProcessorCompactionFailed = newWoodpeckerError("segment processor compaction failed", SegmentProcessorCompactionFailed, true)
+	ErrSegmentProcessorRecoveryFailed   = newWoodpeckerError("segment processor recovery failed", SegmentProcessorRecoveryFailed, true)
+	ErrSegmentProcessorCleanupFailed    = newWoodpeckerError("segment processor cleanup failed", SegmentProcessorCleanupFailed, true)
+
+	// file writer errors (disk/object storage)
+	ErrFileWriterBufferFull           = newWoodpeckerError("writer buffer is full", FileWriterBufferFull, true)
+	ErrFileWriterSyncFailed           = newWoodpeckerError("writer sync failed", FileWriterSyncFailed, true)
+	ErrFileWriterFinalizeFailed       = newWoodpeckerError("writer finalize failed", FileWriterFinalizeFailed, true)
+	ErrFileWriterFenceFailed          = newWoodpeckerError("writer fence failed", FileWriterFenceFailed, true)
+	ErrFileWriterRecoveryFailed       = newWoodpeckerError("writer recovery failed", FileWriterRecoveryFailed, true)
+	ErrFileWriterCloseFailed          = newWoodpeckerError("writer close failed", FileWriterCloseFailed, true)
+	ErrFileWriterLockFailed           = newWoodpeckerError("writer lock failed", FileWriterLockFailed, true)
+	ErrFileWriterNoSpace              = newWoodpeckerError("writer no space available", FileWriterNoSpace, false)
+	ErrFileWriterCorrupted            = newWoodpeckerError("writer data corrupted", FileWriterCorrupted, false)
+	ErrFileWriterInvalidRecord        = newWoodpeckerError("writer invalid record size", FileWriterInvalidRecord, false)
+	ErrFileWriterCodecNotFound        = newWoodpeckerError("writer codec not found", FileWriterCodecNotFound, false)
+	ErrFileWriterUnknownRecordType    = newWoodpeckerError("writer unknown record type", FileWriterUnknownRecordType, false)
+	ErrFileWriterUnexpectedRecordType = newWoodpeckerError("writer unexpected record type", FileWriterUnexpectedRecordType, false)
+	ErrFileWriterInvalidMagicCode     = newWoodpeckerError("writer invalid magic code", FileWriterInvalidMagicCode, false)
+	ErrFileWriterCRCMismatch          = newWoodpeckerError("writer crc mismatch", FileWriterCRCMismatch, false)
+	ErrFileWriterInvalidEntryId       = newWoodpeckerError("invalid entry id", FileWriterInvalidEntryId, false)
+	ErrFileWriterFinalized            = newWoodpeckerError("writer finalized", FileWriterFinalized, false)
+	ErrFileWriterAlreadyClosed        = newWoodpeckerError("writer already closed", FileWriterAlreadyClosed, false)
+
+	// file reader errors (disk/object storage)
+	ErrFileReaderNotFound             = newWoodpeckerError("reader file not found", FileReaderNotFound, false)
+	ErrFileReaderCorrupted            = newWoodpeckerError("reader data corrupted", FileReaderCorrupted, false)
+	ErrFileReaderInvalidRecord        = newWoodpeckerError("reader invalid record size", FileReaderInvalidRecord, false)
+	ErrFileReaderCodecNotFound        = newWoodpeckerError("reader codec not found", FileReaderCodecNotFound, false)
+	ErrFileReaderUnknownRecordType    = newWoodpeckerError("reader unknown record type", FileReaderUnknownRecordType, false)
+	ErrFileReaderUnexpectedRecordType = newWoodpeckerError("reader unexpected record type", FileReaderUnexpectedRecordType, false)
+	ErrFileReaderInvalidMagicCode     = newWoodpeckerError("reader invalid magic code", FileReaderInvalidMagicCode, false)
+	ErrFileReaderCRCMismatch          = newWoodpeckerError("reader crc mismatch", FileReaderCRCMismatch, false)
+	ErrFileReaderCloseFailed          = newWoodpeckerError("reader close failed", FileReaderCloseFailed, true)
+	ErrFileReaderNoBlockFound         = newWoodpeckerError("reader no block found", FileReaderNoBlockFound, false)
+	ErrFileReaderAlreadyClosed        = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
+
+	// ---------------------------------------------
+	// Metadata Layer Errors
+	// ---------------------------------------------
+
+	// Metadata operations
+	ErrMetadataInit          = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
+	ErrMetadataRead          = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
+	ErrMetadataWrite         = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
+	ErrMetadataEncode        = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
+	ErrMetadataDecode        = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
+	ErrMetadataCreateLog     = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrMetadataCreateLogTxn  = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
+	ErrMetadataCreateSegment = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
+	ErrMetadataUpdateSegment = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
+	ErrMetadataUpdateQuorum  = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
+	ErrMetadataCreateReader  = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
+
+	// ---------------------------------------------
+	// Common/Utility Errors
+	// ---------------------------------------------
+
+	// General errors
+	ErrInternalError           = newWoodpeckerError("internal error", InternalError, true)
+	ErrConfigError             = newWoodpeckerError("config error", ConfigError, false)
+	ErrTimeoutError            = newWoodpeckerError("operation timeout", TimeoutError, true)
+	ErrOperationNotSupported   = newWoodpeckerError("operation not supported", OperationNotSupported, false)
+	ErrInvalidConfiguration    = newWoodpeckerError("invalid configuration", InvalidConfiguration, false)
+	ErrUnsupportedVersionError = newWoodpeckerError("unsupported version", UnsupportedVersionError, false)
+	ErrChecksumError           = newWoodpeckerError("checksum error", ChecksumError, false)
+	ErrPersistenceError        = newWoodpeckerError("persistence error", PersistenceError, true)
+	ErrStorageNotWritable      = newWoodpeckerError("storage not writable", StorageNotWritable, false)
+
+	// Data state errors
+	ErrInvalidMessage      = newWoodpeckerError("invalid message", InvalidMessage, false)
+	ErrEmptyPayload        = newWoodpeckerError("empty payload", EmptyPayload, false)
+	ErrEntryNotFound       = newWoodpeckerError("entry not found", EntryNotFound, true)
+	ErrSegmentFenced       = newWoodpeckerError("segment fenced", SegmentFenced, false)
+	ErrSegmentNotFound     = newWoodpeckerError("segment not found", SegmentNotFound, true)
+	ErrObjectAlreadyExists = newWoodpeckerError("object already exists", ObjectAlreadyExists, false)
 )
 
 // woodpeckerError is a custom error type that provides richer error information.
@@ -213,6 +335,7 @@ type woodpeckerError struct {
 	msg       string // msg stores the detailed error message, describing the specific situation of the error.
 	errCode   int32  // errCode is an integer error code used to identify specific types of errors.
 	retryable bool   // retryable indicates whether the error can be retried. Certain operations can decide whether to retry based on this flag when encountering an error.
+	cause     error  // cause stores the underlying error that caused this error, supporting error chaining
 }
 
 func newWoodpeckerError(msg string, code int32, retryable bool) woodpeckerError {
@@ -220,6 +343,7 @@ func newWoodpeckerError(msg string, code int32, retryable bool) woodpeckerError 
 		msg:       msg,
 		errCode:   code,
 		retryable: retryable,
+		cause:     nil,
 	}
 	return err
 }
@@ -229,6 +353,9 @@ func (e woodpeckerError) Code() int32 {
 }
 
 func (e woodpeckerError) Error() string {
+	if e.cause != nil {
+		return e.msg + ": " + e.cause.Error()
+	}
 	return e.msg
 }
 
@@ -236,16 +363,40 @@ func (e woodpeckerError) IsRetryable() bool {
 	return e.retryable
 }
 
+// Unwrap returns the underlying error, supporting Go 1.13+ error chaining
+func (e woodpeckerError) Unwrap() error {
+	return e.cause
+}
+
 func (e woodpeckerError) Is(err error) bool {
-	cause := errors.Cause(err)
-	if cause, ok := cause.(woodpeckerError); ok {
-		return e.errCode == cause.errCode
+	// First check if the error codes match
+	if target, ok := err.(woodpeckerError); ok {
+		return e.errCode == target.errCode
 	}
-	return false
+	// cause is nil, so no underlying error to check
+	if e.cause == nil {
+		return false
+	}
+	// Use the standard library's Is function for error chain traversal
+	return errors.Is(e.cause, err)
+}
+
+// As supports Go 1.13+ error unwrapping for type assertions
+func (e woodpeckerError) As(target interface{}) bool {
+	if target, ok := target.(*woodpeckerError); ok {
+		*target = e
+		return true
+	}
+	return errors.As(e.cause, target)
 }
 
 func (e woodpeckerError) WithCauseErr(cause error) error {
-	return e.WithCauseErrMsg(cause.Error())
+	return woodpeckerError{
+		msg:       e.msg,
+		errCode:   e.errCode,
+		retryable: e.retryable,
+		cause:     cause,
+	}
 }
 
 func (e woodpeckerError) WithCauseErrMsg(msg string) error {
@@ -253,12 +404,24 @@ func (e woodpeckerError) WithCauseErrMsg(msg string) error {
 		msg:       msg,
 		errCode:   e.errCode,
 		retryable: e.retryable,
+		cause:     nil, // No underlying error for message-only wrapping
+	}
+}
+
+// WithContext creates a new error with additional context while preserving the error chain
+func (e woodpeckerError) WithContext(context string) error {
+	return woodpeckerError{
+		msg:       context + ": " + e.msg,
+		errCode:   e.errCode,
+		retryable: e.retryable,
+		cause:     e.cause,
 	}
 }
 
 func IsRetryableErr(err error) bool {
-	if err, ok := err.(woodpeckerError); ok {
-		return err.retryable
+	var wpErr woodpeckerError
+	if errors.As(err, &wpErr) {
+		return wpErr.retryable
 	}
 	return false
 }

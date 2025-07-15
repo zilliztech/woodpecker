@@ -34,8 +34,9 @@ import (
 // It uses the client-based approach for setup and verifies proper error handling
 func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	// Create client
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err, "Failed to create configuration")
+	cfg.Log.Level = "debug"
 
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 	assert.NoError(t, err, "Failed to create client")
@@ -43,7 +44,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -80,7 +81,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrLogWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())
@@ -98,6 +99,10 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	result = newWriter.Write(context.Background(), msg)
 	assert.NoError(t, result.Err, "Write with new writer should succeed")
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
+
+	// wait for sync before read
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	// 6. Verify data integrity with a reader
 	reader, err := logHandle.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")
@@ -117,7 +122,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 
 func TestClientLogWriterSessionExpiry(t *testing.T) {
 	// Create client
-	cfg, err := config.NewConfiguration()
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err, "Failed to create configuration")
 
 	client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
@@ -126,7 +131,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -166,7 +171,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	}
 	result = writer.Write(context.Background(), msg)
 	assert.Error(t, result.Err, "Write after session expiry should fail")
-	assert.True(t, werr.ErrWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
+	assert.True(t, werr.ErrLogWriterLockLost.Is(result.Err), "Error should be ErrWriterLockLost")
 
 	// 3. Close the expired writer
 	err = writer.Close(context.Background())

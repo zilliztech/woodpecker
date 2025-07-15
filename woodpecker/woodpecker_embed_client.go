@@ -59,7 +59,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, min
 
 	initError := embedLogStore.Start()
 	if initError != nil {
-		return takeControlOfClients, initError
+		return false, initError
 	}
 
 	isLogStoreRunning = true
@@ -111,20 +111,28 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	}
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
-		return nil, werr.ErrCreateConnection.WithCauseErr(err)
+		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 	}
 	var minioCli minio.MinioHandler
 	if config.Woodpecker.Storage.IsStorageMinio() {
 		minioCli, err = minio.NewMinioHandler(ctx, config)
 		if err != nil {
-			return nil, werr.ErrCreateConnection.WithCauseErr(err)
+			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 		}
 	}
 	return NewEmbedClient(ctx, config, etcdCli, minioCli, true)
 }
 
 func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler, managed bool) (Client, error) {
+	// init logger
 	logger.InitLogger(cfg)
+	if minioCli != nil {
+		// Check if conditional write is supported.
+		// For MinIO, the version must be v20240510 or later.
+		// For cloud storage, the if-none-match feature is required.
+		minio.CheckIfConditionWriteSupport(ctx, minioCli, cfg.Minio.BucketName, cfg.Minio.RootPath)
+	}
+	// start embedded logStore
 	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, minioCli)
 	if err != nil {
 		return nil, err
@@ -145,7 +153,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	c.closeState.Store(false)
 	initErr := c.initClient(ctx)
 	if initErr != nil {
-		return nil, werr.ErrInitClient.WithCauseErr(initErr)
+		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(initErr)
 	}
 	// Increment active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Inc()
@@ -158,7 +166,7 @@ func (c *woodpeckerEmbedClient) initClient(ctx context.Context) error {
 	if initErr != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("init_client", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("init_client", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return werr.ErrInitClient.WithCauseErr(initErr)
+		return werr.ErrWoodpeckerClientInitFailed.WithCauseErr(initErr)
 	}
 	metrics.WpClientOperationsTotal.WithLabelValues("init_client", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("init_client", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -176,14 +184,14 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
-		return werr.ErrClientClosed
+		return werr.ErrWoodpeckerClientClosed
 	}
 	// early return if cache exists
 	if _, exists := c.logHandles[logName]; exists {
 		metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("create log failed, log already exists", zap.String("logName", logName))
-		return werr.ErrLogAlreadyExists
+		return werr.ErrLogHandleLogAlreadyExists
 	}
 
 	// otherwise try create new log
@@ -201,8 +209,8 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 			return nil
 		}
 
-		// Check if the error is txn (ErrCreateLogMetadataTxn)
-		if werr.ErrCreateLogMetadataTxn.Is(err) {
+		// Check if the error is txn (ErrMetadataCreateLogTxn)
+		if werr.ErrMetadataCreateLogTxn.Is(err) {
 			// auto retry
 			logger.Ctx(ctx).Info("Retrying create log due to transaction conflict",
 				zap.String("logName", logName),
@@ -236,7 +244,7 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	// early return if cache exists
 	if logHandle, exists := c.logHandles[logName]; exists {
@@ -274,7 +282,7 @@ func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
-		return false, werr.ErrClientClosed
+		return false, werr.ErrWoodpeckerClientClosed
 	}
 	// early return if cache exists
 	if _, exists := c.logHandles[logName]; exists {
@@ -303,7 +311,7 @@ func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (
 // It returns a slice containing all log names.
 func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	// Retrieve all logs with detailed comments
@@ -323,7 +331,7 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 // It returns a slice containing log names that match the prefix.
 func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
@@ -339,33 +347,33 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 	return logs, err
 }
 
-func (c *woodpeckerEmbedClient) Close() error {
+func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closeState.CompareAndSwap(false, true) {
-		logger.Ctx(context.TODO()).Info("client already closed, skip")
-		return werr.ErrClientClosed
+		logger.Ctx(ctx).Info("client already closed, skip")
+		return werr.ErrWoodpeckerClientClosed
 	}
 
 	// close all logHandle
 	for _, logHandle := range c.logHandles {
-		logHandle.Close(context.Background())
+		logHandle.Close(ctx)
 	}
 
 	// Decrement active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()
 	if closeErr != nil {
-		logger.Ctx(context.TODO()).Info("close metadata failed", zap.Error(closeErr))
+		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
 	closePoolErr := c.clientPool.Close()
 	if closePoolErr != nil {
-		logger.Ctx(context.TODO()).Info("close client pool failed", zap.Error(closePoolErr))
+		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
 	if c.managedCli {
 		closeEtcdCliErr := c.etcdCli.Close()
 		if closeEtcdCliErr != nil {
-			logger.Ctx(context.TODO()).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
+			logger.Ctx(ctx).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
 		}
 		return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
 	}

@@ -19,16 +19,15 @@ package benchmark
 import (
 	"crypto/rand"
 	"fmt"
-	"github.com/google/gops/agent"
 	"io"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
-
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/gops/agent"
 	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -120,8 +119,8 @@ func startReporting() {
 			select {
 			case <-ticker.C:
 				currentTimeMs := time.Now().UnixMilli()
-				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
-				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
+				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
+				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
 				if err != nil {
 					fmt.Printf("Failed to get metrics: %v\n", err)
 					continue

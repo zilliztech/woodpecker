@@ -35,11 +35,11 @@ func createTestLogStore() *logStore {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	store := &logStore{
-		cfg:                        cfg,
-		ctx:                        ctx,
-		cancel:                     cancel,
-		segmentProcessors:          make(map[int64]map[int64]processor.SegmentProcessor),
-		segmentProcessorLastAccess: make(map[int64]map[int64]time.Time),
+		cfg:               cfg,
+		ctx:               ctx,
+		cancel:            cancel,
+		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
+		cleanupDone:       make(chan struct{}),
 	}
 
 	return store
@@ -66,13 +66,6 @@ func TestLogStore_SegmentProcessorCleanup_Stop(t *testing.T) {
 	store.segmentProcessors[2] = map[int64]processor.SegmentProcessor{
 		30: mockProcessor3,
 	}
-	store.segmentProcessorLastAccess[1] = map[int64]time.Time{
-		10: time.Now(),
-		20: time.Now(),
-	}
-	store.segmentProcessorLastAccess[2] = map[int64]time.Time{
-		30: time.Now(),
-	}
 
 	// Call Stop
 	err := store.Stop()
@@ -80,7 +73,6 @@ func TestLogStore_SegmentProcessorCleanup_Stop(t *testing.T) {
 	// Verify
 	assert.NoError(t, err)
 	assert.Empty(t, store.segmentProcessors)
-	assert.Empty(t, store.segmentProcessorLastAccess)
 
 	// Verify all expectations
 	mockProcessor1.AssertExpectations(t)
@@ -91,98 +83,88 @@ func TestLogStore_SegmentProcessorCleanup_Stop(t *testing.T) {
 func TestLogStore_SegmentProcessorCleanup_IdleCleanup(t *testing.T) {
 	store := createTestLogStore()
 
-	// Create 15 mock processors to ensure some will be cleaned and some protected
+	// Create 5 mock processors to test the simplified cleanup logic
+	// Segments 1,2,3,4 should be cleaned if idle (not highest segment ID)
+	// Segment 5 should be protected (highest segment ID)
 	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
-	for i := int64(1); i <= 15; i++ {
+	for i := int64(1); i <= 5; i++ {
 		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
 	}
 
-	// Set up expectations - processors 1-5 should be closed (oldest by segment ID)
-	// Processors 6-15 (top 10) should be protected
-	// But we'll make processor 15 recently accessed, so it won't be cleaned anyway
-	for i := int64(1); i <= 5; i++ {
+	// Set up expectations - processors 1,2,3 should be closed (idle)
+	// Processor 4 is recent, so won't be closed
+	// Processor 5 is protected (highest segment ID)
+	for i := int64(1); i <= 3; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
 	}
 
 	// Add processors with different access times
 	now := time.Now()
-	oldTime := now.Add(-5 * time.Minute)    // Older than maxIdleTime (3 minutes)
+	oldTime := now.Add(-6 * time.Minute)    // Older than maxIdleTime (5 minutes)
 	recentTime := now.Add(-1 * time.Minute) // Recent access
 
 	store.segmentProcessors[1] = make(map[int64]processor.SegmentProcessor)
-	store.segmentProcessorLastAccess[1] = make(map[int64]time.Time)
 
-	// Add all processors to log 1
-	for i := int64(1); i <= 15; i++ {
+	for i := int64(1); i <= 5; i++ {
 		store.segmentProcessors[1][i] = mockProcessors[i]
-		if i == 15 {
-			// Make the highest segment ID recently accessed
-			store.segmentProcessorLastAccess[1][i] = recentTime
-		} else {
-			// All others are idle
-			store.segmentProcessorLastAccess[1][i] = oldTime
+
+		if i == 4 { // Segment 4 is recently accessed (not idle)
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(recentTime.UnixMilli()).Once()
+		} else if i < 5 { // Segments 1,2,3 are idle
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(oldTime.UnixMilli()).Once()
 		}
+		// Segment 5 (highest) won't have GetLastAccessTime called since it's protected
 	}
 
-	// Set last cleanup time to trigger cleanup
-	store.lastCleanupTime = now.Add(-2 * time.Minute)
+	// Call cleanup with 5 minute max idle time
+	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
 
-	// Call cleanup
-	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 3*time.Minute)
-
-	// Verify that segments 1-5 are removed (oldest and not protected)
-	for i := int64(1); i <= 5; i++ {
-		assert.NotContains(t, store.segmentProcessors[1], i, "Segment %d should be removed", i)
-	}
-	// Verify that segments 6-15 remain (protected as top 10)
-	for i := int64(6); i <= 15; i++ {
-		assert.Contains(t, store.segmentProcessors[1], i, "Segment %d should be protected", i)
+	// Verify that segments 1,2,3 were removed (idle)
+	for i := int64(1); i <= 3; i++ {
+		assert.NotContains(t, store.segmentProcessors[1], i, "Segment %d should be cleaned up (idle)", i)
 	}
 
-	// Verify access times are also cleaned up correctly
-	for i := int64(1); i <= 5; i++ {
-		assert.NotContains(t, store.segmentProcessorLastAccess[1], i, "Access time for segment %d should be removed", i)
-	}
-	for i := int64(6); i <= 15; i++ {
-		assert.Contains(t, store.segmentProcessorLastAccess[1], i, "Access time for segment %d should remain", i)
-	}
+	// Verify that segment 4 remains (not idle)
+	assert.Contains(t, store.segmentProcessors[1], int64(4), "Segment 4 should remain (not idle)")
+
+	// Verify that segment 5 remains (highest segment ID, protected)
+	assert.Contains(t, store.segmentProcessors[1], int64(5), "Segment 5 should be protected (highest segment ID)")
 
 	// Verify expectations for closed processors
-	for i := int64(1); i <= 5; i++ {
+	for i := int64(1); i <= 3; i++ {
 		mockProcessors[i].AssertExpectations(t)
 	}
 }
 
-func TestLogStore_SegmentProcessorCleanup_TryCleanupConditions(t *testing.T) {
+func TestLogStore_SegmentProcessorCleanup_ThresholdConditions(t *testing.T) {
 	store := createTestLogStore()
 
 	// Test case 1: Not enough processors to trigger cleanup
+	mockProcessor1 := mocks_segment.NewSegmentProcessor(t)
 	store.segmentProcessors[1] = map[int64]processor.SegmentProcessor{
-		10: mocks_segment.NewSegmentProcessor(t),
+		10: mockProcessor1,
 	}
-	store.segmentProcessorLastAccess[1] = map[int64]time.Time{
-		10: time.Now(),
-	}
-	store.lastCleanupTime = time.Now().Add(-2 * time.Minute)
 
-	// Should not trigger cleanup (less than minProcessorThreshold)
-	store.tryCleanupIdleSegmentProcessorsUnsafe(context.Background())
-	assert.Contains(t, store.segmentProcessors[1], int64(10)) // Processor should remain
+	// Should trigger cleanup but processor 10 is the highest segment ID so should be protected
+	store.performBackgroundCleanup(5 * time.Minute)
+	assert.Contains(t, store.segmentProcessors[1], int64(10)) // Processor should remain (protected as highest segment ID)
 
-	// Test case 2: Recent cleanup, should not trigger again
+	// Test case 2: Enough processors to trigger cleanup
+	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
+	recentTime := time.Now().Add(-1 * time.Minute) // Recent access time
+
 	for i := int64(1); i <= 15; i++ {
 		if store.segmentProcessors[1] == nil {
 			store.segmentProcessors[1] = make(map[int64]processor.SegmentProcessor)
-			store.segmentProcessorLastAccess[1] = make(map[int64]time.Time)
 		}
-		store.segmentProcessors[1][i] = mocks_segment.NewSegmentProcessor(t)
-		store.segmentProcessorLastAccess[1][i] = time.Now()
+		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
+		// All processors are recently accessed, so none should be cleaned
+		mockProcessors[i].EXPECT().GetLastAccessTime().Return(recentTime.UnixMilli()).Maybe()
+		store.segmentProcessors[1][i] = mockProcessors[i]
 	}
 
-	store.lastCleanupTime = time.Now() // Recent cleanup
-
-	// Should not trigger cleanup (recent cleanup)
-	store.tryCleanupIdleSegmentProcessorsUnsafe(context.Background())
+	// Should trigger cleanup but not clean anything (all processors are recent, and 15 is highest segment ID)
+	store.performBackgroundCleanup(5 * time.Minute)
 	assert.Len(t, store.segmentProcessors[1], 15) // All processors should remain
 }
 
@@ -201,10 +183,6 @@ func TestLogStore_RemoveSegmentProcessor(t *testing.T) {
 		10: mockProcessor1,
 		20: mockProcessor2,
 	}
-	store.segmentProcessorLastAccess[1] = map[int64]time.Time{
-		10: time.Now(),
-		20: time.Now(),
-	}
 
 	// Remove specific processor
 	store.RemoveSegmentProcessor(context.Background(), 1, 10)
@@ -212,8 +190,6 @@ func TestLogStore_RemoveSegmentProcessor(t *testing.T) {
 	// Verify processor is removed
 	assert.NotContains(t, store.segmentProcessors[1], int64(10))
 	assert.Contains(t, store.segmentProcessors[1], int64(20)) // Other processor remains
-	assert.NotContains(t, store.segmentProcessorLastAccess[1], int64(10))
-	assert.Contains(t, store.segmentProcessorLastAccess[1], int64(20))
 
 	// Verify expectations
 	mockProcessor1.AssertExpectations(t)
@@ -230,16 +206,12 @@ func TestLogStore_RemoveSegmentProcessor_LastProcessor(t *testing.T) {
 	store.segmentProcessors[1] = map[int64]processor.SegmentProcessor{
 		10: mockProcessor,
 	}
-	store.segmentProcessorLastAccess[1] = map[int64]time.Time{
-		10: time.Now(),
-	}
 
 	// Remove the only processor
 	store.RemoveSegmentProcessor(context.Background(), 1, 10)
 
 	// Verify entire log entry is removed
 	assert.NotContains(t, store.segmentProcessors, int64(1))
-	assert.NotContains(t, store.segmentProcessorLastAccess, int64(1))
 
 	// Verify expectations
 	mockProcessor.AssertExpectations(t)
@@ -255,20 +227,13 @@ func TestLogStore_GetExistsSegmentProcessor_UpdatesAccessTime(t *testing.T) {
 	store.segmentProcessors[1] = map[int64]processor.SegmentProcessor{
 		10: mockProcessor,
 	}
-	oldTime := time.Now().Add(-1 * time.Hour)
-	store.segmentProcessorLastAccess[1] = map[int64]time.Time{
-		10: oldTime,
-	}
 
 	// Get existing processor
 	processor := store.getExistsSegmentProcessor(1, 10)
 
 	// Verify
 	assert.Equal(t, mockProcessor, processor)
-
-	// Verify access time was updated
-	newTime := store.segmentProcessorLastAccess[1][10]
-	assert.True(t, newTime.After(oldTime))
+	// Note: Access time is now managed internally by the processor
 }
 
 func TestLogStore_GetExistsSegmentProcessor_NotFound(t *testing.T) {
@@ -315,15 +280,17 @@ func TestLogStore_CloseSegmentProcessorUnsafe_CloseError(t *testing.T) {
 func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	store := createTestLogStore()
 
-	// Create 15 mock processors with different segment IDs
+	// Create 5 mock processors to test protection logic
+	// All have old access times, but segment 5 should be protected (highest segment ID)
+	// Segments 1,2,3,4 should be cleaned (all idle and not highest)
 	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
-	for i := int64(1); i <= 15; i++ {
+	for i := int64(1); i <= 5; i++ {
 		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
 	}
 
-	// Only processors with smaller segment IDs should be closed (segments 1-5)
-	// Segments 6-15 (top 10) should be protected
-	for i := int64(1); i <= 5; i++ {
+	// Set up expectations - processors 1,2,3,4 should be closed
+	// Processor 5 will be protected (highest segment ID)
+	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
 	}
 
@@ -332,61 +299,142 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	oldTime := now.Add(-10 * time.Minute) // All are idle
 
 	store.segmentProcessors[1] = make(map[int64]processor.SegmentProcessor)
-	store.segmentProcessorLastAccess[1] = make(map[int64]time.Time)
 
-	for i := int64(1); i <= 15; i++ {
+	for i := int64(1); i <= 5; i++ {
 		store.segmentProcessors[1][i] = mockProcessors[i]
-		store.segmentProcessorLastAccess[1][i] = oldTime
+		// Only processors 1-4 will have GetLastAccessTime called (segment 5 is protected)
+		if i < 5 {
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(oldTime.UnixMilli()).Once()
+		}
 	}
 
 	// Call cleanup
 	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
 
-	// Verify that only segments 1-5 were removed, segments 6-15 (top 10) remain
-	for i := int64(1); i <= 5; i++ {
+	// Verify that segments 1,2,3,4 were removed
+	for i := int64(1); i <= 4; i++ {
 		assert.NotContains(t, store.segmentProcessors[1], i, "Segment %d should be removed", i)
 	}
-	for i := int64(6); i <= 15; i++ {
-		assert.Contains(t, store.segmentProcessors[1], i, "Segment %d should be protected", i)
-	}
+
+	// Verify that segment 5 remains (protected: highest segment ID)
+	assert.Contains(t, store.segmentProcessors[1], int64(5), "Segment 5 should be protected (highest segment ID)")
 
 	// Verify expectations for closed processors
-	for i := int64(1); i <= 5; i++ {
+	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].AssertExpectations(t)
 	}
 }
 
-func TestLogStore_SegmentProcessorCleanup_ProtectWhenLessThan10(t *testing.T) {
+func TestLogStore_SegmentProcessorCleanup_ProtectHighestSegment(t *testing.T) {
 	store := createTestLogStore()
 
-	// Create only 5 processors (less than protection threshold of 10)
+	// Create 5 processors to test highest segment protection
 	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
 	for i := int64(1); i <= 5; i++ {
 		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
 	}
 
-	// None should be closed since we have less than 10 total
-	// (all should be protected)
+	// Set up expectations - processors 1,2,3,4 should be closed (all idle except highest)
+	// Processor 5 will be protected (highest segment ID)
+	for i := int64(1); i <= 4; i++ {
+		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
+	}
 
-	// Add processors with all being idle
+	// Add processors with old access times (all idle)
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute) // All are idle
 
 	store.segmentProcessors[1] = make(map[int64]processor.SegmentProcessor)
-	store.segmentProcessorLastAccess[1] = make(map[int64]time.Time)
 
 	for i := int64(1); i <= 5; i++ {
 		store.segmentProcessors[1][i] = mockProcessors[i]
-		store.segmentProcessorLastAccess[1][i] = oldTime
+		// Only processors 1-4 will have GetLastAccessTime called (segment 5 is protected)
+		if i < 5 {
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(oldTime.UnixMilli()).Once()
+		}
 	}
 
 	// Call cleanup
 	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
 
-	// Verify that all segments remain (all are protected since total < 10)
-	for i := int64(1); i <= 5; i++ {
-		assert.Contains(t, store.segmentProcessors[1], i, "Segment %d should be protected", i)
+	// Verify that segments 1,2,3,4 were removed (idle and not highest)
+	for i := int64(1); i <= 4; i++ {
+		assert.NotContains(t, store.segmentProcessors[1], i, "Segment %d should be cleaned up", i)
 	}
 
-	// No expectations to verify since no processors should be closed
+	// Verify that segment 5 remains (highest segment ID, protected)
+	assert.Contains(t, store.segmentProcessors[1], int64(5), "Segment 5 should be protected (highest segment ID)")
+
+	// Verify expectations for closed processors
+	for i := int64(1); i <= 4; i++ {
+		mockProcessors[i].AssertExpectations(t)
+	}
+}
+
+func TestLogStore_BackgroundCleanup_StartStop(t *testing.T) {
+	store := createTestLogStore()
+
+	// Test starting background cleanup
+	store.startBackgroundCleanup()
+
+	// Give it a moment to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Test stopping background cleanup
+	store.stopBackgroundCleanup()
+
+	// Verify cleanup channel is closed
+	select {
+	case <-store.cleanupDone:
+		// Expected - channel should be closed
+	default:
+		t.Fatal("cleanupDone channel should be closed")
+	}
+}
+
+func TestLogStore_BackgroundCleanup_PerformCleanup(t *testing.T) {
+	store := createTestLogStore()
+
+	// Create 5 mock processors for cleanup testing
+	// Segments 1,2,3,4 should be cleaned (all idle), segment 5 should be protected (highest)
+	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
+	for i := int64(1); i <= 5; i++ {
+		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
+	}
+
+	// Set up expectations - processors 1,2,3,4 should be closed
+	// Processor 5 will be protected (highest segment ID)
+	for i := int64(1); i <= 4; i++ {
+		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
+	}
+
+	// Add processors with old access times
+	now := time.Now()
+	oldTime := now.Add(-10 * time.Minute) // All are idle
+
+	store.segmentProcessors[1] = make(map[int64]processor.SegmentProcessor)
+
+	for i := int64(1); i <= 5; i++ {
+		store.segmentProcessors[1][i] = mockProcessors[i]
+		// Only processors 1-4 will have GetLastAccessTime called (segment 5 is protected)
+		if i < 5 {
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(oldTime.UnixMilli()).Once()
+		}
+	}
+
+	// Perform background cleanup (no threshold check anymore)
+	store.performBackgroundCleanup(5 * time.Minute)
+
+	// Verify that segments 1,2,3,4 were removed
+	for i := int64(1); i <= 4; i++ {
+		assert.NotContains(t, store.segmentProcessors[1], i, "Segment %d should be removed", i)
+	}
+
+	// Verify that segment 5 remains (protected)
+	assert.Contains(t, store.segmentProcessors[1], int64(5), "Segment 5 should be protected (highest segment ID)")
+
+	// Verify expectations for closed processors
+	for i := int64(1); i <= 4; i++ {
+		mockProcessors[i].AssertExpectations(t)
+	}
 }

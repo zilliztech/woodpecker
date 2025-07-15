@@ -114,7 +114,7 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 	options := []grpc.DialOption{}
 	cnx, err := grpc.NewClient(target, options...)
 	if err != nil {
-		return nil, werr.ErrCreateConnection.WithCauseErr(err)
+		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 	}
 	return cnx, nil
 }

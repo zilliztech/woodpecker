@@ -18,7 +18,6 @@ package woodpecker
 
 import (
 	"context"
-	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,7 +36,6 @@ import (
 )
 
 type Client interface {
-	io.Closer
 	// CreateLog creates a new log with the specified name.
 	CreateLog(context.Context, string) error
 	// OpenLog opens an existing log with the specified name and returns a log handle.
@@ -52,6 +50,8 @@ type Client interface {
 	GetLogsWithPrefix(context.Context, string) ([]string, error)
 	// GetMetadataProvider returns the metadata provider associated with the client.
 	GetMetadataProvider() meta.MetadataProvider
+	// Close closes the client.
+	Close(context.Context) error
 }
 
 var _ Client = (*woodpeckerClient)(nil)
@@ -78,7 +78,7 @@ func NewClient(ctx context.Context, etcdClient *clientv3.Client, cfg *config.Con
 	}
 	err := c.initClient(ctx)
 	if err != nil {
-		return nil, werr.ErrInitClient.WithCauseErr(err)
+		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(err)
 	}
 	// Increment active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Inc() // TODO use local addr as label
@@ -91,7 +91,7 @@ func (c *woodpeckerClient) initClient(ctx context.Context) error {
 	if initErr != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("init_client", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("init_client", "error").Observe(float64(time.Since(start).Milliseconds()))
-		return werr.ErrInitClient.WithCauseErr(initErr)
+		return werr.ErrWoodpeckerClientInitFailed.WithCauseErr(initErr)
 	}
 	metrics.WpClientOperationsTotal.WithLabelValues("init_client", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("init_client", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -105,7 +105,7 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 // CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
 	if c.closeState.Load() {
-		return werr.ErrClientClosed
+		return werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	c.mu.RLock()
@@ -115,7 +115,7 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 		metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("create log failed, log already exists", zap.String("logName", logName))
-		return werr.ErrLogAlreadyExists
+		return werr.ErrLogHandleLogAlreadyExists
 	}
 
 	// otherwise try create new log
@@ -133,8 +133,8 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 			return nil
 		}
 
-		// Check if the error is txn (ErrCreateLogMetadataTxn)
-		if werr.ErrCreateLogMetadataTxn.Is(err) {
+		// Check if the error is txn (ErrMetadataCreateLogTxn)
+		if werr.ErrMetadataCreateLogTxn.Is(err) {
 			// auto retry
 			logger.Ctx(ctx).Info("Retrying create log due to transaction conflict",
 				zap.String("logName", logName),
@@ -164,7 +164,7 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	c.mu.Lock()
@@ -200,7 +200,7 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 // LogExists checks if a log with the specified name exists.
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
 	if c.closeState.Load() {
-		return false, werr.ErrClientClosed
+		return false, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	c.mu.RLock()
@@ -231,7 +231,7 @@ func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool,
 // GetAllLogs retrieves all log names.
 func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	// Retrieve all logs with detailed comments
@@ -250,7 +250,7 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 // GetLogsWithPrefix retrieves log names that start with the specified prefix.
 func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error) {
 	if c.closeState.Load() {
-		return nil, werr.ErrClientClosed
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
@@ -266,27 +266,27 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 	return logs, err
 }
 
-func (c *woodpeckerClient) Close() error {
+func (c *woodpeckerClient) Close(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closeState.CompareAndSwap(false, true) {
-		logger.Ctx(context.TODO()).Info("client already closed, skip")
-		return werr.ErrClientClosed
+		logger.Ctx(ctx).Info("client already closed, skip")
+		return werr.ErrWoodpeckerClientClosed
 	}
 
 	// close all logHandle
 	for _, logHandle := range c.logHandles {
-		logHandle.Close(context.Background())
+		logHandle.Close(ctx)
 	}
 	// Decrement active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()
 	if closeErr != nil {
-		logger.Ctx(context.TODO()).Info("close metadata failed", zap.Error(closeErr))
+		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
 	closePoolErr := c.clientPool.Close()
 	if closePoolErr != nil {
-		logger.Ctx(context.TODO()).Info("close client pool failed", zap.Error(closePoolErr))
+		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
 	return werr.Combine(closeErr, closePoolErr)
 }

@@ -16,26 +16,26 @@
             --success-color: #28a745;
             --code-bg: #f6f8fa;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             line-height: 1.6;
             color: #333;
             background-color: #fff;
         }
-        
+
         .container {
             max-width: 1080px;
             margin: 0 auto;
             padding: 0 20px;
         }
-        
+
         /* Navigation */
         .navbar {
             background-color: #fff;
@@ -44,7 +44,7 @@
             top: 0;
             z-index: 1000;
         }
-        
+
         .nav-container {
             display: flex;
             justify-content: space-between;
@@ -53,12 +53,12 @@
             max-width: 1080px;
             margin: 0 auto;
         }
-        
+
         .logo-wrapper {
             display: flex;
             align-items: center;
         }
-        
+
         .logo {
             font-weight: 400;
             font-size: 24px;
@@ -68,54 +68,54 @@
             align-items: center;
             letter-spacing: -0.02em;
         }
-        
+
         .logo-dot {
             margin: 0 4px;
             font-size: 24px;
             line-height: 1;
             opacity: 0.7;
         }
-        
+
         .logo-beta {
             font-size: 14px;
             opacity: 0.6;
             font-weight: 400;
             margin-top: 2px;
         }
-        
+
         .nav-links {
             display: flex;
             list-style: none;
         }
-        
+
         .nav-links li {
             margin-left: 30px;
         }
-        
+
         .nav-links a {
             text-decoration: none;
             color: var(--dark-color);
             font-weight: 500;
             transition: color 0.3s;
         }
-        
+
         .nav-links a:hover {
             color: var(--primary-color);
         }
-        
+
         /* Content Sections */
         .section {
             padding: 60px 0;
         }
-        
+
         .section:nth-child(even) {
             background-color: var(--light-color);
         }
-        
+
         .section-title {
             margin-bottom: 40px;
         }
-        
+
         .section-title h2 {
             font-weight: 400;
             font-size: 36px;
@@ -123,12 +123,12 @@
             margin-bottom: 15px;
             letter-spacing: -0.02em;
         }
-        
+
         .section-title p {
             color: var(--secondary-color);
             max-width: 700px;
         }
-        
+
         /* Code Blocks */
         .code-block {
             background-color: var(--code-bg);
@@ -137,30 +137,30 @@
             margin: 20px 0;
             overflow-x: auto;
         }
-        
+
         .code-block pre {
             margin: 0;
             font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
             font-size: 14px;
             line-height: 1.5;
         }
-        
+
         .code-block code {
             color: #24292e;
         }
-        
+
         /* Lists */
         .feature-list {
             list-style: none;
             margin: 20px 0;
         }
-        
+
         .feature-list li {
             margin-bottom: 15px;
             padding-left: 30px;
             position: relative;
         }
-        
+
         .feature-list li:before {
             content: "•";
             color: var(--primary-color);
@@ -169,7 +169,7 @@
             left: 0;
             top: 0;
         }
-        
+
         /* Tables */
         .config-table {
             width: 100%;
@@ -180,23 +180,23 @@
             overflow: hidden;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
-        
+
         .config-table th {
             background-color: var(--primary-color);
             color: white;
             padding: 15px;
             text-align: left;
         }
-        
+
         .config-table td {
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
         }
-        
+
         .config-table tr:last-child td {
             border-bottom: none;
         }
-        
+
         /* Footer */
         .footer {
             background-color: var(--dark-color);
@@ -204,30 +204,30 @@
             padding: 40px 0;
             text-align: center;
         }
-        
+
         .footer p {
             margin-bottom: 10px;
         }
-        
+
         .footer a {
             color: white;
             text-decoration: none;
         }
-        
+
         /* Responsive Design */
         @media (max-width: 768px) {
             .nav-container {
                 flex-direction: column;
             }
-            
+
             .nav-links {
                 margin-top: 20px;
             }
-            
+
             .nav-links li {
                 margin: 0 15px;
             }
-            
+
             .section-title h2 {
                 font-size: 30px;
             }
@@ -247,7 +247,7 @@
             height: 420px;
             width: 100%;
         }
-        
+
         .hero-content {
             position: relative;
             z-index: 1;
@@ -257,7 +257,7 @@
             display: flex;
             justify-content: space-between;
         }
-        
+
         .hero-text {
             width: 400px;
             height: 100%;
@@ -266,7 +266,7 @@
             justify-content: center;
             padding: 20px 0;
         }
-        
+
         .hero h1 {
             font-weight: 400;
             font-size: 48px;
@@ -274,7 +274,7 @@
             line-height: 1.2;
             letter-spacing: -0.02em;
         }
-        
+
         .hero p {
             font-size: 20px;
             margin-bottom: 24px;
@@ -282,26 +282,26 @@
             line-height: 1.4;
             max-width: 440px;
         }
-        
+
         @media (max-width: 1080px) {
             .hero-content {
                 width: 100%;
                 padding: 0 20px;
             }
         }
-        
+
         @media (max-width: 768px) {
             .hero {
                 height: auto;
             }
-            
+
             .hero-content {
                 flex-direction: column;
                 height: auto;
                 padding: 40px 20px;
                 align-items: center;
             }
-            
+
             .hero-text {
                 width: 100%;
                 height: auto;
@@ -309,16 +309,16 @@
                 text-align: center;
                 padding: 0 0 30px 0;
             }
-            
+
             .hero p {
                 max-width: 100%;
             }
-            
+
             .hero h1 {
                 font-size: 36px;
                 margin-bottom: 12px;
             }
-            
+
             .hero p {
                 font-size: 18px;
                 margin-bottom: 20px;
@@ -369,12 +369,12 @@
             <div class="section-title">
                 <h2>Core Components</h2>
             </div>
-            
+
             <div class="section-title">
                 <h3>FragmentFile</h3>
                 <p>FragmentFile is the basic storage unit responsible for read and write operations of individual log fragment files.</p>
             </div>
-            
+
             <div class="code-block">
                 <pre><code>File Layout:
 [Header (4K)] + [Data Area (grows forward)] + [...Free Space...] + [Index Area (grows backward)] + [Footer (fixed size)]
@@ -393,7 +393,7 @@ Data Entry Format:
                 <h3>DiskLogFile</h3>
                 <p>DiskLogFile manages multiple Fragment files, providing a unified read/write interface.</p>
             </div>
-            
+
             <div class="code-block">
                 <pre><code>Directory Structure:
 /basePath/
@@ -581,7 +581,7 @@ Data Entry Format:
             <div class="section-title">
                 <h2>Usage Examples</h2>
             </div>
-            
+
             <div class="code-block">
                 <pre><code>// Create LogFile
 logFile, err := NewDiskLogFile(1, "/path/to/logs", WithFragmentSize(4*1024*1024))
@@ -594,8 +594,8 @@ entryID, resultCh, err := logFile.AppendAsync(ctx, 0, []byte("async log entry"))
 
 // Read data
 reader, err := logFile.NewReader(ctx, storage.ReaderOpt{
-    StartSequenceNum: 0,
-    EndSequenceNum:   100,
+    StartEntryID: 0,
+    EndEntryID:   100,
 })</code></pre>
             </div>
         </div>

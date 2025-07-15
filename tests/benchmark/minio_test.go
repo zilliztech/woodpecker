@@ -33,9 +33,11 @@ import (
 )
 
 const (
-	TEST_OBJECT_PREFIX = "test_object_"
-	TEST_COUNT         = 100
-	TEST_OBJECT_SIZE   = 128_000_000
+	TEST_OBJECT_PREFIX     = "test_object_"
+	TEST_COUNT             = 10000
+	TEST_OBJECT_SIZE       = 4_000_000
+	CONCURRENT             = 1
+	CONDITION_WRITE_ENABLE = false
 )
 
 func TestMinioReadPerformance(t *testing.T) {
@@ -81,13 +83,13 @@ func TestMinioReadPerformance(t *testing.T) {
 			assert.NoError(t, err)
 			readSize := len(readData)
 			cost := time.Now().Sub(start)
-			//fmt.Printf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
+			//t.Logf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
 			<-ch
 			MinioIOBytes.WithLabelValues("0").Observe(float64(readSize))
 			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}(concurrentCh)
 	}
-	fmt.Printf("Test Minio Finish \n")
+	t.Logf("Test Minio Finish \n")
 }
 
 func TestMinioDelete(t *testing.T) {
@@ -97,10 +99,12 @@ func TestMinioDelete(t *testing.T) {
 	assert.NoError(t, err)
 	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	concurrentCh := make(chan int, 1)
+	concurrentCh := make(chan int, CONCURRENT)
+	wg := sync.WaitGroup{}
 	for i := 0; i < TEST_COUNT; i++ {
 		concurrentCh <- 1
 		objectId := i
+		wg.Add(1)
 		go func(ch chan int) {
 			removeErr := minioCli.RemoveObject(
 				context.Background(),
@@ -109,14 +113,16 @@ func TestMinioDelete(t *testing.T) {
 				minio.RemoveObjectOptions{})
 			assert.NoError(t, removeErr)
 			if removeErr != nil {
-				fmt.Printf("remove test_object_%d failed,err:%v\n", i, removeErr)
+				t.Logf("remove test_object_%d failed,err:%v\n", i, removeErr)
 				return
 			}
-			fmt.Printf("remove test_object_%d completed,\n", i)
+			t.Logf("remove test_object_%d completed,\n", i)
 			<-ch
+			wg.Done()
 		}(concurrentCh)
 	}
-	fmt.Printf("Test Minio Finish \n")
+	wg.Wait()
+	t.Logf("Test Minio Finish \n")
 }
 
 func TestMinioWritePerformance(t *testing.T) {
@@ -128,7 +134,7 @@ func TestMinioWritePerformance(t *testing.T) {
 	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
 	payloadStaticData, err := generateRandomBytes(TEST_OBJECT_SIZE) //
-	concurrentCh := make(chan int, 1)                               // 1 concurrency
+	concurrentCh := make(chan int, CONCURRENT)                      //  concurrency
 	wg := sync.WaitGroup{}
 	for i := 0; i < TEST_COUNT; i++ {
 		concurrentCh <- 1
@@ -136,16 +142,26 @@ func TestMinioWritePerformance(t *testing.T) {
 		wg.Add(1)
 		go func(ch chan int) {
 			start := time.Now()
-			_, putErr := minioCli.PutObject(
-				context.Background(),
-				cfg.Minio.BucketName,
-				fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
-				bytes.NewReader(payloadStaticData),
-				int64(len(payloadStaticData)),
-				minio.PutObjectOptions{})
-			assert.NoError(t, putErr)
+			if CONDITION_WRITE_ENABLE {
+				_, putErr := minioCli.PutObjectIfNoneMatch(
+					context.Background(),
+					cfg.Minio.BucketName,
+					fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
+					bytes.NewReader(payloadStaticData),
+					int64(len(payloadStaticData)))
+				assert.NoError(t, putErr)
+			} else {
+				_, putErr := minioCli.PutObject(
+					context.Background(),
+					cfg.Minio.BucketName,
+					fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
+					bytes.NewReader(payloadStaticData),
+					int64(len(payloadStaticData)),
+					minio.PutObjectOptions{})
+				assert.NoError(t, putErr)
+			}
 			cost := time.Now().Sub(start)
-			//fmt.Printf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
+			//t.Logf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
 			<-ch
 			wg.Done()
 			MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
@@ -153,5 +169,5 @@ func TestMinioWritePerformance(t *testing.T) {
 		}(concurrentCh)
 	}
 	wg.Wait()
-	fmt.Printf("Test Minio Finish \n")
+	t.Logf("Test Minio Finish \n")
 }

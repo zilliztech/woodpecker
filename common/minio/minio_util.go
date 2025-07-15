@@ -221,3 +221,19 @@ func newMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*
 	}
 	return minioClient, nil
 }
+
+func IsPreconditionFailed(err error) bool {
+	return minio.ToErrorResponse(err).Code == "PreconditionFailed"
+}
+
+func IsObjectNotExists(err error) bool {
+	return minio.ToErrorResponse(err).Code == "NoSuchKey"
+}
+
+func IsFencedObject(objInfo minio.ObjectInfo) bool {
+	isFencedObject := objInfo.UserMetadata[FencedObjectMetaKey]
+	if len(isFencedObject) > 0 && isFencedObject == "true" {
+		return true
+	}
+	return false
+}

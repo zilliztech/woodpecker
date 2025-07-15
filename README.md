@@ -63,19 +63,21 @@ In the service mode, the WAL read/write operations and caching logic are decoupl
 ---
 
 ## 🏎 Benchmarks
+We ran comprehensive benchmarks to evaluate Woodpecker's performance in a single-node, single-client, single-log-stream setup. The results were impressive when compared to Kafka and Pulsar:
 
+| System     | Kafka      | Pulsar  | WP Minio | WP Local | WP S3   |
+| ---------- | ---------- | ------- | -------- | -------- | ------- |
+| Throughput | 129.96MB/s | 107MB/s | 71MB/s   | 450MB/s  | 750MB/s |
+| latency    | 58ms       | 35ms    | 184ms    | 1.8ms    | 166ms   |
 
-| Test Scenario                      | Description                                             | Throughput | Latency |
-|------------------------------------|---------------------------------------------------------|------------|---------|
-| **embedded mode one client write** | Concurrent async append log entries to S3               | 729.4 MB/s | T+100ms |
-| **embedded mode one client read**  | Reading batches of log entries from S3                  | 768.0 MB/s | 245ms   |
-| **embedded mode one client write** | Concurrent async append log entries to standalone minio | 103.04MB/s | T+19ms  |
-| **embedded mode one client read**  | Reading batches of log entries from standalone minio    | 141.9MB/s  | 14.1ms  |
-| **embedded mode one client write** | Concurrent async append log entries to local SSD        | 562.9MB/s  | T+27.ms |
-| **embedded mode one client read**  | Reading batches of log entries from local SSD           |            |         |
+For context, we measured the theoretical throughput limits of different storage backends on our test machine:
 
-> **Note**: The performance benchmarks are based on a single ECS instance writing to S3. While there are traffic limitations on a single ECS instance, the upper throughput limits can be higher with proper configuration or scaling. Additionally, **Woodpecker** is still under active development, and performance improvements are continually being made to enhance throughput and reduce latency.
-> **Note**: Test 2MB-16MB per entry, record the max throughput and latency. ”T“ represents the time interval for flush buffer, which is configurable.
+- MinIO: ~110 MB/s
+- Local file system: 600–750 MB/s
+- Amazon S3 (single EC2 instance): up to 1.1 GB/s
+
+Remarkably, Woodpecker consistently achieved 60-80% of the maximum possible throughput for each backend—an exceptional efficiency level for middleware.
+
 ---
 
 ## 🎯 **Usage Examples**
@@ -89,27 +91,33 @@ go install github.com/zilliztech/woodpecker@latest
 ```yaml
 # woodpecker.yaml
 woodpecker:
+  # Configuration of Woodpecker metadata storage.
   meta:
-    type: etcd # Type of the configuration, currently only etcd is supported.
+    type: etcd # Type of the meta data storage, currently only etcd is supported.
     prefix: woodpecker # Root prefix of the key to where Woodpecker stores data in etcd.
+  # Configuration of Woodpecker Client.
   client:
     segmentAppend:
       queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
       maxRetries: 3 # Maximum number of retries for segment append operations
     segmentRollingPolicy:
-      maxSize: 2000000000 # Maximum entries count of a segment, default is 2GB
+      maxSize: 2000000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+  # Configuration of Woodpecker LogStore Server.
   logstore:
     segmentSyncPolicy:
-      maxInterval: 1000 # Maximum interval between two sync operations in milliseconds
-      maxEntries: 100000 # Maximum entries number of write buffer
-      maxBytes: 64000000 # Maximum size of write buffer in bytes
+      maxInterval: 200 # Maximum interval between two sync operations in milliseconds
+      maxIntervalForLocalStorage: 10 # Maximum interval between sync operations for local storage backend, in milliseconds
+      maxEntries: 10000 # Maximum entries number of write buffer
+      maxBytes: 256000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
-      maxFlushSize: 8000000 # Maximum size of a fragment in bytes to flush, default is 8M
-      maxFlushThreads: 4 # Maximum number of threads to flush data
+      maxFlushSize: 4000000 # Maximum size of a fragment in bytes to flush, default is 4MB, which is the best practice for cloud storage
+      maxFlushThreads: 64 # Maximum number of threads to flush data
+    segmentCompactionPolicy:
+      maxBytes: 4000000 # Maximum size of a merged file in bytes after compact, default is 4M
 ```
 
 ### **3. Use Woodpecker for write**

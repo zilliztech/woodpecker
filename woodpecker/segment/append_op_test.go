@@ -19,6 +19,7 @@ package segment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -153,13 +155,16 @@ func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, quorumInfo, 1)
 
 	// Create a channel and send success signal
-	syncedCh := make(chan int64, 1)
-	syncedCh <- 3 // Send the entryId
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: 3,
+		Err:      nil,
+	})
 
 	mockHandle.On("SendAppendSuccessCallbacks", mock.Anything, int64(3)).Return()
 
 	// Execute callback
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// Verify
 	assert.True(t, op.completed.Load())
@@ -187,13 +192,16 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, nil, 1)
 
 	// Create a channel and send failure signal
-	syncedCh := make(chan int64, 1)
-	syncedCh <- -1 // Send failure signal
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: -1,
+		Err:      nil,
+	})
 
 	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), mock.Anything).Return()
 
 	// Execute callback
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// No additional assertions needed, just verify it doesn't panic
 }
@@ -202,11 +210,11 @@ func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Create a channel and close it
-	syncedCh := make(chan int64)
-	close(syncedCh)
+	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
+	_ = rc.Close(context.TODO())
 
 	// Execute callback - should return without error when channel is closed
-	op.receivedAckCallback(context.Background(), time.Now(), 3, syncedCh, nil, 0)
+	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
 
 	// No assertions needed, just ensure it doesn't panic or hang
 }
@@ -215,22 +223,29 @@ func TestAppendOp_FastFail(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add some result channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch1, ch2}
+	rc1 := channel.NewLocalResultChannel("1/2/3-1")
+	rc2 := channel.NewLocalResultChannel("1/2/3-2")
+	op.resultChannels = []channel.ResultChannel{rc1, rc2}
 
 	// Execute FastFail
 	op.FastFail(context.Background(), errors.New("test error"))
 
 	// Verify channels received failure signal
-	assert.Equal(t, int64(-1), <-ch1)
-	assert.Equal(t, int64(-1), <-ch2)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	result1, err1 := rc1.ReadResult(ctx1)
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(-1), result1.SyncedId)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	result2, err2 := rc2.ReadResult(ctx2)
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(-1), result2.SyncedId)
 
 	// Verify channels are closed
-	_, ok1 := <-ch1
-	_, ok2 := <-ch2
-	assert.False(t, ok1)
-	assert.False(t, ok2)
+	assert.True(t, rc1.IsClosed())
+	assert.True(t, rc2.IsClosed())
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
@@ -239,41 +254,51 @@ func TestAppendOp_FastFail(t *testing.T) {
 func TestAppendOp_FastFail_Idempotent(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Call FastFail twice
 	op.FastFail(context.Background(), errors.New("test error"))
 	op.FastFail(context.Background(), errors.New("test error")) // Should be no-op
 
 	// Verify only one signal was sent
-	assert.Equal(t, int64(-1), <-ch)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), result.SyncedId)
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_FastSuccess(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add some result channels
-	ch1 := make(chan int64, 1)
-	ch2 := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch1, ch2}
+	rc1 := channel.NewLocalResultChannel("1/2/3-1")
+	rc2 := channel.NewLocalResultChannel("1/2/3-2")
+	op.resultChannels = []channel.ResultChannel{rc1, rc2}
 
 	// Execute FastSuccess
 	op.FastSuccess(context.Background())
 
 	// Verify channels received success signal
-	assert.Equal(t, int64(3), <-ch1)
-	assert.Equal(t, int64(3), <-ch2)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	result1, err1 := rc1.ReadResult(ctx1)
+	assert.NoError(t, err1)
+	assert.Equal(t, int64(3), result1.SyncedId)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	result2, err2 := rc2.ReadResult(ctx2)
+	assert.NoError(t, err2)
+	assert.Equal(t, int64(3), result2.SyncedId)
 
 	// Verify channels are closed
-	_, ok1 := <-ch1
-	_, ok2 := <-ch2
-	assert.False(t, ok1)
-	assert.False(t, ok2)
+	assert.True(t, rc1.IsClosed())
+	assert.True(t, rc2.IsClosed())
 
 	// Verify fastCalled flag is set
 	assert.True(t, op.fastCalled.Load())
@@ -282,28 +307,31 @@ func TestAppendOp_FastSuccess(t *testing.T) {
 func TestAppendOp_FastSuccess_Idempotent(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Call FastSuccess twice
 	op.FastSuccess(context.Background())
 	op.FastSuccess(context.Background()) // Should be no-op
 
 	// Verify only one signal was sent
-	assert.Equal(t, int64(3), <-ch)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), result.SyncedId)
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_FastFail_WithClosedChannel(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add a closed channel
-	ch := make(chan int64, 1)
-	close(ch)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	_ = rc.Close(context.TODO()) // Close the result channel
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Execute FastFail - should not panic
 	assert.NotPanics(t, func() {
@@ -318,9 +346,9 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
 	// Add a closed channel
-	ch := make(chan int64, 1)
-	close(ch)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	_ = rc.Close(context.TODO()) // Close the result channel
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	// Execute FastSuccess - should not panic
 	assert.NotPanics(t, func() {
@@ -334,8 +362,8 @@ func TestAppendOp_FastSuccess_WithClosedChannel(t *testing.T) {
 func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, nil, 1)
 
-	ch := make(chan int64, 1)
-	op.resultChannels = []chan int64{ch}
+	rc := channel.NewLocalResultChannel("1/2/3")
+	op.resultChannels = []channel.ResultChannel{rc}
 
 	var wg sync.WaitGroup
 	callCount := 0
@@ -364,16 +392,14 @@ func TestAppendOp_ConcurrentFastCalls(t *testing.T) {
 	assert.Equal(t, 10, callCount) // All calls completed
 
 	// Verify channel received exactly one signal
-	select {
-	case val := <-ch:
-		assert.True(t, val == -1 || val == 3) // Either success or failure
-	default:
-		t.Fatal("Expected one signal in channel")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := rc.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.True(t, result.SyncedId == -1 || result.SyncedId == 3) // Either success or failure
 
 	// Channel should be closed
-	_, ok := <-ch
-	assert.False(t, ok)
+	assert.True(t, rc.IsClosed())
 }
 
 func TestAppendOp_toSegmentEntry(t *testing.T) {
@@ -411,4 +437,229 @@ func TestAppendOp_receivedAckCallback_Timeout(t *testing.T) {
 
 	elapsed := time.Since(start)
 	assert.True(t, elapsed < 200*time.Millisecond) // Ensure test doesn't hang
+}
+
+// TestAppendOp_Execute_RetryIdempotency tests that retry operations are idempotent
+// by verifying that result channels are reused across multiple Execute calls
+func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	// Setup expectations - GetQuorumInfo will be called multiple times
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// First execution
+	op.Execute()
+
+	// Verify initial state
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+	assert.NotNil(t, op.resultChannels[1])
+
+	// Store references to original channels
+	originalChannel0 := op.resultChannels[0]
+	originalChannel1 := op.resultChannels[1]
+
+	// Second execution (simulating retry)
+	op.Execute()
+
+	// Verify channels are reused (idempotent)
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on retry")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on retry")
+
+	// Third execution (simulating another retry)
+	op.Execute()
+
+	// Verify channels are still the same
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be reused on multiple retries")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be reused on multiple retries")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize tests idempotency
+// when quorum info is refreshed but maintains the same size
+func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	// Initial quorum with 2 nodes
+	initialQuorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	// Updated quorum with same size but potentially different internal state
+	updatedQuorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"}, // Same nodes
+	}
+
+	// Setup expectations - first call returns initial quorum, second call returns updated quorum
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(initialQuorumInfo, nil).Once()
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(updatedQuorumInfo, nil).Once()
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, 1)
+
+	// First execution with 2 nodes
+	op.Execute()
+
+	// Verify initial state
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+	assert.NotNil(t, op.resultChannels[1])
+
+	// Store references to original channels
+	originalChannel0 := op.resultChannels[0]
+	originalChannel1 := op.resultChannels[1]
+
+	// Second execution with same quorum size (simulating retry with refreshed quorum info)
+	op.Execute()
+
+	// Verify that existing channels are preserved
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Channel 0 should be preserved")
+	assert.Same(t, originalChannel1, op.resultChannels[1], "Channel 1 should be preserved")
+}
+
+// TestAppendOp_sendWriteRequest_ChannelReuse tests that sendWriteRequest
+// creates channels only once per server
+func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
+	// Setup mocks
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"node1"},
+	}
+
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, 1)
+
+	// Initialize result channels slice
+	op.resultChannels = make([]channel.ResultChannel, 1)
+
+	// First call to sendWriteRequest
+	op.sendWriteRequest(context.Background(), mockClient, 0)
+
+	// Verify channel was created
+	assert.NotNil(t, op.resultChannels[0])
+	originalChannel := op.resultChannels[0]
+
+	// Second call to sendWriteRequest for the same server
+	op.sendWriteRequest(context.Background(), mockClient, 0)
+
+	// Verify the same channel is reused
+	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused for the same server")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_WithNilChannels tests behavior when
+// some channels are nil during retry
+func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    2,
+		Aq:    2,
+		Es:    2,
+		Nodes: []string{"node1", "node2"},
+	}
+
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// Manually set up result channels with one nil channel (simulating partial failure)
+	op.resultChannels = make([]channel.ResultChannel, 2)
+	op.resultChannels[0] = channel.NewLocalResultChannel("test-channel-0")
+	op.resultChannels[1] = nil // This should be recreated
+
+	originalChannel0 := op.resultChannels[0]
+
+	// Execute should handle nil channels correctly
+	op.Execute()
+
+	// Verify that existing non-nil channel is preserved and nil channel is created
+	assert.Equal(t, 2, len(op.resultChannels))
+	assert.Same(t, originalChannel0, op.resultChannels[0], "Existing non-nil channel should be preserved")
+	assert.NotNil(t, op.resultChannels[1], "Nil channel should be created")
+}
+
+// TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier tests that
+// channels created for retry use the same identifier
+func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
+	// Setup mocks
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+
+	quorumInfo := &proto.QuorumInfo{
+		Id:    1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"node1"},
+	}
+
+	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
+	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+
+	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
+
+	// First execution
+	op.Execute()
+
+	// Verify channel was created
+	assert.Equal(t, 1, len(op.resultChannels))
+	assert.NotNil(t, op.resultChannels[0])
+
+	// We can't directly access the channel's identifier, but we can verify
+	// that the channel is properly created and reused
+	// The identifier should be consistent with the operation's identifier: "1/2/3"
+	originalChannel := op.resultChannels[0]
+
+	// Second execution (retry)
+	op.Execute()
+
+	// Verify the same channel is reused
+	assert.Same(t, originalChannel, op.resultChannels[0], "Channel should be reused with same identifier")
 }

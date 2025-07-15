@@ -260,7 +260,7 @@ func printDirContents(t *testing.T, ctx context.Context, cli *clientv3.Client, p
 	}
 
 	for _, kv := range resp.Kvs {
-		fmt.Printf("%s%s: %s\n", indent, string(kv.Key), string(kv.Value))
+		t.Logf("%s%s: %s\n", indent, string(kv.Key), string(kv.Value))
 
 		if strings.HasSuffix(string(kv.Key), "/") {
 			newPrefix := string(kv.Key)
@@ -321,8 +321,7 @@ func testStoreSegmentMeta(t *testing.T) {
 
 	// store segment meta
 	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		EntryOffset: []int32{1, 2, 3, 4, 5, 6},
+		SegNo: 1,
 	}
 	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, storeErr)
@@ -333,7 +332,6 @@ func testStoreSegmentMeta(t *testing.T) {
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
 		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
-		assert.Equal(t, segmentMeta.EntryOffset, getSegmentMeta.EntryOffset)
 	}
 
 	// test get all segmentMetas of the log
@@ -342,7 +340,6 @@ func testStoreSegmentMeta(t *testing.T) {
 		assert.NoError(t, listErr)
 		assert.Equal(t, 1, len(segmentMetaList))
 		assert.Equal(t, segmentMeta.SegNo, segmentMetaList[segmentMeta.SegNo].SegNo)
-		assert.Equal(t, segmentMeta.EntryOffset, segmentMetaList[segmentMeta.SegNo].EntryOffset)
 	}
 }
 
@@ -377,11 +374,9 @@ func testUpdateSegmentMeta(t *testing.T) {
 		assert.NotNil(t, getSegmentMeta)
 		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
 		assert.Equal(t, segmentMeta.State, getSegmentMeta.State)
-		assert.Empty(t, getSegmentMeta.EntryOffset)
 	}
 
 	// test update
-	segmentMeta.EntryOffset = []int32{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	segmentMeta.State = proto.SegmentState_Sealed
 	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, updateErr)
@@ -390,7 +385,6 @@ func testUpdateSegmentMeta(t *testing.T) {
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
 		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
-		assert.Equal(t, segmentMeta.EntryOffset, getSegmentMeta.EntryOffset)
 		assert.Equal(t, segmentMeta.State, getSegmentMeta.State)
 	}
 }
@@ -553,14 +547,9 @@ func testCreateReaderTempInfo(t *testing.T) {
 	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
 	assert.NoError(t, err)
 
-	// Create etcd session with a short TTL for testing
-	session, err := concurrency.NewSession(etcdCli, concurrency.WithTTL(3))
-	assert.NoError(t, err)
-
 	// Create a metadata provider with the session
 	provider := &metadataProviderEtcd{
 		client:         etcdCli,
-		session:        session,
 		logWriterLocks: make(map[string]*concurrency.Mutex),
 	}
 
@@ -613,11 +602,6 @@ func testCreateReaderTempInfo(t *testing.T) {
 	assert.True(t, leaseInfo.TTL <= 60, "TTL should be 60 seconds or less")
 
 	t.Logf("Reader temp info is created with TTL of %d seconds", leaseInfo.TTL)
-
-	// Close the etcd session to simulate reader disconnection
-	t.Log("Closing the session to simulate reader disconnection...")
-	err = session.Close()
-	assert.NoError(t, err)
 
 	// Wait for the lease to expire (a bit more than the TTL)
 	t.Log("Waiting for session lease to expire...")
