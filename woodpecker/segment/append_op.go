@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/bitset"
@@ -96,7 +98,7 @@ func (op *AppendOp) Identifier() string {
 }
 
 func (op *AppendOp) Execute() {
-	ctx, sp := logger.NewIntentCtx("AppendOp", fmt.Sprintf("%d/%d/%d", op.logId, op.segmentId, op.entryId))
+	ctx, sp := logger.NewIntentCtx("AppendOp", "Execute")
 	defer sp.End()
 	op.mu.Lock()
 	defer op.mu.Unlock()
@@ -130,6 +132,8 @@ func (op *AppendOp) Execute() {
 }
 
 func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int) {
+	ctx, sp := logger.NewIntentCtx("AppendOp", "sendWriteRequest")
+	defer sp.End()
 	startRequestTime := time.Now()
 
 	// TODO currently only support Local ResultChannel
@@ -141,6 +145,7 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 
 	// order request
 	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), op.resultChannels[serverIndex])
+	sp.AddEvent("AppendEntryCall", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
@@ -148,6 +153,8 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 }
 
 func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int) {
+	ctx, sp := logger.NewIntentCtx("AppendOp", "receivedAckCallback")
+	defer sp.End()
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
@@ -158,6 +165,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	subCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
+	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 	if readChanErr != nil {
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry

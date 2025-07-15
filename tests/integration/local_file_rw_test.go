@@ -847,9 +847,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 		}
 
 		_, err := log.MarshalMessage(emptyMsg)
-		require.Error(t, err)
-		assert.True(t, werr.ErrEmptyPayload.Is(err), "Error should be ErrEmptyPayload")
-
+		require.NoError(t, err)
 		t.Logf("Client level empty payload error: %v", err)
 	})
 
@@ -861,8 +859,21 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 		}
 
 		_, err := log.MarshalMessage(nilMsg)
+		require.NoError(t, err)
+
+		t.Logf("Client level nil payload error: %v", err)
+	})
+
+	// Test both empty err
+	t.Run("BothEmptyMsg", func(t *testing.T) {
+		nilMsg := &log.WriterMessage{
+			Payload:    nil,
+			Properties: map[string]string{},
+		}
+
+		_, err := log.MarshalMessage(nilMsg)
 		require.Error(t, err)
-		assert.True(t, werr.ErrEmptyPayload.Is(err), "Error should be ErrEmptyPayload")
+		require.True(t, werr.ErrInvalidMessage.Is(err))
 
 		t.Logf("Client level nil payload error: %v", err)
 	})

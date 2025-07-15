@@ -648,6 +648,7 @@ func TestReadThroughput(t *testing.T) {
 			var maxReadTime atomic.Int64   // in milliseconds
 
 			readStartTime := time.Now()
+			lastDataReadSuccessTime := time.Now()
 			consecutiveTimeouts := 0
 			maxConsecutiveTimeouts := 5
 			readTimeout := 5 * time.Second
@@ -705,6 +706,7 @@ func TestReadThroughput(t *testing.T) {
 
 					totalBytes.Add(int64(len(msg.Payload)))
 					totalEntries.Add(1)
+					lastDataReadSuccessTime = time.Now()
 
 					if totalEntries.Load()%100 == 0 {
 						t.Logf("Read %d entries, %d bytes, current msg(seg:%d,entry:%d)\n",
@@ -714,7 +716,7 @@ func TestReadThroughput(t *testing.T) {
 			}
 
 			// Calculate and print final statistics
-			totalElapsed := time.Since(readStartTime)
+			totalElapsed := lastDataReadSuccessTime.Sub(readStartTime) // read data elapsed time
 			finalEntries := totalEntries.Load()
 			finalBytes := totalBytes.Load()
 

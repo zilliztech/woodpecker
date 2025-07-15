@@ -163,6 +163,7 @@ const (
 	UnsupportedVersionError
 	ChecksumError
 	PersistenceError
+	InvalidMessage
 	EmptyPayload
 	EntryNotFound
 	StorageNotWritable
@@ -321,6 +322,7 @@ var (
 	ErrStorageNotWritable      = newWoodpeckerError("storage not writable", StorageNotWritable, false)
 
 	// Data state errors
+	ErrInvalidMessage      = newWoodpeckerError("invalid message", InvalidMessage, false)
 	ErrEmptyPayload        = newWoodpeckerError("empty payload", EmptyPayload, false)
 	ErrEntryNotFound       = newWoodpeckerError("entry not found", EntryNotFound, true)
 	ErrSegmentFenced       = newWoodpeckerError("segment fenced", SegmentFenced, false)

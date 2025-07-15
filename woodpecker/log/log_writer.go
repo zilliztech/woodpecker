@@ -152,6 +152,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	}
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
+		logger.Ctx(ctx).Warn("serialize message failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
@@ -194,7 +195,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 
 	bytes, err := MarshalMessage(msg)
 	if err != nil {
-		logger.Ctx(ctx).Warn("encode msg failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
+		logger.Ctx(ctx).Warn("serialize message failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
@@ -281,7 +282,6 @@ func (l *logWriterImpl) runAuditor() {
 			// compact/recover if necessary
 			truncatedSegmentExists := make([]int64, 0)
 			segmentsProcessed := 0
-			segmentsRecovered := 0
 			segmentsCompacted := 0
 			segmentsFailed := 0
 
@@ -314,12 +314,6 @@ func (l *logWriterImpl) runAuditor() {
 							zap.String("logName", l.logHandle.GetName()),
 							zap.Int64("logId", l.logHandle.GetId()),
 							zap.Int64("segmentId", seg.SegNo))
-					} else {
-						segmentsRecovered++
-						logger.Ctx(ctx).Info("Successfully recovered segment",
-							zap.String("logName", l.logHandle.GetName()),
-							zap.Int64("logId", l.logHandle.GetId()),
-							zap.Int64("segmentId", seg.SegNo))
 					}
 				} else if stateBefore == proto.SegmentState_Truncated {
 					truncatedSegmentExists = append(truncatedSegmentExists, seg.SegNo)
@@ -330,7 +324,6 @@ func (l *logWriterImpl) runAuditor() {
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("segmentsProcessed", segmentsProcessed),
-				zap.Int("segmentsRecovered", segmentsRecovered),
 				zap.Int("segmentsCompacted", segmentsCompacted),
 				zap.Int("segmentsFailed", segmentsFailed),
 				zap.Int("truncatedSegments", len(truncatedSegmentExists)))

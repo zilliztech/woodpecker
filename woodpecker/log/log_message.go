@@ -81,9 +81,8 @@ type WriterMessage struct {
 }
 
 func MarshalMessage(m *WriterMessage) ([]byte, error) {
-	// Validate that payload is not empty
-	if len(m.Payload) == 0 {
-		return nil, werr.ErrEmptyPayload
+	if invalidErr := ValidateMsg(m); invalidErr != nil {
+		return nil, invalidErr
 	}
 
 	msgLayout := &pb.LogMessageLayout{
@@ -108,4 +107,16 @@ func UnmarshalMessage(data []byte) (*LogMessage, error) {
 		Properties: msgLayout.Properties,
 	}
 	return m, nil
+}
+
+func ValidateMsg(msg *WriterMessage) error {
+	if msg == nil {
+		return werr.ErrInvalidMessage.WithCauseErrMsg("message is nil")
+	}
+
+	if len(msg.Properties) == 0 && len(msg.Payload) == 0 {
+		return werr.ErrInvalidMessage.WithCauseErrMsg("can not set Properties and Payload both")
+	}
+
+	return nil
 }

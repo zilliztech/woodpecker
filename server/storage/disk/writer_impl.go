@@ -667,10 +667,12 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	// Validate empty payload
 	if len(data) == 0 {
+		logger.Ctx(ctx).Warn("WriteDataAsync: attempting to write rejected, data cannot be empty", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
 		return entryId, werr.ErrEmptyPayload
 	}
 
 	if len(data) > codec.MaxRecordSize {
+		logger.Ctx(ctx).Warn("WriteDataAsync: attempting to write rejected, data size exceed Max Record Size", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.Int("MaxRecordSize", codec.MaxRecordSize), zap.String("inst", fmt.Sprintf("%p", w)))
 		return entryId, werr.ErrLogWriterRecordTooLarge
 	}
 

@@ -34,6 +34,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
@@ -588,7 +590,7 @@ func (f *MinioFileWriter) ack() {
 					}
 				}
 
-				logger.Ctx(context.TODO()).Info("flush success, fast success ack", zap.String("flushSuccessBlock", task.flushFuture.Value().block.BlockKey))
+				logger.Ctx(context.TODO()).Info("flush success, fast success ack", zap.String("flushSuccessBlock", task.flushFuture.Value().block.BlockKey), zap.Int64("flushBlockSize", task.flushFuture.Value().block.Size))
 				// flush success ack
 				f.fastFlushSuccessUnsafe(context.TODO(), task.flushFuture.Value().block, task.flushData)
 				f.lastModifiedTime = time.Now().UnixMilli()
@@ -619,6 +621,7 @@ func (f *MinioFileWriter) GetId() int64 {
 func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "AppendAsync")
 	defer sp.End()
+	startTime := time.Now()
 
 	// Validate that data is not empty
 	if len(data) == 0 {
@@ -654,6 +657,7 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 			zap.Int64("bufferFirstId", currentBuffer.FirstEntryId),
 			zap.Int64("bufferLastId", currentBuffer.FirstEntryId+currentBuffer.MaxEntries))
 		err := f.Sync(ctx)
+		sp.AddEvent("wait sync", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 		if err != nil {
 			// sync does not success
 			logger.Ctx(ctx).Warn("AppendAsync: found buffer full, but sync failed before append", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err))
@@ -662,6 +666,7 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	}
 
 	f.mu.Lock()
+	sp.AddEvent("wait lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if entryId <= f.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to object storage. Return immediately.
 		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastEntryID, already stored", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int64("lastEntryID", f.lastEntryID.Load()))
@@ -843,6 +848,7 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	defer func() {
 		f.lastSyncTimestamp.Store(time.Now().UnixMilli())
 	}()
+	sp.AddEvent("wait syncMu lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	if !f.storageWritable.Load() {
 		logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
@@ -851,7 +857,9 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 
 	// roll buff with lock
 	f.mu.Lock()
+	sp.AddEvent("wait lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	currentBuffer, toFlushData, toFlushDataFirstEntryId, err := f.rollBufferUnsafe(ctx)
+	sp.AddEvent("wait rollBuff", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	f.mu.Unlock()
 	if err != nil {
 		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
@@ -866,6 +874,7 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 
 	// submit async flush task
 	flushResultFutures := f.submitBlockFlushTaskUnsafe(ctx, currentBuffer, toFlushData, toFlushDataFirstEntryId)
+	sp.AddEvent("submit task", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	logger.Ctx(ctx).Debug("Sync submitted flush tasks",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("blocks", len(flushResultFutures)),
@@ -890,6 +899,7 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	if waitBuffErr != nil {
 		return nil, nil, -1, waitBuffErr
 	}
+	sp.AddEvent("wait available flushing buff quota", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	// get current buffer
 	currentBuffer := f.buffer.Load()

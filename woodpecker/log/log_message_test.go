@@ -27,6 +27,104 @@ import (
 	pb "github.com/zilliztech/woodpecker/proto"
 )
 
+func TestValidateMsg(t *testing.T) {
+	t.Run("NilMessage", func(t *testing.T) {
+		err := ValidateMsg(nil)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "message is nil")
+	})
+
+	t.Run("ValidPayloadOnly", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte("test data"),
+			Properties: nil,
+		}
+		err := ValidateMsg(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("ValidPropertiesOnly", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    nil,
+			Properties: map[string]string{"key": "value"},
+		}
+		err := ValidateMsg(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("ValidPayloadAndProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte("test data"),
+			Properties: map[string]string{"key": "value"},
+		}
+		err := ValidateMsg(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("EmptyPayloadWithProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte{},
+			Properties: map[string]string{"key": "value"},
+		}
+		err := ValidateMsg(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("PayloadWithEmptyProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte("test data"),
+			Properties: map[string]string{},
+		}
+		err := ValidateMsg(msg)
+		require.NoError(t, err)
+	})
+
+	t.Run("BothNilPayloadAndProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    nil,
+			Properties: nil,
+		}
+		err := ValidateMsg(msg)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
+	})
+
+	t.Run("BothEmptyPayloadAndProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte{},
+			Properties: map[string]string{},
+		}
+		err := ValidateMsg(msg)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
+	})
+
+	t.Run("NilPayloadWithEmptyProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    nil,
+			Properties: map[string]string{},
+		}
+		err := ValidateMsg(msg)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
+	})
+
+	t.Run("EmptyPayloadWithNilProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte{},
+			Properties: nil,
+		}
+		err := ValidateMsg(msg)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
+	})
+}
+
 func TestMarshalMessage(t *testing.T) {
 	t.Run("ValidPayload", func(t *testing.T) {
 		msg := &WriterMessage{
@@ -46,26 +144,35 @@ func TestMarshalMessage(t *testing.T) {
 		assert.Equal(t, msg.Properties, layout.Properties)
 	})
 
-	t.Run("EmptyPayload", func(t *testing.T) {
-		msg := &WriterMessage{
-			Payload:    []byte{},
-			Properties: map[string]string{"key": "value"},
-		}
-
-		_, err := MarshalMessage(msg)
+	t.Run("NilMessage", func(t *testing.T) {
+		_, err := MarshalMessage(nil)
 		require.Error(t, err)
-		assert.True(t, werr.ErrEmptyPayload.Is(err), "Error should be ErrEmptyPayload")
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "message is nil")
 	})
 
-	t.Run("NilPayload", func(t *testing.T) {
+	t.Run("BothEmptyPayloadAndProperties", func(t *testing.T) {
 		msg := &WriterMessage{
-			Payload:    nil,
-			Properties: map[string]string{"key": "value"},
+			Payload:    []byte{},
+			Properties: map[string]string{},
 		}
 
 		_, err := MarshalMessage(msg)
 		require.Error(t, err)
-		assert.True(t, werr.ErrEmptyPayload.Is(err), "Error should be ErrEmptyPayload")
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
+	})
+
+	t.Run("BothNilPayloadAndProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    nil,
+			Properties: nil,
+		}
+
+		_, err := MarshalMessage(msg)
+		require.Error(t, err)
+		assert.True(t, werr.ErrInvalidMessage.Is(err), "Error should be ErrInvalidMessage")
+		assert.Contains(t, err.Error(), "can not set Properties and Payload both")
 	})
 
 	t.Run("SingleBytePayload", func(t *testing.T) {
@@ -83,6 +190,7 @@ func TestMarshalMessage(t *testing.T) {
 		err = proto.Unmarshal(data, layout)
 		require.NoError(t, err)
 		assert.Equal(t, []byte("a"), layout.Payload)
+		assert.Equal(t, msg.Properties, layout.Properties)
 	})
 
 	t.Run("LargePayload", func(t *testing.T) {
@@ -107,7 +215,7 @@ func TestMarshalMessage(t *testing.T) {
 		assert.Equal(t, largeData, layout.Payload)
 	})
 
-	t.Run("NoProperties", func(t *testing.T) {
+	t.Run("OnlyPayload", func(t *testing.T) {
 		msg := &WriterMessage{
 			Payload:    []byte("test data without properties"),
 			Properties: nil,
@@ -125,7 +233,48 @@ func TestMarshalMessage(t *testing.T) {
 		assert.Nil(t, layout.Properties)
 	})
 
-	t.Run("EmptyProperties", func(t *testing.T) {
+	t.Run("OnlyProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    nil,
+			Properties: map[string]string{"key": "value"},
+		}
+
+		data, err := MarshalMessage(msg)
+		require.NoError(t, err)
+		assert.Greater(t, len(data), 0)
+
+		// Verify content
+		layout := &pb.LogMessageLayout{}
+		err = proto.Unmarshal(data, layout)
+		require.NoError(t, err)
+		assert.Nil(t, layout.Payload)
+		assert.Equal(t, msg.Properties, layout.Properties)
+	})
+
+	t.Run("EmptyPayloadWithProperties", func(t *testing.T) {
+		msg := &WriterMessage{
+			Payload:    []byte{},
+			Properties: map[string]string{"key": "value"},
+		}
+
+		data, err := MarshalMessage(msg)
+		require.NoError(t, err)
+		assert.Greater(t, len(data), 0)
+
+		// Verify content
+		layout := &pb.LogMessageLayout{}
+		err = proto.Unmarshal(data, layout)
+		require.NoError(t, err)
+		// Empty byte slice becomes nil after protobuf serialization/deserialization
+		if layout.Payload == nil {
+			assert.Nil(t, layout.Payload)
+		} else {
+			assert.Equal(t, []byte{}, layout.Payload)
+		}
+		assert.Equal(t, msg.Properties, layout.Properties)
+	})
+
+	t.Run("PayloadWithEmptyProperties", func(t *testing.T) {
 		msg := &WriterMessage{
 			Payload:    []byte("test data with empty properties"),
 			Properties: map[string]string{},
@@ -140,7 +289,7 @@ func TestMarshalMessage(t *testing.T) {
 		err = proto.Unmarshal(data, layout)
 		require.NoError(t, err)
 		assert.Equal(t, msg.Payload, layout.Payload)
-		// Empty map becomes nil after protobuf serialization/deserialization
+		//Empty map becomes nil after protobuf serialization/deserialization
 		if layout.Properties == nil {
 			assert.Nil(t, layout.Properties)
 		} else {

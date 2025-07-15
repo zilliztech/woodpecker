@@ -34,8 +34,8 @@ import (
 
 const (
 	TEST_OBJECT_PREFIX     = "test_object_"
-	TEST_COUNT             = 100
-	TEST_OBJECT_SIZE       = 128_000_000
+	TEST_COUNT             = 10000
+	TEST_OBJECT_SIZE       = 4_000_000
 	CONCURRENT             = 1
 	CONDITION_WRITE_ENABLE = false
 )
