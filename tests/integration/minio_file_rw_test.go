@@ -43,6 +43,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
+	"go.uber.org/zap"
 )
 
 var (
@@ -1628,8 +1629,8 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	ctx := context.Background()
 
 	// Increase buffer sizes for large entries
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 10 * 1024 * 1024    // 10MB
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 5 * 1024 * 1024 // 5MB
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 20 * 1024 * 1024     // 20MB
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 18 * 1024 * 1024 // 18MB
 
 	logId := int64(24)
 	segmentId := int64(2400)
@@ -1645,9 +1646,10 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 		size int
 		data []byte // Store the generated data for later verification
 	}{
-		{"1MB", 1024 * 1024, nil},
 		{"2MB", 2 * 1024 * 1024, nil},
 		{"4MB", 4 * 1024 * 1024, nil},
+		{"8MB", 8 * 1024 * 1024, nil},
+		{"16MB", 16 * 1024 * 1024, nil},
 	}
 
 	// Generate test data once and store it
@@ -1710,6 +1712,112 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 
 	err = reader.Close(ctx)
 	require.NoError(t, err)
+}
+
+// TestMinioFileWriter_VeryLargePayloadSupport specifically tests writing very large payloads
+func TestMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	// Configure for very large entries
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 25 * 1024 * 1024     // 25MB
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 20 * 1024 * 1024 // 20MB
+
+	logId := int64(100)
+	segmentId := int64(10000)
+	baseDir := fmt.Sprintf("test-very-large-payload-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	defer writer.Close(ctx)
+
+	// Test writing large payloads: 2MB, 4MB, 8MB, 16MB
+	testSizes := []struct {
+		name string
+		size int
+	}{
+		{"2MB", 2 * 1024 * 1024},
+		{"4MB", 4 * 1024 * 1024},
+		{"8MB", 8 * 1024 * 1024},
+		{"16MB", 16 * 1024 * 1024},
+	}
+
+	var testData [][]byte
+
+	for i, testCase := range testSizes {
+		t.Run(testCase.name, func(t *testing.T) {
+			entryId := int64(i)
+			largePayload := generateTestData(testCase.size)
+			testData = append(testData, largePayload) // Store for later verification
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-very-large-payload-%s", testCase.name))
+
+			start := time.Now()
+			returnedId, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
+			require.NoError(t, err, "Should be able to write %s payload", testCase.name)
+			assert.Equal(t, entryId, returnedId)
+
+			// Wait for result with extended timeout for very large entries
+			ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+			result, err := resultCh.ReadResult(ctxWithTimeout)
+			cancel()
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+			assert.Equal(t, entryId, result.SyncedId)
+
+			duration := time.Since(start)
+			throughput := float64(testCase.size) / duration.Seconds() / (1024 * 1024) // MB/s
+			t.Logf("Successfully wrote %s payload (%d bytes) in %v (%.2f MB/s)",
+				testCase.name, testCase.size, duration, throughput)
+		})
+	}
+
+	// Verify all entries were written correctly
+	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+	assert.Equal(t, int64(len(testSizes)-1), writer.GetLastEntryId(ctx))
+
+	// Finalize and verify file integrity
+	_, err = writer.Finalize(ctx)
+	require.NoError(t, err)
+
+	err = writer.Close(ctx)
+	require.NoError(t, err)
+
+	// Verify reading large entries back
+	t.Run("VerifyReadBack", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Read all entries
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    int64(len(testSizes)),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(testSizes), len(entries))
+
+		// Verify each large entry
+		for i, testCase := range testSizes {
+			t.Run(fmt.Sprintf("Verify_%s", testCase.name), func(t *testing.T) {
+				assert.Equal(t, int64(i), entries[i].EntryId)
+				assert.Equal(t, testCase.size, len(entries[i].Values))
+
+				// Verify data integrity by comparing with original
+				if i < len(testData) {
+					// Compare first and last 1000 bytes for efficiency
+					assert.Equal(t, testData[i][:1000], entries[i].Values[:1000],
+						"First 1000 bytes mismatch for %s", testCase.name)
+					assert.Equal(t, testData[i][len(testData[i])-1000:],
+						entries[i].Values[len(entries[i].Values)-1000:],
+						"Last 1000 bytes mismatch for %s", testCase.name)
+				}
+
+				t.Logf("Successfully verified %s payload (%d bytes)", testCase.name, testCase.size)
+			})
+		}
+	})
 }
 
 // TestMinioFileWriter_MetadataConsistency tests metadata consistency across operations
@@ -2742,4 +2850,115 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize tests entries larger than maxFlushSize
+func TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	// Configure small maxFlushSize to test the edge case
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 1 * 1024 * 1024 // 1MB flush size
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 5 * 1024 * 1024     // 5MB buffer size
+
+	logId := int64(200)
+	segmentId := int64(20000)
+	baseDir := fmt.Sprintf("test-oversized-entry-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	defer writer.Close(ctx)
+
+	// Test writing entries larger than maxFlushSize
+	testCases := []struct {
+		name string
+		size int
+	}{
+		{"1.5MB", int(1.5 * 1024 * 1024)}, // 1.5MB > 1MB maxFlushSize
+		{"2MB", 2 * 1024 * 1024},          // 2MB > 1MB maxFlushSize
+		{"3MB", 3 * 1024 * 1024},          // 3MB > 1MB maxFlushSize
+		{"4MB", 4 * 1024 * 1024},          // 4MB > 1MB maxFlushSize
+	}
+
+	var writtenData [][]byte
+	for i, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Generate large payload with pattern for verification
+			largePayload := make([]byte, testCase.size)
+			for j := 0; j < len(largePayload); j++ {
+				largePayload[j] = byte((j + i*1000) % 256) // Different pattern for each test
+			}
+			writtenData = append(writtenData, largePayload)
+
+			entryId := int64(i)
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-oversized-entry-%d", i))
+
+			// This should succeed even though entry size > maxFlushSize
+			// because we write to buffer first, then check for flush
+			_, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
+			require.NoError(t, err)
+
+			// Wait for result with extended timeout
+			ctxWithTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
+			result, err := resultCh.ReadResult(ctxWithTimeout)
+			cancel()
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+			assert.Equal(t, entryId, result.SyncedId)
+
+			t.Logf("Successfully wrote %s payload (%d bytes) which is larger than maxFlushSize (1MB)", testCase.name, testCase.size)
+		})
+	}
+
+	// Verify all entries were written correctly
+	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+	assert.Equal(t, int64(len(testCases)-1), writer.GetLastEntryId(ctx))
+
+	// Finalize and verify file integrity
+	_, err = writer.Finalize(ctx)
+	require.NoError(t, err)
+
+	// Read back and verify data integrity
+	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	require.NoError(t, err)
+	defer reader.Close(ctx)
+
+	// Read all entries and verify them
+	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		StartEntryID: 0,
+		BatchSize:    int64(len(testCases)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, len(testCases), len(entries), "Should read all entries")
+
+	// Verify each large entry
+	for i, originalData := range writtenData {
+		require.True(t, i < len(entries), "Entry %d should exist", i)
+		data := entries[i].Values
+		require.Equal(t, len(originalData), len(data), "Entry %d: data length mismatch", i)
+
+		// Verify data integrity byte by byte for first and last 100 bytes
+		verifyLen := 100
+		if len(originalData) < verifyLen {
+			verifyLen = len(originalData)
+		}
+
+		// Check first 100 bytes
+		assert.Equal(t, originalData[:verifyLen], data[:verifyLen], "Entry %d: first %d bytes mismatch", i, verifyLen)
+
+		// Check last 100 bytes if data is large enough
+		if len(originalData) > verifyLen {
+			assert.Equal(t, originalData[len(originalData)-verifyLen:], data[len(data)-verifyLen:], "Entry %d: last %d bytes mismatch", i, verifyLen)
+		}
+
+		t.Logf("Successfully verified entry %d with size %d bytes", i, len(data))
+	}
+
+	logger.Ctx(ctx).Info("successfully wrote and verified all oversized entries",
+		zap.String("segmentFileKey", fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId)),
+		zap.Int("totalTestCases", len(testCases)))
+
+	err = reader.Close(ctx)
+	require.NoError(t, err)
 }

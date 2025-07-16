@@ -22,14 +22,10 @@ import (
 )
 
 const (
-	PartSize              = 2 * 1024 * 1024 // 2MB per part (MinIO minimum)
-	MaxRecordSize         = 2 * 1024 * 1024 // 2MB max record size (within part)
-	RecordHeaderSize      = 9               // CRC32(4) + Type(1) + Length(4)
-	BlockHeaderRecordSize = 24              // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
-	FooterRecordSize      = 28              // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+	RecordHeaderSize      = 9  // CRC32(4) + Type(1) + Length(4)
+	BlockHeaderRecordSize = 24 // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
+	FooterRecordSize      = 28 // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
 	FormatVersion         = 2
-	MaxRetries            = 3
-	RetryDelay            = time.Second
 )
 
 // Record types

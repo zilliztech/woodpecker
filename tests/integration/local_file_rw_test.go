@@ -34,7 +34,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -427,19 +426,104 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		//require.NoError(t, result.Err) // Should succeed (idempotent)
 	})
 
-	t.Run("LargePayloadValidation", func(t *testing.T) {
+	t.Run("LargePayloadSupport", func(t *testing.T) {
 		logId := int64(10)
 		segmentId := int64(1000)
+
+		// Configure for large entries
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 20 * 1024 * 1024 // 20MB
+
 		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
-		// Try to write payload larger than codec.MaxRecordSize
-		largePayload := make([]byte, codec.MaxRecordSize+1)
-		resultCh := channel.NewLocalResultChannel("test-large-payload")
-		_, err = writer.WriteDataAsync(ctx, 0, largePayload, resultCh)
-		require.Error(t, err)
-		assert.True(t, werr.ErrLogWriterRecordTooLarge.Is(err))
+		// Test writing large payloads: 2MB, 4MB, 8MB, 16MB
+		testCases := []struct {
+			name string
+			size int
+		}{
+			{"2MB", 2 * 1024 * 1024},
+			{"4MB", 4 * 1024 * 1024},
+			{"8MB", 8 * 1024 * 1024},
+			{"16MB", 16 * 1024 * 1024},
+		}
+
+		for i, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				// Generate large payload with pattern for verification
+				largePayload := make([]byte, testCase.size)
+				for j := 0; j < len(largePayload); j++ {
+					largePayload[j] = byte(j % 256)
+				}
+
+				entryId := int64(i)
+				resultCh := channel.NewLocalResultChannel("test-large-payload")
+
+				// Write large payload
+				_, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
+				require.NoError(t, err)
+
+				// Wait for result with extended timeout for large entries
+				ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+				result, err := resultCh.ReadResult(ctxWithTimeout)
+				cancel()
+				require.NoError(t, err)
+				require.NoError(t, result.Err)
+				assert.Equal(t, entryId, result.SyncedId)
+
+				t.Logf("Successfully wrote %s payload (%d bytes)", testCase.name, testCase.size)
+			})
+		}
+	})
+
+	t.Run("SingleEntryLargerThanMaxFlushSize", func(t *testing.T) {
+		logId := int64(11)
+		segmentId := int64(1001)
+
+		// Configure small maxFlushSize to test the edge case
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 1 * 1024 * 1024 // 1MB flush size
+
+		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
+		require.NoError(t, err)
+		defer writer.Close(ctx)
+
+		// Test writing entries larger than maxFlushSize
+		testCases := []struct {
+			name string
+			size int
+		}{
+			{"1.5MB", int(1.5 * 1024 * 1024)}, // 1.5MB > 1MB maxFlushSize
+			{"2MB", 2 * 1024 * 1024},          // 2MB > 1MB maxFlushSize
+			{"3MB", 3 * 1024 * 1024},          // 3MB > 1MB maxFlushSize
+		}
+
+		for i, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				// Generate large payload
+				largePayload := make([]byte, testCase.size)
+				for j := 0; j < len(largePayload); j++ {
+					largePayload[j] = byte((j + i*1000) % 256) // Different pattern for each test
+				}
+
+				entryId := int64(i)
+				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-oversized-entry-%d", i))
+
+				// This should succeed even though entry size > maxFlushSize
+				// because we write to buffer first, then check for flush
+				_, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
+				require.NoError(t, err)
+
+				// Wait for result
+				ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+				result, err := resultCh.ReadResult(ctxWithTimeout)
+				cancel()
+				require.NoError(t, err)
+				require.NoError(t, result.Err)
+				assert.Equal(t, entryId, result.SyncedId)
+
+				t.Logf("Successfully wrote %s payload (%d bytes) which is larger than maxFlushSize (1MB)", testCase.name, testCase.size)
+			})
+		}
 	})
 }
 
