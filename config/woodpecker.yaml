@@ -27,7 +27,7 @@ woodpecker:
       queueSize: 10000 # Maximum number of queued segment append requests, default is 10000
       maxRetries: 3 # Maximum number of retries for segment append operations
     segmentRollingPolicy:
-      maxSize: 2000000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
+      maxSize: 256000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
@@ -40,10 +40,10 @@ woodpecker:
       maxBytes: 256000000 # Maximum size of write buffer in bytes
       maxFlushRetries: 5 # Maximum number of retries for sync operations
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
-      maxFlushSize: 4000000 # Maximum size of a block in bytes to flush, default is 4MB, which is the best practice for cloud storage
-      maxFlushThreads: 64 # Maximum number of threads to flush data
+      maxFlushSize: 2000000 # Maximum size of a block in bytes to flush, default is 2MB, which is the best practice for cloud storage
+      maxFlushThreads: 32 # Maximum number of threads to flush data
     segmentCompactionPolicy:
-      maxBytes: 4000000 # Maximum size of a merged block in bytes after compact, default is 4M
+      maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

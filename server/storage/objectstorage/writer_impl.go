@@ -113,6 +113,8 @@ func NewMinioFileWriter(ctx context.Context, bucket string, baseDir string, logI
 }
 
 func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration, recoveryMode bool) (storage.Writer, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "NewWriter")
+	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
 	logger.Ctx(ctx).Debug("creating new minio file writer", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	syncPolicyConfig := &cfg.Woodpecker.Logstore.SegmentSyncPolicy
@@ -189,6 +191,8 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 
 // recoverFromStorage attempts to recover the writer state from existing objects in MinIO
 func (f *MinioFileWriter) recoverFromStorage(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromStorage")
+	defer sp.End()
 	logger.Ctx(ctx).Info("attempting to recover writer state from storage",
 		zap.String("segmentFileKey", f.segmentFileKey))
 
@@ -201,6 +205,8 @@ func (f *MinioFileWriter) recoverFromStorage(ctx context.Context) error {
 }
 
 func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey string, footerBlockObjInfo minio.ObjectInfo) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromFooter")
+	defer sp.End()
 	// Read the entire footer.blk file
 	footerObj, err := f.client.GetObject(ctx, f.bucket, footerBlockKey, minio.GetObjectOptions{})
 	if err != nil {
@@ -327,105 +333,87 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 }
 
 func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
-
-	// List all objects with the segment prefix
-	objectCh := f.client.ListObjects(ctx, f.bucket, f.segmentFileKey, true, minio.ListObjectsOptions{})
-
-	var dataObjects []string
-	var maxBlockID int64 = -1
-
-	lastModifiedTime := int64(0)
-	for object := range objectCh {
-		if object.Err != nil {
-			logger.Ctx(ctx).Warn("error listing objects during recovery",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Error(object.Err))
-			continue
-		}
-
-		// Skip lock files
-		if strings.HasSuffix(object.Key, ".lock") {
-			continue
-		}
-
-		// Parse object key to get block ID
-		if strings.HasSuffix(object.Key, ".blk") {
-			if object.LastModified.UnixMilli() > lastModifiedTime {
-				lastModifiedTime = object.LastModified.UnixMilli()
-			}
-			blockID, isMerge, err := parseBlockIdFromBlockKey(object.Key)
-			if err != nil {
-				logger.Ctx(ctx).Warn("failed to parse object key during recovery",
-					zap.String("objectKey", object.Key),
-					zap.Error(err))
-				continue
-			}
-
-			if !isMerge {
-				dataObjects = append(dataObjects, object.Key)
-				if blockID > maxBlockID {
-					maxBlockID = blockID
-				}
-			}
-		}
-	}
-
-	f.lastModifiedTime = lastModifiedTime
-	if len(dataObjects) == 0 {
-		logger.Ctx(ctx).Info("no existing data objects found, starting fresh",
-			zap.String("segmentFileKey", f.segmentFileKey))
-		return nil
-	}
-
-	logger.Ctx(ctx).Info("found existing data objects during recovery",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("objectCount", len(dataObjects)),
-		zap.Int64("maxBlockID", maxBlockID))
-
-	// Sort objects by part ID to process them in order
-	sort.Strings(dataObjects)
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromFullListing")
+	defer sp.End()
+	logger.Ctx(ctx).Info("recovering from storage by sequentially reading blocks",
+		zap.String("segmentFileKey", f.segmentFileKey))
 
 	// Try to read each data object to rebuild block indexes
 	var firstEntryID int64 = -1
 	var lastEntryID int64 = -1
+	var tempIndexRecords []*codec.IndexRecord
+	lastModifiedTime := int64(0)
 
-	for _, objectKey := range dataObjects {
-		blockID, _, err := parseBlockIdFromBlockKey(objectKey)
-		if err != nil {
-			continue
+	// fence state recover
+	fenceBlockId := int64(-1)
+
+	// Sequentially try to read blocks starting from ID 0
+	// Block sequence must be continuous without gaps - if any block is missing, stop recovery
+	blockID := int64(0)
+	for {
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
+
+		// Try to get object info first to check if it exists and get last modified time
+		objInfo, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
+		if stateErr != nil {
+			if minioHandler.IsObjectNotExists(stateErr) {
+				// Block doesn't exist, we've reached the end of continuous sequence
+				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("blockID", blockID),
+					zap.String("blockKey", blockKey))
+				break
+			}
+			if minioHandler.IsFencedObject(objInfo) {
+				logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("fenceLlockID", blockID),
+					zap.String("blockKey", blockKey))
+				fenceBlockId = blockID
+				break
+			}
+			// Other errors (network issues, permissions, etc.) should also stop recovery
+			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
+				zap.String("blockKey", blockKey),
+				zap.Error(stateErr))
+			return stateErr
 		}
 
-		// TODO only read blocks last record
+		// Update last modified time
+		if objInfo.LastModified.UnixMilli() > lastModifiedTime {
+			lastModifiedTime = objInfo.LastModified.UnixMilli()
+		}
+
 		// Read the object to get block information
-		obj, err := f.client.GetObject(ctx, f.bucket, objectKey, minio.GetObjectOptions{})
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read object during recovery",
-				zap.String("objectKey", objectKey),
-				zap.Error(err))
-			continue
+		obj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, minio.GetObjectOptions{})
+		if getErr != nil {
+			logger.Ctx(ctx).Warn("failed to read object during recovery, please retry later",
+				zap.String("blockKey", blockKey),
+				zap.Error(getErr))
+			return getErr
 		}
 
-		data, err := io.ReadAll(obj)
+		data, readErr := io.ReadAll(obj)
 		obj.Close()
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read object data during recovery",
-				zap.String("objectKey", objectKey),
-				zap.Error(err))
-			continue
+		if readErr != nil {
+			logger.Ctx(ctx).Warn("failed to read object data during recovery, please retry later",
+				zap.String("blockKey", blockKey),
+				zap.Error(readErr))
+			return readErr
 		}
 
 		// Parse the data to find blockHeaderRecord
-		logger.Ctx(ctx).Info("attempting to parse block header record during recovery",
-			zap.String("objectKey", objectKey),
+		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
+			zap.String("blockKey", blockKey),
 			zap.Int("dataSize", len(data)))
 
-		blockHeaderRecord, err := f.parseBlockHeaderRecord(ctx, data)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to parse block header record during recovery",
-				zap.String("objectKey", objectKey),
+		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, data)
+		if parseBlockHeaderErr != nil {
+			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
+				zap.String("blockKey", blockKey),
 				zap.Int("dataSize", len(data)),
-				zap.Error(err))
-			continue
+				zap.Error(parseBlockHeaderErr))
+			return parseBlockHeaderErr
 		}
 
 		// Create index record for this block
@@ -437,7 +425,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}
 
-		f.blockIndexes = append(f.blockIndexes, indexRecord)
+		tempIndexRecords = append(tempIndexRecords, indexRecord)
 
 		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
 			firstEntryID = blockHeaderRecord.FirstEntryID
@@ -447,11 +435,31 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		}
 
 		logger.Ctx(ctx).Debug("recovered block during recovery",
-			zap.String("objectKey", objectKey),
+			zap.String("blockKey", blockKey),
 			zap.Int64("blockID", blockID),
 			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
 			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
+
+		blockID++
 	}
+
+	f.lastModifiedTime = lastModifiedTime
+	if fenceBlockId > -1 {
+		logger.Ctx(ctx).Info("fence block found, fence state recovered",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("fenceBlockId", fenceBlockId))
+		f.fenced.Store(true)
+	}
+
+	if len(tempIndexRecords) == 0 {
+		logger.Ctx(ctx).Info("no existing data objects found, recover completed",
+			zap.String("segmentFileKey", f.segmentFileKey))
+		f.recovered.Store(true)
+		return nil
+	}
+
+	// Index records are already in correct order since we read them sequentially
+	f.blockIndexes = tempIndexRecords
 
 	// Update writer state
 	if firstEntryID != -1 {
@@ -460,11 +468,17 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	if lastEntryID != -1 {
 		f.lastEntryID.Store(lastEntryID)
 	}
-	if maxBlockID != -1 {
+
+	// Calculate maxBlockID from the recovered blocks
+	var maxBlockID int64 = -1
+	if len(tempIndexRecords) > 0 {
+		// Since blocks are sequential, the last block has the maximum ID
+		maxBlockID = int64(tempIndexRecords[len(tempIndexRecords)-1].BlockNumber)
 		f.lastBlockID.Store(maxBlockID)
 		f.lastSubmittedUploadingBlockID.Store(maxBlockID)
 		f.lastSubmittedUploadingEntryID.Store(lastEntryID)
 	}
+
 	logger.Ctx(ctx).Info("successfully recovered writer state from storage",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("blockIndexCount", len(f.blockIndexes)),
@@ -1289,10 +1303,8 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			// get last block ID
 			blocks := f.blockIndexes
 			lastBlockID := int64(-1)
-			lastEntryID := int64(-1)
 			if len(blocks) > 0 {
 				lastBlockID = int64(blocks[len(blocks)-1].BlockNumber)
-				lastEntryID = blocks[len(blocks)-1].LastEntryID
 			}
 			// Get current last block ID and create fence object key
 			fenceBlockId := lastBlockID + 1
@@ -1321,8 +1333,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			logger.Ctx(ctx).Info("Successfully created fence object",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.String("fenceBlockKey", fenceBlockKey),
-				zap.Int64("fenceBlockId", fenceBlockId),
-				zap.Int64("lastEntryId", lastEntryID))
+				zap.Int64("fenceBlockId", fenceBlockId))
 			return nil
 		},
 		retry.Attempts(5),                 // Retry up to 5 times
