@@ -1643,17 +1643,17 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 			return nil, -1, fmt.Errorf("failed to extract data records from block %d: %w", blockIndex.BlockNumber, err)
 		}
 
-		// Check if adding this block would exceed target size
-		if currentMergedSize+int64(len(dataRecords)) > targetBlockSize && len(currentMergedBlock) > 0 {
-			// Upload current merged block before continuing
+		// Add data records to current merged block first
+		currentMergedBlock = append(currentMergedBlock, dataRecords...)
+		currentMergedSize += int64(len(dataRecords))
+
+		// Check if current merged block exceeds target size after adding data
+		if currentMergedSize >= targetBlockSize {
+			// Upload current merged block since it has reached the target size
 			if err := uploadCurrentBlock(); err != nil {
 				return nil, -1, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, err)
 			}
 		}
-
-		// Add data records to current merged block
-		currentMergedBlock = append(currentMergedBlock, dataRecords...)
-		currentMergedSize += int64(len(dataRecords))
 
 		logger.Ctx(ctx).Debug("processed block for streaming merge",
 			zap.String("segmentFileKey", f.segmentFileKey),

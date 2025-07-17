@@ -29,6 +29,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
@@ -2961,4 +2962,421 @@ func TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 
 	err = reader.Close(ctx)
 	require.NoError(t, err)
+}
+
+// TestMinioFileWriter_Compaction tests the complete compaction workflow
+func TestMinioFileWriter_Compaction(t *testing.T) {
+	if os.Getenv("SKIP_MINIO_TESTS") != "" {
+		t.Skip("Skipping MinIO tests")
+	}
+
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	// Configure small maxFlushSize to create multiple small blocks
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 512          // Very small to create many blocks
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 10 * 1024 * 1024 // 10MB buffer
+
+	logId := int64(300)
+	segmentId := int64(30000)
+	baseDir := fmt.Sprintf("test-compaction-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	// Phase 1: Write data to create multiple small blocks
+	t.Run("WriteDataToCreateMultipleBlocks", func(t *testing.T) {
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+
+		// Write enough data to create multiple blocks (each entry ~200-300 bytes, block size ~512 bytes)
+		totalEntries := 20
+		testData := make([][]byte, totalEntries)
+
+		for i := 0; i < totalEntries; i++ {
+			// Create entries of varying sizes to ensure realistic block distribution
+			entrySize := 200 + (i%3)*100 // 200, 300, or 400 bytes per entry
+			data := make([]byte, entrySize)
+			for j := 0; j < entrySize; j++ {
+				data[j] = byte((i*100 + j) % 256)
+			}
+			testData[i] = data
+
+			entryId := int64(i)
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-compaction-write-%d", entryId))
+
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			require.NoError(t, err)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+
+			// Force sync after every few entries to create separate blocks
+			if (i+1)%3 == 0 {
+				err = writer.Sync(ctx)
+				require.NoError(t, err)
+			}
+		}
+
+		// Final sync and finalize
+		err = writer.Sync(ctx)
+		require.NoError(t, err)
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(totalEntries-1), lastEntryId)
+
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		t.Logf("Successfully wrote %d entries and finalized segment", totalEntries)
+	})
+
+	// Phase 2: Verify original data before compaction
+	var originalData []*proto.LogEntry
+	var originalBlockCount int
+	var originalFooter *codec.FooterRecord
+
+	t.Run("VerifyOriginalDataBeforeCompaction", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close(ctx)
+
+		// Get original footer and block information
+		originalFooter = reader.GetFooter()
+		require.NotNil(t, originalFooter, "Original footer should exist")
+		assert.False(t, codec.IsCompacted(originalFooter.Flags), "Original segment should not be compacted")
+
+		originalBlockIndexes := reader.GetBlockIndexes()
+		originalBlockCount = len(originalBlockIndexes)
+		assert.Greater(t, originalBlockCount, 3, "Should have created multiple blocks")
+
+		t.Logf("Original segment has %d blocks, %d total records",
+			originalBlockCount, originalFooter.TotalRecords)
+
+		// Read all original data for later comparison
+		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    int64(originalFooter.TotalRecords),
+		})
+		require.NoError(t, err)
+		originalData = entries
+		assert.Equal(t, int(originalFooter.TotalRecords), len(originalData))
+
+		t.Logf("Successfully read %d entries from original segment", len(originalData))
+	})
+
+	// Phase 3: Perform compaction
+	t.Run("PerformCompaction", func(t *testing.T) {
+		// Open writer in recovery mode to compact existing segment
+		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+
+		// Perform compaction
+		compactedSize, err := writer.Compact(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, compactedSize, int64(0), "Compacted size should be positive")
+
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		t.Logf("Successfully compacted segment, new size: %d bytes", compactedSize)
+	})
+
+	// Phase 4: Verify compacted data
+	t.Run("VerifyCompactedData", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close(ctx)
+
+		// Verify compacted footer and flags
+		compactedFooter := reader.GetFooter()
+		require.NotNil(t, compactedFooter, "Compacted footer should exist")
+		assert.True(t, codec.IsCompacted(compactedFooter.Flags), "Compacted segment should have compacted flag set")
+		assert.Equal(t, originalFooter.TotalRecords, compactedFooter.TotalRecords, "Total records should remain the same")
+
+		// Verify block count reduction
+		compactedBlockIndexes := reader.GetBlockIndexes()
+		compactedBlockCount := len(compactedBlockIndexes)
+		assert.Less(t, compactedBlockCount, originalBlockCount, "Compacted segment should have fewer blocks")
+		assert.Equal(t, int32(compactedBlockCount), compactedFooter.TotalBlocks, "Footer should reflect actual block count")
+
+		t.Logf("Compacted segment has %d blocks (reduced from %d), %d total records",
+			compactedBlockCount, originalBlockCount, compactedFooter.TotalRecords)
+
+		// Read all compacted data
+		compactedEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    int64(compactedFooter.TotalRecords),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, len(originalData), len(compactedEntries), "Should have same number of entries")
+
+		// Verify data integrity - every entry should be identical
+		for i, originalEntry := range originalData {
+			assert.Equal(t, originalEntry.EntryId, compactedEntries[i].EntryId,
+				"Entry ID should match at index %d", i)
+			assert.Equal(t, originalEntry.Values, compactedEntries[i].Values,
+				"Entry data should match at index %d", i)
+		}
+
+		t.Logf("Successfully verified %d entries have identical data after compaction", len(compactedEntries))
+	})
+
+	// Phase 5: Verify object storage structure
+	t.Run("VerifyObjectStorageStructure", func(t *testing.T) {
+		segmentPrefix := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId)
+		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix, true, minio.ListObjectsOptions{})
+
+		var regularBlocks []string
+		var mergedBlocks []string
+		var footerFound bool
+		var lockFiles []string
+
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+
+			if strings.HasSuffix(object.Key, ".lock") {
+				lockFiles = append(lockFiles, object.Key)
+			} else if strings.HasSuffix(object.Key, "footer.blk") {
+				footerFound = true
+			} else if strings.Contains(object.Key, "/m_") && strings.HasSuffix(object.Key, ".blk") {
+				mergedBlocks = append(mergedBlocks, object.Key)
+			} else if strings.HasSuffix(object.Key, ".blk") {
+				regularBlocks = append(regularBlocks, object.Key)
+			}
+
+			t.Logf("Found object: %s (size: %d)", object.Key, object.Size)
+		}
+
+		// Verify object structure
+		assert.True(t, footerFound, "Footer object should exist")
+		assert.Greater(t, len(mergedBlocks), 0, "Should have merged block objects")
+		assert.GreaterOrEqual(t, len(regularBlocks), 0, "May have original block objects")
+
+		t.Logf("Object structure: %d regular blocks, %d merged blocks, footer: %v",
+			len(regularBlocks), len(mergedBlocks), footerFound)
+	})
+
+	// Phase 6: Test auto batch mode before and after compaction
+	var originalAutoBatchSizes []int
+	var compactedAutoBatchSizes []int
+
+	t.Run("TestAutoBatchBeforeCompaction", func(t *testing.T) {
+		// First, restore original (non-compacted) segment temporarily for testing
+		// We need to test with original data before it was compacted
+
+		// Since we already compacted, we'll create a fresh segment for this test
+		tempLogId := logId + 1000
+		tempSegmentId := segmentId + 1000
+		tempBaseDir := fmt.Sprintf("test-auto-batch-before-%d", time.Now().Unix())
+		defer cleanupMinioFileWriterObjects(t, minioHdl, tempBaseDir)
+
+		// Write same data pattern as original but don't compact
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl, cfg)
+		require.NoError(t, err)
+
+		// Write same 20 entries with same pattern
+		totalEntries := 20
+		for i := 0; i < totalEntries; i++ {
+			entrySize := 200 + (i%3)*100 // Same pattern as before
+			data := make([]byte, entrySize)
+			for j := 0; j < entrySize; j++ {
+				data[j] = byte((i*100 + j) % 256)
+			}
+
+			entryId := int64(i)
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-auto-batch-before-write-%d", entryId))
+
+			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+
+			// Force sync after every few entries to create separate blocks (same as original)
+			if (i+1)%3 == 0 {
+				err = writer.Sync(ctx)
+				require.NoError(t, err)
+			}
+		}
+
+		err = writer.Sync(ctx)
+		require.NoError(t, err)
+		_, err = writer.Finalize(ctx)
+		require.NoError(t, err)
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		// Test auto batch mode on original (non-compacted) segment
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify this segment is not compacted
+		footer := reader.GetFooter()
+		require.NotNil(t, footer)
+		assert.False(t, codec.IsCompacted(footer.Flags), "Test segment should not be compacted")
+
+		// Test auto batch from different starting points
+		testStartIds := []int64{0, 3, 6, 9, 12, 15}
+		for _, startId := range testStartIds {
+			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartEntryID: startId,
+				BatchSize:    -1, // Auto batch mode
+			})
+			require.NoError(t, err)
+
+			if len(entries) > 0 {
+				originalAutoBatchSizes = append(originalAutoBatchSizes, len(entries))
+				assert.Equal(t, startId, entries[0].EntryId, "First entry should match start ID %d", startId)
+
+				t.Logf("Original segment: Auto batch from entry %d returned %d entries", startId, len(entries))
+			}
+		}
+
+		t.Logf("Original segment auto batch sizes: %v", originalAutoBatchSizes)
+	})
+
+	t.Run("TestAutoBatchAfterCompaction", func(t *testing.T) {
+		// Test auto batch mode on compacted segment
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify this segment is compacted
+		footer := reader.GetFooter()
+		require.NotNil(t, footer)
+		assert.True(t, codec.IsCompacted(footer.Flags), "Segment should be compacted")
+
+		// Test auto batch from same starting points
+		testStartIds := []int64{0, 3, 6, 9, 12, 15}
+		for _, startId := range testStartIds {
+			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartEntryID: startId,
+				BatchSize:    -1, // Auto batch mode
+			})
+			require.NoError(t, err)
+
+			if len(entries) > 0 {
+				compactedAutoBatchSizes = append(compactedAutoBatchSizes, len(entries))
+				assert.Equal(t, startId, entries[0].EntryId, "First entry should match start ID %d", startId)
+
+				t.Logf("Compacted segment: Auto batch from entry %d returned %d entries", startId, len(entries))
+			}
+		}
+
+		t.Logf("Compacted segment auto batch sizes: %v", compactedAutoBatchSizes)
+	})
+
+	t.Run("VerifyAutoBatchImprovementAfterCompaction", func(t *testing.T) {
+		// Verify that compaction actually improves auto batch efficiency
+		require.Greater(t, len(originalAutoBatchSizes), 0, "Should have original auto batch size data")
+		require.Greater(t, len(compactedAutoBatchSizes), 0, "Should have compacted auto batch size data")
+
+		// Calculate average entries per auto batch
+		var originalSum, compactedSum int
+		for _, size := range originalAutoBatchSizes {
+			originalSum += size
+		}
+		for _, size := range compactedAutoBatchSizes {
+			compactedSum += size
+		}
+
+		originalAvg := float64(originalSum) / float64(len(originalAutoBatchSizes))
+		compactedAvg := float64(compactedSum) / float64(len(compactedAutoBatchSizes))
+
+		t.Logf("Original segment average entries per auto batch: %.2f", originalAvg)
+		t.Logf("Compacted segment average entries per auto batch: %.2f", compactedAvg)
+
+		// Compacted segment should have larger auto batches on average
+		// This validates that compaction successfully merged multiple small blocks into fewer large blocks
+		assert.Greater(t, compactedAvg, originalAvg,
+			"Compacted segment should have larger auto batches (%.2f) than original segment (%.2f)",
+			compactedAvg, originalAvg)
+
+		// Find max batch sizes for comparison
+		originalMax := 0
+		compactedMax := 0
+		for _, size := range originalAutoBatchSizes {
+			if size > originalMax {
+				originalMax = size
+			}
+		}
+		for _, size := range compactedAutoBatchSizes {
+			if size > compactedMax {
+				compactedMax = size
+			}
+		}
+
+		t.Logf("Original segment max auto batch size: %d", originalMax)
+		t.Logf("Compacted segment max auto batch size: %d", compactedMax)
+
+		// The maximum auto batch size should also be larger after compaction
+		assert.GreaterOrEqual(t, compactedMax, originalMax,
+			"Compacted segment max auto batch size (%d) should be >= original segment (%d)",
+			compactedMax, originalMax)
+	})
+
+	// Additional tests for specific batch size mode
+	t.Run("TestSpecificBatchSizeModes", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Test specific batch size mode
+		t.Run("SpecificBatchSize", func(t *testing.T) {
+			batchSize := int64(7)
+			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				StartEntryID: 3,
+				BatchSize:    batchSize,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, int(batchSize), len(entries), "Should read exact batch size")
+
+			// Verify sequential entry IDs
+			for i, entry := range entries {
+				assert.Equal(t, int64(3+i), entry.EntryId, "Entry ID should be sequential")
+			}
+		})
+
+		// Test reading from different starting points
+		t.Run("DifferentStartingPoints", func(t *testing.T) {
+			testPoints := []int64{0, 1, 5, 10, 15}
+			for _, startId := range testPoints {
+				entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+					StartEntryID: startId,
+					BatchSize:    3,
+				})
+				require.NoError(t, err)
+				if len(entries) > 0 {
+					assert.Equal(t, startId, entries[0].EntryId,
+						"First entry should match start ID %d", startId)
+				}
+			}
+		})
+	})
+
+	// Phase 7: Test compaction is idempotent
+	t.Run("TestCompactionIdempotency", func(t *testing.T) {
+		// Try to compact again - should be skipped since already compacted
+		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+
+		// Second compaction should return -1 (already compacted)
+		compactedSize, err := writer.Compact(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(-1), compactedSize, "Second compaction should return -1 (already compacted)")
+
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		t.Log("Successfully verified compaction idempotency")
+	})
 }

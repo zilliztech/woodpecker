@@ -593,7 +593,7 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		return nil, werr.ErrEntryNotFound
 	}
 
-	if opt.BatchSize == -1 || f.isCompacted.Load() {
+	if opt.BatchSize == -1 {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
 		logger.Ctx(ctx).Debug("using single block mode")
 		res, readErr := f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartEntryID)
