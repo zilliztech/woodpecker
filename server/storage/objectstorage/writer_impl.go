@@ -213,6 +213,7 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 	if err != nil {
 		return err
 	}
+	defer footerObj.Close()
 	f.lastModifiedTime = footerBlockObjInfo.LastModified.UnixMilli()
 
 	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, footerBlockObjInfo.Size)

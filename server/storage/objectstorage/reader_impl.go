@@ -236,6 +236,7 @@ func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer footerObj.Close()
 
 	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, statInfo.Size)
 	if err != nil {
@@ -409,6 +410,7 @@ func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int6
 			zap.Error(getErr))
 		return nil, getErr
 	}
+	defer headerRecordObj.Close()
 
 	data, err := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize)
 	if err != nil {
@@ -826,6 +828,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				zap.Error(getErr))
 			break // Stop reading on error, return what we have so far
 		}
+		defer blockObj.Close()
 
 		blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, objInfo.Size)
 		if err != nil {
