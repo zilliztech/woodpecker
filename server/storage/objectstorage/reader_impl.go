@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -50,6 +52,9 @@ type MinioFileReader struct {
 	client         minioHandler.MinioHandler
 	bucket         string
 	segmentFileKey string
+	logId          int64
+	segmentId      int64
+	logIdStr       string // for metrics only
 
 	blocks      []*codec.IndexRecord
 	footer      *codec.FooterRecord
@@ -68,6 +73,9 @@ func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logI
 	logger.Ctx(ctx).Debug("creating new minio file reader", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	// Get object size
 	reader := &MinioFileReader{
+		logId:          logId,
+		segmentId:      segId,
+		logIdStr:       fmt.Sprintf("%d", logId),
 		client:         client,
 		bucket:         bucket,
 		segmentFileKey: segmentFileKey,
@@ -108,6 +116,7 @@ func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logI
 func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchAllBlockInfoOnce")
 	defer sp.End()
+	startTime := time.Now()
 	listPrefix := fmt.Sprintf("%s/", f.segmentFileKey)
 	if f.isCompacted.Load() {
 		listPrefix = fmt.Sprintf("%s/m_", f.segmentFileKey)
@@ -201,6 +210,10 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 	existsBlocks = continuousBlocks
 
 	f.blocks = existsBlocks
+
+	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	return len(existsBlocks), nil
 }
 
@@ -315,6 +328,7 @@ func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
 func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (bool, *codec.IndexRecord, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchIncrementalBlockInfo")
 	defer sp.End()
+	startTime := time.Now()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var fetchedLastBlock *codec.IndexRecord
@@ -359,6 +373,8 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 	}
 
 	logger.Ctx(ctx).Debug("prefetch block infos", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("blocks", len(f.blocks)), zap.Int64("lastBlockID", blockID-1))
+	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "loadIncr", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return existsNewBlock, fetchedLastBlock, nil
 }
 
@@ -525,6 +541,7 @@ func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
 	defer sp.End()
+	startTime := time.Now()
 
 	logger.Ctx(ctx).Debug("ReadNextBatch called",
 		zap.Int64("startEntryID", opt.StartEntryID),
@@ -579,13 +596,23 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	if opt.BatchSize == -1 || f.isCompacted.Load() {
 		// Auto batch mode: return all data records from the single block containing the start sequence number
 		logger.Ctx(ctx).Debug("using single block mode")
-		return f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartEntryID)
+		res, readErr := f.readSingleBlock(ctx, allBlocks[startBlockIndex], opt.StartEntryID)
+		if readErr == nil {
+			metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "readBatch", "success").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "readBatch", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		}
+		return res, readErr
 	} else {
 		// Specified batch size mode: read across multiple blocks if necessary to get the requested number of entries
 		logger.Ctx(ctx).Debug("using multiple blocks mode",
 			zap.Int("startBlockIndex", startBlockIndex),
 			zap.Int64("batchSize", opt.BatchSize))
-		return f.readMultipleBlocks(ctx, allBlocks, startBlockIndex, opt.StartEntryID, opt.BatchSize)
+		res, readErr := f.readMultipleBlocks(ctx, allBlocks, startBlockIndex, opt.StartEntryID, opt.BatchSize)
+		if readErr == nil {
+			metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "readBatch", "success").Inc()
+			metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "readBatch", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		}
+		return res, readErr
 	}
 }
 
@@ -656,6 +683,7 @@ func (f *MinioFileReader) getBlockObjectKey(blockNumber int64) string {
 func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startEntryID int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
+	startTime := time.Now()
 	blockObjKey := f.getBlockObjectKey(int64(blockInfo.BlockNumber))
 
 	// Get object info to determine the actual size
@@ -737,6 +765,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	entries := make([]*proto.LogEntry, 0, 32)
 	currentEntryID := blockInfo.FirstEntryID
 
+	readBytes := 0
 	// Parse all data records in the block
 	for j := 0; j < len(records); j++ {
 		if records[j].Type() != codec.DataRecordType {
@@ -750,6 +779,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 				Values:  r.Payload,
 			}
 			entries = append(entries, entry)
+			readBytes += len(r.Payload)
 		}
 		currentEntryID++
 	}
@@ -759,6 +789,8 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
 		zap.Int64("startEntryID", startEntryID),
 		zap.Int("entriesReturned", len(entries)))
+	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }
@@ -767,8 +799,10 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startSequenceNum int64, batchSize int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	entries := make([]*proto.LogEntry, 0, batchSize)
 	entriesCollected := int64(0)
+	readBytes := 0
 
 	for i := startBlockIndex; i < len(allBlocks) && entriesCollected < batchSize; i++ {
 		blockInfo := allBlocks[i]
@@ -866,6 +900,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				}
 				entries = append(entries, entry)
 				entriesCollected++
+				readBytes += len(r.Payload)
 			}
 			currentEntryID++
 		}
@@ -876,6 +911,9 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		zap.Int64("startSequenceNum", startSequenceNum),
 		zap.Int64("requestedBatchSize", batchSize),
 		zap.Int("entriesReturned", len(entries)))
+
+	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }

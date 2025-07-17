@@ -34,6 +34,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -62,6 +63,7 @@ type LocalFileWriter struct {
 	logId           int64
 	segmentId       int64
 	file            *os.File
+	logIdStr        string // for metrics only
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -145,6 +147,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		segmentFilePath:  filePath,
 		logId:            logId,
 		segmentId:        segmentId,
+		logIdStr:         fmt.Sprintf("%d", logId),
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,
@@ -319,6 +322,7 @@ func (w *LocalFileWriter) run() {
 func (w *LocalFileWriter) Sync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
+	startTime := time.Now()
 	// Use syncMu to ensure only one sync can proceed at a time
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -352,6 +356,9 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
 	}
 
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	return nil
 }
 
@@ -359,6 +366,7 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
+	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil || currentBuffer.GetExpectedNextEntryId() <= currentBuffer.GetFirstEntryId() {
 		return
@@ -417,12 +425,16 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 			w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
 		}
 	}()
+
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "rollBuffer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 }
 
 // processFlushTask processes a flush task by writing data to disk
 func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
+	startTime := time.Now()
 	// Add nil check for safety
 	if task == nil {
 		return
@@ -568,6 +580,11 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		zap.Int64("lastEntryId", task.lastEntryId),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
+
+	// update metrics
+	actualDataSize := w.writtenBytes - blockStartOffset
+	metrics.WpFileFlushBytesWritten.WithLabelValues(w.logIdStr).Add(float64(actualDataSize))
+	metrics.WpFileFlushLatency.WithLabelValues(w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(task.entries)
@@ -785,6 +802,7 @@ func (w *LocalFileWriter) writeRecord(ctx context.Context, record codec.Record) 
 func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
+	startTime := time.Now()
 
 	if !w.finalized.CompareAndSwap(false, true) {
 		// if already finalized, return fast
@@ -850,6 +868,8 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "finalize", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized log file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.finalized.Store(true)
 	return w.lastEntryID.Load(), nil
@@ -869,6 +889,7 @@ func (w *LocalFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 func (w *LocalFileWriter) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Close")
 	defer sp.End()
+	startTime := time.Now()
 	if !w.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
@@ -907,6 +928,9 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Error(err))
 	}
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "close", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	return nil
 }
 
@@ -914,6 +938,7 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Fence")
 	defer sp.End()
+	startTime := time.Now()
 
 	// If already fenced, return idempotently
 	if w.fenced.Load() {
@@ -966,6 +991,9 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
+
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "fence", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return lastEntryId, nil
 }
@@ -1038,6 +1066,7 @@ func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) err
 func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, file *os.File, footerRecord *codec.FooterRecord) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFooter")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Info("Recovering blocks from footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int64("logId", w.logId),
@@ -1140,6 +1169,9 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 		zap.Int64("firstEntryID", w.firstEntryID.Load()),
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
 
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "recover_footer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	w.recovered.Store(true)
 	return nil
 }
@@ -1148,6 +1180,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, file *os.File) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFullScan")
 	defer sp.End()
+	startTime := time.Now()
 	// Read the entire file content
 	data := make([]byte, w.writtenBytes)
 	_, err := file.ReadAt(data, 0)
@@ -1268,6 +1301,10 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 		w.lastEntryID.Store(-1)
 		w.currentBlockNumber.Store(0)
 	}
+
+	// update metrics
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "recover_raw", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }

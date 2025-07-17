@@ -28,7 +28,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
@@ -65,7 +64,6 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -85,7 +83,6 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -118,7 +115,6 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 			b.ExpectedNextEntryId.Add(1)
 			bufferEntry := b.Entries[addedId-b.FirstEntryId]
 			b.SequentialReadyDataSize.Add(int64(len(bufferEntry.Data)))
-			metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Dec()
 		} else {
 			break
 		}

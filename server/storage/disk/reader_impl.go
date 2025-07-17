@@ -24,10 +24,12 @@ import (
 	"os"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -44,6 +46,7 @@ var _ storage.Reader = (*LocalFileReader)(nil)
 type LocalFileReader struct {
 	logId        int64
 	segId        int64
+	logIdStr     string // for metrics only
 	filePath     string
 	file         *os.File
 	size         int64
@@ -108,6 +111,7 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	reader := &LocalFileReader{
 		logId:    logId,
 		segId:    segId,
+		logIdStr: fmt.Sprintf("%d", logId),
 		filePath: filePath,
 		file:     file,
 		size:     stat.Size(),
@@ -253,6 +257,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanFileForBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Info("starting full file scan to build block indexes",
 		zap.String("filePath", r.filePath),
 		zap.Int64("fileSize", r.size))
@@ -442,6 +447,8 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 		zap.Int("blocksFound", len(r.blockIndexes)),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset))
 
+	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -450,6 +457,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForNewBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	// Get current file size
 	stat, err := r.file.Stat()
 	if err != nil {
@@ -628,6 +636,8 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 		zap.Int("totalBlocks", len(r.blockIndexes)),
 		zap.Int64("newSize", r.size),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset))
+	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadIncr", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
@@ -760,6 +770,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startEntryID int64, batchSize int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ensureSufficientBlocks")
 	defer sp.End()
+
 	// Check if we already have the starting block
 	hasStartingBlock := false
 	var lastAvailableEntryID int64 = -1
@@ -811,6 +822,7 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startEntry
 func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startEntryID int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
+	startTime := time.Now()
 	// For files without footer, we treat the entire file as one block
 	// Calculate the end offset of this block
 	var blockEndOffset int64
@@ -914,6 +926,7 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	// Check if this block starts with a HeaderRecord
 	// If StartOffset is 0 and FirstRecordOffset > 0, then this block includes a HeaderRecord
 	skipHeaderRecord := blockInfo.StartOffset == 0 && blockInfo.FirstRecordOffset > 0
+	readBytes := 0
 
 	for _, record := range records {
 		if record.Type() == codec.HeaderRecordType && skipHeaderRecord {
@@ -939,6 +952,7 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 					Values:  dataRecord.Payload,
 				}
 				entries = append(entries, entry)
+				readBytes += len(dataRecord.Payload)
 			}
 			currentEntryID++
 		}
@@ -960,6 +974,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 			zap.Int64("startEntryID", startEntryID),
 			zap.Int("readEntryCount", len(entries)))
 	}
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }
@@ -968,6 +984,7 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startEntryID int64, batchSize int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Debug("readMultipleBlocks started",
 		zap.Int("startBlockIndex", startBlockIndex),
 		zap.Int64("startEntryID", startEntryID),
@@ -976,6 +993,7 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 	entries := make([]*proto.LogEntry, 0, batchSize)
 	entriesCollected := int64(0)
+	readBytes := 0
 
 	for i := startBlockIndex; i < len(allBlocks) && entriesCollected < batchSize; i++ {
 		blockInfo := allBlocks[i]
@@ -1108,6 +1126,7 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 					}
 					entries = append(entries, entry)
 					entriesCollected++
+					readBytes += len(dataRecord.Payload)
 
 					logger.Ctx(ctx).Debug("added entry to result",
 						zap.Int64("entryId", currentEntryID),
@@ -1141,6 +1160,8 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 	logger.Ctx(ctx).Debug("readMultipleBlocks finished",
 		zap.Int64("totalEntriesCollected", entriesCollected),
 		zap.Int64("entriesCollected", entriesCollected))
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }
