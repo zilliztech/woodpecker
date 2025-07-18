@@ -36,7 +36,7 @@ type MetadataProvider interface {
 	// CreateLog creates a new log in the metadata provider.
 	CreateLog(ctx context.Context, logName string) error
 	// OpenLog opens an existing log in the metadata provider.
-	OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error)
+	OpenLog(ctx context.Context, logName string) (*LogMeta, map[int64]*SegmentMeta, error)
 	// CheckExists checks if a log exists in the metadata provider.
 	CheckExists(ctx context.Context, logName string) (bool, error)
 	// ListLogs returns a list of all logs in the metadata provider.
@@ -44,24 +44,24 @@ type MetadataProvider interface {
 	// ListLogsWithPrefix returns a list of all logs in the metadata provider with a given prefix.
 	ListLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	// GetLogMeta returns the metadata for a specific log.
-	GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error)
+	GetLogMeta(ctx context.Context, logName string) (*LogMeta, error)
 	// UpdateLogMeta updates the metadata for a specific log.
-	UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error
+	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
 	// AcquireLogWriterLock acquires a lock for writing to a specific log.
 	AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error)
 	// ReleaseLogWriterLock releases a lock for writing to a specific log.
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
 
 	// StoreSegmentMetadata stores the metadata for a specific segment.
-	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *proto.SegmentMetadata) error
+	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
 	// UpdateSegmentMetadata updates the metadata for a specific segment.
-	UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *proto.SegmentMetadata) error
+	UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
 	// DeleteSegmentMetadata deletes the metadata for a specific segment.
 	DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error
 	// GetSegmentMetadata returns the metadata for a specific segment.
-	GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*proto.SegmentMetadata, error)
+	GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*SegmentMeta, error)
 	// GetAllSegmentMetadata returns all segment metadata for a specific log.
-	GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*proto.SegmentMetadata, error)
+	GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*SegmentMeta, error)
 	// CheckSegmentExists checks if a segment exists in the metadata provider.
 	CheckSegmentExists(ctx context.Context, name string, segmentId int64) (bool, error)
 
@@ -91,4 +91,16 @@ type MetadataProvider interface {
 	DeleteSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) error
 	// ListSegmentCleanupStatus lists all cleanup statuses for a log
 	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
+}
+
+// LogMeta is a wrapper of proto.LogMeta with revision.
+type LogMeta struct {
+	Metadata *proto.LogMeta
+	Revision int64
+}
+
+// SegmentMeta is a wrapper of proto.SegmentMetadata with revision.
+type SegmentMeta struct {
+	Metadata *proto.SegmentMetadata
+	Revision int64
 }

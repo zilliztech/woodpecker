@@ -28,6 +28,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_segment_handle"
 	"github.com/zilliztech/woodpecker/proto"
@@ -46,7 +47,7 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 		},
 	}
 
-	segments := map[int64]*proto.SegmentMetadata{}
+	segments := map[int64]*meta.SegmentMeta{}
 	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg).(*logHandleImpl)
 
 	return logHandle, mockMeta
@@ -60,9 +61,12 @@ func TestOpenLogReader_ReaderResourceLeak(t *testing.T) {
 	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(errors.New("metadata error"))
 
 	// Mock GetTruncatedRecordId
-	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&proto.LogMeta{
-		TruncatedSegmentId: -1,
-		TruncatedEntryId:   -1,
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: -1,
+			TruncatedEntryId:   -1,
+		},
+		Revision: 1,
 	}, nil)
 
 	// Mock DeleteReaderTempInfo for cleanup
@@ -184,10 +188,10 @@ func TestCreateAndCacheNewSegmentHandle_SetsAccessTime(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock GetNextSegmentId
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{}, nil)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
 
 	// Mock StoreSegmentMetadata
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.AnythingOfType("*proto.SegmentMetadata")).Return(nil)
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(nil)
 
 	// Call createAndCacheNewSegmentHandle
 	handle, err := logHandle.createAndCacheWritableSegmentHandle(ctx)
@@ -212,8 +216,8 @@ func TestGetOrCreateWritableSegmentHandle_ErrorHandling(t *testing.T) {
 	logHandle.WritableSegmentId = -1 // No writable segment exists
 
 	// Mock metadata operations for createNewSegmentMeta that will fail
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{}, nil)
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.AnythingOfType("*proto.SegmentMetadata")).Return(errors.New("storage error"))
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(errors.New("storage error"))
 
 	// Call GetOrCreateWritableSegmentHandle and expect error
 	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
@@ -232,9 +236,9 @@ func TestFenceAllActiveSegments_NoActiveSegments(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock segments with no active segments
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Completed},
-		2: {SegNo: 2, State: proto.SegmentState_Sealed},
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Completed}, Revision: 1},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Sealed}, Revision: 1},
 	}, nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)
@@ -253,10 +257,10 @@ func TestFenceAllActiveSegments_SuccessfulFencing(t *testing.T) {
 	mockSegment3 := mocks_segment_handle.NewSegmentHandle(t)
 
 	// Mock segments with some active segments
-	segments := map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
-		2: {SegNo: 2, State: proto.SegmentState_Completed}, // Not active
-		3: {SegNo: 3, State: proto.SegmentState_Active},
+	segments := map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Completed}, Revision: 1}, // Not active
+		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Active}, Revision: 1},
 	}
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
 
@@ -269,11 +273,11 @@ func TestFenceAllActiveSegments_SuccessfulFencing(t *testing.T) {
 	mockSegment3.EXPECT().Fence(mock.Anything).Return(int64(200), nil)
 
 	// Mock metadata updates after fencing
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 1 && meta.State == proto.SegmentState_Sealed && meta.LastEntryId == 100
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
 	})).Return(nil)
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 3 && meta.State == proto.SegmentState_Sealed && meta.LastEntryId == 200
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 3 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 200
 	})).Return(nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)
@@ -295,9 +299,9 @@ func TestFenceAllActiveSegments_PartialFailure(t *testing.T) {
 	mockSegment2 := mocks_segment_handle.NewSegmentHandle(t)
 
 	// Mock segments with active segments
-	segments := map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
-		2: {SegNo: 2, State: proto.SegmentState_Active},
+	segments := map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
+		2: {Metadata: &proto.SegmentMetadata{SegNo: 2, State: proto.SegmentState_Active}, Revision: 1},
 	}
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
 
@@ -310,8 +314,8 @@ func TestFenceAllActiveSegments_PartialFailure(t *testing.T) {
 	mockSegment2.EXPECT().Fence(mock.Anything).Return(int64(-1), errors.New("fence error"))
 
 	// Mock metadata update for successful segment
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 1 && meta.State == proto.SegmentState_Sealed && meta.LastEntryId == 100
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
 	})).Return(nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)
@@ -332,7 +336,7 @@ func TestFenceAllActiveSegments_EmptySegments(t *testing.T) {
 	ctx := context.Background()
 
 	// Mock empty segments
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{}, nil)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)
 	assert.NoError(t, err)
@@ -360,11 +364,11 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
 	}, nil)
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 2 && meta.State == proto.SegmentState_Active
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling
@@ -402,11 +406,11 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
 	}, nil)
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 2 && meta.State == proto.SegmentState_Active
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling due to time
@@ -443,11 +447,11 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_ForceRolling(t *testing.T) {
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
 	}, nil)
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 2 && meta.State == proto.SegmentState_Active
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling due to force rolling
@@ -503,9 +507,9 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_CreateFirstSegment(t *testin
 	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
 
 	// Mock metadata operations for creating first segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{}, nil)
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *proto.SegmentMetadata) bool {
-		return meta.SegNo == 0 && meta.State == proto.SegmentState_Active
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 0 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should create first segment
@@ -642,10 +646,10 @@ func TestLogHandle_Rolling_ConcurrentAccess(t *testing.T) {
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Maybe()
 
 	// Mock metadata operations - may be called multiple times due to concurrency
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*proto.SegmentMetadata{
-		1: {SegNo: 1, State: proto.SegmentState_Active},
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
 	}, nil).Maybe()
-	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.AnythingOfType("*proto.SegmentMetadata")).Return(nil).Maybe()
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(nil).Maybe()
 
 	// Start multiple goroutines trying to get writable segment handle
 	numGoroutines := 5

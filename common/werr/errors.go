@@ -149,6 +149,7 @@ const (
 	MetadataUpdateSegmentError
 	MetadataUpdateQuorumError
 	MetadataCreateReaderError
+	MetadataRevisionInvalidError
 
 	// ---------------------------------------------
 	// Common/Utility Error Codes
@@ -294,17 +295,18 @@ var (
 	// ---------------------------------------------
 
 	// Metadata operations
-	ErrMetadataInit          = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
-	ErrMetadataRead          = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
-	ErrMetadataWrite         = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
-	ErrMetadataEncode        = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
-	ErrMetadataDecode        = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
-	ErrMetadataCreateLog     = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
-	ErrMetadataCreateLogTxn  = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
-	ErrMetadataCreateSegment = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
-	ErrMetadataUpdateSegment = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
-	ErrMetadataUpdateQuorum  = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
-	ErrMetadataCreateReader  = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
+	ErrMetadataInit            = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
+	ErrMetadataRead            = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
+	ErrMetadataWrite           = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
+	ErrMetadataEncode          = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
+	ErrMetadataDecode          = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
+	ErrMetadataCreateLog       = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrMetadataCreateLogTxn    = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
+	ErrMetadataCreateSegment   = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
+	ErrMetadataUpdateSegment   = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
+	ErrMetadataUpdateQuorum    = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
+	ErrMetadataCreateReader    = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
+	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", MetadataRevisionInvalidError, false)
 
 	// ---------------------------------------------
 	// Common/Utility Errors

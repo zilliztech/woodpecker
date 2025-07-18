@@ -875,7 +875,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			for segId, seg := range segments {
 				if segId < truncatePoint.SegmentId {
 					// Segments completely before truncation point should be marked as truncated
-					assert.Equal(t, proto.SegmentState_Truncated, seg.State,
+					assert.Equal(t, proto.SegmentState_Truncated, seg.Metadata.State,
 						"Segment %d should be marked as truncated, as truncated Point:%d/%d", segId, truncatePoint.SegmentId, truncatePoint.EntryId)
 				}
 			}
@@ -1047,7 +1047,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 			// Check which segments are marked as truncated
 			truncatedSegments := 0
 			for segId, segMeta := range segmentsAfterTruncation {
-				if segMeta.State == proto.SegmentState_Truncated {
+				if segMeta.Metadata.State == proto.SegmentState_Truncated {
 					t.Logf("Segment %d is now marked as truncated", segId)
 					truncatedSegments++
 				}
@@ -1239,10 +1239,10 @@ func TestTruncateAndReopenClient(t *testing.T) {
 
 			// Check which segments are marked as truncated
 			for segId, segMeta := range segmentsAfterTruncation {
-				if segMeta.State == proto.SegmentState_Truncated {
+				if segMeta.Metadata.State == proto.SegmentState_Truncated {
 					t.Logf("Segment %d is now marked as truncated", segId)
 				} else {
-					t.Logf("Segment %d is now %v", segId, segMeta.State)
+					t.Logf("Segment %d is now %v", segId, segMeta.Metadata.State)
 				}
 			}
 			assert.Equal(t, len(segmentsAfterTruncation), len(segmentMap)-2, "Expected cleanup 2 segments, which 0,1")
@@ -1287,7 +1287,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 			// Check that truncated segments are still marked as truncated
 			for segId, segMeta := range reopenedSegments {
 				if segId <= truncatePoint.SegmentId && segId != truncatePoint.SegmentId {
-					assert.Equal(t, proto.SegmentState_Truncated, segMeta.State,
+					assert.Equal(t, proto.SegmentState_Truncated, segMeta.Metadata.State,
 						"Segment %d should still be marked as truncated after client restart", segId)
 				}
 			}

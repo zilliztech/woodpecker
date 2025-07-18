@@ -33,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
@@ -59,8 +60,11 @@ func TestNewSegmentHandle(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo: 1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	assert.Equal(t, "testLog", segmentHandle.GetLogName())
@@ -84,10 +88,13 @@ func TestAppendAsync_Success(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	callbackCalled := false
@@ -142,10 +149,13 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -230,10 +240,13 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -310,10 +323,13 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -380,10 +396,13 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	logger.InitLogger(cfg)
 	_ = tracer.InitTracer(cfg, "test", 1001)
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -459,10 +478,13 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	lastEntryId, fenceErr := segmentHandle.Fence(context.Background())
@@ -497,10 +519,13 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			},
 		},
 	}
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -565,10 +590,13 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			},
 		},
 	}
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -644,10 +672,13 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -728,10 +759,13 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -800,10 +834,13 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -852,10 +889,13 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -948,10 +988,13 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -1041,10 +1084,13 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	testQueue := list.New()
@@ -1142,10 +1188,13 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 
 	// Create a writable segment handle (canWrite=true is needed for ForceCompleteAndClose to work)
@@ -1190,10 +1239,13 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
@@ -1254,10 +1306,13 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 		},
 	}
 
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo:       1,
-		State:       proto.SegmentState_Active,
-		LastEntryId: -1,
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 

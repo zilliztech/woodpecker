@@ -10,8 +10,6 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 
-	proto "github.com/zilliztech/woodpecker/proto"
-
 	segment "github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
@@ -593,23 +591,23 @@ func (_c *LogHandle_GetRecoverableSegmentHandle_Call) RunAndReturn(run func(cont
 }
 
 // GetSegments provides a mock function with given fields: _a0
-func (_m *LogHandle) GetSegments(_a0 context.Context) (map[int64]*proto.SegmentMetadata, error) {
+func (_m *LogHandle) GetSegments(_a0 context.Context) (map[int64]*meta.SegmentMeta, error) {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSegments")
 	}
 
-	var r0 map[int64]*proto.SegmentMetadata
+	var r0 map[int64]*meta.SegmentMeta
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (map[int64]*proto.SegmentMetadata, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context) (map[int64]*meta.SegmentMeta, error)); ok {
 		return rf(_a0)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) map[int64]*proto.SegmentMetadata); ok {
+	if rf, ok := ret.Get(0).(func(context.Context) map[int64]*meta.SegmentMeta); ok {
 		r0 = rf(_a0)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[int64]*proto.SegmentMetadata)
+			r0 = ret.Get(0).(map[int64]*meta.SegmentMeta)
 		}
 	}
 
@@ -640,12 +638,12 @@ func (_c *LogHandle_GetSegments_Call) Run(run func(_a0 context.Context)) *LogHan
 	return _c
 }
 
-func (_c *LogHandle_GetSegments_Call) Return(_a0 map[int64]*proto.SegmentMetadata, _a1 error) *LogHandle_GetSegments_Call {
+func (_c *LogHandle_GetSegments_Call) Return(_a0 map[int64]*meta.SegmentMeta, _a1 error) *LogHandle_GetSegments_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogHandle_GetSegments_Call) RunAndReturn(run func(context.Context) (map[int64]*proto.SegmentMetadata, error)) *LogHandle_GetSegments_Call {
+func (_c *LogHandle_GetSegments_Call) RunAndReturn(run func(context.Context) (map[int64]*meta.SegmentMeta, error)) *LogHandle_GetSegments_Call {
 	_c.Call.Return(run)
 	return _c
 }

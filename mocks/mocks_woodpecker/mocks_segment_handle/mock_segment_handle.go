@@ -6,6 +6,8 @@ import (
 	context "context"
 
 	mock "github.com/stretchr/testify/mock"
+	meta "github.com/zilliztech/woodpecker/meta"
+
 	processor "github.com/zilliztech/woodpecker/server/processor"
 
 	proto "github.com/zilliztech/woodpecker/proto"
@@ -512,19 +514,19 @@ func (_c *SegmentHandle_GetLogName_Call) RunAndReturn(run func() string) *Segmen
 }
 
 // GetMetadata provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *proto.SegmentMetadata {
+func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *meta.SegmentMeta {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetMetadata")
 	}
 
-	var r0 *proto.SegmentMetadata
-	if rf, ok := ret.Get(0).(func(context.Context) *proto.SegmentMetadata); ok {
+	var r0 *meta.SegmentMeta
+	if rf, ok := ret.Get(0).(func(context.Context) *meta.SegmentMeta); ok {
 		r0 = rf(_a0)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*proto.SegmentMetadata)
+			r0 = ret.Get(0).(*meta.SegmentMeta)
 		}
 	}
 
@@ -549,12 +551,12 @@ func (_c *SegmentHandle_GetMetadata_Call) Run(run func(_a0 context.Context)) *Se
 	return _c
 }
 
-func (_c *SegmentHandle_GetMetadata_Call) Return(_a0 *proto.SegmentMetadata) *SegmentHandle_GetMetadata_Call {
+func (_c *SegmentHandle_GetMetadata_Call) Return(_a0 *meta.SegmentMeta) *SegmentHandle_GetMetadata_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *SegmentHandle_GetMetadata_Call) RunAndReturn(run func(context.Context) *proto.SegmentMetadata) *SegmentHandle_GetMetadata_Call {
+func (_c *SegmentHandle_GetMetadata_Call) RunAndReturn(run func(context.Context) *meta.SegmentMeta) *SegmentHandle_GetMetadata_Call {
 	_c.Call.Return(run)
 	return _c
 }

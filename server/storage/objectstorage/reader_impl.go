@@ -22,14 +22,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -46,9 +44,8 @@ var (
 
 var _ storage.Reader = (*MinioFileReader)(nil)
 
-// MinioFileReader implements AbstractFileReader for MinIO object storage
+// MinioFileReader implements AbstractFileReader for MinIO object storage.
 type MinioFileReader struct {
-	mu             sync.RWMutex
 	client         minioHandler.MinioHandler
 	bucket         string
 	segmentFileKey string
@@ -331,8 +328,6 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchIncrementalBlockInfo")
 	defer sp.End()
 	startTime := time.Now()
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	var fetchedLastBlock *codec.IndexRecord
 
 	blockID := int64(0)
@@ -515,8 +510,6 @@ func (f *MinioFileReader) getBlock(ctx context.Context, entryId int64) (*codec.I
 
 // findBlock finds the exists cache blocks for the entryId
 func (f *MinioFileReader) findBlock(entryId int64) (*codec.IndexRecord, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
 	return SearchBlock(f.blocks, entryId)
 }
 
@@ -562,10 +555,8 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	}
 
 	// Get all available blocks
-	f.mu.RLock()
 	allBlocks := make([]*codec.IndexRecord, len(f.blocks))
 	copy(allBlocks, f.blocks)
-	f.mu.RUnlock()
 
 	if len(allBlocks) == 0 {
 		return nil, werr.ErrEntryNotFound
@@ -629,7 +620,6 @@ func (f *MinioFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 	hasStartingBlock := false
 	var lastAvailableEntryID int64 = -1
 
-	f.mu.RLock()
 	for _, block := range f.blocks {
 		if block.FirstEntryID <= startSequenceNum && startSequenceNum <= block.LastEntryID {
 			hasStartingBlock = true
@@ -638,7 +628,6 @@ func (f *MinioFileReader) ensureSufficientBlocks(ctx context.Context, startSeque
 			lastAvailableEntryID = block.LastEntryID
 		}
 	}
-	f.mu.RUnlock()
 
 	// If we don't have the starting block, definitely need to scan
 	needToScan := !hasStartingBlock
