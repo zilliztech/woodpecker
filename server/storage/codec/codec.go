@@ -31,7 +31,7 @@ func EncodeRecord(r Record) []byte {
 
 	switch record := r.(type) {
 	case *HeaderRecord:
-		payload = make([]byte, 16) // Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
+		payload = make([]byte, HeaderRecordSize) // Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
 		binary.LittleEndian.PutUint16(payload[0:], record.Version)
 		binary.LittleEndian.PutUint16(payload[2:], record.Flags)
 		binary.LittleEndian.PutUint64(payload[4:], uint64(record.FirstEntryID))
@@ -41,12 +41,13 @@ func EncodeRecord(r Record) []byte {
 		payload = append([]byte(nil), record.Payload...)
 
 	case *IndexRecord:
-		payload = make([]byte, 36) // BlockNumber(4) + StartOffset(8) + FirstRecordOffset(8) + FirstEntryID(8) + LastEntryID(8)
+		payload = make([]byte, IndexRecordSize) // BlockNumber(4) + StartOffset(8) + FirstRecordOffset(8) + BlockSize(4) + FirstEntryID(8) + LastEntryID(8)
 		binary.LittleEndian.PutUint32(payload[0:], uint32(record.BlockNumber))
 		binary.LittleEndian.PutUint64(payload[4:], uint64(record.StartOffset))
 		binary.LittleEndian.PutUint64(payload[12:], uint64(record.FirstRecordOffset))
-		binary.LittleEndian.PutUint64(payload[20:], uint64(record.FirstEntryID))
-		binary.LittleEndian.PutUint64(payload[28:], uint64(record.LastEntryID))
+		binary.LittleEndian.PutUint32(payload[20:], record.BlockSize)
+		binary.LittleEndian.PutUint64(payload[24:], uint64(record.FirstEntryID))
+		binary.LittleEndian.PutUint64(payload[32:], uint64(record.LastEntryID))
 
 	case *BlockHeaderRecord:
 		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
@@ -56,14 +57,15 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint32(payload[20:], record.BlockCrc)
 
 	case *FooterRecord:
-		payload = make([]byte, FooterRecordSize) // TotalBlocks(4) + TotalRecords(4) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+		payload = make([]byte, FooterRecordSize) // TotalBlocks(4) + TotalRecords(4) + TotalSize(8) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
 		binary.LittleEndian.PutUint32(payload[0:], uint32(record.TotalBlocks))
 		binary.LittleEndian.PutUint32(payload[4:], record.TotalRecords)
-		binary.LittleEndian.PutUint64(payload[8:], record.IndexOffset)
-		binary.LittleEndian.PutUint32(payload[16:], record.IndexLength)
-		binary.LittleEndian.PutUint16(payload[20:], record.Version)
-		binary.LittleEndian.PutUint16(payload[22:], record.Flags)
-		copy(payload[24:], FooterMagic[:])
+		binary.LittleEndian.PutUint64(payload[8:], record.TotalSize)
+		binary.LittleEndian.PutUint64(payload[16:], record.IndexOffset)
+		binary.LittleEndian.PutUint32(payload[24:], record.IndexLength)
+		binary.LittleEndian.PutUint16(payload[28:], record.Version)
+		binary.LittleEndian.PutUint16(payload[30:], record.Flags)
+		copy(payload[32:], FooterMagic[:])
 	}
 
 	// Create record with header: CRC32(4) + Type(1) + Length(4) + Payload
@@ -179,7 +181,7 @@ func ParseRecord(recordType byte, payload []byte) (Record, error) {
 }
 
 func ParseHeader(payload []byte) (*HeaderRecord, error) {
-	if len(payload) != 16 {
+	if len(payload) != HeaderRecordSize {
 		return nil, errors.Errorf("invalid header payload length: %d", len(payload))
 	}
 
@@ -187,6 +189,11 @@ func ParseHeader(payload []byte) (*HeaderRecord, error) {
 		Version:      binary.LittleEndian.Uint16(payload[0:]),
 		Flags:        binary.LittleEndian.Uint16(payload[2:]),
 		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[4:])),
+	}
+
+	// Verify version
+	if h.Version != FormatVersion {
+		return nil, errors.New("invalid format version")
 	}
 
 	// Verify magic
@@ -210,7 +217,7 @@ func ParseData(payload []byte) (*DataRecord, error) {
 }
 
 func ParseBlockIndex(payload []byte) (*IndexRecord, error) {
-	if len(payload) < 36 {
+	if len(payload) < IndexRecordSize {
 		return nil, errors.Errorf("invalid index payload length: %d", len(payload))
 	}
 
@@ -218,8 +225,9 @@ func ParseBlockIndex(payload []byte) (*IndexRecord, error) {
 		BlockNumber:       int32(binary.LittleEndian.Uint32(payload[0:])),
 		StartOffset:       int64(binary.LittleEndian.Uint64(payload[4:])),
 		FirstRecordOffset: int64(binary.LittleEndian.Uint64(payload[12:])),
-		FirstEntryID:      int64(binary.LittleEndian.Uint64(payload[20:])),
-		LastEntryID:       int64(binary.LittleEndian.Uint64(payload[28:])),
+		BlockSize:         binary.LittleEndian.Uint32(payload[20:]),
+		FirstEntryID:      int64(binary.LittleEndian.Uint64(payload[24:])),
+		LastEntryID:       int64(binary.LittleEndian.Uint64(payload[32:])),
 	}, nil
 }
 
@@ -232,27 +240,33 @@ func ParseBlockIndexList(payload []byte) ([]*IndexRecord, error) {
 		}
 
 		indexRecords = append(indexRecords, indexRecord)
-		payload = payload[36:]
+		payload = payload[IndexRecordSize:]
 	}
 	return indexRecords, nil
 }
 
 func ParseFooter(payload []byte) (*FooterRecord, error) {
-	if len(payload) != 28 {
+	if len(payload) != FooterRecordSize {
 		return nil, errors.Errorf("invalid footer payload length: %d", len(payload))
 	}
 
 	f := &FooterRecord{
 		TotalBlocks:  int32(binary.LittleEndian.Uint32(payload[0:])),
 		TotalRecords: binary.LittleEndian.Uint32(payload[4:]),
-		IndexOffset:  binary.LittleEndian.Uint64(payload[8:]),
-		IndexLength:  binary.LittleEndian.Uint32(payload[16:]),
-		Version:      binary.LittleEndian.Uint16(payload[20:]),
-		Flags:        binary.LittleEndian.Uint16(payload[22:]),
+		TotalSize:    binary.LittleEndian.Uint64(payload[8:]),
+		IndexOffset:  binary.LittleEndian.Uint64(payload[16:]),
+		IndexLength:  binary.LittleEndian.Uint32(payload[24:]),
+		Version:      binary.LittleEndian.Uint16(payload[28:]),
+		Flags:        binary.LittleEndian.Uint16(payload[30:]),
+	}
+
+	// Verify version
+	if f.Version != FormatVersion {
+		return nil, errors.New("invalid format version")
 	}
 
 	// Verify magic
-	if !bytes.Equal(payload[24:28], FooterMagic[:]) {
+	if !bytes.Equal(payload[32:36], FooterMagic[:]) {
 		return nil, errors.New("invalid footer magic")
 	}
 

@@ -299,7 +299,7 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 		}
 
 		// Move to next record (header + payload)
-		recordSize := codec.RecordHeaderSize + 36 // IndexRecord payload size
+		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		offset += recordSize
 
 		logger.Ctx(ctx).Debug("parsed index record",
@@ -427,6 +427,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			BlockNumber:       int32(blockID),
 			StartOffset:       blockID,
 			FirstRecordOffset: 0,
+			BlockSize:         uint32(objInfo.Size), // Use object size as block size
 			FirstEntryID:      blockHeaderRecord.FirstEntryID,
 			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}
@@ -795,7 +796,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	if f.footerRecord != nil && codec.IsCompacted(f.footerRecord.Flags) {
 		logger.Ctx(ctx).Info("segment is already compacted, skipping",
 			zap.String("segmentFileKey", f.segmentFileKey))
-		return -1, nil
+		return int64(f.footerRecord.TotalSize), nil
 	}
 
 	// Ensure segment is finalized before compaction
@@ -830,8 +831,9 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	newFooter := &codec.FooterRecord{
 		TotalBlocks:  int32(len(newBlockIndexes)),
 		TotalRecords: f.footerRecord.TotalRecords,
+		TotalSize:    uint64(fileSizeAfterCompact),
 		IndexOffset:  0,
-		IndexLength:  uint32(len(newBlockIndexes) * (codec.RecordHeaderSize + 36)), // IndexRecord size
+		IndexLength:  uint32(len(newBlockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)), // IndexRecord size
 		Version:      codec.FormatVersion,
 		Flags:        codec.SetCompacted(f.footerRecord.Flags), // Set compacted flag=1 (bit 0)
 	}
@@ -984,8 +986,9 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, blockInfo 
 
 	f.blockIndexes = append(f.blockIndexes, &codec.IndexRecord{
 		BlockNumber:       int32(blockInfo.BlockID),
-		StartOffset:       blockInfo.BlockID, // Use BlockID as StartOffset (block number in MinIO)
-		FirstRecordOffset: 0,                 // First record starts at offset 0 within this block
+		StartOffset:       blockInfo.BlockID,
+		FirstRecordOffset: 0,
+		BlockSize:         uint32(blockInfo.Size), // Use block size from BlockInfo
 		FirstEntryID:      blockInfo.FirstEntryID,
 		LastEntryID:       blockInfo.LastEntryID,
 	})
@@ -1784,6 +1787,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 		BlockNumber:       int32(mergedBlockID),
 		StartOffset:       mergedBlockID,
 		FirstRecordOffset: 0,
+		BlockSize:         uint32(len(completeBlockData)), // Use actual block data size
 		FirstEntryID:      blockFirstEntryID,
 		LastEntryID:       blockLastEntryID,
 	}
@@ -1892,15 +1896,17 @@ func getHostname() string {
 
 func serializeFooterAndIndexes(ctx context.Context, blocks []*codec.IndexRecord) ([]byte, *codec.FooterRecord) {
 	serializedData := make([]byte, 0)
+	totalSize := int64(0)
 	// Serialize all block index records
 	for _, record := range blocks {
 		encodedRecord := codec.EncodeRecord(record)
 		serializedData = append(serializedData, encodedRecord...)
+		totalSize += int64(record.BlockSize)
 	}
 	indexLength := len(serializedData)
 
-	// Verify that indexLength is a multiple of 36 (IndexRecord size)
-	expectedRecordSize := codec.RecordHeaderSize + 36 // 9 + 36 = 45 bytes per IndexRecord
+	// Verify that indexLength is a multiple of IndexRecordSize (IndexRecord size)
+	expectedRecordSize := codec.RecordHeaderSize + codec.IndexRecordSize // 9 + 40 = 49 bytes per IndexRecord
 	if indexLength%(expectedRecordSize) != 0 {
 		logger.Ctx(ctx).Warn("Index length is not a multiple of expected record size",
 			zap.Int("indexLength", indexLength),
@@ -1911,6 +1917,7 @@ func serializeFooterAndIndexes(ctx context.Context, blocks []*codec.IndexRecord)
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(len(blocks)),
 		TotalRecords: uint32(len(blocks)),
+		TotalSize:    uint64(totalSize),
 		IndexOffset:  0,
 		IndexLength:  uint32(indexLength),
 		Version:      codec.FormatVersion,

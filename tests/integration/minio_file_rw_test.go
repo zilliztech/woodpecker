@@ -3067,6 +3067,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	})
 
 	// Phase 3: Perform compaction
+	sizeAfterCompacted := int64(0)
 	t.Run("PerformCompaction", func(t *testing.T) {
 		// Open writer in recovery mode to compact existing segment
 		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
@@ -3081,6 +3082,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		err = writer.Close(ctx)
 		require.NoError(t, err)
 
+		sizeAfterCompacted = compactedSize
 		t.Logf("Successfully compacted segment, new size: %d bytes", compactedSize)
 	})
 
@@ -3370,7 +3372,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		// Second compaction should return -1 (already compacted)
 		compactedSize, err := writer.Compact(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, int64(-1), compactedSize, "Second compaction should return -1 (already compacted)")
+		assert.Equal(t, sizeAfterCompacted, compactedSize, "Second compaction should return -1 (already compacted)")
 
 		err = writer.Close(ctx)
 		require.NoError(t, err)

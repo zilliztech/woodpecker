@@ -175,6 +175,7 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 				BlockNumber:       int32(blockId),
 				StartOffset:       blockId,
 				FirstRecordOffset: 0,
+				BlockSize:         uint32(objInfo.Size), // Use object size as block size
 				FirstEntryID:      blockHeaderRecord.FirstEntryID,
 				LastEntryID:       blockHeaderRecord.LastEntryID,
 			})
@@ -306,7 +307,7 @@ func (f *MinioFileReader) tryReadFooterAndIndex(ctx context.Context) error {
 		f.blocks = append(f.blocks, indexRecord)
 
 		// Move to next record (header + payload)
-		recordSize := codec.RecordHeaderSize + 36 // IndexRecord payload size
+		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		offset += recordSize
 
 		logger.Ctx(ctx).Debug("parsed index record",
@@ -345,7 +346,7 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 		blockKey := getBlockKey(f.segmentFileKey, blockID)
 
 		// check if the block exists in object storage
-		_, err := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
+		blockObjInfo, err := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
 		if err != nil && minioHandler.IsObjectNotExists(err) {
 			break
 		}
@@ -364,6 +365,7 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 			BlockNumber:       int32(blockID),
 			StartOffset:       blockID,
 			FirstRecordOffset: 0,
+			BlockSize:         uint32(blockObjInfo.Size),
 			FirstEntryID:      blockHeaderRecord.FirstEntryID,
 			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}

@@ -555,10 +555,12 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	logger.Ctx(ctx).Debug("file synced to disk successfully")
 
 	// Create index record for this block
+	actualDataSize := w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
 		BlockNumber:       task.blockNumber,
 		StartOffset:       blockStartOffset,
 		FirstRecordOffset: blockStartOffset,
+		BlockSize:         uint32(actualDataSize), // Size of this block including header and data
 		FirstEntryID:      task.firstEntryId,
 		LastEntryID:       task.lastEntryId,
 	}
@@ -582,7 +584,6 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
 	// update metrics
-	actualDataSize := w.writtenBytes - blockStartOffset
 	metrics.WpFileFlushBytesWritten.WithLabelValues(w.logIdStr).Add(float64(actualDataSize))
 	metrics.WpFileFlushLatency.WithLabelValues(w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
@@ -853,6 +854,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(blockIndexesLen),
 		TotalRecords: uint32(blockIndexesLen),  // Simplified - each block is one record for index
+		TotalSize:    uint64(w.writtenBytes),   // Total size of the file
 		IndexOffset:  uint64(indexStartOffset), // Will be calculated by the codec
 		IndexLength:  indexLength,              // Will be calculated by the codec
 		Version:      codec.FormatVersion,
@@ -1133,7 +1135,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 			zap.Int64("lastEntryID", indexRecord.LastEntryID))
 
 		// Move to next record (header + IndexRecord payload size)
-		recordSize := codec.RecordHeaderSize + 36 // IndexRecord payload size is 36 bytes
+		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		offset += recordSize
 	}
 
@@ -1255,6 +1257,7 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 					BlockNumber:       int32(currentBlockNumber),
 					StartOffset:       currentBlockStart,
 					FirstRecordOffset: currentBlockStart,
+					BlockSize:         uint32(int64(offset) - currentBlockStart), // Calculate block size
 					FirstEntryID:      currentBlockFirstEntryID,
 					LastEntryID:       currentBlockLastEntryID,
 				}
@@ -1282,6 +1285,7 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 			BlockNumber:       int32(currentBlockNumber),
 			StartOffset:       currentBlockStart,
 			FirstRecordOffset: currentBlockStart,
+			BlockSize:         uint32(int64(offset) - currentBlockStart), // Calculate block size
 			FirstEntryID:      currentBlockFirstEntryID,
 			LastEntryID:       currentBlockLastEntryID,
 		}

@@ -208,7 +208,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 	// Calculate where index records start
 	// Index records are located before the footer record
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
-	indexRecordSize := int64(codec.RecordHeaderSize + 36) // IndexRecord payload size: BlockNumber(4) + StartOffset(8) + FirstRecordOffset(8) + FirstEntryID(8) + LastEntryID(8) = 36
+	indexRecordSize := int64(codec.RecordHeaderSize + codec.IndexRecordSize) // IndexRecord payload size
 	totalIndexSize := int64(r.footer.TotalBlocks) * indexRecordSize
 
 	indexStartOffset := r.size - footerRecordSize - totalIndexSize
@@ -224,11 +224,11 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 	offset := 0
 
 	for i := int32(0); i < r.footer.TotalBlocks; i++ {
-		if offset+codec.RecordHeaderSize+36 > len(indexData) {
+		if offset+codec.RecordHeaderSize+codec.IndexRecordSize > len(indexData) {
 			return fmt.Errorf("incomplete index record at offset %d", offset)
 		}
 
-		recordData := indexData[offset : offset+codec.RecordHeaderSize+36]
+		recordData := indexData[offset : offset+codec.RecordHeaderSize+codec.IndexRecordSize]
 		record, err := codec.DecodeRecord(recordData)
 		if err != nil {
 			return fmt.Errorf("decode index record %d: %w", i, err)
@@ -241,7 +241,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 		indexRecord := record.(*codec.IndexRecord)
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-		offset += codec.RecordHeaderSize + 36
+		offset += codec.RecordHeaderSize + codec.IndexRecordSize
 	}
 
 	// Sort index records by block number to ensure correct order
@@ -348,6 +348,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 					BlockNumber:       currentBlockNumber,
 					StartOffset:       currentBlockStart,
 					FirstRecordOffset: 0,
+					BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
 					FirstEntryID:      currentBlockFirstEntryID,
 					LastEntryID:       currentBlockLastEntryID,
 				}
@@ -377,7 +378,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 				zap.Int64("lastEntryID", currentBlockLastEntryID))
 
 		case codec.IndexRecordType:
-			recordSize = codec.RecordHeaderSize + 36 // IndexRecord payload size
+			recordSize = codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		case codec.FooterRecordType:
 			recordSize = codec.RecordHeaderSize + codec.FooterRecordSize
 		default:
@@ -394,6 +395,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			BlockNumber:       currentBlockNumber,
 			StartOffset:       currentBlockStart,
 			FirstRecordOffset: 0,
+			BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
 			FirstEntryID:      currentBlockFirstEntryID,
 			LastEntryID:       currentBlockLastEntryID,
 		}
@@ -418,8 +420,9 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			// This ensures that when reading the block, we process all records including the header
 			indexRecord := &codec.IndexRecord{
 				BlockNumber:       0,
-				StartOffset:       0,          // Start from beginning to include HeaderRecord
-				FirstRecordOffset: headerSize, // First data record offset after header
+				StartOffset:       0,              // Start from beginning to include HeaderRecord
+				FirstRecordOffset: headerSize,     // First data record offset after header
+				BlockSize:         uint32(r.size), // Total file size as block size
 				FirstEntryID:      0,
 				LastEntryID:       currentEntryID - 1,
 			}
@@ -568,6 +571,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 					BlockNumber:       currentBlockNumber,
 					StartOffset:       currentBlockStart,
 					FirstRecordOffset: 0,
+					BlockSize:         uint32(currentOffset - currentBlockStart), // Calculate block size
 					FirstEntryID:      currentBlockFirstEntryID,
 					LastEntryID:       currentBlockLastEntryID,
 				}
@@ -597,7 +601,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 				zap.Int64("lastEntryID", currentBlockLastEntryID))
 
 		case codec.IndexRecordType:
-			recordSize = codec.RecordHeaderSize + 36
+			recordSize = codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		case codec.FooterRecordType:
 			recordSize = codec.RecordHeaderSize + codec.FooterRecordSize
 		default:
@@ -613,6 +617,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 			BlockNumber:       currentBlockNumber,
 			StartOffset:       currentBlockStart,
 			FirstRecordOffset: 0,
+			BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
 			FirstEntryID:      currentBlockFirstEntryID,
 			LastEntryID:       currentBlockLastEntryID,
 		}
