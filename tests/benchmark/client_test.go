@@ -27,12 +27,13 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
 func TestE2EWrite(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	testCases := []struct {
 		name        string
@@ -101,7 +102,7 @@ func TestE2EWrite(t *testing.T) {
 }
 
 func TestE2ERead(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	testCases := []struct {
 		name        string
@@ -196,9 +197,9 @@ func TestE2ERead(t *testing.T) {
 }
 
 func TestEmptyRuntime(t *testing.T) {
-	startGopsAgentWithPort(6060)
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgentWithPort(6060)
+	utils.StartMetrics()
+	utils.StartReporting()
 
 	testCases := []struct {
 		name        string
@@ -244,9 +245,9 @@ func TestEmptyRuntime(t *testing.T) {
 
 // Simulate throughput performance using single-threaded asynchronous writes
 func TestAsyncWriteThroughput(t *testing.T) {
-	startGopsAgentWithPort(6060)
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgentWithPort(6060)
+	utils.StartMetrics()
+	utils.StartReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
 	writeCount := 10_000   // total rows to write
@@ -307,7 +308,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			}
 
 			// gen static data
-			payloadStaticData, err := generateRandomBytes(entrySize) // 1KB per row
+			payloadStaticData, err := utils.GenerateRandomBytes(entrySize) // 1KB per row
 			assert.NoError(t, err)
 
 			// ### Write
@@ -338,8 +339,8 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
 							//t.Logf("write success, returned recordId:%v \n", writeResult.LogMessageId)
-							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
+							utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							utils.MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
 							startTime = time.Now()
 							successCount++
 						}
@@ -387,8 +388,8 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							fmt.Println(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
-							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
+							utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							utils.MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
 							startTime = time.Now()
 							successCount++
 						}
@@ -415,9 +416,9 @@ func TestAsyncWriteThroughput(t *testing.T) {
 
 // Simulate throughput performance using multithreaded synchronous writes
 func TestWriteThroughput(t *testing.T) {
-	startGopsAgentWithPort(6060)
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgentWithPort(6060)
+	utils.StartMetrics()
+	utils.StartReporting()
 	entrySize := 1_000_000 // 1MB per row
 	concurrency := 1_000   // concurrent goroutines
 	writeCount := 10_000   // total rows to write
@@ -477,7 +478,7 @@ func TestWriteThroughput(t *testing.T) {
 			}
 
 			// gen static data
-			payloadStaticData, err := generateRandomBytes(entrySize)
+			payloadStaticData, err := utils.GenerateRandomBytes(entrySize)
 			assert.NoError(t, err)
 
 			// ### Concurrent write with controlled concurrency
@@ -529,8 +530,8 @@ func TestWriteThroughput(t *testing.T) {
 						} else {
 							// Success
 							currentSuccess := successCount.Add(1)
-							MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-							MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(writeStart).Milliseconds()))
+							utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+							utils.MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(writeStart).Milliseconds()))
 
 							// Log progress every 100 successful writes
 							if currentSuccess%100 == 0 {
@@ -583,8 +584,8 @@ func TestWriteThroughput(t *testing.T) {
 }
 
 func TestReadThroughput(t *testing.T) {
-	startGopsAgentWithPort(6060)
-	startMetrics()
+	utils.StartGopsAgentWithPort(6060)
+	utils.StartMetrics()
 
 	testCases := []struct {
 		name        string
@@ -747,7 +748,7 @@ func TestReadThroughput(t *testing.T) {
 }
 
 func TestReadFromEarliest(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	testCases := []struct {
 		name        string
@@ -824,7 +825,7 @@ func TestReadFromEarliest(t *testing.T) {
 }
 
 func TestReadFromLatest(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	testCases := []struct {
 		name        string
@@ -898,7 +899,7 @@ func TestReadFromLatest(t *testing.T) {
 }
 
 func TestReadFromSpecifiedPosition(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	testCases := []struct {
 		name        string

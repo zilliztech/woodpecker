@@ -30,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/tests/utils"
 )
 
 const (
@@ -41,9 +42,9 @@ const (
 )
 
 func TestMinioReadPerformance(t *testing.T) {
-	startGopsAgent()
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgent()
+	utils.StartMetrics()
+	utils.StartReporting()
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
@@ -85,16 +86,16 @@ func TestMinioReadPerformance(t *testing.T) {
 			cost := time.Now().Sub(start)
 			//t.Logf("Get test_object_%d completed,read %d bytes cost: %d ms \n", i, readSize, cost.Milliseconds())
 			<-ch
-			MinioIOBytes.WithLabelValues("0").Observe(float64(readSize))
-			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
+			utils.MinioIOBytes.WithLabelValues("0").Observe(float64(readSize))
+			utils.MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}(concurrentCh)
 	}
 	t.Logf("Test Minio Finish \n")
 }
 
 func TestMinioDelete(t *testing.T) {
-	startGopsAgent()
-	startMetrics()
+	utils.StartGopsAgent()
+	utils.StartMetrics()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
@@ -126,16 +127,16 @@ func TestMinioDelete(t *testing.T) {
 }
 
 func TestMinioWritePerformance(t *testing.T) {
-	startGopsAgent()
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgent()
+	utils.StartMetrics()
+	utils.StartReporting()
 	startTime := time.Now()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
 	assert.NoError(t, err)
-	payloadStaticData, err := generateRandomBytes(TEST_OBJECT_SIZE) //
-	concurrentCh := make(chan int, CONCURRENT)                      //  concurrency
+	payloadStaticData, err := utils.GenerateRandomBytes(TEST_OBJECT_SIZE) //
+	concurrentCh := make(chan int, CONCURRENT)                            //  concurrency
 	wg := sync.WaitGroup{}
 	fmt.Printf("Test Minio Start, objectSize:%d concurrent:%d condition:%v ms \n", TEST_OBJECT_SIZE, CONCURRENT, CONDITION_WRITE_ENABLE)
 	for i := 0; i < TEST_COUNT; i++ {
@@ -166,8 +167,8 @@ func TestMinioWritePerformance(t *testing.T) {
 			//t.Logf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
 			<-ch
 			wg.Done()
-			MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-			MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
+			utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+			utils.MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
 		}(concurrentCh)
 	}
 	wg.Wait()
@@ -176,7 +177,7 @@ func TestMinioWritePerformance(t *testing.T) {
 
 // TestMinioSingleThreadLatency tests single-threaded MinIO put latency with different object sizes
 func TestMinioSingleThreadLatency(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
@@ -217,7 +218,7 @@ func TestMinioSingleThreadLatency(t *testing.T) {
 		fmt.Printf("\n=== Testing Object Size: %d bytes (%.2f MB) with %d objects ===\n",
 			objectSize, float64(objectSize)/(1024*1024), objectCount)
 
-		payloadStaticData, err := generateRandomBytes(objectSize)
+		payloadStaticData, err := utils.GenerateRandomBytes(objectSize)
 		assert.NoError(t, err)
 
 		objectPrefix := fmt.Sprintf("latency_test_%d_%d_", uniqueId, objectSize)
@@ -283,7 +284,7 @@ func TestMinioSingleThreadLatency(t *testing.T) {
 
 // TestMinioSingleReadLatency tests single-threaded MinIO get latency with different object sizes
 func TestMinioSingleReadLatency(t *testing.T) {
-	startGopsAgent()
+	utils.StartGopsAgent()
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
@@ -325,7 +326,7 @@ func TestMinioSingleReadLatency(t *testing.T) {
 			objectSize, float64(objectSize)/(1024*1024), objectCount)
 
 		// First, create test objects for reading
-		payloadStaticData, err := generateRandomBytes(objectSize)
+		payloadStaticData, err := utils.GenerateRandomBytes(objectSize)
 		assert.NoError(t, err)
 
 		objectPrefix := fmt.Sprintf("read_latency_test_%d_%d_", uniqueId, objectSize)

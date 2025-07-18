@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
+	"github.com/zilliztech/woodpecker/tests/utils"
 )
 
 const (
@@ -38,9 +39,9 @@ const (
 )
 
 func TestMinioFileWriterPerformance(t *testing.T) {
-	startGopsAgent()
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgent()
+	utils.StartMetrics()
+	utils.StartReporting()
 	startTime := time.Now()
 
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -66,7 +67,7 @@ func TestMinioFileWriterPerformance(t *testing.T) {
 
 	fileWriter := writer.(*objectstorage.MinioFileWriter)
 
-	payloadStaticData, err := generateRandomBytes(TEST_ENTRY_SIZE)
+	payloadStaticData, err := utils.GenerateRandomBytes(TEST_ENTRY_SIZE)
 	assert.NoError(t, err)
 
 	concurrentCh := make(chan int, CONCURRENT_THREADS) // concurrency control
@@ -114,8 +115,8 @@ func TestMinioFileWriterPerformance(t *testing.T) {
 			wg.Done()
 
 			// Record metrics (reuse existing metrics from minio_test.go)
-			MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-			MinioIOLatency.WithLabelValues("0").Observe(float64(latency.Milliseconds()))
+			utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
+			utils.MinioIOLatency.WithLabelValues("0").Observe(float64(latency.Milliseconds()))
 		}(concurrentCh, entryId)
 
 		// Progress reporting during execution

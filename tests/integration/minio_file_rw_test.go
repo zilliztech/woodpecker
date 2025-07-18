@@ -18,7 +18,6 @@ package integration
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"os"
@@ -28,23 +27,23 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/zilliztech/woodpecker/common/werr"
-	"github.com/zilliztech/woodpecker/proto"
-
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/zilliztech/woodpecker/common/logger"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
-	"go.uber.org/zap"
 )
 
 var (
@@ -84,8 +83,7 @@ func cleanupMinioFileWriterObjects(t *testing.T, client minioHandler.MinioHandle
 }
 
 func generateTestData(size int) []byte {
-	data := make([]byte, size)
-	_, err := rand.Read(data)
+	data, err := utils.GenerateRandomBytes(size)
 	if err != nil {
 		panic(err)
 	}

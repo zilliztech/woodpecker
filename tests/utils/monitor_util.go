@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package benchmark
+package utils
 
 import (
 	"crypto/rand"
@@ -35,11 +35,11 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 )
 
-func startGopsAgent() {
-	startGopsAgentWithPort(6060)
+func StartGopsAgent() {
+	StartGopsAgentWithPort(6060)
 }
 
-func startGopsAgentWithPort(port int) {
+func StartGopsAgentWithPort(port int) {
 	// start gops agent
 	if err := agent.Listen(agent.Options{}); err != nil {
 		panic(err)
@@ -73,7 +73,7 @@ var (
 	)
 )
 
-func startMetrics() {
+func StartMetrics() {
 	testMetricsRegistry = prometheus.DefaultRegisterer
 	metrics.RegisterWoodpeckerWithRegisterer(testMetricsRegistry)
 	testMetricsRegistry.MustRegister(MinioIOBytes)
@@ -102,7 +102,7 @@ func startMetrics() {
 //	}
 //}
 
-func startReporting() {
+func StartReporting() {
 	go func() {
 		ticker := time.NewTicker(time.Duration(1000 * int(time.Millisecond)))
 		defer ticker.Stop()
@@ -156,7 +156,7 @@ func startReporting() {
 	}()
 }
 
-func printMetrics() {
+func PrintMetrics() {
 	resp, err := http.Get("http://localhost:29092/metrics")
 	if err != nil {
 		fmt.Printf("Failed to get metrics: %v\n", err)
@@ -282,7 +282,7 @@ func parseMetricValue(line string) (float64, error) {
 	return strconv.ParseFloat(parts[1], 64)
 }
 
-func generateRandomBytes(length int) ([]byte, error) {
+func GenerateRandomBytes(length int) ([]byte, error) {
 	randomBytes := make([]byte, length)
 	_, err := rand.Read(randomBytes)
 	if err != nil {

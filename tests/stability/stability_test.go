@@ -19,6 +19,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 // One goroutine writes messages one by one, closing and reopening the writer after a certain time to continue writing.
 // Another goroutine continuously performs a tail read, verifying that the data is continuous.
 func TestWriteAndConcurrentTailRead(t *testing.T) {
+	utils.StartGopsAgentWithPort(6061)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestWriteAndConcurrentTailRead")
 	testCases := []struct {
@@ -260,6 +262,7 @@ func TestWriteAndConcurrentTailRead(t *testing.T) {
 // One goroutine writes messages one by one, closing and reopening the writer after a certain time to continue writing.
 // Another goroutine performs a catchup read from the beginning at regular intervals, verifying that the data is continuous.
 func TestWriteAndConcurrentCatchupRead(t *testing.T) {
+	utils.StartGopsAgentWithPort(6062)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestWriteAndConcurrentCatchupRead")
 	testCases := []struct {
@@ -537,6 +540,7 @@ func TestWriteAndConcurrentCatchupRead(t *testing.T) {
 
 // Similar to TestWriteAndConcurrentTailReadWithTruncate, but with an additional goroutine that periodically calls logHandle's truncate to advance the truncation point.
 func TestWriteAndConcurrentTailReadWithTruncate(t *testing.T) {
+	utils.StartGopsAgentWithPort(6063)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestWriteAndConcurrentTailReadWithTruncate")
 	testCases := []struct {
@@ -874,6 +878,7 @@ func TestWriteAndConcurrentTailReadWithTruncate(t *testing.T) {
 
 // Similar to TestWriteAndConcurrentCatchupRead, but with an additional goroutine that periodically calls logHandle's truncate to advance the truncation point.
 func TestWriteAndConcurrentCatchupReadWithTruncate(t *testing.T) {
+	utils.StartGopsAgentWithPort(6064)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestWriteAndConcurrentCatchupReadWithTruncate")
 	testCases := []struct {

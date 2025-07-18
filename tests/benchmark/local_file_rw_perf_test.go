@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
+	"github.com/zilliztech/woodpecker/tests/utils"
 )
 
 const (
@@ -39,9 +40,9 @@ const (
 )
 
 func TestLocalFileWriterPerformance(t *testing.T) {
-	startGopsAgent()
-	startMetrics()
-	startReporting()
+	utils.StartGopsAgent()
+	utils.StartMetrics()
+	utils.StartReporting()
 	startTime := time.Now()
 
 	// Clean up test directory at start and end
@@ -64,7 +65,7 @@ func TestLocalFileWriterPerformance(t *testing.T) {
 	assert.NoError(t, err)
 	defer writer.Close(context.Background())
 
-	payloadStaticData, err := generateRandomBytes(LOCAL_TEST_ENTRY_SIZE)
+	payloadStaticData, err := utils.GenerateRandomBytes(LOCAL_TEST_ENTRY_SIZE)
 	assert.NoError(t, err)
 
 	concurrentCh := make(chan int, LOCAL_CONCURRENT_THREADS) // concurrency control
@@ -112,8 +113,8 @@ func TestLocalFileWriterPerformance(t *testing.T) {
 			wg.Done()
 
 			// Record metrics
-			MinioIOBytes.WithLabelValues("local_perf_test").Observe(float64(len(payloadStaticData)))
-			MinioIOLatency.WithLabelValues("local_perf_test").Observe(float64(latency.Milliseconds()))
+			utils.MinioIOBytes.WithLabelValues("local_perf_test").Observe(float64(len(payloadStaticData)))
+			utils.MinioIOLatency.WithLabelValues("local_perf_test").Observe(float64(latency.Milliseconds()))
 		}(concurrentCh, entryId)
 
 		// Progress reporting during execution
