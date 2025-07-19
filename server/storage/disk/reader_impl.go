@@ -548,7 +548,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 				currentBlockFirstEntryID = currentEntryID
 				inBlock = true
 
-				logger.Ctx(ctx).Debug("found new block start from DataRecord (legacy format)",
+				logger.Ctx(ctx).Debug("found new block start from DataRecord",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -927,10 +927,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 					zap.Int64("segId", r.segId),
 					zap.Int32("blockNumber", blockInfo.BlockNumber),
 					zap.Error(err))
-				// Currently, we only log a warning, but each data record can still be read independently
-				// because each data record's integrity is verified individually. Additionally, during writing,
-				// the data records that are successfully written to disk are readable, and block-level atomicity
-				// is not enforced.
+				// only
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("reading block is incomplete")
 			} else {
 				logger.Ctx(ctx).Debug("block data integrity verified successfully",
 					zap.Int64("logId", r.logId),
@@ -939,6 +937,13 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 			}
+		} else {
+			// block is not complated, stop reading next records
+			logger.Ctx(ctx).Warn("block data integrity verification failed, it is incomplete",
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
+				zap.Int32("blockNumber", blockInfo.BlockNumber))
+			return nil, werr.ErrEntryNotFound.WithCauseErrMsg("reading block is incomplete")
 		}
 	}
 
@@ -1077,6 +1082,8 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 			zap.Int64("logId", r.logId),
 			zap.Int64("segId", r.segId),
 			zap.Int("blockIndex", blkIdx),
+			zap.Int64("blockSize", blockSize),
+			zap.Int("readBlockSize", len(blockData)),
 			zap.Int("recordCount", len(records)))
 
 		// Find BlockHeaderRecord and verify data integrity
@@ -1103,10 +1110,8 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 						zap.Int("blockIndex", blkIdx),
 						zap.Int32("blockNumber", blockInfo.BlockNumber),
 						zap.Error(err))
-					// Currently, we only log a warning, but each data record can still be read independently
-					// because each data record's integrity is verified individually. Additionally, during writing,
-					// the data records that are successfully written to disk are readable, and block-level atomicity
-					// is not enforced.
+					// block is incomplete, stop reading next records
+					break
 				} else {
 					logger.Ctx(ctx).Debug("block data integrity verified successfully",
 						zap.Int64("logId", r.logId),
@@ -1116,6 +1121,14 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 						zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 						zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 				}
+			} else {
+				// block is not completed, stop reading next records
+				logger.Ctx(ctx).Warn("block data integrity verification failed, it is incomplete",
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int("blockIndex", blkIdx),
+					zap.Int32("blockNumber", blockInfo.BlockNumber))
+				break
 			}
 		}
 
@@ -1166,6 +1179,14 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 						zap.Int64("entryId", currentEntryID),
 						zap.Int("blockIndex", blkIdx),
 						zap.Int("payloadSize", len(dataRecord.Payload)),
+						zap.Int64("entriesCollected", entriesCollected))
+				} else {
+					logger.Ctx(ctx).Debug("not add entry to result",
+						zap.Int64("logId", r.logId),
+						zap.Int64("segId", r.segId),
+						zap.Int("blockIndex", blkIdx),
+						zap.Int64("entryId", currentEntryID),
+						zap.Int64("entriesCollected", entriesCollected),
 						zap.Int64("entriesCollected", entriesCollected))
 				}
 				currentEntryID++
