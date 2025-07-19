@@ -131,6 +131,7 @@ const (
 	FileReaderCRCMismatch
 	FileReaderCloseFailed
 	FileReaderAlreadyClosed
+	FileEndOfFile
 	FileReaderNoBlockFound
 
 	// ---------------------------------------------
@@ -289,6 +290,7 @@ var (
 	ErrFileReaderCloseFailed          = newWoodpeckerError("reader close failed", FileReaderCloseFailed, true)
 	ErrFileReaderNoBlockFound         = newWoodpeckerError("reader no block found", FileReaderNoBlockFound, false)
 	ErrFileReaderAlreadyClosed        = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
+	ErrFileReaderEndOfFile            = newWoodpeckerError("end of file", FileEndOfFile, false)
 
 	// ---------------------------------------------
 	// Metadata Layer Errors
@@ -371,6 +373,9 @@ func (e woodpeckerError) Unwrap() error {
 }
 
 func (e woodpeckerError) Is(err error) bool {
+	if err == nil {
+		return false
+	}
 	// First check if the error codes match
 	if target, ok := err.(woodpeckerError); ok {
 		return e.errCode == target.errCode

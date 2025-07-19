@@ -1207,11 +1207,12 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 
 					// Write messages
 					for i := 0; i < messageCount; i++ {
+						msgIdx := i
 						message := &log.WriterMessage{
-							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, i)),
+							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
-								"index": fmt.Sprintf("%d", i),
+								"index": fmt.Sprintf("%d", msgIdx),
 								"type":  "concurrent-test",
 							},
 						}
@@ -1220,9 +1221,9 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 						assert.NoError(t, result.Err)
 
 						// Log milestone messages
-						if i%5 == 0 || i == messageCount-1 {
+						if i%5 == 0 || msgIdx == messageCount-1 {
 							t.Logf("Cycle %d - Writer: Written message %d with ID: segment=%d, entry=%d",
-								cycle+1, i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+								cycle+1, msgIdx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 						}
 
 						// Small delay to allow readers to catch up
@@ -1560,11 +1561,12 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 
 					// Write messages
 					for i := 0; i < messageCount; i++ {
+						msgIdx := i
 						message := &log.WriterMessage{
-							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, i)),
+							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
-								"index": fmt.Sprintf("%d", i),
+								"index": fmt.Sprintf("%d", msgIdx),
 								"type":  "concurrent-test",
 							},
 						}
@@ -1573,9 +1575,9 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 						assert.NoError(t, result.Err)
 
 						// Log milestone messages
-						if i%5 == 0 || i == messageCount-1 {
+						if i%5 == 0 || msgIdx == messageCount-1 {
 							t.Logf("Cycle %d - Writer: Written message %d with ID: segment=%d, entry=%d",
-								cycle+1, i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+								cycle+1, msgIdx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 						}
 
 						// Small delay to allow readers to catch up
@@ -1915,12 +1917,13 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 
 					// Write messages
 					for i := 0; i < messageCount; i++ {
-						messageContent := fmt.Sprintf("Cycle %d - Message %d", cycle+1, i)
+						msgIdx := i
+						messageContent := fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)
 						message := &log.WriterMessage{
 							Payload: []byte(messageContent),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
-								"index": fmt.Sprintf("%d", i),
+								"index": fmt.Sprintf("%d", msgIdx),
 								"type":  "concurrent-test",
 							},
 						}
@@ -1932,9 +1935,9 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 						allExpectedMessages = append(allExpectedMessages, messageContent)
 
 						// Log milestone messages
-						if i%5 == 0 || i == messageCount-1 {
+						if i%5 == 0 || msgIdx == messageCount-1 {
 							t.Logf("Cycle %d - Writer: Written message %d with ID: segment=%d, entry=%d",
-								cycle+1, i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+								cycle+1, msgIdx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 						}
 
 						// Small delay to allow readers to catch up

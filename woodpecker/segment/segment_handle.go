@@ -436,10 +436,6 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, maxSize i
 		return nil, err
 	}
 
-	if maxSize != -1 {
-		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("support maxSize=-1 as auto batch size currently")
-	}
-
 	segmentEntryList, err := cli.ReadEntriesBatch(ctx, s.logId, s.segmentId, from, maxSize)
 	if err != nil {
 		return nil, err

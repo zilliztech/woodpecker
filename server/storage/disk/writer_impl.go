@@ -482,6 +482,8 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	blockStartOffset := w.writtenBytes
 
 	logger.Ctx(ctx).Debug("starting to process flush task",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
@@ -503,6 +505,8 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
 
 	logger.Ctx(ctx).Debug("calculated block metadata",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Uint32("blockLength", blockLength),
 		zap.Uint32("blockCrc", blockCrc),
 		zap.Int("dataRecordsCount", len(task.entries)))
@@ -522,6 +526,8 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	}
 
 	logger.Ctx(ctx).Debug("block header written, now writing data records",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int("blockDataSize", len(blockDataBuffer)))
 
 	// Write the pre-serialized data records
@@ -541,6 +547,11 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	w.writtenBytes += int64(n)
 
 	logger.Ctx(ctx).Debug("block data written successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
+		zap.Int64("firstEntryId", task.firstEntryId),
+		zap.Int64("lastEntryId", task.lastEntryId),
 		zap.Int("bytesWritten", n),
 		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
@@ -552,7 +563,12 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		return
 	}
 
-	logger.Ctx(ctx).Debug("file synced to disk successfully")
+	logger.Ctx(ctx).Debug("file synced to disk successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
+		zap.Int64("firstEntryId", task.firstEntryId),
+		zap.Int64("lastEntryId", task.lastEntryId))
 
 	// Create index record for this block
 	actualDataSize := w.writtenBytes - blockStartOffset
@@ -577,6 +593,8 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	w.lastEntryID.Store(task.lastEntryId)
 
 	logger.Ctx(ctx).Debug("block processing completed successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),

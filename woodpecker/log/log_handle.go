@@ -802,6 +802,8 @@ func (l *logHandleImpl) adjustPendingReadPointIfTruncated(ctx context.Context, r
 			}
 
 			logger.Ctx(ctx).Info("Adjusting opening reader start position to after truncation point",
+				zap.String("logName", l.GetName()),
+				zap.String("readerName", readerName),
 				zap.Int64("originalPendingReadSegmentId", from.SegmentId),
 				zap.Int64("originalPendingReadEntryId", from.EntryId),
 				zap.Int64("truncatedSegmentId", truncatedId.SegmentId),

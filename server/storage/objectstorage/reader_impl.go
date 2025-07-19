@@ -559,6 +559,11 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	copy(allBlocks, f.blocks)
 
 	if len(allBlocks) == 0 {
+		// if no blocks and the segment is compacted or fenced, return an EOF
+		if f.isCompacted.Load() || f.isFenced.Load() {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no data blocks")
+		}
+		// otherwise return entry Not found, since there is no data, reader should retry later
 		return nil, werr.ErrEntryNotFound
 	}
 
@@ -585,6 +590,11 @@ func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		logger.Ctx(ctx).Warn("no block found for start sequence number",
 			zap.Int64("startEntryID", opt.StartEntryID),
 			zap.Int("totalBlocks", len(allBlocks)))
+		// if no block contains reading point and the segment is compacted or fenced, return an EOF
+		if f.isCompacted.Load() || f.isFenced.Load() {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg(fmt.Sprintf("no data contains %d", opt.StartEntryID))
+		}
+		// otherwise return entry Not found, since there is no data, reader should retry later
 		return nil, werr.ErrEntryNotFound
 	}
 
@@ -719,73 +729,81 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	// Find BlockHeaderRecord and verify data integrity
 	var blockHeaderRecord *codec.BlockHeaderRecord
-	var dataRecordsStart int
-	for j, record := range records {
+	for _, record := range records {
 		if record.Type() == codec.BlockHeaderRecordType {
 			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-			dataRecordsStart = j + 1
 			break
 		}
 	}
 
 	// If we found a BlockHeaderRecord, verify the block data integrity
 	if blockHeaderRecord != nil {
-		// Extract only the data records part for verification
-		var dataRecordsBuffer []byte
-		for j := dataRecordsStart; j < len(records); j++ {
-			if records[j].Type() == codec.DataRecordType {
-				encodedRecord := codec.EncodeRecord(records[j])
-				dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+		// Extract the data records part from blockData (skip BlockHeaderRecord)
+		// BlockHeaderRecord is at the beginning, so data starts after it
+		blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+		if len(blockData) > blockHeaderSize {
+			dataRecordsBuffer := blockData[blockHeaderSize:]
+			// Verify block data integrity
+			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+				logger.Ctx(ctx).Warn("block data integrity verification failed",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+					zap.Error(err))
+				return nil, fmt.Errorf("block data integrity verification failed: %w", err)
 			}
-		}
 
-		// Verify block data integrity
-		if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
-			logger.Ctx(ctx).Warn("block data integrity verification failed",
+			logger.Ctx(ctx).Debug("block data integrity verified successfully",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-				zap.Error(err))
-			return nil, fmt.Errorf("block data integrity verification failed: %w", err)
+				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 		}
 
-		logger.Ctx(ctx).Debug("block data integrity verified successfully",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-			zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-			zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
-	}
+		entries := make([]*proto.LogEntry, 0, 32)
+		currentEntryID := blockInfo.FirstEntryID
 
-	entries := make([]*proto.LogEntry, 0, 32)
-	currentEntryID := blockInfo.FirstEntryID
-
-	readBytes := 0
-	// Parse all data records in the block
-	for j := 0; j < len(records); j++ {
-		if records[j].Type() != codec.DataRecordType {
-			continue
-		}
-		// Only include entries from the start sequence number onwards
-		if currentEntryID >= startEntryID {
-			r := records[j].(*codec.DataRecord)
-			entry := &proto.LogEntry{
-				EntryId: currentEntryID,
-				Values:  r.Payload,
+		readBytes := 0
+		// Parse all data records in the block
+		for j := 0; j < len(records); j++ {
+			if records[j].Type() != codec.DataRecordType {
+				continue
 			}
-			entries = append(entries, entry)
-			readBytes += len(r.Payload)
+			// Only include entries from the start sequence number onwards
+			if currentEntryID >= startEntryID {
+				r := records[j].(*codec.DataRecord)
+				entry := &proto.LogEntry{
+					EntryId: currentEntryID,
+					Values:  r.Payload,
+				}
+				entries = append(entries, entry)
+				readBytes += len(r.Payload)
+			}
+			currentEntryID++
 		}
-		currentEntryID++
+
+		if len(entries) == 0 {
+			// return entry not found yet, wp client retry later
+			logger.Ctx(ctx).Debug("read single block completed, no entry extracted",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+				zap.Int64("startEntryID", startEntryID),
+				zap.Int("entriesReturned", len(entries)))
+			return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
+		} else {
+			logger.Ctx(ctx).Debug("read single block completed",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+				zap.Int64("startEntryID", startEntryID),
+				zap.Int("entriesReturned", len(entries)))
+		}
+		metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
+		metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+
+		return entries, nil
 	}
 
-	logger.Ctx(ctx).Debug("read single block completed",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-		zap.Int64("startEntryID", startEntryID),
-		zap.Int("entriesReturned", len(entries)))
-	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
-
-	return entries, nil
+	// means get no block for this entryId
+	return nil, nil
 }
 
 // readMultipleBlocks reads across multiple blocks to get the specified number of entries
@@ -843,69 +861,72 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 		// Find BlockHeaderRecord and verify data integrity
 		var blockHeaderRecord *codec.BlockHeaderRecord
-		var dataRecordsStart int
-		for j, record := range records {
+		for _, record := range records {
 			if record.Type() == codec.BlockHeaderRecordType {
 				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-				dataRecordsStart = j + 1
 				break
 			}
 		}
 
 		// If we found a BlockHeaderRecord, verify the block data integrity
 		if blockHeaderRecord != nil {
-			// Extract only the data records part for verification
-			var dataRecordsBuffer []byte
-			for j := dataRecordsStart; j < len(records); j++ {
-				if records[j].Type() == codec.DataRecordType {
-					encodedRecord := codec.EncodeRecord(records[j])
-					dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+			// Extract the data records part from blockData (skip BlockHeaderRecord)
+			// BlockHeaderRecord is at the beginning, so data starts after it
+			blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+			if len(blockData) > blockHeaderSize {
+				dataRecordsBuffer := blockData[blockHeaderSize:]
+				// Verify block data integrity
+				if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+					logger.Ctx(ctx).Warn("block data integrity verification failed",
+						zap.String("segmentFileKey", f.segmentFileKey),
+						zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+						zap.Error(err))
+					break // Stop reading on error, return what we have so far
 				}
-			}
 
-			// Verify block data integrity
-			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
-				logger.Ctx(ctx).Warn("block data integrity verification failed",
+				logger.Ctx(ctx).Debug("block data integrity verified successfully",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-					zap.Error(err))
-				break // Stop reading on error, return what we have so far
+					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 			}
 
-			logger.Ctx(ctx).Debug("block data integrity verified successfully",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
-				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
-		}
-
-		currentEntryID := blockInfo.FirstEntryID
-		// Parse all data records in the block
-		for j := 0; j < len(records) && entriesCollected < batchSize; j++ {
-			if records[j].Type() != codec.DataRecordType {
-				continue
-			}
-			// Only include entries from the start sequence number onwards
-			if currentEntryID >= startSequenceNum {
-				r := records[j].(*codec.DataRecord)
-				entry := &proto.LogEntry{
-					EntryId: currentEntryID,
-					Values:  r.Payload,
+			currentEntryID := blockInfo.FirstEntryID
+			// Parse all data records in the block
+			for j := 0; j < len(records) && entriesCollected < batchSize; j++ {
+				if records[j].Type() != codec.DataRecordType {
+					continue
 				}
-				entries = append(entries, entry)
-				entriesCollected++
-				readBytes += len(r.Payload)
+				// Only include entries from the start sequence number onwards
+				if currentEntryID >= startSequenceNum {
+					r := records[j].(*codec.DataRecord)
+					entry := &proto.LogEntry{
+						EntryId: currentEntryID,
+						Values:  r.Payload,
+					}
+					entries = append(entries, entry)
+					entriesCollected++
+					readBytes += len(r.Payload)
+				}
+				currentEntryID++
 			}
-			currentEntryID++
 		}
 	}
 
-	logger.Ctx(ctx).Debug("read multiple blocks completed",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int64("startSequenceNum", startSequenceNum),
-		zap.Int64("requestedBatchSize", batchSize),
-		zap.Int("entriesReturned", len(entries)))
-
+	if len(entries) == 0 {
+		logger.Ctx(ctx).Debug("read multiple blocks completed, no entry extracted",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("startSequenceNum", startSequenceNum),
+			zap.Int64("requestedBatchSize", batchSize),
+			zap.Int("entriesReturned", len(entries)))
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
+	} else {
+		logger.Ctx(ctx).Debug("read multiple blocks completed",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("startSequenceNum", startSequenceNum),
+			zap.Int64("requestedBatchSize", batchSize),
+			zap.Int("entriesReturned", len(entries)))
+	}
 	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
 	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 

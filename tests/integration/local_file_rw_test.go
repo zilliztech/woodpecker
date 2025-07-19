@@ -782,7 +782,7 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 			BatchSize:    10,
 		})
 		assert.Error(t, err)
-		assert.True(t, werr.ErrEntryNotFound.Is(err))
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err), err.Error())
 		assert.Nil(t, entries)
 	})
 

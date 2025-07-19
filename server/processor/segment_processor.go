@@ -307,7 +307,7 @@ func (s *segmentProcessor) getNewSegmentReader(ctx context.Context) (storage.Rea
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId)
-		logger.Ctx(ctx).Info("create segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", localReader)))
+		logger.Ctx(ctx).Info("created segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", localReader)))
 		return localReader, err
 	} else {
 		minioReader, getReaderErr := objectstorage.NewMinioFileReader(
@@ -320,7 +320,7 @@ func (s *segmentProcessor) getNewSegmentReader(ctx context.Context) (storage.Rea
 		if getReaderErr != nil {
 			return nil, getReaderErr
 		}
-		logger.Ctx(ctx).Info("create segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", minioReader)))
+		logger.Ctx(ctx).Info("created segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", minioReader)))
 		return minioReader, nil
 	}
 }

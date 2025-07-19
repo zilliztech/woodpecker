@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -43,6 +44,7 @@ func minInt(a, b int) int {
 }
 
 func TestReadTheWrittenDataSequentially(t *testing.T) {
+	utils.StartGopsAgentWithPort(6060)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestReadTheWrittenDataSequentially")
 	testCases := []struct {
@@ -66,6 +68,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
