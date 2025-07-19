@@ -486,6 +486,15 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 		},
 		Revision: 1,
 	}
+	segmentMetaAfterFenced := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 1,
+		},
+		Revision: 2,
+	}
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 	lastEntryId, fenceErr := segmentHandle.Fence(context.Background())
 	assert.NoError(t, fenceErr)
@@ -654,6 +663,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 // with partial success based on lastEntryId returned from FenceSegment
 func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
@@ -714,6 +724,15 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 	}
 
 	// Call Fence - should return lastEntryId = 2
+	segmentMetaAfterFenced := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 2,
+		},
+		Revision: 2,
+	}
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	lastEntryId, err := segmentHandle.Fence(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), lastEntryId)
@@ -741,6 +760,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 // and verifies that lastEntryId is still used correctly for partial success
 func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
@@ -799,6 +819,15 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	}
 
 	// Call Fence - should return lastEntryId = 1 even with ErrSegmentFenced
+	segmentMetaAfterFenced := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 1,
+		},
+		Revision: 2,
+	}
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	lastEntryId, err := segmentHandle.Fence(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), lastEntryId)
