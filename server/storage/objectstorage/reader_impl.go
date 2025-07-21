@@ -384,9 +384,7 @@ func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int6
 	// Check if this is the first block (block 0)
 	if blockID == 0 {
 		// First block has HeaderRecord + BlockHeaderRecord, so we need to read more
-		// HeaderRecord payload is 16 bytes: Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
-		headerRecordSize := int64(16)
-		readSize = int64(codec.RecordHeaderSize) + headerRecordSize + int64(codec.RecordHeaderSize+codec.BlockHeaderRecordSize)
+		readSize = int64(codec.RecordHeaderSize+codec.HeaderRecordSize) + int64(codec.RecordHeaderSize+codec.BlockHeaderRecordSize)
 	}
 
 	// get block header record from the beginning of the block
@@ -419,7 +417,7 @@ func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int6
 	}
 	// check if it is a fence object
 	if int64(len(data)) != readSize {
-		objStat, stateErr := headerRecordObj.Stat()
+		objStat, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
 		if stateErr != nil {
 			logger.Ctx(ctx).Warn("Error getting block header record",
 				zap.String("segmentFileKey", f.segmentFileKey),
@@ -457,6 +455,7 @@ func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int6
 	logger.Ctx(ctx).Warn("Error finding block header record",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.String("blockKey", blockKey),
+		zap.Int("records", len(records)),
 		zap.Error(typeErr))
 	return nil, typeErr
 }
@@ -744,7 +743,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		var dataStartOffset int
 		// First block: HeaderRecord -> BlockHeaderRecord -> DataRecords
 		// Check if the first record is HeaderRecord
-		if len(records) > 0 && records[0].Type() == codec.HeaderRecordType {
+		if blockInfo.BlockNumber == 0 {
 			// Skip HeaderRecord + BlockHeaderRecord
 			dataStartOffset = codec.RecordHeaderSize + codec.HeaderRecordSize + codec.RecordHeaderSize + codec.BlockHeaderRecordSize
 		} else {
@@ -887,7 +886,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 			var dataStartOffset int
 			// First block: HeaderRecord -> BlockHeaderRecord -> DataRecords
 			// Check if the first record is HeaderRecord
-			if len(records) > 0 && records[0].Type() == codec.HeaderRecordType {
+			if blockInfo.BlockNumber == 0 {
 				// Skip HeaderRecord + BlockHeaderRecord
 				dataStartOffset = codec.RecordHeaderSize + codec.HeaderRecordSize + codec.RecordHeaderSize + codec.BlockHeaderRecordSize
 			} else {

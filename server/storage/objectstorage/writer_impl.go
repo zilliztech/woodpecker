@@ -1045,7 +1045,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			flushTaskStart := time.Now()
 			logger.Ctx(ctx).Debug("start flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
 			blockKey := getBlockKey(f.segmentFileKey, blockId)
-			blockRawData := f.serialize(blockDataBuff)
+			blockRawData := f.serialize(blockId, blockDataBuff)
 			actualDataSize := int64(len(blockRawData))
 			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
@@ -1515,15 +1515,15 @@ func (f *MinioFileWriter) releaseSegmentLock(ctx context.Context) error {
 }
 
 // serialize serializes entries with optional HeaderRecord for the first block
-func (f *MinioFileWriter) serialize(entries []*cache.BufferEntry) []byte {
+func (f *MinioFileWriter) serialize(blockId int64, entries []*cache.BufferEntry) []byte {
 	if len(entries) == 0 {
 		return []byte{}
 	}
 
 	serializedData := make([]byte, 0)
 
-	// Add HeaderRecord only for the first block (when headerWritten is false)
-	if !f.headerWritten.Load() {
+	// Add HeaderRecord only for the first block
+	if blockId == 0 {
 		firstEntryID := entries[0].EntryId
 		headerRecord := &codec.HeaderRecord{
 			Version:      codec.FormatVersion,
