@@ -20,8 +20,6 @@ package objectstorage
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -90,11 +88,12 @@ func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logI
 	}
 	// If completed, no need to prefetch from data blocks
 	if reader.isCompleted.Load() {
+		logger.Ctx(ctx).Debug("create new minio file reader finish for completed segment", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
 		return reader, nil
 	}
 	if !reader.isCompleted.Load() && !reader.isFenced.Load() {
 		// if uncompleted, try fetch all block infos
-		existsBlocks, err := reader.prefetchAllBlockInfoOnce(ctx)
+		existsBlocks, err := reader.prefetchAllBlockInfo(ctx)
 		if err != nil {
 			logger.Ctx(ctx).Warn("prefetch block infos failed when create Read-only SegmentImpl",
 				zap.String("segmentFileKey", segmentFileKey),
@@ -110,54 +109,54 @@ func NewMinioFileReader(ctx context.Context, bucket string, baseDir string, logI
 }
 
 // Start by listing all once
-func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchAllBlockInfoOnce")
+func (f *MinioFileReader) prefetchAllBlockInfo(ctx context.Context) (int, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "prefetchAllBlockInfo")
 	defer sp.End()
 	startTime := time.Now()
-	listPrefix := fmt.Sprintf("%s/", f.segmentFileKey)
-	if f.isCompacted.Load() {
-		listPrefix = fmt.Sprintf("%s/m_", f.segmentFileKey)
-	}
-	objectCh := f.client.ListObjects(ctx, f.bucket, listPrefix, false, minio.ListObjectsOptions{
-		Recursive: f.isCompacted.Load(), // only list compacted merged blocks if
-	})
 	existsBlocks := make([]*codec.IndexRecord, 0, 32)
-	for objInfo := range objectCh {
-		if objInfo.Err != nil {
-			logger.Ctx(ctx).Warn("Error listing objects",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Error(objInfo.Err))
-			return 0, objInfo.Err
+
+	var firstEntryID int64 = -1
+	var lastEntryID int64 = -1
+	// fence blockId if fence block exists
+	fenceBlockId := int64(-1)
+	// Sequentially try to read blocks starting from ID 0
+	// Block sequence must be continuous without gaps - if any block is missing, stop fetching
+	blockID := int64(0)
+	for {
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
+
+		// Try to get object info first to check if it exists and get last modified time
+		objInfo, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
+		if stateErr != nil {
+			if minioHandler.IsObjectNotExists(stateErr) {
+				// Block doesn't exist, we've reached the end of continuous sequence
+				logger.Ctx(ctx).Debug("block not found, stopping prefetch as sequence must be continuous",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("blockID", blockID),
+					zap.String("blockKey", blockKey))
+				break
+			}
+			// Other errors (network issues, permissions, etc.) should also stop fetching
+			return -1, stateErr
 		}
-		if !strings.HasSuffix(objInfo.Key, ".blk") {
-			continue
+		if minioHandler.IsFencedObject(objInfo) {
+			logger.Ctx(ctx).Warn("object is fenced, stopping prefetch",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("fenceBlockID", blockID),
+				zap.String("blockKey", blockKey))
+			fenceBlockId = blockID
+			f.isFenced.Store(true)
+			break
 		}
 
-		// Skip footer object
-		if strings.HasSuffix(objInfo.Key, "/footer.blk") {
-			logger.Ctx(ctx).Debug("Skipping footer object",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.String("blockKey", objInfo.Key))
-			continue
-		}
-
-		blockId, isMerged, parseErr := parseBlockIdFromBlockKey(objInfo.Key)
-		if parseErr != nil {
-			logger.Ctx(ctx).Warn("Error parsing segment file block id from block key",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.String("blockKey", objInfo.Key),
-				zap.Error(parseErr))
-			return 0, parseErr
-		}
 		logger.Ctx(ctx).Debug("Found segment file block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("blockKey", objInfo.Key),
 			zap.Int64("blockSize", objInfo.Size),
-			zap.Int64("blockID", blockId),
-			zap.Bool("isMerged", isMerged))
+			zap.Int64("blockID", blockID))
 
 		// get block header record
-		blockHeaderRecord, getErr := f.getBlockHeaderRecord(ctx, blockId, objInfo.Key)
+		blockHeaderRecord, getErr := f.getBlockHeaderRecord(ctx, blockID, objInfo.Key)
 		if getErr != nil && werr.ErrSegmentFenced.Is(getErr) {
 			continue
 		}
@@ -165,50 +164,40 @@ func (f *MinioFileReader) prefetchAllBlockInfoOnce(ctx context.Context) (int, er
 			return 0, getErr
 		}
 
-		if isMerged == f.isCompacted.Load() {
-			// if compacted, only merged blocks we need
-			// if not compacted, not merged blocks we need
-			existsBlocks = append(existsBlocks, &codec.IndexRecord{
-				BlockNumber:       int32(blockId),
-				StartOffset:       blockId,
-				FirstRecordOffset: 0,
-				BlockSize:         uint32(objInfo.Size), // Use object size as block size
-				FirstEntryID:      blockHeaderRecord.FirstEntryID,
-				LastEntryID:       blockHeaderRecord.LastEntryID,
-			})
+		indexRecord := &codec.IndexRecord{
+			BlockNumber:       int32(blockID),
+			StartOffset:       blockID,
+			FirstRecordOffset: 0,
+			BlockSize:         uint32(objInfo.Size), // Use object size as block size
+			FirstEntryID:      blockHeaderRecord.FirstEntryID,
+			LastEntryID:       blockHeaderRecord.LastEntryID,
 		}
-	}
-	// ensure no hole in list - only include continuous blocks from 0
-	sort.Slice(existsBlocks, func(i, j int) bool {
-		return existsBlocks[i].BlockNumber < existsBlocks[j].BlockNumber
-	})
 
-	// Only keep continuous blocks starting from 0
-	continuousBlocks := make([]*codec.IndexRecord, 0, len(existsBlocks))
-	expectedBlockId := int32(0)
-
-	for _, block := range existsBlocks {
-		if block.BlockNumber == expectedBlockId {
-			continuousBlocks = append(continuousBlocks, block)
-			expectedBlockId++
-			logger.Ctx(ctx).Debug("Added continuous block",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int32("blockID", block.BlockNumber),
-				zap.Int64("firstEntryID", block.FirstEntryID),
-				zap.Int64("lastEntryID", block.LastEntryID))
-		} else {
-			logger.Ctx(ctx).Debug("Found block hole, stopping at continuous sequence",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int32("blockID", block.BlockNumber),
-				zap.Int32("expectedBlockId", expectedBlockId))
-			break
+		existsBlocks = append(existsBlocks, indexRecord)
+		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
+			firstEntryID = blockHeaderRecord.FirstEntryID
 		}
-	}
+		if blockHeaderRecord.LastEntryID > lastEntryID {
+			lastEntryID = blockHeaderRecord.LastEntryID
+		}
 
-	existsBlocks = continuousBlocks
+		logger.Ctx(ctx).Debug("extracted block info during prefetch All blocks info",
+			zap.String("blockKey", blockKey),
+			zap.Int64("blockID", blockID),
+			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
+			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
+
+		// move to next blockID
+		blockID++
+	}
 
 	f.blocks = existsBlocks
-
+	logger.Ctx(ctx).Info("successfully prefetch all blocks info from storage",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("blockIndexCount", len(f.blocks)),
+		zap.Int64("firstEntryID", firstEntryID),
+		zap.Int64("lastEntryID", lastEntryID),
+		zap.Int64("fenceBlockId", fenceBlockId))
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "loadAll", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
@@ -350,6 +339,14 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 			//fmt.Println("object storage read block err: ", err)
 			return existsNewBlock, nil, err
 		}
+		if minioHandler.IsFencedObject(blockObjInfo) {
+			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("fenceBlockID", blockID),
+				zap.String("blockKey", blockKey))
+			f.isFenced.Store(true)
+			break
+		}
 
 		blockHeaderRecord, getErr := f.getBlockHeaderRecord(ctx, blockID, blockKey)
 		if getErr != nil {
@@ -417,20 +414,12 @@ func (f *MinioFileReader) getBlockHeaderRecord(ctx context.Context, blockID int6
 	}
 	// check if it is a fence object
 	if int64(len(data)) != readSize {
-		objStat, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
-		if stateErr != nil {
-			logger.Ctx(ctx).Warn("Error getting block header record",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.String("blockKey", blockKey),
-				zap.Error(stateErr))
-			return nil, stateErr
-		}
-		if minioHandler.IsFencedObject(objStat) {
-			// it means the object is fenced out, no more blocks data
-			logger.Ctx(ctx).Info("segment file is fenced out", zap.String("segmentFileKey", f.segmentFileKey), zap.String("fencedBlockKey", objStat.Key))
-			f.isFenced.Store(true)
-			return nil, werr.ErrSegmentFenced
-		}
+		logger.Ctx(ctx).Warn("Error getting block header record",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.String("blockKey", blockKey),
+			zap.Int64("requestReadSize", readSize),
+			zap.Int("actualReadSize", len(data)))
+		return nil, werr.ErrFileReaderInvalidRecord.WithCauseErrMsg("not enough size for block header record")
 	}
 
 	// Parse records to find the BlockHeaderRecord

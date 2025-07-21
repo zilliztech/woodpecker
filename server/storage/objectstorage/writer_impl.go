@@ -155,7 +155,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 
 	if recoveryMode {
 		// Try to recover existing state from MinIO before creating lock
-		if err := segmentFileWriter.recoverFromStorage(ctx); err != nil {
+		if err := segmentFileWriter.recoverFromStorageUnsafe(ctx); err != nil {
 			logger.Ctx(ctx).Warn("Failed to recover from storage, starting fresh",
 				zap.String("segmentFileKey", segmentFileKey),
 				zap.Error(err))
@@ -190,7 +190,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 }
 
 // recoverFromStorage attempts to recover the writer state from existing objects in MinIO
-func (f *MinioFileWriter) recoverFromStorage(ctx context.Context) error {
+func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromStorage")
 	defer sp.End()
 	logger.Ctx(ctx).Info("attempting to recover writer state from storage",
@@ -365,24 +365,19 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			if minioHandler.IsObjectNotExists(stateErr) {
 				// Block doesn't exist, we've reached the end of continuous sequence
 				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
-					zap.String("segmentFileKey", f.segmentFileKey),
-					zap.Int64("blockID", blockID),
-					zap.String("blockKey", blockKey))
-				break
-			}
-			if minioHandler.IsFencedObject(objInfo) {
-				logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
-					zap.String("segmentFileKey", f.segmentFileKey),
-					zap.Int64("fenceLlockID", blockID),
-					zap.String("blockKey", blockKey))
-				fenceBlockId = blockID
+					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
 				break
 			}
 			// Other errors (network issues, permissions, etc.) should also stop recovery
 			logger.Ctx(ctx).Warn("failed to stat object during recovery, please retry later",
-				zap.String("blockKey", blockKey),
-				zap.Error(stateErr))
+				zap.String("blockKey", blockKey), zap.Error(stateErr))
 			return stateErr
+		}
+		if minioHandler.IsFencedObject(objInfo) {
+			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
+				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
+			fenceBlockId = blockID
+			break
 		}
 
 		// Update last modified time
@@ -390,34 +385,15 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 			lastModifiedTime = objInfo.LastModified.UnixMilli()
 		}
 
-		// Read the object to get block information
-		obj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, minio.GetObjectOptions{})
-		if getErr != nil {
-			logger.Ctx(ctx).Warn("failed to read object during recovery, please retry later",
-				zap.String("blockKey", blockKey),
-				zap.Error(getErr))
-			return getErr
-		}
-
-		data, readErr := io.ReadAll(obj)
-		obj.Close()
-		if readErr != nil {
-			logger.Ctx(ctx).Warn("failed to read object data during recovery, please retry later",
-				zap.String("blockKey", blockKey),
-				zap.Error(readErr))
-			return readErr
-		}
-
 		// Parse the data to find blockHeaderRecord
 		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
 			zap.String("blockKey", blockKey),
-			zap.Int("dataSize", len(data)))
+			zap.Int64("dataSize", objInfo.Size))
 
-		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, data)
+		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
 		if parseBlockHeaderErr != nil {
 			logger.Ctx(ctx).Warn("failed to parse block header record during recovery, please retry later",
 				zap.String("blockKey", blockKey),
-				zap.Int("dataSize", len(data)),
 				zap.Error(parseBlockHeaderErr))
 			return parseBlockHeaderErr
 		}
@@ -503,7 +479,42 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 }
 
 // parseBlockHeaderRecord extracts the BlockHeaderRecord from the end of block data
-func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, data []byte) (*codec.BlockHeaderRecord, error) {
+func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID int64, blockKey string) (*codec.BlockHeaderRecord, error) {
+	// For the first block (block 0), we need to read more data to account for the HeaderRecord
+	// For other blocks, we only need to read the BlockHeaderRecord
+	readSize := int64(codec.RecordHeaderSize + codec.BlockHeaderRecordSize)
+
+	// Check if this is the first block (block 0)
+	if blockID == 0 {
+		// First block has HeaderRecord + BlockHeaderRecord, so we need to read more
+		readSize = int64(codec.RecordHeaderSize+codec.HeaderRecordSize) + int64(codec.RecordHeaderSize+codec.BlockHeaderRecordSize)
+	}
+
+	// get block header record from the beginning of the block
+	getBlockHeaderRecordOpt := minio.GetObjectOptions{}
+	setOptErr := getBlockHeaderRecordOpt.SetRange(0, readSize-1)
+	if setOptErr != nil {
+		logger.Ctx(ctx).Warn("Error setting range for block header record",
+			zap.String("blockKey", blockKey),
+			zap.Error(setOptErr))
+		return nil, setOptErr
+	}
+	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, getBlockHeaderRecordOpt)
+	if getErr != nil {
+		logger.Ctx(ctx).Warn("Error getting block header record",
+			zap.String("blockKey", blockKey),
+			zap.Error(getErr))
+		return nil, getErr
+	}
+	defer headerRecordObj.Close()
+	data, readErr := io.ReadAll(headerRecordObj)
+	if readErr != nil {
+		logger.Ctx(ctx).Warn("failed to read object data during prefetch, please retry later",
+			zap.String("blockKey", blockKey),
+			zap.Error(readErr))
+		return nil, readErr
+	}
+
 	if len(data) == 0 {
 		return nil, errors.New("empty data")
 	}
@@ -1317,7 +1328,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 		func() error {
 			// recover to find incremental new blocks
 			if !firstFenceAttempt {
-				recoverErr := f.recoverFromStorage(ctx)
+				recoverErr := f.recoverFromStorageUnsafe(ctx)
 				if recoverErr != nil {
 					logger.Ctx(ctx).Warn("Failed to recover from storage during fence",
 						zap.String("segmentFileKey", f.segmentFileKey),

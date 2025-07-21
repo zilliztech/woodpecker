@@ -837,29 +837,14 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
 	startTime := time.Now()
-	// For files without footer, we treat the entire file as one block
-	// Calculate the end offset of this block
-	var blockEndOffset int64
-	if r.footer != nil {
-		// Complete file with footer - use next block's start offset or file end
-		blockIndex := int(blockInfo.BlockNumber)
-		if blockIndex+1 < len(r.blockIndexes) {
-			blockEndOffset = r.blockIndexes[blockIndex+1].StartOffset
-		} else {
-			blockEndOffset = r.size
-		}
-	} else {
-		// Incomplete file without footer - use entire file
-		blockEndOffset = r.size
-	}
+	// Get blockSize
+	blockSize := int64(blockInfo.BlockSize)
 
-	blockSize := blockEndOffset - blockInfo.StartOffset
 	logger.Ctx(ctx).Debug("reading single block",
 		zap.Int64("logId", r.logId),
 		zap.Int64("segId", r.segId),
 		zap.Int32("blockNumber", blockInfo.BlockNumber),
 		zap.Int64("startOffset", blockInfo.StartOffset),
-		zap.Int64("endOffset", blockEndOffset),
 		zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
 		zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
 		zap.Int64("blockSize", blockSize),
