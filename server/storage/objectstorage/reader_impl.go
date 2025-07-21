@@ -738,11 +738,22 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	// If we found a BlockHeaderRecord, verify the block data integrity
 	if blockHeaderRecord != nil {
-		// Extract the data records part from blockData (skip BlockHeaderRecord)
-		// BlockHeaderRecord is at the beginning, so data starts after it
-		blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
-		if len(blockData) > blockHeaderSize {
-			dataRecordsBuffer := blockData[blockHeaderSize:]
+		// Extract the data records part from blockData
+		// For the first block (blockNumber == 0), there might be a HeaderRecord before BlockHeaderRecord
+		// For other blocks, only BlockHeaderRecord exists
+		var dataStartOffset int
+		// First block: HeaderRecord -> BlockHeaderRecord -> DataRecords
+		// Check if the first record is HeaderRecord
+		if len(records) > 0 && records[0].Type() == codec.HeaderRecordType {
+			// Skip HeaderRecord + BlockHeaderRecord
+			dataStartOffset = codec.RecordHeaderSize + codec.HeaderRecordSize + codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+		} else {
+			// Only BlockHeaderRecord exists
+			dataStartOffset = codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+		}
+
+		if len(blockData) > dataStartOffset {
+			dataRecordsBuffer := blockData[dataStartOffset:]
 			// Verify block data integrity
 			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
 				logger.Ctx(ctx).Warn("block data integrity verification failed",
@@ -870,11 +881,22 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 		// If we found a BlockHeaderRecord, verify the block data integrity
 		if blockHeaderRecord != nil {
-			// Extract the data records part from blockData (skip BlockHeaderRecord)
-			// BlockHeaderRecord is at the beginning, so data starts after it
-			blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
-			if len(blockData) > blockHeaderSize {
-				dataRecordsBuffer := blockData[blockHeaderSize:]
+			// Extract the data records part from blockData
+			// For the first block (blockNumber == 0), there might be a HeaderRecord before BlockHeaderRecord
+			// For other blocks, only BlockHeaderRecord exists
+			var dataStartOffset int
+			// First block: HeaderRecord -> BlockHeaderRecord -> DataRecords
+			// Check if the first record is HeaderRecord
+			if len(records) > 0 && records[0].Type() == codec.HeaderRecordType {
+				// Skip HeaderRecord + BlockHeaderRecord
+				dataStartOffset = codec.RecordHeaderSize + codec.HeaderRecordSize + codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+			} else {
+				// Only BlockHeaderRecord exists
+				dataStartOffset = codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+			}
+
+			if len(blockData) > dataStartOffset {
+				dataRecordsBuffer := blockData[dataStartOffset:]
 				// Verify block data integrity
 				if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
 					logger.Ctx(ctx).Warn("block data integrity verification failed",
