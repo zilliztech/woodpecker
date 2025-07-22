@@ -419,6 +419,69 @@ func (_c *LogStore_GetBatchEntries_Call) RunAndReturn(run func(context.Context, 
 	return _c
 }
 
+// GetBatchEntriesAdv provides a mock function with given fields: _a0, _a1, _a2, _a3, _a4, _a5
+func (_m *LogStore) GetBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *processor.LastReadState) (*processor.BatchData, error) {
+	ret := _m.Called(_a0, _a1, _a2, _a3, _a4, _a5)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBatchEntriesAdv")
+	}
+
+	var r0 *processor.BatchData
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)); ok {
+		return rf(_a0, _a1, _a2, _a3, _a4, _a5)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) *processor.BatchData); ok {
+		r0 = rf(_a0, _a1, _a2, _a3, _a4, _a5)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*processor.BatchData)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) error); ok {
+		r1 = rf(_a0, _a1, _a2, _a3, _a4, _a5)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStore_GetBatchEntriesAdv_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBatchEntriesAdv'
+type LogStore_GetBatchEntriesAdv_Call struct {
+	*mock.Call
+}
+
+// GetBatchEntriesAdv is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+//   - _a3 int64
+//   - _a4 int64
+//   - _a5 *processor.LastReadState
+func (_e *LogStore_Expecter) GetBatchEntriesAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}, _a4 interface{}, _a5 interface{}) *LogStore_GetBatchEntriesAdv_Call {
+	return &LogStore_GetBatchEntriesAdv_Call{Call: _e.mock.On("GetBatchEntriesAdv", _a0, _a1, _a2, _a3, _a4, _a5)}
+}
+
+func (_c *LogStore_GetBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *processor.LastReadState)) *LogStore_GetBatchEntriesAdv_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*processor.LastReadState))
+	})
+	return _c
+}
+
+func (_c *LogStore_GetBatchEntriesAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *LogStore_GetBatchEntriesAdv_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStore_GetBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)) *LogStore_GetBatchEntriesAdv_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetSegmentLastAddConfirmed provides a mock function with given fields: _a0, _a1, _a2
 func (_m *LogStore) GetSegmentLastAddConfirmed(_a0 context.Context, _a1 int64, _a2 int64) (int64, error) {
 	ret := _m.Called(_a0, _a1, _a2)

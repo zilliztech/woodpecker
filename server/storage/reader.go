@@ -74,5 +74,5 @@ type BatchInfo struct {
 	// last block info of this batch
 	Version       uint16
 	Flags         uint16
-	LastBlockInfo *codec.IndexRecord
+	LastBlockInfo *codec.IndexRecord // TODO only blockId, blockOffset, blockSize are need
 }

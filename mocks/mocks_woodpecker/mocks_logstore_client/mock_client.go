@@ -322,6 +322,69 @@ func (_c *LogStoreClient_ReadEntriesBatch_Call) RunAndReturn(run func(context.Co
 	return _c
 }
 
+// ReadEntriesBatchAdv provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, maxSize, lastReadState
+func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
+	ret := _m.Called(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadEntriesBatchAdv")
+	}
+
+	var r0 *processor.BatchData
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)); ok {
+		return rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) *processor.BatchData); ok {
+		r0 = rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*processor.BatchData)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) error); ok {
+		r1 = rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_ReadEntriesBatchAdv_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadEntriesBatchAdv'
+type LogStoreClient_ReadEntriesBatchAdv_Call struct {
+	*mock.Call
+}
+
+// ReadEntriesBatchAdv is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+//   - fromEntryId int64
+//   - maxSize int64
+//   - lastReadState *processor.LastReadState
+func (_e *LogStoreClient_Expecter) ReadEntriesBatchAdv(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxSize interface{}, lastReadState interface{}) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	return &LogStoreClient_ReadEntriesBatchAdv_Call{Call: _e.mock.On("ReadEntriesBatchAdv", ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)}
+}
+
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*processor.LastReadState))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SegmentClean provides a mock function with given fields: ctx, logId, segmentId, flag
 func (_m *LogStoreClient) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
 	ret := _m.Called(ctx, logId, segmentId, flag)

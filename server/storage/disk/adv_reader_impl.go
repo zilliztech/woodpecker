@@ -68,7 +68,8 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 	logger.Ctx(ctx).Debug("creating new local file reader",
 		zap.String("baseDir", baseDir),
 		zap.Int64("logId", logId),
-		zap.Int64("segId", segId))
+		zap.Int64("segId", segId),
+		zap.Any("advOpt", advOpt))
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists

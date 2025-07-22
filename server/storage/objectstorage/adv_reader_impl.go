@@ -69,7 +69,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewMinioFileReaderAdv")
 	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
-	logger.Ctx(ctx).Debug("creating new minio file reader", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
+	logger.Ctx(ctx).Debug("creating new minio file reader", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Any("advOpt", advOpt))
 	// Get object size
 	reader := &MinioFileReaderAdv{
 		logId:          logId,
