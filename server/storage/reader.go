@@ -29,6 +29,9 @@ type Reader interface {
 	// ReadNextBatch returns the next batch of entries in the log according to the Reader's direction
 	ReadNextBatch(ctx context.Context, opt ReaderOpt) ([]*proto.LogEntry, error)
 
+	// ReadNextBatchAdv returns the next batch of entries in the log according to the Reader's direction
+	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt) (*Batch, error)
+
 	// GetBlockIndexes returns all block indexes
 	GetBlockIndexes() []*codec.IndexRecord
 
@@ -57,4 +60,19 @@ type ReaderOpt struct {
 
 	// BatchSize is the maxSize of entries to read in a batch.
 	BatchSize int64
+}
+
+// Batch represents a batch of entries, and its block infos using for next batch reading position hint.
+type Batch struct {
+	// last block info of this batch
+	LastBatchInfo *BatchInfo
+	// data entries
+	Entries []*proto.LogEntry
+}
+
+type BatchInfo struct {
+	// last block info of this batch
+	Version       uint16
+	Flags         uint16
+	LastBlockInfo *codec.IndexRecord
 }

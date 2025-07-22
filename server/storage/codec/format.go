@@ -80,8 +80,9 @@ func (b *BlockHeaderRecord) Type() byte { return BlockHeaderRecordType }
 
 // IndexRecord represents block-level index (one entry per 2MB block)
 type IndexRecord struct {
-	BlockNumber       int32  // Which 2MB block this refers to
-	StartOffset       int64  // Start offset of this block in the complete file
+	BlockNumber int32 // Which 2MB block this refers to
+	StartOffset int64 // Start offset of this block in the complete file
+	// Deprecated
 	FirstRecordOffset int64  // Offset of the first record in this block
 	BlockSize         uint32 // Size of this block, including this block header record+data records of this block
 	FirstEntryID      int64  // First entry ID of this first data record

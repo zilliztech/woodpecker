@@ -43,6 +43,7 @@ var (
 var _ storage.Reader = (*LocalFileReader)(nil)
 
 // LocalFileReader implements AbstractFileReader for local filesystem storage
+// Deprecated use LocalFileReaderAdv instead
 type LocalFileReader struct {
 	logId        int64
 	segId        int64
@@ -693,6 +694,11 @@ func (r *LocalFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 	// Return the last entry ID from the last block
 	lastBlock := r.blockIndexes[len(r.blockIndexes)-1]
 	return lastBlock.LastEntryID, nil
+}
+
+func (f *LocalFileReader) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt) (*storage.Batch, error) {
+	// use Adv Reader instead
+	return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("local backend not support advance read yet")
 }
 
 // ReadNextBatch reads the next batch of entries

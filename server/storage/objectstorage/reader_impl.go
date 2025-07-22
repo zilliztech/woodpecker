@@ -43,6 +43,7 @@ var (
 var _ storage.Reader = (*MinioFileReader)(nil)
 
 // MinioFileReader implements AbstractFileReader for MinIO object storage.
+// Deprecated use MinoFileReaderAdv instead
 type MinioFileReader struct {
 	client         minioHandler.MinioHandler
 	bucket         string
@@ -523,6 +524,11 @@ func (f *MinioFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 	return -1, nil
 }
 
+func (f *MinioFileReader) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt) (*storage.Batch, error) {
+	// use Adv Reader instead
+	return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("not support advance read")
+}
+
 func (f *MinioFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
 	defer sp.End()
@@ -836,7 +842,6 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				zap.Error(getErr))
 			break // Stop reading on error, return what we have so far
 		}
-		defer blockObj.Close()
 
 		blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, objInfo.Size)
 		if err != nil {
