@@ -303,21 +303,25 @@ func (l *logBatchReaderImpl) handleTailRead(ctx context.Context, latestSegmentId
 	lastSegmentId := latestSegmentId
 	if lastSegmentId < 0 {
 		// No segments exist yet, wait for the first segment
-		logger.Ctx(ctx).Debug("no segments exist yet, wait for first segment",
+		logger.Ctx(ctx).Debug("no segments exist yet, tail read from first segment",
 			zap.String("logName", l.logName),
 			zap.Int64("logId", l.logId),
 			zap.String("readerName", l.readerName))
+		l.pendingReadSegmentId = 0
+		l.pendingReadEntryId = 0
 		return nil, -1, -1, werr.ErrSegmentNotFound.WithCauseErrMsg("no segments exists yet")
 	}
 
 	segHandle, err := l.logHandle.GetExistsReadonlySegmentHandle(context.Background(), lastSegmentId)
 	if err != nil && werr.ErrSegmentNotFound.Is(err) {
 		// Last segment doesn't exist, wait for future segment
-		logger.Ctx(ctx).Debug("last segment doesn't exist, wait for future segment",
+		logger.Ctx(ctx).Debug("the segment doesn't exist yet, tail read from it's first entry",
 			zap.String("logName", l.logName),
 			zap.Int64("logId", l.logId),
 			zap.Int64("lastSegmentId", lastSegmentId),
 			zap.String("readerName", l.readerName))
+		l.pendingReadSegmentId = lastSegmentId
+		l.pendingReadEntryId = 0
 		return nil, -1, -1, werr.ErrSegmentNotFound.WithCauseErrMsg("last segment doesn't exist yet")
 	}
 
@@ -334,6 +338,17 @@ func (l *logBatchReaderImpl) handleTailRead(ctx context.Context, latestSegmentId
 	// get  last confirmed entry ID of the last segment
 	lastConfirmedId, err := segHandle.GetLastAddConfirmed(context.Background())
 	if err != nil {
+		if werr.ErrFileReaderNoBlockFound.Is(err) {
+			// No entries in the segment yet, it is a new active segment,start to read it's first entry
+			logger.Ctx(ctx).Debug("tail read from last active segment first entry",
+				zap.String("logName", l.logName),
+				zap.Int64("logId", l.logId),
+				zap.Int64("segmentId", segHandle.GetId(ctx)),
+				zap.String("readerName", l.readerName))
+			l.pendingReadSegmentId = segHandle.GetId(context.Background())
+			l.pendingReadEntryId = 0
+			return segHandle, segHandle.GetId(context.Background()), 0, nil
+		}
 		logger.Ctx(ctx).Warn("get segment LAC failed",
 			zap.String("logName", l.logName),
 			zap.Int64("logId", l.logId),
@@ -343,12 +358,14 @@ func (l *logBatchReaderImpl) handleTailRead(ctx context.Context, latestSegmentId
 		return nil, -1, -1, err
 	}
 
-	logger.Ctx(ctx).Debug("tail read from last active segment",
+	logger.Ctx(ctx).Debug("tail read from last active segment lac",
 		zap.String("logName", l.logName),
 		zap.Int64("logId", l.logId),
 		zap.Int64("segmentId", segHandle.GetId(ctx)),
 		zap.Int64("lastConfirmedId", lastConfirmedId),
 		zap.String("readerName", l.readerName))
+	l.pendingReadSegmentId = segHandle.GetId(context.Background())
+	l.pendingReadEntryId = lastConfirmedId + 1
 	return segHandle, segHandle.GetId(context.Background()), lastConfirmedId + 1, nil
 }
 

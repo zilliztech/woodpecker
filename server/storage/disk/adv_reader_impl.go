@@ -458,22 +458,29 @@ func (r *LocalFileReaderAdv) readAt(ctx context.Context, offset int64, length in
 
 	// Seek to offset
 	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek to offset %d: %w", offset, err)
+		logger.Ctx(ctx).Warn("seek offset to start failed",
+			zap.String("filePath", r.filePath),
+			zap.Int64("offset", offset),
+			zap.Int("requestedLength", length),
+			zap.Error(err))
+		return nil, err
 	}
 
 	// Read data
 	data := make([]byte, length)
 	n, err := io.ReadFull(r.file, data)
-	if err != nil && err != io.ErrUnexpectedEOF {
+	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read data from file",
+			zap.String("filePath", r.filePath),
 			zap.Int64("offset", offset),
 			zap.Int("requestedLength", length),
 			zap.Int("actualRead", n),
 			zap.Error(err))
-		return nil, fmt.Errorf("read data: %w", err)
+		return nil, err
 	}
 
 	logger.Ctx(ctx).Debug("data read successfully",
+		zap.String("filePath", r.filePath),
 		zap.Int64("offset", offset),
 		zap.Int("requestedLength", length),
 		zap.Int("actualRead", n))
@@ -747,7 +754,7 @@ func (r *LocalFileReaderAdv) isFooterExists(ctx context.Context) bool {
 	// Check if file has minimum size for a footer
 	if r.size < codec.RecordHeaderSize+codec.FooterRecordSize {
 		// File is too small to contain footer, might be empty or still being written
-		logger.Ctx(ctx).Debug("file too small for footer, performing raw scan",
+		logger.Ctx(ctx).Debug("file too small for footer, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Int64("fileSize", r.size))
 		return false
@@ -757,7 +764,7 @@ func (r *LocalFileReaderAdv) isFooterExists(ctx context.Context) bool {
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
 	footerData, err := r.readAt(ctx, r.size-footerRecordSize, int(footerRecordSize))
 	if err != nil {
-		logger.Ctx(ctx).Debug("failed to read footer data, performing raw scan",
+		logger.Ctx(ctx).Debug("failed to read footer data, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
 		return false
@@ -766,7 +773,7 @@ func (r *LocalFileReaderAdv) isFooterExists(ctx context.Context) bool {
 	// Try to decode footer record
 	footerRecord, err := codec.DecodeRecord(footerData)
 	if err != nil {
-		logger.Ctx(ctx).Debug("failed to decode footer record, performing raw scan",
+		logger.Ctx(ctx).Debug("failed to decode footer record, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Error(err))
 		return false
@@ -774,7 +781,7 @@ func (r *LocalFileReaderAdv) isFooterExists(ctx context.Context) bool {
 
 	// Check if it's actually a footer record
 	if footerRecord.Type() != codec.FooterRecordType {
-		logger.Ctx(ctx).Debug("no valid footer found, performing raw scan",
+		logger.Ctx(ctx).Debug("no valid footer found, no footer exists yet",
 			zap.String("filePath", r.filePath),
 			zap.Uint8("recordType", footerRecord.Type()),
 			zap.Uint8("expectedType", codec.FooterRecordType))

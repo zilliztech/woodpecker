@@ -293,7 +293,7 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
 	s.updateAccessTime()
-	readerImpl, err := s.getNewSegmentReader(ctx)
+	readerImpl, err := s.getNewSegmentReaderAdv(ctx, nil)
 	if err != nil {
 		return -1, err
 	}
