@@ -6,6 +6,8 @@ import (
 	context "context"
 
 	mock "github.com/stretchr/testify/mock"
+	meta "github.com/zilliztech/woodpecker/meta"
+
 	processor "github.com/zilliztech/woodpecker/server/processor"
 
 	proto "github.com/zilliztech/woodpecker/proto"
@@ -512,19 +514,19 @@ func (_c *SegmentHandle_GetLogName_Call) RunAndReturn(run func() string) *Segmen
 }
 
 // GetMetadata provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *proto.SegmentMetadata {
+func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *meta.SegmentMeta {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetMetadata")
 	}
 
-	var r0 *proto.SegmentMetadata
-	if rf, ok := ret.Get(0).(func(context.Context) *proto.SegmentMetadata); ok {
+	var r0 *meta.SegmentMeta
+	if rf, ok := ret.Get(0).(func(context.Context) *meta.SegmentMeta); ok {
 		r0 = rf(_a0)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*proto.SegmentMetadata)
+			r0 = ret.Get(0).(*meta.SegmentMeta)
 		}
 	}
 
@@ -549,12 +551,12 @@ func (_c *SegmentHandle_GetMetadata_Call) Run(run func(_a0 context.Context)) *Se
 	return _c
 }
 
-func (_c *SegmentHandle_GetMetadata_Call) Return(_a0 *proto.SegmentMetadata) *SegmentHandle_GetMetadata_Call {
+func (_c *SegmentHandle_GetMetadata_Call) Return(_a0 *meta.SegmentMeta) *SegmentHandle_GetMetadata_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *SegmentHandle_GetMetadata_Call) RunAndReturn(run func(context.Context) *proto.SegmentMetadata) *SegmentHandle_GetMetadata_Call {
+func (_c *SegmentHandle_GetMetadata_Call) RunAndReturn(run func(context.Context) *meta.SegmentMeta) *SegmentHandle_GetMetadata_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -825,6 +827,67 @@ func (_c *SegmentHandle_ReadBatch_Call) RunAndReturn(run func(context.Context, i
 	return _c
 }
 
+// ReadBatchAdv provides a mock function with given fields: _a0, _a1, _a2, _a3
+func (_m *SegmentHandle) ReadBatchAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 *processor.LastReadState) (*processor.BatchData, error) {
+	ret := _m.Called(_a0, _a1, _a2, _a3)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadBatchAdv")
+	}
+
+	var r0 *processor.BatchData
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)); ok {
+		return rf(_a0, _a1, _a2, _a3)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *processor.LastReadState) *processor.BatchData); ok {
+		r0 = rf(_a0, _a1, _a2, _a3)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*processor.BatchData)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, *processor.LastReadState) error); ok {
+		r1 = rf(_a0, _a1, _a2, _a3)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentHandle_ReadBatchAdv_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReadBatchAdv'
+type SegmentHandle_ReadBatchAdv_Call struct {
+	*mock.Call
+}
+
+// ReadBatchAdv is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 int64
+//   - _a2 int64
+//   - _a3 *processor.LastReadState
+func (_e *SegmentHandle_Expecter) ReadBatchAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *SegmentHandle_ReadBatchAdv_Call {
+	return &SegmentHandle_ReadBatchAdv_Call{Call: _e.mock.On("ReadBatchAdv", _a0, _a1, _a2, _a3)}
+}
+
+func (_c *SegmentHandle_ReadBatchAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 *processor.LastReadState)) *SegmentHandle_ReadBatchAdv_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(*processor.LastReadState))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_ReadBatchAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *SegmentHandle_ReadBatchAdv_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentHandle_ReadBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)) *SegmentHandle_ReadBatchAdv_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RefreshAndGetMetadata provides a mock function with given fields: _a0
 func (_m *SegmentHandle) RefreshAndGetMetadata(_a0 context.Context) error {
 	ret := _m.Called(_a0)
@@ -867,52 +930,6 @@ func (_c *SegmentHandle_RefreshAndGetMetadata_Call) Return(_a0 error) *SegmentHa
 }
 
 func (_c *SegmentHandle_RefreshAndGetMetadata_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_RefreshAndGetMetadata_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RequestCompactionAsync provides a mock function with given fields: _a0
-func (_m *SegmentHandle) RequestCompactionAsync(_a0 context.Context) error {
-	ret := _m.Called(_a0)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RequestCompactionAsync")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(_a0)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// SegmentHandle_RequestCompactionAsync_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RequestCompactionAsync'
-type SegmentHandle_RequestCompactionAsync_Call struct {
-	*mock.Call
-}
-
-// RequestCompactionAsync is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) RequestCompactionAsync(_a0 interface{}) *SegmentHandle_RequestCompactionAsync_Call {
-	return &SegmentHandle_RequestCompactionAsync_Call{Call: _e.mock.On("RequestCompactionAsync", _a0)}
-}
-
-func (_c *SegmentHandle_RequestCompactionAsync_Call) Run(run func(_a0 context.Context)) *SegmentHandle_RequestCompactionAsync_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_RequestCompactionAsync_Call) Return(_a0 error) *SegmentHandle_RequestCompactionAsync_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *SegmentHandle_RequestCompactionAsync_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_RequestCompactionAsync_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1015,6 +1032,40 @@ func (_c *SegmentHandle_SetRollingReady_Call) Return() *SegmentHandle_SetRolling
 }
 
 func (_c *SegmentHandle_SetRollingReady_Call) RunAndReturn(run func(context.Context)) *SegmentHandle_SetRollingReady_Call {
+	_c.Run(run)
+	return _c
+}
+
+// SetWriterInvalidationNotifier provides a mock function with given fields: _a0, _a1
+func (_m *SegmentHandle) SetWriterInvalidationNotifier(_a0 context.Context, _a1 func(context.Context, string)) {
+	_m.Called(_a0, _a1)
+}
+
+// SegmentHandle_SetWriterInvalidationNotifier_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetWriterInvalidationNotifier'
+type SegmentHandle_SetWriterInvalidationNotifier_Call struct {
+	*mock.Call
+}
+
+// SetWriterInvalidationNotifier is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 func(context.Context , string)
+func (_e *SegmentHandle_Expecter) SetWriterInvalidationNotifier(_a0 interface{}, _a1 interface{}) *SegmentHandle_SetWriterInvalidationNotifier_Call {
+	return &SegmentHandle_SetWriterInvalidationNotifier_Call{Call: _e.mock.On("SetWriterInvalidationNotifier", _a0, _a1)}
+}
+
+func (_c *SegmentHandle_SetWriterInvalidationNotifier_Call) Run(run func(_a0 context.Context, _a1 func(context.Context, string))) *SegmentHandle_SetWriterInvalidationNotifier_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(func(context.Context, string)))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_SetWriterInvalidationNotifier_Call) Return() *SegmentHandle_SetWriterInvalidationNotifier_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *SegmentHandle_SetWriterInvalidationNotifier_Call) RunAndReturn(run func(context.Context, func(context.Context, string))) *SegmentHandle_SetWriterInvalidationNotifier_Call {
 	_c.Run(run)
 	return _c
 }

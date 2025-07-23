@@ -34,6 +34,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -62,6 +63,7 @@ type LocalFileWriter struct {
 	logId           int64
 	segmentId       int64
 	file            *os.File
+	logIdStr        string // for metrics only
 
 	// Configuration
 	maxFlushSize     int64 // Max buffer size before triggering sync
@@ -145,6 +147,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		segmentFilePath:  filePath,
 		logId:            logId,
 		segmentId:        segmentId,
+		logIdStr:         fmt.Sprintf("%d", logId),
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,
@@ -319,6 +322,7 @@ func (w *LocalFileWriter) run() {
 func (w *LocalFileWriter) Sync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
+	startTime := time.Now()
 	// Use syncMu to ensure only one sync can proceed at a time
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -347,10 +351,13 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 		zap.Int64("entryCount", entryCount))
 
 	if needSync {
-		logger.Ctx(ctx).Info("Sync: triggering rollBufferAndFlush")
+		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		// Add global writer lock to prevent race conditions with WriteDataAsync
 		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
 	}
+
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
@@ -359,6 +366,7 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
 	defer sp.End()
+	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil || currentBuffer.GetExpectedNextEntryId() <= currentBuffer.GetFirstEntryId() {
 		return
@@ -417,12 +425,16 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 			w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
 		}
 	}()
+
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "rollBuffer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 }
 
 // processFlushTask processes a flush task by writing data to disk
 func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
+	startTime := time.Now()
 	// Add nil check for safety
 	if task == nil {
 		return
@@ -438,19 +450,19 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	}()
 
 	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced")
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrSegmentFenced)
 		return
 	}
 
 	if w.finalized.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrFileWriterFinalized)
 		return
 	}
 
 	if !w.storageWritable.Load() {
-		logger.Ctx(ctx).Warn("process flush task: storage not writable", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId))
+		logger.Ctx(ctx).Warn("process flush task: storage not writable", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable)
 		return
 	}
@@ -458,7 +470,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	// Write header if not written yet
 	if !w.headerWritten.Load() {
 		if err := w.writeHeader(ctx); err != nil {
-			logger.Ctx(ctx).Warn("write header error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+			logger.Ctx(ctx).Warn("write header error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId), zap.Error(err))
 			w.storageWritable.Store(false)
 			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 			return
@@ -470,6 +482,8 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	blockStartOffset := w.writtenBytes
 
 	logger.Ctx(ctx).Debug("starting to process flush task",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
@@ -491,6 +505,9 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
 
 	logger.Ctx(ctx).Debug("calculated block metadata",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
 		zap.Uint32("blockLength", blockLength),
 		zap.Uint32("blockCrc", blockCrc),
 		zap.Int("dataRecordsCount", len(task.entries)))
@@ -503,25 +520,28 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		BlockCrc:     blockCrc,
 	}
 	if err := w.writeRecord(ctx, blockHeaderRecord); err != nil {
-		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 
 	logger.Ctx(ctx).Debug("block header written, now writing data records",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int("blockDataSize", len(blockDataBuffer)))
 
 	// Write the pre-serialized data records
 	n, err := w.file.Write(blockDataBuffer)
 	if err != nil {
-		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 	if n != len(blockDataBuffer) {
-		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
+		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(fmt.Errorf("incomplete write: wrote %d of %d bytes", n, len(blockDataBuffer))))
 		return
@@ -529,6 +549,11 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	w.writtenBytes += int64(n)
 
 	logger.Ctx(ctx).Debug("block data written successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
+		zap.Int64("firstEntryId", task.firstEntryId),
+		zap.Int64("lastEntryId", task.lastEntryId),
 		zap.Int("bytesWritten", n),
 		zap.Int64("totalWrittenBytes", w.writtenBytes))
 
@@ -540,15 +565,21 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		return
 	}
 
-	logger.Ctx(ctx).Debug("file synced to disk successfully")
+	logger.Ctx(ctx).Debug("file synced to disk successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
+		zap.Int64("firstEntryId", task.firstEntryId),
+		zap.Int64("lastEntryId", task.lastEntryId))
 
 	// Create index record for this block
+	actualDataSize := w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
-		BlockNumber:       task.blockNumber,
-		StartOffset:       blockStartOffset,
-		FirstRecordOffset: blockStartOffset,
-		FirstEntryID:      task.firstEntryId,
-		LastEntryID:       task.lastEntryId,
+		BlockNumber:  task.blockNumber,
+		StartOffset:  blockStartOffset,
+		BlockSize:    uint32(actualDataSize), // Size of this block including header and data
+		FirstEntryID: task.firstEntryId,
+		LastEntryID:  task.lastEntryId,
 	}
 
 	// Lock to protect blockIndexes from concurrent access
@@ -563,11 +594,17 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	w.lastEntryID.Store(task.lastEntryId)
 
 	logger.Ctx(ctx).Debug("block processing completed successfully",
+		zap.Int64("logId", w.logId),
+		zap.Int64("segId", w.segmentId),
 		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
+
+	// update metrics
+	metrics.WpFileFlushBytesWritten.WithLabelValues(w.logIdStr).Add(float64(actualDataSize))
+	metrics.WpFileFlushLatency.WithLabelValues(w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(task.entries)
@@ -662,18 +699,13 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	if !w.storageWritable.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrFileWriterAlreadyClosed
+		return entryId, werr.ErrStorageNotWritable
 	}
 
 	// Validate empty payload
 	if len(data) == 0 {
 		logger.Ctx(ctx).Warn("WriteDataAsync: attempting to write rejected, data cannot be empty", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
 		return entryId, werr.ErrEmptyPayload
-	}
-
-	if len(data) > codec.MaxRecordSize {
-		logger.Ctx(ctx).Warn("WriteDataAsync: attempting to write rejected, data size exceed Max Record Size", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.Int("MaxRecordSize", codec.MaxRecordSize), zap.String("inst", fmt.Sprintf("%p", w)))
-		return entryId, werr.ErrLogWriterRecordTooLarge
 	}
 
 	// Check for duplicates
@@ -790,6 +822,7 @@ func (w *LocalFileWriter) writeRecord(ctx context.Context, record codec.Record) 
 func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
+	startTime := time.Now()
 
 	if !w.finalized.CompareAndSwap(false, true) {
 		// if already finalized, return fast
@@ -840,6 +873,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	footer := &codec.FooterRecord{
 		TotalBlocks:  int32(blockIndexesLen),
 		TotalRecords: uint32(blockIndexesLen),  // Simplified - each block is one record for index
+		TotalSize:    uint64(w.writtenBytes),   // Total size of the file
 		IndexOffset:  uint64(indexStartOffset), // Will be calculated by the codec
 		IndexLength:  indexLength,              // Will be calculated by the codec
 		Version:      codec.FormatVersion,
@@ -855,6 +889,8 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "finalize", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized log file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.finalized.Store(true)
 	return w.lastEntryID.Load(), nil
@@ -874,6 +910,7 @@ func (w *LocalFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 func (w *LocalFileWriter) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Close")
 	defer sp.End()
+	startTime := time.Now()
 	if !w.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
@@ -912,6 +949,9 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Error(err))
 	}
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "close", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	return nil
 }
 
@@ -919,6 +959,7 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Fence")
 	defer sp.End()
+	startTime := time.Now()
 
 	// If already fenced, return idempotently
 	if w.fenced.Load() {
@@ -971,6 +1012,9 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
+
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "fence", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return lastEntryId, nil
 }
@@ -1043,6 +1087,7 @@ func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) err
 func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, file *os.File, footerRecord *codec.FooterRecord) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFooter")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Info("Recovering blocks from footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int64("logId", w.logId),
@@ -1109,7 +1154,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 			zap.Int64("lastEntryID", indexRecord.LastEntryID))
 
 		// Move to next record (header + IndexRecord payload size)
-		recordSize := codec.RecordHeaderSize + 36 // IndexRecord payload size is 36 bytes
+		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		offset += recordSize
 	}
 
@@ -1145,6 +1190,9 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 		zap.Int64("firstEntryID", w.firstEntryID.Load()),
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
 
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "recover_footer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
 	w.recovered.Store(true)
 	return nil
 }
@@ -1153,6 +1201,7 @@ func (w *LocalFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fil
 func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, file *os.File) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "recoverBlocksFromFullScan")
 	defer sp.End()
+	startTime := time.Now()
 	// Read the entire file content
 	data := make([]byte, w.writtenBytes)
 	_, err := file.ReadAt(data, 0)
@@ -1224,11 +1273,11 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 			if inBlock {
 				// Create index record for the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       int32(currentBlockNumber),
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: currentBlockStart,
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  int32(currentBlockNumber),
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(int64(offset) - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				w.blockIndexes = append(w.blockIndexes, indexRecord)
 				currentBlockNumber++
@@ -1251,11 +1300,11 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 	// Handle the last block if we were still in one
 	if inBlock {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       int32(currentBlockNumber),
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: currentBlockStart,
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  int32(currentBlockNumber),
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(offset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		w.blockIndexes = append(w.blockIndexes, indexRecord)
 		currentBlockNumber++
@@ -1273,6 +1322,10 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 		w.lastEntryID.Store(-1)
 		w.currentBlockNumber.Store(0)
 	}
+
+	// update metrics
+	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "recover_raw", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }

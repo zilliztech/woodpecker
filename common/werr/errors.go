@@ -131,6 +131,7 @@ const (
 	FileReaderCRCMismatch
 	FileReaderCloseFailed
 	FileReaderAlreadyClosed
+	FileEndOfFile
 	FileReaderNoBlockFound
 
 	// ---------------------------------------------
@@ -149,6 +150,7 @@ const (
 	MetadataUpdateSegmentError
 	MetadataUpdateQuorumError
 	MetadataCreateReaderError
+	MetadataRevisionInvalidError
 
 	// ---------------------------------------------
 	// Common/Utility Error Codes
@@ -288,23 +290,25 @@ var (
 	ErrFileReaderCloseFailed          = newWoodpeckerError("reader close failed", FileReaderCloseFailed, true)
 	ErrFileReaderNoBlockFound         = newWoodpeckerError("reader no block found", FileReaderNoBlockFound, false)
 	ErrFileReaderAlreadyClosed        = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
+	ErrFileReaderEndOfFile            = newWoodpeckerError("end of file", FileEndOfFile, false)
 
 	// ---------------------------------------------
 	// Metadata Layer Errors
 	// ---------------------------------------------
 
 	// Metadata operations
-	ErrMetadataInit          = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
-	ErrMetadataRead          = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
-	ErrMetadataWrite         = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
-	ErrMetadataEncode        = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
-	ErrMetadataDecode        = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
-	ErrMetadataCreateLog     = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
-	ErrMetadataCreateLogTxn  = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
-	ErrMetadataCreateSegment = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
-	ErrMetadataUpdateSegment = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
-	ErrMetadataUpdateQuorum  = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
-	ErrMetadataCreateReader  = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
+	ErrMetadataInit            = newWoodpeckerError("failed to initialize service metadata", MetadataInitError, true)
+	ErrMetadataRead            = newWoodpeckerError("failed to read metadata", MetadataReadError, true)
+	ErrMetadataWrite           = newWoodpeckerError("failed to write metadata", MetadataWriteError, true)
+	ErrMetadataEncode          = newWoodpeckerError("failed to encode metadata", MetadataEncodeError, false)
+	ErrMetadataDecode          = newWoodpeckerError("failed to decode metadata", MetadataDecodeError, false)
+	ErrMetadataCreateLog       = newWoodpeckerError("failed to create log metadata", MetadataCreateLogError, true)
+	ErrMetadataCreateLogTxn    = newWoodpeckerError("failed execute create log metadata txn", MetadataCreateLogTxnError, true)
+	ErrMetadataCreateSegment   = newWoodpeckerError("failed to create segment metadata", MetadataCreateSegmentError, true)
+	ErrMetadataUpdateSegment   = newWoodpeckerError("failed to update segment metadata", MetadataUpdateSegmentError, true)
+	ErrMetadataUpdateQuorum    = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
+	ErrMetadataCreateReader    = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
+	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", MetadataRevisionInvalidError, false)
 
 	// ---------------------------------------------
 	// Common/Utility Errors
@@ -369,6 +373,9 @@ func (e woodpeckerError) Unwrap() error {
 }
 
 func (e woodpeckerError) Is(err error) bool {
+	if err == nil {
+		return false
+	}
 	// First check if the error codes match
 	if target, ok := err.(woodpeckerError); ok {
 		return e.errCode == target.errCode

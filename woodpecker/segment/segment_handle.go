@@ -50,13 +50,15 @@ type SegmentHandle interface {
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
 	// ReadBatch num of entries from the segment
+	// Deprecated
 	ReadBatch(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
+	ReadBatchAdv(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
 	GetLastAddPushed(context.Context) (int64, error)
 	// GetMetadata of the segment
-	GetMetadata(context.Context) *proto.SegmentMetadata
+	GetMetadata(context.Context) *meta.SegmentMeta
 	// RefreshAndGetMetadata of the segment
 	RefreshAndGetMetadata(context.Context) error
 	// GetQuorumInfo of the segment if it's a active segment
@@ -71,8 +73,6 @@ type SegmentHandle interface {
 	SendAppendErrorCallbacks(context.Context, int64, error)
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
-	// RequestCompactionAsync request compaction for the segment asynchronously
-	RequestCompactionAsync(context.Context) error
 	// Complete the segment writing
 	Complete(context.Context) (int64, error)
 	// Fence the segment in all nodes
@@ -85,14 +85,16 @@ type SegmentHandle interface {
 	IsForceRollingReady(context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
 	GetLastAccessTime() int64
+	// SetWriterInvalidationNotifier set the expired trigger
+	SetWriterInvalidationNotifier(context.Context, func(ctx context.Context, reason string))
 }
 
-func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
+func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
 		logId:          logId,
 		logName:        logName,
-		segmentId:      segmentMeta.SegNo,
+		segmentId:      segmentMeta.Metadata.SegNo,
 		metadata:       metadata,
 		ClientPool:     clientPool,
 		appendOpsQueue: list.New(),
@@ -108,9 +110,9 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
 		cfg:      cfg,
 	}
-	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
-	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
-	segmentHandle.commitedSize.Store(segmentMeta.Size)
+	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
+	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
+	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
 	segmentHandle.submittedSize.Store(0)
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
@@ -123,17 +125,17 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 }
 
 // NewSegmentHandleWithAppendOpsQueue TODO TestOnly
-func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List) SegmentHandle {
+func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List) SegmentHandle {
 	return NewSegmentHandleWithAppendOpsQueueWithWritable(ctx, logId, logName, segmentMeta, metadata, clientPool, cfg, testAppendOpsQueue, false)
 }
 
 // NewSegmentHandleWithAppendOpsQueue TODO TestOnly
-func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *proto.SegmentMetadata, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
+func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
 		logId:          logId,
 		logName:        logName,
-		segmentId:      segmentMeta.SegNo,
+		segmentId:      segmentMeta.Metadata.SegNo,
 		metadata:       metadata,
 		ClientPool:     clientPool,
 		appendOpsQueue: testAppendOpsQueue,
@@ -149,9 +151,9 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
 		cfg:      cfg,
 	}
-	segmentHandle.lastPushed.Store(segmentMeta.LastEntryId)
-	segmentHandle.lastAddConfirmed.Store(segmentMeta.LastEntryId)
-	segmentHandle.commitedSize.Store(segmentMeta.Size)
+	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
+	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
+	segmentHandle.commitedSize.Store(segmentMeta.Metadata.Size)
 	segmentHandle.submittedSize.Store(0)
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
@@ -167,7 +169,7 @@ type segmentHandleImpl struct {
 	logId            int64
 	logName          string
 	segmentId        int64
-	segmentMetaCache atomic.Pointer[proto.SegmentMetadata]
+	segmentMetaCache atomic.Pointer[meta.SegmentMeta]
 	metadata         meta.MetadataProvider
 	ClientPool       client.LogStoreClientPool
 	quorumInfo       *proto.QuorumInfo
@@ -180,13 +182,14 @@ type segmentHandleImpl struct {
 	commitedSize     atomic.Int64
 	submittedSize    atomic.Int64
 
-	fencedState   atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
-	canWriteState atomic.Bool
-	rollingState  atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
+	fencedState    atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
+	canWriteState  atomic.Bool
+	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
+	expiredTrigger func(ctx context.Context, reason string)
 
 	executor *SequentialExecutor
 
-	doingRecoveryOrCompact atomic.Bool
+	doingCompact atomic.Bool
 
 	lastAccessTime atomic.Int64
 }
@@ -219,8 +222,8 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	currentSegmentMeta := s.segmentMetaCache.Load()
 
 	// Check segment state
-	if currentSegmentMeta.State != proto.SegmentState_Active {
-		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentHandleSegmentStateInvalid)
+	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
+		callback(currentSegmentMeta.Metadata.SegNo, -1, werr.ErrSegmentHandleSegmentStateInvalid)
 		return
 	}
 
@@ -239,7 +242,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 	// Try to submit first, only add to queue if successful
 	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
-		callback(currentSegmentMeta.SegNo, -1, werr.ErrSegmentHandleSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
+		callback(currentSegmentMeta.Metadata.SegNo, -1, werr.ErrSegmentHandleSegmentClosed.WithCauseErrMsg("submit append failed, segment closed"))
 		return
 	}
 
@@ -438,16 +441,41 @@ func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, maxSize i
 		return nil, err
 	}
 
-	if maxSize != -1 {
-		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("support maxSize=-1 as auto batch size currently")
-	}
-
 	segmentEntryList, err := cli.ReadEntriesBatch(ctx, s.logId, s.segmentId, from, maxSize)
 	if err != nil {
 		return nil, err
 	}
 	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize), zap.Int("count", len(segmentEntryList)))
 	return segmentEntryList, nil
+}
+
+func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
+	defer sp.End()
+	s.updateAccessTime()
+	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize))
+	// write data to quorum
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO support quorum read, and read state for each
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
+	}
+
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxSize, lastReadState)
+	if err != nil {
+		return nil, err
+	}
+	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize), zap.Int("count", len(batchResult.Entries)))
+	return batchResult, nil
 }
 
 // GetLastAddConfirmed call by reader
@@ -457,7 +485,7 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 	s.updateAccessTime()
 	currentSegmentMeta := s.segmentMetaCache.Load()
 	// should get from meta if seg completed, other wise get from data
-	if currentSegmentMeta.State != proto.SegmentState_Active {
+	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
 		return s.lastAddConfirmed.Load(), nil
 	}
 
@@ -478,7 +506,7 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
-	lac, err := cli.GetLastAddConfirmed(ctx, s.logId, currentSegmentMeta.SegNo)
+	lac, err := cli.GetLastAddConfirmed(ctx, s.logId, currentSegmentMeta.Metadata.SegNo)
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "get_lac", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lac, err
@@ -489,18 +517,22 @@ func (s *segmentHandleImpl) GetLastAddPushed(ctx context.Context) (int64, error)
 	return s.lastPushed.Load(), nil
 }
 
-func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *proto.SegmentMetadata {
+func (s *segmentHandleImpl) GetMetadata(ctx context.Context) *meta.SegmentMeta {
 	s.RLock()
 	defer s.RUnlock()
 	return s.segmentMetaCache.Load()
 }
 
 func (s *segmentHandleImpl) RefreshAndGetMetadata(ctx context.Context) error {
+	s.Lock()
+	defer s.Unlock()
+	return s.refreshAndGetMetadataUnsafe(ctx)
+}
+
+func (s *segmentHandleImpl) refreshAndGetMetadataUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RefreshAndGetMetadata")
 	defer sp.End()
 	s.updateAccessTime()
-	s.Lock()
-	defer s.Unlock()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	newMeta, err := s.metadata.GetSegmentMetadata(ctx, s.logName, s.segmentId)
@@ -527,7 +559,7 @@ func (s *segmentHandleImpl) GetQuorumInfo(ctx context.Context) (*proto.QuorumInf
 	if s.quorumInfo != nil {
 		return s.quorumInfo, nil
 	}
-	quorumId := s.segmentMetaCache.Load().GetQuorumId()
+	quorumId := s.segmentMetaCache.Load().Metadata.GetQuorumId()
 	if quorumId <= 0 {
 		s.quorumInfo = &proto.QuorumInfo{
 			Id: 0,
@@ -558,6 +590,67 @@ func (s *segmentHandleImpl) ForceCompleteAndClose(ctx context.Context) error {
 	return s.doCompleteAndCloseUnsafe(ctx)
 }
 
+func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
+	defer sp.End()
+	s.updateAccessTime()
+	if !s.canWriteState.CompareAndSwap(true, false) {
+		return nil
+	}
+
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", s.logId)
+	// fast fail all pending append operations
+	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
+
+	// shutdown segment executor
+	s.executor.Stop(ctx)
+
+	// update metadata as completed
+	currentSegmentMeta := s.segmentMetaCache.Load()
+	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
+		// not active writable segmentHandle, just return
+		return nil
+	}
+
+	if lastFlushedEntryId == -1 {
+		// Segment metadata is updated immediately with an exact last flushed entry ID; otherwise, it is updated asynchronously by the auditor.
+		return nil
+	}
+
+	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
+	newSegmentMetadata.State = proto.SegmentState_Completed
+	newSegmentMetadata.Size = s.commitedSize.Load() // Update with approximate segment file size, only use for metrics
+	newSegmentMetadata.LastEntryId = lastFlushedEntryId
+	newSegmentMetadata.CompletionTime = time.Now().UnixMilli()
+	newSegMeta := &meta.SegmentMeta{
+		Metadata: newSegmentMetadata,
+		Revision: currentSegmentMeta.Revision,
+	}
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	if err != nil && werr.ErrMetadataRevisionInvalid.Is(err) {
+		// metadata revision is invalid or outdated, some one updated it, trigger fence this segmentHandle to let client reopen new writer
+		// new append will fail with ErrSegmentFenced, and application client should reopen new logWriter instead.
+		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d meta update revision invalid", s.segmentId))
+		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return err
+	}
+
+	if err != nil {
+		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
+	} else {
+		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime))
+		s.segmentMetaCache.Store(newSegMeta)
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "success").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
+	}
+	return err
+}
+
 func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error {
 	var lastError error
 	// complete this segment and close
@@ -570,6 +663,7 @@ func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error 
 			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
 		lastError = err
+		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed", s.segmentId))
 	}
 	err = s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
 	if err != nil {
@@ -589,52 +683,6 @@ func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error 
 		s.canWriteState.Store(false)
 	}
 	return lastError
-}
-
-func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
-	defer sp.End()
-	s.updateAccessTime()
-	if !s.canWriteState.CompareAndSwap(true, false) {
-		return nil
-	}
-
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
-	// fast fail all pending append operations
-	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
-
-	// shutdown segment executor
-	s.executor.Stop(ctx)
-
-	// update metadata as completed
-	currentSegmentMeta := s.segmentMetaCache.Load()
-	if currentSegmentMeta.State != proto.SegmentState_Active {
-		// not active writable segmentHandle, just return
-		return nil
-	}
-
-	if lastFlushedEntryId == -1 {
-		// Segment metadata is updated immediately with an exact last flushed entry ID; otherwise, it is updated asynchronously by the auditor.
-		return nil
-	}
-
-	newSegmentMeta := currentSegmentMeta.CloneVT()
-	newSegmentMeta.State = proto.SegmentState_Completed
-	newSegmentMeta.Size = s.commitedSize.Load() // Update with approximate segment file size, only use for metrics
-	newSegmentMeta.LastEntryId = lastFlushedEntryId
-	newSegmentMeta.CompletionTime = time.Now().UnixMilli()
-	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
-	if err != nil {
-		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMeta.CompletionTime), zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "error").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
-	} else {
-		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMeta.CompletionTime))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
-	}
-	return err
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
@@ -674,38 +722,6 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 // GetSize returns the size of the segment
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
 	return s.submittedSize.Load() + s.commitedSize.Load()
-}
-
-func (s *segmentHandleImpl) RequestCompactionAsync(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "RequestCompactionAsync")
-	defer sp.End()
-	s.updateAccessTime()
-	// select one node to compact segment asynchronously
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return err
-	}
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	_, err = s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return err
-	}
-
-	// TODO should maintain a async compactions queue
-	if s.doingRecoveryOrCompact.Load() {
-		logger.Ctx(ctx).Debug("segment is doing recovery or compact, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		return nil
-	}
-
-	go func() {
-		compactErr := s.compactToSealed(ctx)
-		if compactErr != nil {
-			logger.Ctx(ctx).Warn("segment compaction failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(compactErr))
-		}
-	}()
-	return nil
 }
 
 func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
@@ -839,30 +855,66 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Info("segment fence fail", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(fencedErr))
 		return -1, fencedErr
-	} else {
-		if lastEntryId != -1 && s.lastAddConfirmed.Load() < lastEntryId {
-			logger.Ctx(ctx).Info("Updating last add confirmed from fence result",
-				zap.String("logName", s.logName),
-				zap.Int64("logId", s.logId),
-				zap.Int64("segmentId", s.segmentId),
-				zap.Int64("previousLastAddConfirmed", s.lastAddConfirmed.Load()),
-				zap.Int64("newLastAddConfirmed", lastEntryId))
-			s.lastAddConfirmed.Store(lastEntryId)
-		}
-		// Use the actual lastEntryId returned from FenceSegment, even in error cases
-		// because these "errors" indicate the segment was already fenced, not a failure
-		s.fastFailAppendOpsUnsafe(ctx, lastEntryId, werr.ErrSegmentFenced)
-		logger.Ctx(ctx).Info("Segment fence completed successfully",
+	}
+
+	// update segment state and meta
+	currentMeta := s.segmentMetaCache.Load()
+	newSegmentMetadata := currentMeta.Metadata.CloneVT()
+	newSegmentMetadata.LastEntryId = lastEntryId
+	newSegmentMetadata.State = proto.SegmentState_Completed
+	newSegmentMetadata.CompletionTime = time.Now().UnixMilli()
+	newSegMeta := &meta.SegmentMeta{
+		Metadata: newSegmentMetadata,
+		Revision: currentMeta.Revision,
+	}
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	if updateMetaErr != nil {
+		logger.Ctx(ctx).Warn("Failed to update segment metadata after fence",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
-			zap.Int64("lastEntryId", lastEntryId),
-			zap.Duration("duration", time.Since(start)))
-		s.fencedState.Store(true) // Set fenced state to prevent new append operations
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
-		return lastEntryId, nil
+			zap.Error(updateMetaErr))
+		return -1, updateMetaErr
+	} else {
+		logger.Ctx(ctx).Info("Successfully updated segment metadata after fence",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
 	}
+
+	logger.Ctx(ctx).Info("finish fence segment to completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", lastEntryId))
+	// update segmentHandle meta cache
+	refreshErr := s.refreshAndGetMetadataUnsafe(ctx)
+	if refreshErr != nil {
+		logger.Ctx(ctx).Warn("Failed to refresh segment metadata cache after compaction",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(refreshErr))
+	}
+
+	if lastEntryId != -1 && s.lastAddConfirmed.Load() < lastEntryId {
+		logger.Ctx(ctx).Info("Updating last add confirmed from fence result",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("previousLastAddConfirmed", s.lastAddConfirmed.Load()),
+			zap.Int64("newLastAddConfirmed", lastEntryId))
+		s.lastAddConfirmed.Store(lastEntryId)
+	}
+	// Use the actual lastEntryId returned from FenceSegment, even in error cases
+	// because these "errors" indicate the segment was already fenced, not a failure
+	s.fastFailAppendOpsUnsafe(ctx, lastEntryId, werr.ErrSegmentFenced)
+	logger.Ctx(ctx).Info("Segment fence completed successfully",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lastEntryId", lastEntryId),
+		zap.Duration("duration", time.Since(start)))
+	s.fencedState.Store(true) // Set fenced state to prevent new append operations
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return lastEntryId, nil
 }
 
 // Compact used for the auditor of this Log
@@ -870,11 +922,24 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Compact")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Info("Starting segment recovery or compact operation",
+	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
+		logger.Ctx(ctx).Info("Local storage detected, skipping compaction (not yet implemented)",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId))
+		// TODO: currently local fs no need to compact due to it is already a single file.
+		// If local backend support compaction in the future, it may be necessary to use a last flushed entry id for safe compaction,
+		// because in local fs mode, data might be written but the flush could fail,
+		// while the system might have fsync it to disk. This data is beyond the business's flush entry id.
+		return nil
+	}
+
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", s.logId)
+	logger.Ctx(ctx).Info("Starting segment compaction from Completed to Sealed",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId))
-
 	err := s.RefreshAndGetMetadata(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to refresh segment metadata",
@@ -885,69 +950,19 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		return err
 	}
 	currentSegmentMeta := s.GetMetadata(ctx)
-
-	logger.Ctx(ctx).Info("Segment metadata refreshed, determining operation type",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segmentId", s.segmentId),
-		zap.String("currentState", currentSegmentMeta.State.String()),
-		zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId),
-		zap.Int64("size", currentSegmentMeta.Size))
-
-	if currentSegmentMeta.State == proto.SegmentState_Completed {
-		logger.Ctx(ctx).Info("Segment is in Completed state, starting compaction operation",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId))
-		return s.compactToSealed(ctx)
-	}
-
-	logger.Ctx(ctx).Info("Segment state does not require maintenance",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segmentId", s.segmentId),
-		zap.String("currentState", currentSegmentMeta.State.String()))
-	return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("no need to maintain the segment in state:%s , logName:%s logId:%d, segId:%d", currentSegmentMeta.State, s.logName, s.logId, currentSegmentMeta.SegNo))
-}
-
-// TODO: It may be necessary to use a last flushed entry id for safe compaction,
-// because in local fs mode, data might be written but the flush could fail,
-// while the system might have fsynced it to disk.
-// This data is beyond the business's flush entry id.
-func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "compactToSealed")
-	defer sp.End()
-	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
-
-	logger.Ctx(ctx).Info("Starting segment compaction from Completed to Sealed",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segmentId", s.segmentId))
-
-	if s.cfg.Woodpecker.Storage.IsStorageLocal() {
-		logger.Ctx(ctx).Info("Local storage detected, skipping compaction (not yet implemented)",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId))
-		// TODO: Add support for local storage compact once implemented merge/compact function, skip currently
-		return nil
-	}
-	currentSegmentMeta := s.GetMetadata(ctx)
-
 	logger.Ctx(ctx).Info("Validating segment state for compaction",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.String("currentState", currentSegmentMeta.State.String()),
-		zap.Int64("currentLastEntryId", currentSegmentMeta.LastEntryId),
-		zap.Int64("currentSize", currentSegmentMeta.Size))
+		zap.String("currentState", currentSegmentMeta.Metadata.State.String()),
+		zap.Int64("currentLastEntryId", currentSegmentMeta.Metadata.LastEntryId),
+		zap.Int64("currentSize", currentSegmentMeta.Metadata.Size))
 
-	if currentSegmentMeta.State != proto.SegmentState_Completed {
+	if currentSegmentMeta.Metadata.State != proto.SegmentState_Completed {
 		logger.Ctx(ctx).Info("segment is not in completed state, compaction skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		return werr.ErrSegmentHandleSegmentStateInvalid.WithCauseErrMsg(fmt.Sprintf("segment state is not in completed. logId:%s, segId:%d", s.logName, s.segmentId))
 	}
-	if !s.doingRecoveryOrCompact.CompareAndSwap(false, true) {
+	if !s.doingCompact.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Info("Recovery or compact operation already in progress, skipping compaction",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -955,7 +970,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		return nil
 	}
 	defer func() {
-		s.doingRecoveryOrCompact.Store(false)
+		s.doingCompact.Store(false)
 		logger.Ctx(ctx).Info("Compaction operation completed, released operation lock",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -993,7 +1008,7 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		return err
 	}
 	// wait compaction success
-	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.LastEntryId))
+	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.Metadata.LastEntryId))
 	compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
 	if compactErr != nil {
 		logger.Ctx(ctx).Warn("Segment compaction operation failed",
@@ -1015,11 +1030,15 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 		zap.Int64("completionTime", compactSegMetaInfo.SealedTime))
 
 	// update segment state and meta
-	newSegmentMeta := currentSegmentMeta.CloneVT()
-	newSegmentMeta.State = proto.SegmentState_Sealed
-	newSegmentMeta.SealedTime = compactSegMetaInfo.CompletionTime
-	newSegmentMeta.Size = compactSegMetaInfo.Size
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegmentMeta)
+	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
+	newSegmentMetadata.State = proto.SegmentState_Sealed
+	newSegmentMetadata.SealedTime = compactSegMetaInfo.CompletionTime
+	newSegmentMetadata.Size = compactSegMetaInfo.Size
+	newSegMeta := &meta.SegmentMeta{
+		Metadata: newSegmentMetadata,
+		Revision: currentSegmentMeta.Revision,
+	}
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after compaction",
 			zap.String("logName", s.logName),
@@ -1063,7 +1082,17 @@ func (s *segmentHandleImpl) compactToSealed(ctx context.Context) error {
 func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 	s.Lock()
 	defer s.Unlock()
+	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
+	if s.appendOpsQueue.Len() > 0 {
+		logger.Ctx(ctx).Warn("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
+		return
+	}
+	// trigger immediately
+	err := s.doCompleteAndCloseUnsafe(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to complete segment after setting to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Error(err))
+	}
 }
 
 // IsForceRollingReady check if the segment is ready for rolling
@@ -1079,4 +1108,14 @@ func (s *segmentHandleImpl) updateAccessTime() {
 
 func (s *segmentHandleImpl) GetLastAccessTime() int64 {
 	return s.lastAccessTime.Load()
+}
+
+func (s *segmentHandleImpl) SetWriterInvalidationNotifier(ctx context.Context, f func(ctx context.Context, reason string)) {
+	s.expiredTrigger = f
+}
+
+func (s *segmentHandleImpl) NotifyWriterInvalidation(ctx context.Context, reason string) {
+	if s.expiredTrigger != nil {
+		s.expiredTrigger(ctx, reason)
+	}
 }

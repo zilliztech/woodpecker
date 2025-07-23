@@ -60,6 +60,8 @@ func TestAll(t *testing.T) {
 	t.Run("test delete segment cleanup status", testDeleteSegmentCleanupStatus)
 	t.Run("test non existent segment cleanup status", testNonExistentStatus)
 	t.Run("test empty list for non existent log", testEmptyListForNonExistentLog)
+	t.Run("test update log meta with wrong revision", testUpdateLogMetaWithWrongRevision)
+	t.Run("test update segment meta with wrong revision", testUpdateSegmentMetaWithWrongRevision)
 }
 
 func testInitIfNecessary(t *testing.T) {
@@ -160,7 +162,7 @@ func testCreateLogAndOpen(t *testing.T) {
 		// check LogMeta content
 		assert.Equal(t, int64(1), logMeta.LogId, "Unexpected LogId")
 		assert.Equal(t, int64(60), logMeta.MaxSegmentRollTimeSeconds, "Unexpected MaxSegmentRollTimeSeconds")
-		assert.Equal(t, int64(1024*1024*1024), logMeta.MaxSegmentRollSizeBytes, "Unexpected MaxSegmentRollSizeBytes")
+		assert.Equal(t, int64(256*1024*1024), logMeta.MaxSegmentRollSizeBytes, "Unexpected MaxSegmentRollSizeBytes")
 		assert.Equal(t, int64(128*1024*1024), logMeta.CompactionBufferSizeBytes, "Unexpected CompactionBufferSizeBytes")
 		assert.Equal(t, int64(600), logMeta.MaxCompactionFileCount, "Unexpected MaxCompactionFileCount")
 		assert.Greater(t, logMeta.CreationTimestamp, uint64(0), "Unexpected CreationTimestamp")
@@ -177,10 +179,10 @@ func testCreateLogAndOpen(t *testing.T) {
 	{
 		logMeta, segMetas, err := provider.OpenLog(context.Background(), logName)
 		assert.NoError(t, err)
-		assert.Equal(t, int64(1), logMeta.LogId, "Unexpected LogId")
-		assert.Equal(t, int64(60), logMeta.MaxSegmentRollTimeSeconds, "Unexpected MaxSegmentRollTimeSeconds")
-		assert.Equal(t, int64(1024*1024*1024), logMeta.MaxSegmentRollSizeBytes, "Unexpected MaxSegmentRollSizeBytes")
-		assert.Equal(t, int64(128*1024*1024), logMeta.CompactionBufferSizeBytes, "Unexpected CompactionBufferSizeBytes")
+		assert.Equal(t, int64(1), logMeta.Metadata.LogId, "Unexpected LogId")
+		assert.Equal(t, int64(60), logMeta.Metadata.MaxSegmentRollTimeSeconds, "Unexpected MaxSegmentRollTimeSeconds")
+		assert.Equal(t, int64(256*1024*1024), logMeta.Metadata.MaxSegmentRollSizeBytes, "Unexpected MaxSegmentRollSizeBytes")
+		assert.Equal(t, int64(128*1024*1024), logMeta.Metadata.CompactionBufferSizeBytes, "Unexpected CompactionBufferSizeBytes")
 		assert.NotNil(t, segMetas, "Unexpected nil segMetas")
 		assert.Equal(t, 0, len(segMetas), "Unexpected segMetas length")
 	}
@@ -320,8 +322,10 @@ func testStoreSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// store segment meta
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo: 1,
+	segmentMeta := &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+		},
 	}
 	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, storeErr)
@@ -331,7 +335,7 @@ func testStoreSegmentMeta(t *testing.T) {
 		getSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
-		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
+		assert.Equal(t, segmentMeta.Metadata.SegNo, getSegmentMeta.Metadata.SegNo)
 	}
 
 	// test get all segmentMetas of the log
@@ -339,7 +343,7 @@ func testStoreSegmentMeta(t *testing.T) {
 		segmentMetaList, listErr := provider.GetAllSegmentMetadata(context.Background(), logName)
 		assert.NoError(t, listErr)
 		assert.Equal(t, 1, len(segmentMetaList))
-		assert.Equal(t, segmentMeta.SegNo, segmentMetaList[segmentMeta.SegNo].SegNo)
+		assert.Equal(t, segmentMeta.Metadata.SegNo, segmentMetaList[segmentMeta.Metadata.SegNo].Metadata.SegNo)
 	}
 }
 
@@ -361,9 +365,11 @@ func testUpdateSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// test store
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo: 1,
-		State: proto.SegmentState_Active,
+	segmentMeta := &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+			State: proto.SegmentState_Active,
+		},
 	}
 	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, storeErr)
@@ -372,20 +378,25 @@ func testUpdateSegmentMeta(t *testing.T) {
 		getSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
-		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
-		assert.Equal(t, segmentMeta.State, getSegmentMeta.State)
+		assert.Equal(t, segmentMeta.Metadata.SegNo, getSegmentMeta.Metadata.SegNo)
+		assert.Equal(t, segmentMeta.Metadata.State, getSegmentMeta.Metadata.State)
 	}
 
 	// test update
-	segmentMeta.State = proto.SegmentState_Sealed
-	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, segmentMeta)
+	// Get the current segment meta to get the revision
+	currentSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
+	assert.NoError(t, getErr)
+
+	// Update the state and use the current revision
+	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
+	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
 	assert.NoError(t, updateErr)
 	{
 		getSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
 		assert.NoError(t, getErr)
 		assert.NotNil(t, getSegmentMeta)
-		assert.Equal(t, segmentMeta.SegNo, getSegmentMeta.SegNo)
-		assert.Equal(t, segmentMeta.State, getSegmentMeta.State)
+		assert.Equal(t, currentSegmentMeta.Metadata.SegNo, getSegmentMeta.Metadata.SegNo)
+		assert.Equal(t, currentSegmentMeta.Metadata.State, getSegmentMeta.Metadata.State)
 	}
 }
 
@@ -407,30 +418,32 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create segment metadata
-	segmentMeta := &proto.SegmentMetadata{
-		SegNo: 1,
-		State: proto.SegmentState_Active,
+	segmentMeta := &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+			State: proto.SegmentState_Active,
+		},
 	}
 
 	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
 	assert.NoError(t, storeErr)
 
 	// Verify segment exists
-	exists, err := provider.CheckSegmentExists(context.Background(), logName, segmentMeta.SegNo)
+	exists, err := provider.CheckSegmentExists(context.Background(), logName, segmentMeta.Metadata.SegNo)
 	assert.NoError(t, err)
 	assert.True(t, exists)
 
 	// Delete the segment
-	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, segmentMeta.SegNo)
+	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, segmentMeta.Metadata.SegNo)
 	assert.NoError(t, deleteErr)
 
 	// Verify segment no longer exists
-	exists, err = provider.CheckSegmentExists(context.Background(), logName, segmentMeta.SegNo)
+	exists, err = provider.CheckSegmentExists(context.Background(), logName, segmentMeta.Metadata.SegNo)
 	assert.NoError(t, err)
 	assert.False(t, exists)
 
 	// Attempt to get the deleted segment should result in error
-	_, getErr := provider.GetSegmentMetadata(context.Background(), logName, segmentMeta.SegNo)
+	_, getErr := provider.GetSegmentMetadata(context.Background(), logName, segmentMeta.Metadata.SegNo)
 	assert.Error(t, getErr)
 	assert.True(t, werr.ErrSegmentNotFound.Is(getErr))
 
@@ -516,15 +529,15 @@ func testUpdateLogMetaForTruncation(t *testing.T) {
 	// Get the initial log metadata
 	initialLogMeta, err := provider.GetLogMeta(context.Background(), logName)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(-1), initialLogMeta.TruncatedSegmentId)
-	assert.Equal(t, int64(-1), initialLogMeta.TruncatedEntryId)
+	assert.Equal(t, int64(-1), initialLogMeta.Metadata.TruncatedSegmentId)
+	assert.Equal(t, int64(-1), initialLogMeta.Metadata.TruncatedEntryId)
 
 	// Update truncation point
 	truncatedSegmentId := int64(5)
 	truncatedEntryId := int64(100)
-	initialLogMeta.TruncatedSegmentId = truncatedSegmentId
-	initialLogMeta.TruncatedEntryId = truncatedEntryId
-	initialLogMeta.ModificationTimestamp = uint64(time.Now().Unix())
+	initialLogMeta.Metadata.TruncatedSegmentId = truncatedSegmentId
+	initialLogMeta.Metadata.TruncatedEntryId = truncatedEntryId
+	initialLogMeta.Metadata.ModificationTimestamp = uint64(time.Now().Unix())
 
 	// Update the log metadata
 	err = provider.UpdateLogMeta(context.Background(), logName, initialLogMeta)
@@ -535,9 +548,9 @@ func testUpdateLogMetaForTruncation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify truncation point is updated
-	assert.Equal(t, truncatedSegmentId, updatedLogMeta.TruncatedSegmentId)
-	assert.Equal(t, truncatedEntryId, updatedLogMeta.TruncatedEntryId)
-	assert.GreaterOrEqual(t, updatedLogMeta.ModificationTimestamp, initialLogMeta.ModificationTimestamp)
+	assert.Equal(t, truncatedSegmentId, updatedLogMeta.Metadata.TruncatedSegmentId)
+	assert.Equal(t, truncatedEntryId, updatedLogMeta.Metadata.TruncatedEntryId)
+	assert.GreaterOrEqual(t, updatedLogMeta.Metadata.ModificationTimestamp, initialLogMeta.Metadata.ModificationTimestamp)
 }
 
 func testCreateReaderTempInfo(t *testing.T) {
@@ -571,11 +584,11 @@ func testCreateReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info - this will use the session's lease
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.LogId, segmentId, entryId)
+	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
 
 	// Verify the reader temp info was created
-	readerKey := BuildLogReaderTempInfoKey(logMeta.LogId, readerName)
+	readerKey := BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
 	resp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs), "Reader temp info should exist")
@@ -587,7 +600,7 @@ func testCreateReaderTempInfo(t *testing.T) {
 
 	// Verify the reader temp info content
 	assert.Equal(t, readerName, readerInfo.ReaderName)
-	assert.Equal(t, logMeta.LogId, readerInfo.LogId)
+	assert.Equal(t, logMeta.Metadata.LogId, readerInfo.LogId)
 	assert.Equal(t, segmentId, readerInfo.OpenSegmentId)
 	assert.Equal(t, entryId, readerInfo.OpenEntryId)
 	assert.Equal(t, segmentId, readerInfo.RecentReadSegmentId)
@@ -642,17 +655,17 @@ func testGetReaderTempInfo(t *testing.T) {
 	entryId := int64(42)
 
 	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.LogId, segmentId, entryId)
+	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, segmentId, entryId)
 	assert.NoError(t, err)
 
 	// Get the reader temp info
-	readerInfo, err := provider.GetReaderTempInfo(context.Background(), logMeta.LogId, readerName)
+	readerInfo, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
 	assert.NoError(t, err)
 	assert.NotNil(t, readerInfo)
 
 	// Verify reader temp info content
 	assert.Equal(t, readerName, readerInfo.ReaderName)
-	assert.Equal(t, logMeta.LogId, readerInfo.LogId)
+	assert.Equal(t, logMeta.Metadata.LogId, readerInfo.LogId)
 	assert.Equal(t, segmentId, readerInfo.OpenSegmentId)
 	assert.Equal(t, entryId, readerInfo.OpenEntryId)
 	assert.Equal(t, segmentId, readerInfo.RecentReadSegmentId)
@@ -662,7 +675,7 @@ func testGetReaderTempInfo(t *testing.T) {
 
 	// Test getting non-existent reader
 	nonExistentReaderName := "non-existent-reader"
-	_, err = provider.GetReaderTempInfo(context.Background(), logMeta.LogId, nonExistentReaderName)
+	_, err = provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, nonExistentReaderName)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reader temp info not found")
 }
@@ -695,11 +708,11 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	initialEntryId := int64(42)
 
 	// Create the reader temp info
-	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.LogId, initialSegmentId, initialEntryId)
+	err = provider.CreateReaderTempInfo(context.Background(), readerName, logMeta.Metadata.LogId, initialSegmentId, initialEntryId)
 	assert.NoError(t, err)
 
 	// Get the reader temp info
-	initialReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.LogId, readerName)
+	initialReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
 	assert.NoError(t, err)
 	assert.NotNil(t, initialReader)
 	assert.Equal(t, initialSegmentId, initialReader.RecentReadSegmentId)
@@ -710,11 +723,11 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	updatedEntryId := int64(10)
 
 	// Update reader temp info
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.LogId, readerName, updatedSegmentId, updatedEntryId)
+	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName, updatedSegmentId, updatedEntryId)
 	assert.NoError(t, err)
 
 	// Get the updated reader temp info
-	updatedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.LogId, readerName)
+	updatedReader, err := provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerName)
 	assert.NoError(t, err)
 	assert.NotNil(t, updatedReader)
 
@@ -728,7 +741,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	assert.Equal(t, initialEntryId, updatedReader.OpenEntryId)
 
 	// Test updating non-existent reader
-	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.LogId, "non-existent-reader", 1, 1)
+	err = provider.UpdateReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader", 1, 1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
@@ -738,7 +751,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	// Verify lease persistence (reader temporary info should still exist with a TTL)
-	readerKey := BuildLogReaderTempInfoKey(logMeta.LogId, readerName)
+	readerKey := BuildLogReaderTempInfoKey(logMeta.Metadata.LogId, readerName)
 	resp, err := etcdCli.Get(context.Background(), readerKey)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Kvs))
@@ -782,31 +795,31 @@ func testDeleteReaderTempInfo(t *testing.T) {
 
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.LogId, segmentIds[i], entryIds[i])
+		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
 	// Verify all readers exist
-	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, readerCount, len(readers))
 
 	// Test 1: Delete a specific reader
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.LogId, readerNames[1])
+	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[1])
 	assert.NoError(t, err)
 
 	// Verify reader was deleted
-	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, readerCount-1, len(readers))
 
 	// Try to get the deleted reader - should fail
-	_, err = provider.GetReaderTempInfo(context.Background(), logMeta.LogId, readerNames[1])
+	_, err = provider.GetReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[1])
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "reader temp info not found")
 
 	// Test 2: Delete non-existent reader - should not error
-	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.LogId, "non-existent-reader")
+	err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, "non-existent-reader")
 	assert.NoError(t, err)
 
 	// Test 3: Delete with incorrect logId - should not error but won't delete anything
@@ -814,20 +827,20 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify remaining reader still exists
-	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, readerCount-1, len(readers))
 
 	// Delete last readers
 	for i := 0; i < readerCount; i++ {
 		if i != 1 { // Skip the one we already deleted
-			err = provider.DeleteReaderTempInfo(context.Background(), logMeta.LogId, readerNames[i])
+			err = provider.DeleteReaderTempInfo(context.Background(), logMeta.Metadata.LogId, readerNames[i])
 			assert.NoError(t, err)
 		}
 	}
 
 	// Verify all readers are gone
-	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	readers, err = provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(readers))
 }
@@ -854,7 +867,7 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Initially there should be no readers
-	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	readers, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(readers))
 
@@ -866,12 +879,12 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 
 	for i := 0; i < readerCount; i++ {
 		readerNames[i] = fmt.Sprintf("test-reader-%d-%s", i, time.Now().Format("20060102150405"))
-		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.LogId, segmentIds[i], entryIds[i])
+		err = provider.CreateReaderTempInfo(context.Background(), readerNames[i], logMeta.Metadata.LogId, segmentIds[i], entryIds[i])
 		assert.NoError(t, err)
 	}
 
 	// Get all reader temp infos for the log
-	allReaders, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.LogId)
+	allReaders, err := provider.GetAllReaderTempInfoForLog(context.Background(), logMeta.Metadata.LogId)
 	assert.NoError(t, err)
 	assert.Equal(t, readerCount, len(allReaders))
 
@@ -890,7 +903,7 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 		}
 
 		// Verify reader info matches what we created
-		assert.Equal(t, logMeta.LogId, reader.LogId)
+		assert.Equal(t, logMeta.Metadata.LogId, reader.LogId)
 		assert.Equal(t, segmentIds[idx], reader.OpenSegmentId)
 		assert.Equal(t, entryIds[idx], reader.OpenEntryId)
 		assert.Equal(t, segmentIds[idx], reader.RecentReadSegmentId)
@@ -931,7 +944,7 @@ func setupSegmentCleanupTest(t *testing.T) (MetadataProvider, string, int64) {
 	logMeta, err := provider.GetLogMeta(context.Background(), logName)
 	assert.NoError(t, err)
 
-	return provider, logName, logMeta.LogId
+	return provider, logName, logMeta.Metadata.LogId
 }
 
 // Test creating segment cleanup status
@@ -1198,4 +1211,133 @@ func testEmptyListForNonExistentLog(t *testing.T) {
 	statuses, err := provider.ListSegmentCleanupStatus(context.Background(), nonExistentLogId)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(statuses))
+}
+
+// Test updating logMeta with wrong revision (optimistic lock failure)
+func testUpdateLogMetaWithWrongRevision(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	// Create a test log
+	logName := "wrong_revision_test_log_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Get the initial log metadata
+	initialLogMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), initialLogMeta.Metadata.TruncatedSegmentId)
+	assert.Equal(t, int64(-1), initialLogMeta.Metadata.TruncatedEntryId)
+
+	// Create a logMeta with wrong revision (using a different revision number)
+	wrongRevisionLogMeta := &LogMeta{
+		Metadata: &proto.LogMeta{
+			LogId:                     initialLogMeta.Metadata.LogId,
+			MaxSegmentRollTimeSeconds: initialLogMeta.Metadata.MaxSegmentRollTimeSeconds,
+			MaxSegmentRollSizeBytes:   initialLogMeta.Metadata.MaxSegmentRollSizeBytes,
+			CompactionBufferSizeBytes: initialLogMeta.Metadata.CompactionBufferSizeBytes,
+			MaxCompactionFileCount:    initialLogMeta.Metadata.MaxCompactionFileCount,
+			CreationTimestamp:         initialLogMeta.Metadata.CreationTimestamp,
+			ModificationTimestamp:     initialLogMeta.Metadata.ModificationTimestamp,
+			TruncatedSegmentId:        int64(100),
+			TruncatedEntryId:          int64(200),
+		},
+		Revision: initialLogMeta.Revision + 1, // Wrong revision
+	}
+
+	// Try to update with wrong revision - should fail
+	err = provider.UpdateLogMeta(context.Background(), logName, wrongRevisionLogMeta)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "log metadata revision is invalid or outdated")
+
+	// Verify the log metadata was not updated
+	unchangedLogMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), unchangedLogMeta.Metadata.TruncatedSegmentId)
+	assert.Equal(t, int64(-1), unchangedLogMeta.Metadata.TruncatedEntryId)
+
+	// Now try with correct revision - should succeed
+	initialLogMeta.Metadata.TruncatedSegmentId = int64(100)
+	initialLogMeta.Metadata.TruncatedEntryId = int64(200)
+	initialLogMeta.Metadata.ModificationTimestamp = uint64(time.Now().Unix())
+
+	err = provider.UpdateLogMeta(context.Background(), logName, initialLogMeta)
+	assert.NoError(t, err)
+
+	// Verify the update was successful
+	updatedLogMeta, err := provider.GetLogMeta(context.Background(), logName)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(100), updatedLogMeta.Metadata.TruncatedSegmentId)
+	assert.Equal(t, int64(200), updatedLogMeta.Metadata.TruncatedEntryId)
+}
+
+// Test updating segmentMeta with wrong revision (optimistic lock failure)
+func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, etcdCli)
+	_, err = etcdCli.Delete(context.Background(), ServicePrefix, clientv3.WithPrefix())
+	assert.NoError(t, err)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli)
+	err = provider.InitIfNecessary(context.Background())
+	assert.NoError(t, err)
+
+	logName := "wrong_revision_segment_test_log_" + time.Now().Format("20060102150405")
+	err = provider.CreateLog(context.Background(), logName)
+	assert.NoError(t, err)
+
+	// Create initial segment metadata
+	initialSegmentMeta := &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+			State: proto.SegmentState_Active,
+		},
+	}
+
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, initialSegmentMeta)
+	assert.NoError(t, storeErr)
+
+	// Get the current segment metadata to get the correct revision
+	currentSegmentMeta, err := provider.GetSegmentMetadata(context.Background(), logName, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentState_Active, currentSegmentMeta.Metadata.State)
+
+	// Create a segmentMeta with wrong revision
+	wrongRevisionSegmentMeta := &SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+			State: proto.SegmentState_Sealed,
+		},
+		Revision: currentSegmentMeta.Revision + 1, // Wrong revision
+	}
+
+	// Try to update with wrong revision - should fail
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, wrongRevisionSegmentMeta)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "segment metadata revision is invalid or outdated")
+
+	// Verify the segment metadata was not updated
+	unchangedSegmentMeta, err := provider.GetSegmentMetadata(context.Background(), logName, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentState_Active, unchangedSegmentMeta.Metadata.State)
+
+	// Now try with correct revision - should succeed
+	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
+	assert.NoError(t, err)
+
+	// Verify the update was successful
+	updatedSegmentMeta, err := provider.GetSegmentMetadata(context.Background(), logName, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, proto.SegmentState_Sealed, updatedSegmentMeta.Metadata.State)
 }

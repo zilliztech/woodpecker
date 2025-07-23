@@ -28,7 +28,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
@@ -65,7 +64,6 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -85,7 +83,6 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		FirstEntryId: startEntryId,
 	}
 	b.ExpectedNextEntryId.Store(startEntryId)
-	metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Set(float64(maxEntries))
 	return b
 }
 
@@ -118,7 +115,6 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 			b.ExpectedNextEntryId.Add(1)
 			bufferEntry := b.Entries[addedId-b.FirstEntryId]
 			b.SequentialReadyDataSize.Add(int64(len(bufferEntry.Data)))
-			metrics.WpWriteBufferSlotsTotal.WithLabelValues(b.logIdStr).Dec()
 		} else {
 			break
 		}
@@ -378,13 +374,15 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue))
+			zap.Int64("notifyValue", notifyValue),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	} else {
 		logger.Ctx(ctx).Debug("Notified pending entry directly with fail",
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("result", result))
+			zap.Int64("result", result),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	}
 	sendErr := notifyChan.SendResult(ctx, &channel.AppendResult{
 		SyncedId: notifyValue,
@@ -394,13 +392,14 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 		logger.Ctx(ctx).Warn("Send result to channel failed",
 			zap.Int64("entryId", entryId),
 			zap.Int64("notifyValue", notifyValue),
-			zap.Error(sendErr),
-		)
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)),
+			zap.Error(sendErr))
 	} else {
 		logger.Ctx(ctx).Debug("Notified pending entry finish",
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue))
+			zap.Int64("notifyValue", notifyValue),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	}
 }

@@ -19,6 +19,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/meta"
 	"testing"
 	"time"
 
@@ -56,10 +57,10 @@ func TestActiveSegmentRead(t *testing.T) {
 	// mock segmentHandle
 	mockSegmentHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockSegmentHandle.EXPECT().GetId(mock.Anything).Return(int64(0)) // segment#0
-	mockSegmentHandle.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // it is active, not completed
-	})
+	}, Revision: 1})
 	mockSegmentHandle.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	msg0 := &log.WriterMessage{
 		Payload:    []byte("test0"),
@@ -122,11 +123,11 @@ func TestSegmentInExceptionState(t *testing.T) {
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, 0).Return(true, nil)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(1)).Return(true, nil)
 	//mockMetadata.EXPECT().CheckSegmentExists(mock.Anything, mock.Anything, int64(2)).Return(false, nil)
-	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(1)).Return(&proto.SegmentMetadata{
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(1)).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		SegNo:      int64(1),
 		State:      proto.SegmentState_Active,
 		CreateTime: time.Now().UnixMilli(),
-	}, nil)
+	}, Revision: 1}, nil)
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, int64(2)).Return(nil, werr.ErrSegmentNotFound)
 	// mock logHandle
 	mockLogHandle := mocks_log_handle.NewLogHandle(t)
@@ -137,20 +138,20 @@ func TestSegmentInExceptionState(t *testing.T) {
 	// mock segmentHandle#0 , no entries
 	mockSegmentHandle := mocks_segment_handle.NewSegmentHandle(t)
 	mockSegmentHandle.EXPECT().GetId(mock.Anything).Return(int64(0)) // segment#0
-	mockSegmentHandle.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		SegNo:       int64(0),
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // it is active, not completed
-	})
+	}, Revision: 1})
 	mockSegmentHandle.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	mockSegmentHandle.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1) /*autoBatchSize*/).Return(nil, werr.ErrEntryNotFound)
 	// mock segmentHandle#1 , entries 0,1 in it
 	mockSegmentHandle1 := mocks_segment_handle.NewSegmentHandle(t)
-	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		SegNo:       int64(1),
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // it is active, not completed
-	})
+	}, Revision: 1})
 	mockSegmentHandle1.EXPECT().GetId(mock.Anything).Return(1)
 	msg0 := &log.WriterMessage{
 		Payload:    []byte("test0"),
@@ -235,10 +236,10 @@ func TestReadFromEarlyNotExistsPoint(t *testing.T) {
 	// mock segment #2 , entries 0,1 in it
 	mockSegmentHandle2 := mocks_segment_handle.NewSegmentHandle(t)
 	mockSegmentHandle2.EXPECT().GetId(mock.Anything).Return(int64(0)) // segment#0
-	mockSegmentHandle2.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle2.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // it is active, not completed
-	})
+	}, Revision: 1})
 	mockSegmentHandle2.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	msg0 := &log.WriterMessage{
 		Payload:    []byte("test0"),
@@ -313,10 +314,10 @@ func TestReadFromSeekPoint(t *testing.T) {
 	// mock segment #2
 	mockSegmentHandle2 := mocks_segment_handle.NewSegmentHandle(t)
 	mockSegmentHandle2.EXPECT().GetId(mock.Anything).Return(int64(0)) // segment#0
-	mockSegmentHandle2.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle2.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // it is active, not completed
-	})
+	}, Revision: 1})
 	mockSegmentHandle2.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	msg1 := &log.WriterMessage{
 		Payload:    []byte("test1"),
@@ -371,10 +372,10 @@ func TestReadFromLatestWhenLatestIsCompleted(t *testing.T) {
 
 	// mock segment #1, no data, state=completed
 	mockSegmentHandle1 := mocks_segment_handle.NewSegmentHandle(t)
-	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		State:       proto.SegmentState_Completed,
 		LastEntryId: int64(1), // completed, no data
-	})
+	}, Revision: 1})
 	mockLogHandle.EXPECT().GetExistsReadonlySegmentHandle(mock.Anything, int64(1)).Return(mockSegmentHandle1, nil)
 
 	// Test LogReader read latest should block
@@ -413,10 +414,10 @@ func TestReadFromLatestWhenLatestIsActive(t *testing.T) {
 
 	// mock segment #1, no data, state=completed
 	mockSegmentHandle1 := mocks_segment_handle.NewSegmentHandle(t)
-	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&proto.SegmentMetadata{
+	mockSegmentHandle1.EXPECT().GetMetadata(mock.Anything).Return(&meta.SegmentMeta{Metadata: &proto.SegmentMetadata{
 		State:       proto.SegmentState_Active,
 		LastEntryId: int64(-1), // active
-	})
+	}, Revision: 1})
 	mockSegmentHandle1.EXPECT().GetId(mock.Anything).Return(int64(1)) // segment#0
 	mockSegmentHandle1.EXPECT().RefreshAndGetMetadata(mock.Anything).Return(nil)
 	mockSegmentHandle1.EXPECT().ReadBatch(mock.Anything, int64(0) /*from*/, int64(-1)). /*autoBatchSize*/ Return(nil, werr.ErrEntryNotFound)

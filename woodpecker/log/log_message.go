@@ -115,7 +115,7 @@ func ValidateMsg(msg *WriterMessage) error {
 	}
 
 	if len(msg.Properties) == 0 && len(msg.Payload) == 0 {
-		return werr.ErrInvalidMessage.WithCauseErrMsg("can not set Properties and Payload both")
+		return werr.ErrInvalidMessage.WithCauseErrMsg("can not set Properties and Payload both empty")
 	}
 
 	return nil

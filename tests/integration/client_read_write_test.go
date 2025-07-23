@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -43,6 +44,7 @@ func minInt(a, b int) int {
 }
 
 func TestReadTheWrittenDataSequentially(t *testing.T) {
+	utils.StartGopsAgentWithPort(6060)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestReadTheWrittenDataSequentially")
 	testCases := []struct {
@@ -66,6 +68,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -985,7 +988,8 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 30 * 1000                // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 30 * 1000 // 60s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1022,12 +1026,14 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 
 			// Start the 10 concurrent write operations
 			for i := 0; i < numWriters; i++ {
+				entryId := i
 				go func(idx int) {
 					defer wg.Done()
 					// Slightly randomize when writes happen
 					time.Sleep(time.Duration(idx*30) * time.Millisecond)
 
 					// Synchronous write
+					t.Logf("Write %d entry start", idx)
 					result := logWriter.Write(context.Background(), &log.WriterMessage{
 						Payload: []byte(fmt.Sprintf("client close test message %d", idx)),
 						Properties: map[string]string{
@@ -1046,7 +1052,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 						t.Logf("Write %d succeeded: seg:%d entry:%d\n",
 							idx, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
 					}
-				}(i)
+				}(entryId)
 			}
 
 			// Wait a bit to let some writes start, then close the entire client
@@ -1201,7 +1207,8 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 30 * 1000                // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 30 * 1000 // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType

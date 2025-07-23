@@ -85,9 +85,9 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	log := logger.Ctx(ctx)
 	resp, err := e.client.Txn(ctx).If().Then(ops...).Commit()
 	if err != nil || !resp.Succeeded {
-		log.Error("init service metadata failed", zap.Error(err))
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		log.Warn("init service metadata failed", zap.Error(err))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	sp.AddEvent("GetServiceMetaCompleted", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
@@ -106,9 +106,9 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				}
 				data, encodeErr := pb.Marshal(v)
 				if encodeErr != nil {
-					log.Error("encode version failed", zap.Error(encodeErr))
 					metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
 					metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+					log.Warn("encode version failed", zap.Error(encodeErr))
 					return werr.ErrMetadataEncode.WithCauseErr(encodeErr)
 				}
 				initOps = append(initOps, clientv3.OpPut(keys[index], string(data)))
@@ -126,18 +126,18 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	} else if len(initOps) != len(keys) {
 		// cluster already initialized partially, but not all
 		err = werr.ErrMetadataInit.WithCauseErrMsg("some keys already exists")
-		log.Error("init operation failed, some keys already exists", zap.Error(err))
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		log.Warn("init operation failed, some keys already exists", zap.Error(err))
 		return err
 	}
 	// cluster not initialized, initialize it
 	initResp, initErr := e.client.Txn(ctx).If().Then(initOps...).Commit()
 	if initErr != nil || !initResp.Succeeded {
 		err = werr.ErrMetadataInit.WithCauseErr(initErr)
-		log.Error("init operation failed", zap.Error(err))
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("init_if_necessary", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		log.Warn("init operation failed", zap.Error(err))
 		return err
 	}
 	sp.AddEvent("InitServiceMetaCompleted", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
@@ -154,11 +154,13 @@ func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Versi
 	if getErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_version_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_version_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get version info failed", zap.Error(getErr))
 		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_version_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_version_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("version not found")
 		return nil, werr.ErrMetadataRead.WithCauseErrMsg("version not found")
 	}
 	expectedVersion := &proto.Version{}
@@ -166,6 +168,7 @@ func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Versi
 	if decodedErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_version_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_version_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("decode version info failed", zap.Error(decodedErr))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(decodedErr)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_version_info", "success").Inc()
@@ -188,12 +191,14 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get log id generator failed", zap.Error(err))
 		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 
 	if len(resp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("log id generator key not found", zap.String("key", LogIdGeneratorKey))
 		return werr.ErrMetadataCreateLog.WithCauseErrMsg(fmt.Sprintf("%s key not found", LogIdGeneratorKey))
 	}
 
@@ -203,11 +208,13 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("check log exists failed", zap.Error(err))
 		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	if exists {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("log already exists", zap.String("logName", logName))
 		return werr.ErrMetadataCreateLog.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 
@@ -217,14 +224,16 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("parse log id failed", zap.Error(err))
 		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	nextID := currentID + 1
 	logMeta := &proto.LogMeta{
-		LogId:                     int64(nextID),
+		LogId: int64(nextID),
+		// Reserved fields for log-level configuration
 		MaxSegmentRollTimeSeconds: 60,
-		MaxSegmentRollSizeBytes:   1024 * 1024 * 1024, // 1GB
-		CompactionBufferSizeBytes: 128 * 1024 * 1024,  // 128MB
+		MaxSegmentRollSizeBytes:   256 * 1024 * 1024, // 256MB
+		CompactionBufferSizeBytes: 128 * 1024 * 1024, // 128MB
 		MaxCompactionFileCount:    600,
 		CreationTimestamp:         uint64(time.Now().Unix()),
 		ModificationTimestamp:     uint64(time.Now().Unix()),
@@ -236,6 +245,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal log meta failed", zap.Error(err))
 		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 	// Start a transaction
@@ -255,12 +265,14 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("create log transaction failed", zap.Error(err))
 		return werr.ErrMetadataCreateLog.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("create log transaction failed due to idgen mismatch")
 		return werr.ErrMetadataCreateLog.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
 	}
 	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
@@ -278,7 +290,7 @@ func atoi(s string) (int, error) {
 	return value, nil
 }
 
-func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (*proto.LogMeta, error) {
+func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (*LogMeta, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetLogMeta")
 	defer sp.End()
 	startTime := time.Now()
@@ -288,33 +300,41 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get log meta failed", zap.Error(err))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("log not found", zap.String("logName", logName))
 		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
 	}
+	revision := logResp.Kvs[0].ModRevision
 	logMeta := &proto.LogMeta{}
 	if err = pb.Unmarshal(logResp.Kvs[0].Value, logMeta); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal log meta failed", zap.Error(err))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_log_meta", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_log_meta", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return logMeta, nil
+	return &LogMeta{
+		Metadata: logMeta,
+		Revision: revision,
+	}, nil
 }
 
-func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string, logMeta *proto.LogMeta) error {
+func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateLogMeta")
 	defer sp.End()
 	startTime := time.Now()
 	logKey := BuildLogKey(logName)
-	logMetaValue, err := pb.Marshal(logMeta)
+	logMetaValue, err := pb.Marshal(logMeta.Metadata)
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal log meta failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
@@ -324,7 +344,7 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 	// Update the log metadata if it exists
 	txnResp, err := txn.If(
 		// Ensure the log exists
-		clientv3.Compare(clientv3.CreateRevision(logKey), ">", 0),
+		clientv3.Compare(clientv3.ModRevision(logKey), "=", logMeta.Revision),
 	).Then(
 		// Update the log metadata
 		clientv3.OpPut(logKey, string(logMetaValue)),
@@ -333,13 +353,15 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("update log meta transaction failed", zap.Error(err))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("log not found: %s", logName))
+		logger.Ctx(ctx).Warn("log metadata revision is invalid or outdated", zap.String("logName", logName))
+		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg(fmt.Sprintf("log metadata revision is invalid or outdated: %s", logName))
 	}
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_log_meta", "success").Inc()
@@ -347,13 +369,13 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 	return nil
 }
 
-func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*proto.LogMeta, map[int64]*proto.SegmentMetadata, error) {
+func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*LogMeta, map[int64]*SegmentMeta, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "OpenLog")
 	defer sp.End()
 	startTime := time.Now()
 
 	// Get log meta for the path = logs/<logName>
-	logResp, err := e.GetLogMeta(ctx, logName)
+	logMeta, err := e.GetLogMeta(ctx, logName)
 	sp.AddEvent("GetLogMeta", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("open_log", "error").Inc()
@@ -370,10 +392,10 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*pr
 		return nil, nil, err
 	}
 
-	logger.Ctx(ctx).Info("log opened successfully", zap.String("logName", logName), zap.Int64("logId", logResp.LogId))
+	logger.Ctx(ctx).Info("log opened successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.Metadata.LogId))
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return logResp, segmentMetaList, nil
+	return logMeta, segmentMetaList, nil
 }
 
 func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) (bool, error) {
@@ -385,6 +407,7 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_exists", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("check_exists", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("check log exists failed", zap.Error(err))
 		return false, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_exists", "success").Inc()
@@ -419,6 +442,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("list_logs_with_prefix", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_logs_with_prefix", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("list logs with prefix failed", zap.Error(err))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(logResp.Kvs) == 0 {
@@ -432,6 +456,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 		if extractErr != nil {
 			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("list_logs_with_prefix", "error").Inc()
 			metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_logs_with_prefix", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("extract log name failed", zap.Error(extractErr))
 			return nil, werr.ErrMetadataRead.WithCauseErr(extractErr)
 		}
 		logs[logName] = 1
@@ -533,11 +558,9 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 		// First unlock the mutex
 		err := l.Unlock(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to unlock writer lock",
-				zap.String("logName", logName),
-				zap.Error(err))
 			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
 			metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
 			return err
 		}
 
@@ -545,11 +568,9 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
 			closeErr := session.Close()
 			if closeErr != nil {
-				logger.Ctx(ctx).Warn("Failed to close lock session",
-					zap.String("logName", logName),
-					zap.Error(closeErr))
 				metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
 				metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+				logger.Ctx(ctx).Warn("Failed to close lock session", zap.String("logName", logName), zap.Error(closeErr))
 			}
 		}
 
@@ -565,17 +586,18 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 	return nil
 }
 
-func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
-	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.GetSegNo()))
-	segmentMetadata, err := pb.Marshal(metadata)
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentMeta.Metadata.GetSegNo()))
+	segmentMetadata, err := pb.Marshal(segmentMeta.Metadata)
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 	// Start a transaction
@@ -593,32 +615,36 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("store segment metadata transaction failed", zap.Error(err))
 		return werr.ErrMetadataCreateSegment.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment metadata already exists", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
 		return werr.ErrMetadataCreateSegment.WithCauseErrMsg(
-			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, metadata.SegNo))
+			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
 	}
-
+	// update revision
+	segmentMeta.Revision = txnResp.Header.Revision
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
-func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, metadata *proto.SegmentMetadata) error {
+func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
-	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", metadata.SegNo))
-	segmentMetadata, err := pb.Marshal(metadata)
+	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentMeta.Metadata.GetSegNo()))
+	segmentMetadata, err := pb.Marshal(segmentMeta.Metadata)
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 	// Start a transaction
@@ -627,7 +653,7 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	// Update segmentKey if it exists
 	txnResp, err := txn.If(
 		// Ensure segmentKey exists
-		clientv3.Compare(clientv3.ModRevision(segmentKey), ">", 0), // TODO: check if this is correct
+		clientv3.Compare(clientv3.ModRevision(segmentKey), "=", segmentMeta.Revision),
 	).Then(
 		// Update segmentKey with segmentMetadata
 		clientv3.OpPut(segmentKey, string(segmentMetadata)),
@@ -636,21 +662,23 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("update segment metadata transaction failed", zap.Error(err))
 		return err
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return werr.ErrMetadataUpdateSegment.WithCauseErrMsg(
-			fmt.Sprintf("segment metadata not found for logName:%s segmentId:%d", logName, metadata.SegNo))
+		logger.Ctx(ctx).Warn("segment metadata revision is invalid or outdated", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
+		return werr.ErrMetadataRevisionInvalid.WithCauseErrMsg(
+			fmt.Sprintf("segment metadata revision is invalid or outdated for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
-func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*proto.SegmentMetadata, error) {
+func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*SegmentMeta, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
@@ -659,24 +687,31 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	if getErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get segment metadata failed", zap.Error(getErr))
 		return nil, getErr
 	}
 	if len(getResp.Kvs) == 0 {
+		logger.Ctx(ctx).Warn("segment meta not found", zap.String("logName", logName), zap.Int64("segmentId", segmentId))
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}
+	revision := getResp.Kvs[0].ModRevision
 	segmentMetadata := &proto.SegmentMetadata{}
 	if err := pb.Unmarshal(getResp.Kvs[0].Value, segmentMetadata); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal segment metadata failed", zap.Error(err))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return segmentMetadata, nil
+	return &SegmentMeta{
+		Metadata: segmentMetadata,
+		Revision: revision,
+	}, nil
 }
 
-func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*proto.SegmentMetadata, error) {
+func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logName string) (map[int64]*SegmentMeta, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetAllSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
@@ -685,10 +720,11 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	if getErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_all_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_all_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get all segment metadata failed", zap.Error(getErr))
 		return nil, getErr
 	}
 
-	segmentMetaMap := make(map[int64]*proto.SegmentMetadata)
+	segmentMetaMap := make(map[int64]*SegmentMeta)
 	if len(getResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_all_segment_metadata", "success").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_all_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -697,14 +733,19 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 
 	segIds := make([]int64, 0)
 	for _, kv := range getResp.Kvs {
-		segmentMeta := &proto.SegmentMetadata{}
-		if err := pb.Unmarshal(kv.Value, segmentMeta); err != nil {
+		metadata := &proto.SegmentMetadata{}
+		if err := pb.Unmarshal(kv.Value, metadata); err != nil {
 			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_all_segment_metadata", "error").Inc()
 			metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_all_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("unmarshal segment metadata failed", zap.Error(err))
 			return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 		}
-		segmentMetaMap[segmentMeta.SegNo] = segmentMeta
-		segIds = append(segIds, segmentMeta.SegNo)
+		segmentMeta := &SegmentMeta{
+			Metadata: metadata,
+			Revision: kv.ModRevision,
+		}
+		segmentMetaMap[metadata.SegNo] = segmentMeta
+		segIds = append(segIds, metadata.SegNo)
 	}
 	logger.Ctx(ctx).Debug("GetAllSegmentMetadata", zap.String("logName", logName), zap.Int("segmentCount", len(segmentMetaMap)), zap.Int64s("segmentIds", segIds))
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_all_segment_metadata", "success").Inc()
@@ -720,6 +761,7 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_segment_exists", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("check_segment_exists", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("check segment exists failed", zap.Error(err))
 		return false, err
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_segment_exists", "success").Inc()
@@ -756,12 +798,14 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("delete_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("delete_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("delete segment metadata transaction failed", zap.Error(err))
 		return werr.ErrMetadataWrite.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("delete_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("delete_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment not found for deletion", zap.String("logName", logName), zap.Int64("segmentId", segmentId))
 		return werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment not found for logName:%s segmentId:%d", logName, segmentId))
 	}
@@ -784,6 +828,7 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal quorum info failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
@@ -802,12 +847,14 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("store quorum info transaction failed", zap.Error(err))
 		return werr.ErrMetadataUpdateQuorum.WithCauseErr(err)
 	}
 
 	if !txnResp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("quorum info already exists", zap.Int64("quorumId", info.Id))
 		return werr.ErrMetadataUpdateQuorum.WithCauseErrMsg(
 			fmt.Sprintf("quorum info already exists for id:%d", info.Id))
 	}
@@ -826,11 +873,13 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	if getErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get quorum info failed", zap.Error(getErr))
 		return nil, werr.ErrMetadataEncode.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("quorum info not found", zap.Int64("quorumId", quorumId))
 		return nil, werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf("quorum info not found for id:%d", quorumId))
 	}
 
@@ -838,6 +887,7 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	if err := pb.Unmarshal(getResp.Kvs[0].Value, quorumInfo); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal quorum info failed", zap.Error(err))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "success").Inc()
@@ -870,6 +920,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
@@ -878,6 +929,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("grant lease failed", zap.Error(err))
 		return werr.ErrMetadataWrite.WithCauseErr(err)
 	}
 
@@ -886,6 +938,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("put reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataWrite.WithCauseErr(err)
 	}
 
@@ -915,6 +968,7 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get reader temp info failed", zap.Error(err))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 
@@ -922,6 +976,7 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 	if len(resp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("reader temp info not found", zap.Int64("logId", logId), zap.String("readerName", readerName))
 		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
 	}
 
@@ -930,6 +985,7 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 	if err := pb.Unmarshal(resp.Kvs[0].Value, readerInfo); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal reader temp info failed", zap.Error(err))
 		return nil, werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 
@@ -951,6 +1007,7 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_all_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_all_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get all reader temp info failed", zap.Error(err))
 		return nil, werr.ErrMetadataRead.WithCauseErr(err)
 	}
 
@@ -987,11 +1044,13 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataRead.WithCauseErr(err)
 	}
 	if len(resp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("reader temp info not found", zap.Int64("logId", logId), zap.String("readerName", readerName))
 		return werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("reader temp info not found for logId:%d readerName:%s", logId, readerName))
 	}
 
@@ -1000,6 +1059,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	if err := pb.Unmarshal(resp.Kvs[0].Value, readerInfo); err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataDecode.WithCauseErr(err)
 	}
 
@@ -1013,6 +1073,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
@@ -1030,6 +1091,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("update reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataWrite.WithCauseErr(err)
 	}
 
@@ -1057,6 +1119,7 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("delete_reader_temp_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("delete_reader_temp_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("delete reader temp info failed", zap.Error(err))
 		return werr.ErrMetadataWrite.WithCauseErr(err)
 	}
 
@@ -1126,6 +1189,7 @@ func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, s
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment cleanup status failed", zap.Error(err))
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
@@ -1140,12 +1204,14 @@ func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, s
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("create segment cleanup status transaction failed", zap.Error(err))
 		return fmt.Errorf("failed to create segment cleanup status: %w", err)
 	}
 
 	if !resp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment cleanup status already exists", zap.String("key", key))
 		return fmt.Errorf("segment cleanup status already exists: %s", key)
 	}
 
@@ -1164,6 +1230,7 @@ func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, s
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("marshal segment cleanup status failed", zap.Error(err))
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
@@ -1178,12 +1245,14 @@ func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, s
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("update segment cleanup status transaction failed", zap.Error(err))
 		return fmt.Errorf("failed to update segment cleanup status: %w", err)
 	}
 
 	if !resp.Succeeded {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("update_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("update_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("segment cleanup status does not exist", zap.String("key", key))
 		return fmt.Errorf("segment cleanup status does not exist: %s", key)
 	}
 
@@ -1203,6 +1272,7 @@ func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logI
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get segment cleanup status failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to get segment cleanup status: %w", err)
 	}
 
@@ -1217,6 +1287,7 @@ func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logI
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("unmarshal segment cleanup status failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
 	}
 
@@ -1236,6 +1307,7 @@ func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, l
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("delete_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("delete_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("delete segment cleanup status failed", zap.Error(err))
 		return fmt.Errorf("failed to delete segment cleanup status: %w", err)
 	}
 
@@ -1256,6 +1328,7 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("list_segment_cleanup_status", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("list segment cleanup statuses failed", zap.Error(err))
 		return nil, fmt.Errorf("failed to list segment cleanup statuses: %w", err)
 	}
 
@@ -1272,6 +1345,7 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 		if err != nil {
 			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("list_segment_cleanup_status", "error").Inc()
 			metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_segment_cleanup_status", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("unmarshal segment cleanup status failed", zap.Error(err))
 			return nil, fmt.Errorf("failed to unmarshal segment cleanup status: %w", err)
 		}
 		statuses = append(statuses, status)

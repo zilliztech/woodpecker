@@ -24,10 +24,12 @@ import (
 	"os"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -41,9 +43,11 @@ var (
 var _ storage.Reader = (*LocalFileReader)(nil)
 
 // LocalFileReader implements AbstractFileReader for local filesystem storage
+// Deprecated use LocalFileReaderAdv instead
 type LocalFileReader struct {
 	logId        int64
 	segId        int64
+	logIdStr     string // for metrics only
 	filePath     string
 	file         *os.File
 	size         int64
@@ -108,6 +112,7 @@ func NewLocalFileReader(ctx context.Context, baseDir string, logId int64, segId 
 	reader := &LocalFileReader{
 		logId:    logId,
 		segId:    segId,
+		logIdStr: fmt.Sprintf("%d", logId),
 		filePath: filePath,
 		file:     file,
 		size:     stat.Size(),
@@ -204,7 +209,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 	// Calculate where index records start
 	// Index records are located before the footer record
 	footerRecordSize := int64(codec.RecordHeaderSize + codec.FooterRecordSize)
-	indexRecordSize := int64(codec.RecordHeaderSize + 36) // IndexRecord payload size: BlockNumber(4) + StartOffset(8) + FirstRecordOffset(8) + FirstEntryID(8) + LastEntryID(8) = 36
+	indexRecordSize := int64(codec.RecordHeaderSize + codec.IndexRecordSize) // IndexRecord payload size
 	totalIndexSize := int64(r.footer.TotalBlocks) * indexRecordSize
 
 	indexStartOffset := r.size - footerRecordSize - totalIndexSize
@@ -220,11 +225,11 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 	offset := 0
 
 	for i := int32(0); i < r.footer.TotalBlocks; i++ {
-		if offset+codec.RecordHeaderSize+36 > len(indexData) {
+		if offset+codec.RecordHeaderSize+codec.IndexRecordSize > len(indexData) {
 			return fmt.Errorf("incomplete index record at offset %d", offset)
 		}
 
-		recordData := indexData[offset : offset+codec.RecordHeaderSize+36]
+		recordData := indexData[offset : offset+codec.RecordHeaderSize+codec.IndexRecordSize]
 		record, err := codec.DecodeRecord(recordData)
 		if err != nil {
 			return fmt.Errorf("decode index record %d: %w", i, err)
@@ -237,7 +242,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 		indexRecord := record.(*codec.IndexRecord)
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-		offset += codec.RecordHeaderSize + 36
+		offset += codec.RecordHeaderSize + codec.IndexRecordSize
 	}
 
 	// Sort index records by block number to ensure correct order
@@ -253,6 +258,7 @@ func (r *LocalFileReader) parseIndexRecords(ctx context.Context) error {
 func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanFileForBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Info("starting full file scan to build block indexes",
 		zap.String("filePath", r.filePath),
 		zap.Int64("fileSize", r.size))
@@ -340,11 +346,11 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			if inBlock {
 				// Finalize the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       currentBlockNumber,
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: 0,
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  currentBlockNumber,
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -372,7 +378,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 				zap.Int64("lastEntryID", currentBlockLastEntryID))
 
 		case codec.IndexRecordType:
-			recordSize = codec.RecordHeaderSize + 36 // IndexRecord payload size
+			recordSize = codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		case codec.FooterRecordType:
 			recordSize = codec.RecordHeaderSize + codec.FooterRecordSize
 		default:
@@ -386,11 +392,11 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 	// Handle case where file ends without completing the current block (incomplete block still being written)
 	if inBlock && currentBlockFirstEntryID != -1 {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       currentBlockNumber,
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: 0,
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  currentBlockNumber,
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -412,18 +418,18 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			// StartOffset should be 0 to include the HeaderRecord in the block
 			// This ensures that when reading the block, we process all records including the header
 			indexRecord := &codec.IndexRecord{
-				BlockNumber:       0,
-				StartOffset:       0,          // Start from beginning to include HeaderRecord
-				FirstRecordOffset: headerSize, // First data record offset after header
-				FirstEntryID:      0,
-				LastEntryID:       currentEntryID - 1,
+				BlockNumber:  0,
+				StartOffset:  0,              // Start from beginning to include HeaderRecord
+				BlockSize:    uint32(r.size), // Total file size as block size
+				FirstEntryID: 0,
+				LastEntryID:  currentEntryID - 1,
 			}
 			r.blockIndexes = append(r.blockIndexes, indexRecord)
 
 			logger.Ctx(ctx).Debug("created single block for headerless data",
 				zap.String("filePath", r.filePath),
 				zap.Int64("startOffset", int64(0)),
-				zap.Int64("firstRecordOffset", headerSize),
+				zap.Int64("headerSize", headerSize),
 				zap.Int64("firstEntryID", int64(0)),
 				zap.Int64("lastEntryID", currentEntryID-1))
 		}
@@ -442,6 +448,8 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 		zap.Int("blocksFound", len(r.blockIndexes)),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset))
 
+	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -450,6 +458,7 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForNewBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	// Get current file size
 	stat, err := r.file.Stat()
 	if err != nil {
@@ -537,7 +546,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 				currentBlockFirstEntryID = currentEntryID
 				inBlock = true
 
-				logger.Ctx(ctx).Debug("found new block start from DataRecord (legacy format)",
+				logger.Ctx(ctx).Debug("found new block start from DataRecord",
 					zap.String("filePath", r.filePath),
 					zap.Int32("blockNumber", currentBlockNumber),
 					zap.Int64("startOffset", currentBlockStart),
@@ -557,11 +566,11 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 			if inBlock {
 				// Finalize the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       currentBlockNumber,
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: 0,
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  currentBlockNumber,
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(currentOffset - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -589,7 +598,7 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 				zap.Int64("lastEntryID", currentBlockLastEntryID))
 
 		case codec.IndexRecordType:
-			recordSize = codec.RecordHeaderSize + 36
+			recordSize = codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
 		case codec.FooterRecordType:
 			recordSize = codec.RecordHeaderSize + codec.FooterRecordSize
 		default:
@@ -602,11 +611,11 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 	// Handle case where new data ends with incomplete block
 	if inBlock && currentBlockFirstEntryID != -1 {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       currentBlockNumber,
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: 0,
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  currentBlockNumber,
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -628,6 +637,8 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 		zap.Int("totalBlocks", len(r.blockIndexes)),
 		zap.Int64("newSize", r.size),
 		zap.Int64("lastScannedOffset", r.lastScannedOffset))
+	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadIncr", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
@@ -680,6 +691,11 @@ func (r *LocalFileReader) GetLastEntryID(ctx context.Context) (int64, error) {
 	return lastBlock.LastEntryID, nil
 }
 
+func (f *LocalFileReader) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt) (*storage.Batch, error) {
+	// use Adv Reader instead
+	return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("local backend not support advance read yet")
+}
+
 // ReadNextBatch reads the next batch of entries
 func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatch")
@@ -703,7 +719,11 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 	}
 
 	if len(r.blockIndexes) == 0 {
-		logger.Ctx(ctx).Warn("no block indexes available")
+		// if no blocks and the segment is compacted or fenced, return an EOF
+		if !r.isIncompleteFile {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no data blocks")
+		}
+		// otherwise return entry Not found, since there is no data, reader should retry later
 		return nil, werr.ErrEntryNotFound
 	}
 
@@ -735,6 +755,11 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 		logger.Ctx(ctx).Warn("no block found for start sequence number",
 			zap.Int64("startEntryID", opt.StartEntryID),
 			zap.Int("totalBlocks", len(r.blockIndexes)))
+		// if no blocks and the segment is compacted or fenced, return an EOF
+		if !r.isIncompleteFile {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg(fmt.Sprintf("no block contains %d", opt.StartEntryID))
+		}
+		// otherwise return entry Not found, since there is no data, reader should retry later
 		return nil, werr.ErrEntryNotFound
 	}
 
@@ -760,6 +785,7 @@ func (r *LocalFileReader) ReadNextBatch(ctx context.Context, opt storage.ReaderO
 func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startEntryID int64, batchSize int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ensureSufficientBlocks")
 	defer sp.End()
+
 	// Check if we already have the starting block
 	hasStartingBlock := false
 	var lastAvailableEntryID int64 = -1
@@ -811,27 +837,15 @@ func (r *LocalFileReader) ensureSufficientBlocks(ctx context.Context, startEntry
 func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.IndexRecord, startEntryID int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readSingleBlock")
 	defer sp.End()
-	// For files without footer, we treat the entire file as one block
-	// Calculate the end offset of this block
-	var blockEndOffset int64
-	if r.footer != nil {
-		// Complete file with footer - use next block's start offset or file end
-		blockIndex := int(blockInfo.BlockNumber)
-		if blockIndex+1 < len(r.blockIndexes) {
-			blockEndOffset = r.blockIndexes[blockIndex+1].StartOffset
-		} else {
-			blockEndOffset = r.size
-		}
-	} else {
-		// Incomplete file without footer - use entire file
-		blockEndOffset = r.size
-	}
+	startTime := time.Now()
+	// Get blockSize
+	blockSize := int64(blockInfo.BlockSize)
 
-	blockSize := blockEndOffset - blockInfo.StartOffset
 	logger.Ctx(ctx).Debug("reading single block",
+		zap.Int64("logId", r.logId),
+		zap.Int64("segId", r.segId),
 		zap.Int32("blockNumber", blockInfo.BlockNumber),
 		zap.Int64("startOffset", blockInfo.StartOffset),
-		zap.Int64("endOffset", blockEndOffset),
 		zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
 		zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
 		zap.Int64("blockSize", blockSize),
@@ -839,6 +853,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 
 	if blockSize <= 0 {
 		logger.Ctx(ctx).Debug("block size is zero or negative, returning empty entries",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int64("blockSize", blockSize))
 		return []*proto.LogEntry{}, nil
 	}
@@ -847,6 +863,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	blockData, err := r.readAt(ctx, blockInfo.StartOffset, int(blockSize))
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read block data",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int32("blockNumber", blockInfo.BlockNumber),
 			zap.Int64("startOffset", blockInfo.StartOffset),
 			zap.Int64("blockSize", blockSize),
@@ -858,6 +876,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	records, err := codec.DecodeRecordList(blockData)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to decode block records",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int32("blockNumber", blockInfo.BlockNumber),
 			zap.Int("blockDataSize", len(blockData)),
 			zap.Error(err))
@@ -865,45 +885,51 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	}
 
 	logger.Ctx(ctx).Debug("decoded block records",
+		zap.Int64("logId", r.logId),
+		zap.Int64("segId", r.segId),
 		zap.Int32("blockNumber", blockInfo.BlockNumber),
 		zap.Int("recordCount", len(records)))
 
 	// Find BlockHeaderRecord and verify data integrity
 	var blockHeaderRecord *codec.BlockHeaderRecord
-	var dataRecordsStart int
-	for i, record := range records {
+	for _, record := range records {
 		if record.Type() == codec.BlockHeaderRecordType {
 			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-			dataRecordsStart = i + 1
 			break
 		}
 	}
 
 	// If we found a BlockHeaderRecord, verify the block data integrity
 	if blockHeaderRecord != nil {
-		// Extract only the data records part for verification
-		var dataRecordsBuffer []byte
-		for i := dataRecordsStart; i < len(records); i++ {
-			if records[i].Type() == codec.DataRecordType {
-				encodedRecord := codec.EncodeRecord(records[i])
-				dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+		// Extract the data records part from blockData (skip BlockHeaderRecord)
+		// BlockHeaderRecord is at the beginning, so data starts after it
+		blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+		if len(blockData) > blockHeaderSize {
+			dataRecordsBuffer := blockData[blockHeaderSize:]
+			// Verify block data integrity
+			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+				logger.Ctx(ctx).Warn("block data integrity verification failed",
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int32("blockNumber", blockInfo.BlockNumber),
+					zap.Error(err))
+				// only
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("reading block is incomplete")
+			} else {
+				logger.Ctx(ctx).Debug("block data integrity verified successfully",
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int32("blockNumber", blockInfo.BlockNumber),
+					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 			}
-		}
-
-		// Verify block data integrity
-		if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
-			logger.Ctx(ctx).Warn("block data integrity verification failed",
-				zap.Int32("blockNumber", blockInfo.BlockNumber),
-				zap.Error(err))
-			// Currently, we only log a warning, but each data record can still be read independently
-			// because each data record's integrity is verified individually. Additionally, during writing,
-			// the data records that are successfully written to disk are readable, and block-level atomicity
-			// is not enforced.
 		} else {
-			logger.Ctx(ctx).Debug("block data integrity verified successfully",
-				zap.Int32("blockNumber", blockInfo.BlockNumber),
-				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
+			// block is not complated, stop reading next records
+			logger.Ctx(ctx).Warn("block data integrity verification failed, it is incomplete",
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
+				zap.Int32("blockNumber", blockInfo.BlockNumber))
+			return nil, werr.ErrEntryNotFound.WithCauseErrMsg("reading block is incomplete")
 		}
 	}
 
@@ -912,13 +938,16 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	currentEntryID := blockInfo.FirstEntryID
 
 	// Check if this block starts with a HeaderRecord
-	// If StartOffset is 0 and FirstRecordOffset > 0, then this block includes a HeaderRecord
-	skipHeaderRecord := blockInfo.StartOffset == 0 && blockInfo.FirstRecordOffset > 0
+	// Only the first block (BlockNumber == 0) can contain a HeaderRecord
+	skipHeaderRecord := blockInfo.BlockNumber == 0
+	readBytes := 0
 
 	for _, record := range records {
 		if record.Type() == codec.HeaderRecordType && skipHeaderRecord {
 			// Skip the HeaderRecord when processing entries
 			logger.Ctx(ctx).Debug("skipping HeaderRecord in block",
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
 				zap.Int32("blockNumber", blockInfo.BlockNumber))
 			continue
 		}
@@ -926,6 +955,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		if record.Type() == codec.BlockHeaderRecordType && skipHeaderRecord {
 			// Skip the BlockHeaderRecord when processing entries
 			logger.Ctx(ctx).Debug("skipping BlockHeaderRecord in block",
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
 				zap.Int32("blockNumber", blockInfo.BlockNumber))
 			continue
 		}
@@ -939,6 +970,7 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 					Values:  dataRecord.Payload,
 				}
 				entries = append(entries, entry)
+				readBytes += len(dataRecord.Payload)
 			}
 			currentEntryID++
 		}
@@ -947,6 +979,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	if len(entries) == 0 {
 		// return entry not found yet, wp client retry later
 		logger.Ctx(ctx).Debug("no record extracted from the ongoing block",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int32("blockNumber", blockInfo.BlockNumber),
 			zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
 			zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
@@ -954,12 +988,16 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record has been written to the ongoing block")
 	} else {
 		logger.Ctx(ctx).Debug("extracted entries from single block",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int32("blockNumber", blockInfo.BlockNumber),
 			zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
 			zap.Int64("blockLastEntryID", blockInfo.LastEntryID),
 			zap.Int64("startEntryID", startEntryID),
 			zap.Int("readEntryCount", len(entries)))
 	}
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }
@@ -968,7 +1006,10 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*codec.IndexRecord, startBlockIndex int, startEntryID int64, batchSize int64) ([]*proto.LogEntry, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readMultipleBlocks")
 	defer sp.End()
+	startTime := time.Now()
 	logger.Ctx(ctx).Debug("readMultipleBlocks started",
+		zap.Int64("logId", r.logId),
+		zap.Int64("segId", r.segId),
 		zap.Int("startBlockIndex", startBlockIndex),
 		zap.Int64("startEntryID", startEntryID),
 		zap.Int64("batchSize", batchSize),
@@ -976,42 +1017,37 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 
 	entries := make([]*proto.LogEntry, 0, batchSize)
 	entriesCollected := int64(0)
+	readBytes := 0
 
 	for i := startBlockIndex; i < len(allBlocks) && entriesCollected < batchSize; i++ {
-		blockInfo := allBlocks[i]
+		blkIdx := i
+		blockInfo := allBlocks[blkIdx]
 
 		logger.Ctx(ctx).Debug("processing block in readMultipleBlocks",
-			zap.Int("blockIndex", i),
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int("blockIndex", blkIdx),
 			zap.Int32("blockNumber", blockInfo.BlockNumber),
 			zap.Int64("blockStartOffset", blockInfo.StartOffset),
+			zap.Uint32("blockSize", blockInfo.BlockSize),
 			zap.Int64("blockFirstEntryID", blockInfo.FirstEntryID),
 			zap.Int64("blockLastEntryID", blockInfo.LastEntryID))
 
-		// Calculate the end offset of this block
-		var blockEndOffset int64
-		if r.footer != nil {
-			// Complete file with footer
-			if i+1 < len(allBlocks) {
-				blockEndOffset = allBlocks[i+1].StartOffset
-			} else {
-				blockEndOffset = r.size
-			}
-		} else {
-			// Incomplete file without footer - use entire file for the single block
-			blockEndOffset = r.size
-		}
-
-		blockSize := blockEndOffset - blockInfo.StartOffset
+		// Get blockSize
+		blockSize := int64(blockInfo.BlockSize)
 
 		logger.Ctx(ctx).Debug("reading block data",
-			zap.Int("blockIndex", i),
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int("blockIndex", blkIdx),
 			zap.Int64("startOffset", blockInfo.StartOffset),
-			zap.Int64("endOffset", blockEndOffset),
 			zap.Int64("blockSize", blockSize))
 
 		if blockSize <= 0 {
 			logger.Ctx(ctx).Debug("skipping block with zero size",
-				zap.Int("blockIndex", i),
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
+				zap.Int("blockIndex", blkIdx),
 				zap.Int64("blockSize", blockSize))
 			continue
 		}
@@ -1029,47 +1065,56 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		}
 
 		logger.Ctx(ctx).Debug("decoded records from block",
-			zap.Int("blockIndex", i),
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int("blockIndex", blkIdx),
+			zap.Int64("blockSize", blockSize),
+			zap.Int("readBlockSize", len(blockData)),
 			zap.Int("recordCount", len(records)))
 
 		// Find BlockHeaderRecord and verify data integrity
 		var blockHeaderRecord *codec.BlockHeaderRecord
-		var dataRecordsStart int
-		for j, record := range records {
+		for _, record := range records {
 			if record.Type() == codec.BlockHeaderRecordType {
 				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-				dataRecordsStart = j + 1
 				break
 			}
 		}
 
 		// If we found a BlockHeaderRecord, verify the block data integrity
 		if blockHeaderRecord != nil {
-			// Extract only the data records part for verification
-			var dataRecordsBuffer []byte
-			for j := dataRecordsStart; j < len(records); j++ {
-				if records[j].Type() == codec.DataRecordType {
-					encodedRecord := codec.EncodeRecord(records[j])
-					dataRecordsBuffer = append(dataRecordsBuffer, encodedRecord...)
+			// Extract the data records part from blockData (skip BlockHeaderRecord)
+			// BlockHeaderRecord is at the beginning, so data starts after it
+			blockHeaderSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
+			if len(blockData) > blockHeaderSize {
+				dataRecordsBuffer := blockData[blockHeaderSize:]
+				// Verify block data integrity
+				if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
+					logger.Ctx(ctx).Warn("block data integrity verification failed",
+						zap.Int64("logId", r.logId),
+						zap.Int64("segId", r.segId),
+						zap.Int("blockIndex", blkIdx),
+						zap.Int32("blockNumber", blockInfo.BlockNumber),
+						zap.Error(err))
+					// block is incomplete, stop reading next records
+					break
+				} else {
+					logger.Ctx(ctx).Debug("block data integrity verified successfully",
+						zap.Int64("logId", r.logId),
+						zap.Int64("segId", r.segId),
+						zap.Int("blockIndex", blkIdx),
+						zap.Int32("blockNumber", blockInfo.BlockNumber),
+						zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
+						zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 				}
-			}
-
-			// Verify block data integrity
-			if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
-				logger.Ctx(ctx).Warn("block data integrity verification failed",
-					zap.Int("blockIndex", i),
-					zap.Int32("blockNumber", blockInfo.BlockNumber),
-					zap.Error(err))
-				// Currently, we only log a warning, but each data record can still be read independently
-				// because each data record's integrity is verified individually. Additionally, during writing,
-				// the data records that are successfully written to disk are readable, and block-level atomicity
-				// is not enforced.
 			} else {
-				logger.Ctx(ctx).Debug("block data integrity verified successfully",
-					zap.Int("blockIndex", i),
-					zap.Int32("blockNumber", blockInfo.BlockNumber),
-					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
+				// block is not completed, stop reading next records
+				logger.Ctx(ctx).Warn("block data integrity verification failed, it is incomplete",
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int("blockIndex", blkIdx),
+					zap.Int32("blockNumber", blockInfo.BlockNumber))
+				break
 			}
 		}
 
@@ -1077,12 +1122,14 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		currentEntryID := blockInfo.FirstEntryID
 
 		// Check if this block starts with a HeaderRecord
-		// If StartOffset is 0 and FirstRecordOffset > 0, then this block includes a HeaderRecord
-		skipHeaderRecord := blockInfo.StartOffset == 0 && blockInfo.FirstRecordOffset > 0
+		// Only the first block (BlockNumber == 0) can contain a HeaderRecord
+		skipHeaderRecord := blockInfo.BlockNumber == 0
 
 		for recordIndex, record := range records {
 			logger.Ctx(ctx).Debug("processing record",
-				zap.Int("blockIndex", i),
+				zap.Int64("logId", r.logId),
+				zap.Int64("segId", r.segId),
+				zap.Int("blockIndex", blkIdx),
 				zap.Int("recordIndex", recordIndex),
 				zap.Uint8("recordType", record.Type()),
 				zap.Int64("currentEntryID", currentEntryID),
@@ -1093,7 +1140,9 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 			if record.Type() == codec.HeaderRecordType && skipHeaderRecord {
 				// Skip the HeaderRecord when processing entries
 				logger.Ctx(ctx).Debug("skipping HeaderRecord in block",
-					zap.Int("blockIndex", i),
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int("blockIndex", blkIdx),
 					zap.Int32("blockNumber", blockInfo.BlockNumber))
 				continue
 			}
@@ -1108,15 +1157,30 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 					}
 					entries = append(entries, entry)
 					entriesCollected++
+					readBytes += len(dataRecord.Payload)
 
 					logger.Ctx(ctx).Debug("added entry to result",
+						zap.Int64("logId", r.logId),
+						zap.Int64("segId", r.segId),
 						zap.Int64("entryId", currentEntryID),
+						zap.Int("blockIndex", blkIdx),
 						zap.Int("payloadSize", len(dataRecord.Payload)),
+						zap.Int64("entriesCollected", entriesCollected))
+				} else {
+					logger.Ctx(ctx).Debug("not add entry to result",
+						zap.Int64("logId", r.logId),
+						zap.Int64("segId", r.segId),
+						zap.Int("blockIndex", blkIdx),
+						zap.Int64("entryId", currentEntryID),
+						zap.Int64("entriesCollected", entriesCollected),
 						zap.Int64("entriesCollected", entriesCollected))
 				}
 				currentEntryID++
 			} else {
 				logger.Ctx(ctx).Debug("skipping non-data record or batch size reached",
+					zap.Int64("logId", r.logId),
+					zap.Int64("segId", r.segId),
+					zap.Int("blockIndex", blkIdx),
 					zap.Uint8("recordType", record.Type()),
 					zap.Int64("entriesCollected", entriesCollected),
 					zap.Int64("batchSize", batchSize))
@@ -1129,7 +1193,9 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		}
 
 		logger.Ctx(ctx).Debug("finished processing block",
-			zap.Int("blockIndex", i),
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int("blockIndex", blkIdx),
 			zap.Int64("entriesCollected", entriesCollected))
 
 		// Stop processing blocks if we've collected enough entries
@@ -1138,9 +1204,25 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		}
 	}
 
-	logger.Ctx(ctx).Debug("readMultipleBlocks finished",
-		zap.Int64("totalEntriesCollected", entriesCollected),
-		zap.Int64("entriesCollected", entriesCollected))
+	if entriesCollected == 0 {
+		// return entry not found yet, wp client retry later
+		logger.Ctx(ctx).Debug("no record extracted from multi blocks",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int64("startEntryID", startEntryID),
+			zap.Int64("totalEntriesCollected", entriesCollected),
+			zap.Int64("entriesCollected", entriesCollected))
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
+	} else {
+		logger.Ctx(ctx).Debug("extracted entries from multi blocks",
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
+			zap.Int64("startEntryID", startEntryID),
+			zap.Int64("totalEntriesCollected", entriesCollected),
+			zap.Int64("entriesCollected", entriesCollected))
+	}
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return entries, nil
 }

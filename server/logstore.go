@@ -50,7 +50,9 @@ type LogStore interface {
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
 	AddEntry(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)
+	// Deprecated
 	GetBatchEntries(context.Context, int64, int64, int64, int64) ([]*processor.SegmentEntry, error)
+	GetBatchEntriesAdv(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)
 	FenceSegment(context.Context, int64, int64) (int64, error)
 	CompleteSegment(context.Context, int64, int64) (int64, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
@@ -251,6 +253,33 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 		}
 	}
 	return nil
+}
+
+func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize), zap.Error(err))
+		return nil, err
+	}
+	batchData, err := segmentProcessor.ReadBatchEntriesAdv(ctx, fromEntryId, maxSize, lastReadState)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error").Observe(float64(time.Since(start).Milliseconds()))
+		if !werr.ErrEntryNotFound.Is(err) {
+			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize), zap.Error(err))
+		}
+		return nil, err
+	}
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return batchData, nil
 }
 
 func (l *logStore) GetBatchEntries(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {

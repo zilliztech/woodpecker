@@ -29,7 +29,7 @@ import (
 
 func TestHeaderRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	original := &HeaderRecord{
-		Version:      1,
+		Version:      FormatVersion,
 		Flags:        0x1234,
 		FirstEntryID: 1000,
 	}
@@ -85,11 +85,11 @@ func TestDataRecord_EncodeDecodeRoundTrip(t *testing.T) {
 
 func TestIndexRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	original := &IndexRecord{
-		BlockNumber:       10,
-		StartOffset:       1024,
-		FirstRecordOffset: 100,
-		FirstEntryID:      500,
-		LastEntryID:       600,
+		BlockNumber:  10,
+		StartOffset:  1024,
+		BlockSize:    2048576, // 2MB block size
+		FirstEntryID: 500,
+		LastEntryID:  600,
 	}
 
 	// Test encoding
@@ -105,7 +105,7 @@ func TestIndexRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, original.BlockNumber, indexRecord.BlockNumber)
 	assert.Equal(t, original.StartOffset, indexRecord.StartOffset)
-	assert.Equal(t, original.FirstRecordOffset, indexRecord.FirstRecordOffset)
+	assert.Equal(t, original.BlockSize, indexRecord.BlockSize)
 	assert.Equal(t, original.FirstEntryID, indexRecord.FirstEntryID)
 	assert.Equal(t, original.LastEntryID, indexRecord.LastEntryID)
 }
@@ -141,7 +141,8 @@ func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
 		TotalRecords: 5000,
 		IndexOffset:  10240,
 		IndexLength:  512,
-		Version:      1,
+		TotalSize:    2048576, // 2MB file size
+		Version:      FormatVersion,
 		Flags:        0x5678,
 	}
 
@@ -160,6 +161,7 @@ func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	assert.Equal(t, original.TotalRecords, footerRecord.TotalRecords)
 	assert.Equal(t, original.IndexOffset, footerRecord.IndexOffset)
 	assert.Equal(t, original.IndexLength, footerRecord.IndexLength)
+	assert.Equal(t, original.TotalSize, footerRecord.TotalSize)
 	assert.Equal(t, original.Version, footerRecord.Version)
 	assert.Equal(t, original.Flags, footerRecord.Flags)
 }
@@ -167,11 +169,11 @@ func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
 func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 	// Create multiple records
 	records := []Record{
-		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
+		&HeaderRecord{Version: FormatVersion, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
-		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
+		&IndexRecord{BlockNumber: 1, StartOffset: 100, BlockSize: 2048576, FirstEntryID: 1000, LastEntryID: 1010},
 		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
-		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
+		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, TotalSize: 2048, IndexOffset: 200, IndexLength: 44, Version: FormatVersion, Flags: 0x5678},
 	}
 
 	// Encode all records into a single buffer
@@ -204,7 +206,7 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, original.BlockNumber, indexRecord.BlockNumber)
 			assert.Equal(t, original.StartOffset, indexRecord.StartOffset)
-			assert.Equal(t, original.FirstRecordOffset, indexRecord.FirstRecordOffset)
+			assert.Equal(t, original.BlockSize, indexRecord.BlockSize)
 			assert.Equal(t, original.FirstEntryID, indexRecord.FirstEntryID)
 			assert.Equal(t, original.LastEntryID, indexRecord.LastEntryID)
 		case *BlockHeaderRecord:
@@ -344,9 +346,9 @@ func TestDecodeRecord_InvalidLength(t *testing.T) {
 func TestParseBlockIndexList(t *testing.T) {
 	// Create multiple index records
 	indexRecords := []*IndexRecord{
-		{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
-		{BlockNumber: 2, StartOffset: 200, FirstRecordOffset: 150, FirstEntryID: 1011, LastEntryID: 1020},
-		{BlockNumber: 3, StartOffset: 300, FirstRecordOffset: 250, FirstEntryID: 1021, LastEntryID: 1030},
+		{BlockNumber: 1, StartOffset: 100, BlockSize: 2048576, FirstEntryID: 1000, LastEntryID: 1010},
+		{BlockNumber: 2, StartOffset: 200, BlockSize: 2048576, FirstEntryID: 1011, LastEntryID: 1020},
+		{BlockNumber: 3, StartOffset: 300, BlockSize: 2048576, FirstEntryID: 1021, LastEntryID: 1030},
 	}
 
 	// Encode all index records
@@ -368,7 +370,7 @@ func TestParseBlockIndexList(t *testing.T) {
 		original := indexRecords[i]
 		assert.Equal(t, original.BlockNumber, parsedRecord.BlockNumber)
 		assert.Equal(t, original.StartOffset, parsedRecord.StartOffset)
-		assert.Equal(t, original.FirstRecordOffset, parsedRecord.FirstRecordOffset)
+		assert.Equal(t, original.BlockSize, parsedRecord.BlockSize)
 		assert.Equal(t, original.FirstEntryID, parsedRecord.FirstEntryID)
 		assert.Equal(t, original.LastEntryID, parsedRecord.LastEntryID)
 	}
@@ -413,11 +415,11 @@ func TestEdgeCases(t *testing.T) {
 	t.Run("MaxValues", func(t *testing.T) {
 		// Test with maximum values
 		indexRecord := &IndexRecord{
-			BlockNumber:       2147483647,          // max int32
-			StartOffset:       9223372036854775807, // max int64
-			FirstRecordOffset: 9223372036854775807,
-			FirstEntryID:      9223372036854775807,
-			LastEntryID:       9223372036854775807,
+			BlockNumber:  2147483647,          // max int32
+			StartOffset:  9223372036854775807, // max int64
+			BlockSize:    4294967295,          // max uint32
+			FirstEntryID: 9223372036854775807,
+			LastEntryID:  9223372036854775807,
 		}
 
 		encoded := EncodeRecord(indexRecord)
@@ -428,7 +430,7 @@ func TestEdgeCases(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, indexRecord.BlockNumber, decodedIndex.BlockNumber)
 		assert.Equal(t, indexRecord.StartOffset, decodedIndex.StartOffset)
-		assert.Equal(t, indexRecord.FirstRecordOffset, decodedIndex.FirstRecordOffset)
+		assert.Equal(t, indexRecord.BlockSize, decodedIndex.BlockSize)
 		assert.Equal(t, indexRecord.FirstEntryID, decodedIndex.FirstEntryID)
 		assert.Equal(t, indexRecord.LastEntryID, decodedIndex.LastEntryID)
 	})
@@ -436,11 +438,11 @@ func TestEdgeCases(t *testing.T) {
 	t.Run("MinValues", func(t *testing.T) {
 		// Test with minimum values
 		indexRecord := &IndexRecord{
-			BlockNumber:       -2147483648,          // min int32
-			StartOffset:       -9223372036854775808, // min int64
-			FirstRecordOffset: -9223372036854775808,
-			FirstEntryID:      -9223372036854775808,
-			LastEntryID:       -9223372036854775808,
+			BlockNumber:  -2147483648,          // min int32
+			StartOffset:  -9223372036854775808, // min int64
+			BlockSize:    0,                    // min uint32
+			FirstEntryID: -9223372036854775808,
+			LastEntryID:  -9223372036854775808,
 		}
 
 		encoded := EncodeRecord(indexRecord)
@@ -451,7 +453,7 @@ func TestEdgeCases(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, indexRecord.BlockNumber, decodedIndex.BlockNumber)
 		assert.Equal(t, indexRecord.StartOffset, decodedIndex.StartOffset)
-		assert.Equal(t, indexRecord.FirstRecordOffset, decodedIndex.FirstRecordOffset)
+		assert.Equal(t, indexRecord.BlockSize, decodedIndex.BlockSize)
 		assert.Equal(t, indexRecord.FirstEntryID, decodedIndex.FirstEntryID)
 		assert.Equal(t, indexRecord.LastEntryID, decodedIndex.LastEntryID)
 	})
@@ -465,17 +467,17 @@ func TestMagicValidation(t *testing.T) {
 
 		_, err := ParseHeader(payload)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid header magic")
+		assert.Contains(t, err.Error(), "invalid format version")
 	})
 
 	t.Run("InvalidFooterMagic", func(t *testing.T) {
 		// Create a payload with invalid magic
-		payload := make([]byte, 28)
-		payload[24] = 0xFF // Invalid magic
+		payload := make([]byte, 36)
+		payload[32] = 0xFF // Invalid magic
 
 		_, err := ParseFooter(payload)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid footer magic")
+		assert.Contains(t, err.Error(), "invalid format version")
 	})
 }
 
@@ -539,9 +541,10 @@ func TestCompactedFlagIntegration(t *testing.T) {
 		original := &FooterRecord{
 			TotalBlocks:  100,
 			TotalRecords: 5000,
+			TotalSize:    2048576,
 			IndexOffset:  10240,
 			IndexLength:  512,
-			Version:      1,
+			Version:      FormatVersion,
 			Flags:        0x1234, // Not compacted initially
 		}
 
@@ -566,7 +569,7 @@ func TestCompactedFlagIntegration(t *testing.T) {
 	t.Run("HeaderRecord_CompactedFlag", func(t *testing.T) {
 		// Test with HeaderRecord as well
 		original := &HeaderRecord{
-			Version:      1,
+			Version:      FormatVersion,
 			Flags:        0x5678, // Not compacted initially
 			FirstEntryID: 1000,
 		}
@@ -635,9 +638,9 @@ func BenchmarkEncodeRecord(b *testing.B) {
 		{"HeaderRecord", &HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000}},
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
-		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
+		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, BlockSize: 2048576, FirstEntryID: 500, LastEntryID: 600}},
 		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
-		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
+		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
 	for _, tc := range testCases {
@@ -658,9 +661,9 @@ func BenchmarkDecodeRecord(b *testing.B) {
 		{"HeaderRecord", &HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000}},
 		{"DataRecord_Small", &DataRecord{Payload: []byte("hello world")}},
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
-		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, FirstRecordOffset: 100, FirstEntryID: 500, LastEntryID: 600}},
+		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, BlockSize: 2048576, FirstEntryID: 500, LastEntryID: 600}},
 		{"BlockHeaderRecord", &BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
-		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
+		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
 	}
 
 	for _, tc := range testCases {
@@ -679,9 +682,9 @@ func BenchmarkDecodeRecordList(b *testing.B) {
 	records := []Record{
 		&HeaderRecord{Version: 1, Flags: 0x1234, FirstEntryID: 1000},
 		&DataRecord{Payload: []byte("hello world")},
-		&IndexRecord{BlockNumber: 1, StartOffset: 100, FirstRecordOffset: 50, FirstEntryID: 1000, LastEntryID: 1010},
+		&IndexRecord{BlockNumber: 1, StartOffset: 100, BlockSize: 2048576, FirstEntryID: 1000, LastEntryID: 1010},
 		&BlockHeaderRecord{FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
-		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 36, Version: 1, Flags: 0x5678},
+		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 44, Version: 1, Flags: 0x5678},
 	}
 
 	var buf bytes.Buffer
@@ -702,11 +705,11 @@ func BenchmarkParseBlockIndexList(b *testing.B) {
 	indexRecords := make([]*IndexRecord, 100)
 	for i := 0; i < 100; i++ {
 		indexRecords[i] = &IndexRecord{
-			BlockNumber:       int32(i),
-			StartOffset:       int64(i * 1024),
-			FirstRecordOffset: int64(i * 100),
-			FirstEntryID:      int64(i * 1000),
-			LastEntryID:       int64(i*1000 + 999),
+			BlockNumber:  int32(i),
+			StartOffset:  int64(i * 1024),
+			BlockSize:    uint32(2048576 + i*1024), // Varying block sizes
+			FirstEntryID: int64(i * 1000),
+			LastEntryID:  int64(i*1000 + 999),
 		}
 	}
 

@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,565 +38,12 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
-	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-var (
-	testBucket = "a-bucket"
-)
-
-func setupMinioFileWriterTest(t *testing.T) (minioHandler.MinioHandler, *config.Configuration) {
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-
-	// Set log level to debug for detailed logging
-	cfg.Log.Level = "debug"
-
-	// Initialize logger with debug level
-	logger.InitLogger(cfg)
-
-	testBucket = cfg.Minio.BucketName
-	minioHdl, err := minioHandler.NewMinioHandler(context.Background(), cfg)
-	require.NoError(t, err)
-	return minioHdl, cfg
-}
-
-func cleanupMinioFileWriterObjects(t *testing.T, client minioHandler.MinioHandler, prefix string) {
-	ctx := context.Background()
-	objectCh := client.ListObjects(ctx, testBucket, prefix, true, minio.ListObjectsOptions{})
-
-	for object := range objectCh {
-		if object.Err != nil {
-			t.Logf("Warning: failed to list object for cleanup: %v", object.Err)
-			continue
-		}
-		err := client.RemoveObject(ctx, testBucket, object.Key, minio.RemoveObjectOptions{})
-		if err != nil {
-			t.Logf("Warning: failed to cleanup object %s: %v", object.Key, err)
-		}
-	}
-}
-
-func generateTestData(size int) []byte {
-	data, err := utils.GenerateRandomBytes(size)
-	if err != nil {
-		panic(err)
-	}
-	return data
-}
-
-func TestMinioFileWriter_BasicWriteAndSync(t *testing.T) {
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	logId := int64(1)
-	segmentId := int64(100)
-	baseDir := fmt.Sprintf("test-basic-write-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	// Create MinioFileWriter
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-	require.NotNil(t, writer)
-
-	t.Run("WriteDataAsync", func(t *testing.T) {
-		// Test writing data
-		testData := [][]byte{
-			[]byte("Hello, MinIO!"),
-			[]byte("This is test data"),
-			generateTestData(1024), // 1KB
-			generateTestData(2048), // 2KB
-		}
-
-		for i, data := range testData {
-			entryId := int64(i)
-			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-basic-%d", entryId))
-
-			returnedId, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, returnedId)
-
-			// Wait for result
-			result, err := resultCh.ReadResult(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, result.SyncedId)
-		}
-
-		// Verify writer state
-		assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-		assert.Equal(t, int64(3), writer.GetLastEntryId(ctx))
-	})
-
-	t.Run("ManualSync", func(t *testing.T) {
-		// Test manual sync
-		err := writer.Sync(ctx)
-		require.NoError(t, err)
-	})
-
-	// Close writer
-	err = writer.Close(ctx)
-	require.NoError(t, err)
-}
-
-func TestMinioFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	// Configure for smaller blocks to test multi-block scenario
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 256 * 1024 // 256KB per block
-
-	logId := int64(2)
-	segmentId := int64(200)
-	baseDir := fmt.Sprintf("test-large-data-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-	defer writer.Close(ctx)
-
-	// Write data that will span multiple blocks
-	largeData := [][]byte{
-		generateTestData(200 * 1024), // 200KB
-		generateTestData(200 * 1024), // 200KB - should trigger new block
-		generateTestData(100 * 1024), // 100KB
-		generateTestData(150 * 1024), // 150KB - should trigger another block
-		[]byte("Final small entry"),
-	}
-
-	var wg sync.WaitGroup
-	for i, data := range largeData {
-		wg.Add(1)
-		go func(entryId int64, entryData []byte) {
-			defer wg.Done()
-
-			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-large-%d", entryId))
-			returnedId, err := writer.WriteDataAsync(ctx, entryId, entryData, resultCh)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, returnedId)
-
-			// Wait for result
-			result, err := resultCh.ReadResult(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, result.SyncedId)
-		}(int64(i), data)
-	}
-
-	wg.Wait()
-
-	// Verify final state
-	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-	assert.Equal(t, int64(len(largeData)-1), writer.GetLastEntryId(ctx))
-
-	// Verify objects were created in MinIO
-	objectCh := minioHdl.ListObjects(ctx, testBucket, baseDir, true, minio.ListObjectsOptions{})
-	objectCount := 0
-	for object := range objectCh {
-		require.NoError(t, object.Err)
-		objectCount++
-		t.Logf("Created object: %s (size: %d)", object.Key, object.Size)
-	}
-	assert.Greater(t, objectCount, 1, "Should have created multiple objects")
-}
-
-func TestMinioFileWriter_ConcurrentWrites(t *testing.T) {
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	logId := int64(3)
-	segmentId := int64(300)
-	baseDir := fmt.Sprintf("test-concurrent-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-	defer writer.Close(ctx)
-
-	// Test concurrent writes
-	const numGoroutines = 10
-	const entriesPerGoroutine = 5
-
-	var wg sync.WaitGroup
-	results := make(chan error, numGoroutines*entriesPerGoroutine)
-
-	for g := 0; g < numGoroutines; g++ {
-		wg.Add(1)
-		go func(goroutineId int) {
-			defer wg.Done()
-
-			for e := 0; e < entriesPerGoroutine; e++ {
-				entryId := int64(goroutineId*entriesPerGoroutine + e)
-				data := []byte(fmt.Sprintf("Goroutine %d, Entry %d: %s", goroutineId, e, generateTestData(512)))
-
-				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-concurrent-%d", entryId))
-				_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-				if err != nil {
-					results <- err
-					continue
-				}
-
-				// Wait for result
-				result, err := resultCh.ReadResult(ctx)
-				if err != nil {
-					results <- err
-				} else {
-					results <- result.Err
-				}
-			}
-		}(g)
-	}
-
-	wg.Wait()
-	close(results)
-
-	// Check results
-	successCount := 0
-	for err := range results {
-		if err == nil {
-			successCount++
-		} else {
-			t.Logf("Write error: %v", err)
-		}
-	}
-
-	expectedEntries := numGoroutines * entriesPerGoroutine
-	assert.Equal(t, expectedEntries, successCount, "All concurrent writes should succeed")
-
-	// Verify final state
-	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-	assert.Equal(t, int64(expectedEntries-1), writer.GetLastEntryId(ctx))
-}
-
-func TestMinioFileWriter_Finalize(t *testing.T) {
-
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	logId := int64(4)
-	segmentId := int64(400)
-	baseDir := fmt.Sprintf("test-finalize-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-
-	// Write some test data
-	testData := [][]byte{
-		[]byte("Entry 1"),
-		[]byte("Entry 2"),
-		generateTestData(1024),
-		[]byte("Final entry"),
-	}
-
-	for i, data := range testData {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-finalize-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		require.NoError(t, err)
-
-		// Wait for result
-		result, err := resultCh.ReadResult(ctx)
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-	}
-
-	// Test finalize
-	lastEntryId, err := writer.Finalize(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(testData)-1), lastEntryId)
-
-	// Verify objects were created including footer
-	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-	objects := make([]string, 0)
-	for object := range objectCh {
-		require.NoError(t, object.Err)
-		objects = append(objects, object.Key)
-		t.Logf("Finalized object: %s (size: %d)", object.Key, object.Size)
-	}
-	assert.Greater(t, len(objects), 1, "Should have data objects and footer object")
-
-	// Verify we can't write after finalize
-	resultCh := channel.NewLocalResultChannel("test-finalize-fail")
-	_, err = writer.WriteDataAsync(ctx, 999, []byte("should fail"), resultCh)
-	assert.Error(t, err, "Should not be able to write after finalize")
-}
-
-func TestMinioFileWriter_ErrorHandling(t *testing.T) {
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
-		logId := int64(5)
-		segmentId := int64(500)
-		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx)
-		require.NoError(t, err)
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		require.NoError(t, err)
-
-		// Wait for second write with timeout - this should return immediately since it's a duplicate
-		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh2.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err) // Should succeed (idempotent)
-	})
-
-	t.Run("DuplicateEntryIdInBuffer", func(t *testing.T) {
-		logId := int64(5)
-		segmentId := int64(500)
-		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx)
-		require.NoError(t, err)
-
-		// Wait for second write with timeout - this should return immediately since it's a duplicate
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh2.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err) // Should succeed (idempotent)
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		//require.NoError(t, result.Err)
-		assert.Error(t, err)
-		assert.True(t, errors.IsAny(err, context.Canceled, context.DeadlineExceeded))
-
-	})
-
-	t.Run("DuplicateEntryIdInUploading", func(t *testing.T) {
-		logId := int64(5)
-		segmentId := int64(500)
-		baseDir := fmt.Sprintf("test-duplicate-entry-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx)
-		require.NoError(t, err)
-
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		require.NoError(t, err)
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-
-		//// Wait for second write with timeout - this should return immediately since it's a duplicate
-		//ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		//result, err = resultCh2.ReadResult(ctxWithTimeout)
-		//cancel()
-		//require.NoError(t, err)
-		//require.NoError(t, result.Err) // Should succeed (idempotent)
-	})
-
-	t.Run("WriteAfterClose", func(t *testing.T) {
-		logId := int64(6)
-		segmentId := int64(600)
-		baseDir := fmt.Sprintf("test-write-after-close-%d", time.Now().Unix())
-		defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-		require.NoError(t, err)
-
-		// Close writer
-		err = writer.Close(ctx)
-		require.NoError(t, err)
-
-		// Try to write after close
-		resultCh := channel.NewLocalResultChannel("test-write-after-close")
-		_, err = writer.WriteDataAsync(ctx, 1, []byte("should fail"), resultCh)
-		assert.Error(t, err, "Should not be able to write after close")
-	})
-}
-
-func TestMinioFileWriter_BlockLastRecordVerification(t *testing.T) {
-	if os.Getenv("SKIP_MINIO_TESTS") != "" {
-		t.Skip("Skipping MinIO tests")
-	}
-
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	// Configure for small blocks to ensure we get BlockLastRecord
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 200 // Very small to force block creation
-
-	logId := int64(7)
-	segmentId := int64(700)
-	baseDir := fmt.Sprintf("test-block-last-record-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-	defer writer.Close(ctx)
-
-	// Write data that will create multiple blocks
-	testData := [][]byte{
-		[]byte("Entry 0: " + string(generateTestData(100))),
-		[]byte("Entry 1: " + string(generateTestData(100))),
-		[]byte("Entry 2: " + string(generateTestData(100))),
-	}
-
-	for i, data := range testData {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-block-last-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		require.NoError(t, err)
-
-		result, err := resultCh.ReadResult(ctx)
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-	}
-
-	// Force final sync
-	err = writer.Sync(ctx)
-	require.NoError(t, err)
-
-	// Read back the objects and verify they contain BlockLastRecord
-	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-
-	for object := range objectCh {
-		require.NoError(t, object.Err)
-
-		// Skip lock files
-		if len(object.Key) >= 5 && object.Key[len(object.Key)-5:] == ".lock" {
-			continue
-		}
-
-		t.Logf("Verifying object: %s (size: %d)", object.Key, object.Size)
-
-		// Read object content
-		obj, err := minioHdl.GetObject(ctx, testBucket, object.Key, minio.GetObjectOptions{})
-		require.NoError(t, err)
-
-		data, err := minioHandler.ReadObjectFull(ctx, obj, int64(object.Size))
-		require.NoError(t, err)
-		obj.Close()
-
-		// Parse records from the object
-		records, err := codec.DecodeRecordList(data)
-		require.NoError(t, err)
-
-		if len(records) == 0 {
-			t.Logf("Object contains no records, skipping verification")
-			continue
-		}
-
-		t.Logf("Object contains %d records", len(records))
-
-		// Check if first record is BlockHeaderRecord (after optional HeaderRecord)
-		var blockHeaderRecord *codec.BlockHeaderRecord
-		for _, record := range records {
-			if record.Type() == codec.BlockHeaderRecordType {
-				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-				break
-			}
-		}
-
-		if blockHeaderRecord != nil {
-			t.Logf("Found BlockHeaderRecord: FirstEntryID=%d, LastEntryID=%d",
-				blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID)
-
-			// Verify the entry IDs are valid
-			assert.GreaterOrEqual(t, blockHeaderRecord.FirstEntryID, int64(0))
-			assert.GreaterOrEqual(t, blockHeaderRecord.LastEntryID, blockHeaderRecord.FirstEntryID)
-		} else {
-			t.Logf("No BlockHeaderRecord found in this object")
-		}
-	}
-}
-
-func TestMinioFileWriter_SegmentLocking(t *testing.T) {
-	if os.Getenv("SKIP_MINIO_TESTS") != "" {
-		t.Skip("Skipping MinIO tests")
-	}
-
-	minioHdl, cfg := setupMinioFileWriterTest(t)
-	ctx := context.Background()
-
-	logId := int64(8)
-	segmentId := int64(800)
-	baseDir := fmt.Sprintf("test-segment-locking-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
-
-	// Create first writer
-	writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-
-	// Try to create second writer with same segment (should fail due to lock)
-	writer2, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	assert.Error(t, err, "Should not be able to create second writer for same segment")
-	assert.Nil(t, writer2)
-
-	// Close first writer
-	err = writer1.Close(ctx)
-	require.NoError(t, err)
-
-	// Now should be able to create new writer
-	writer3, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	require.NoError(t, err)
-	require.NotNil(t, writer3)
-
-	err = writer3.Close(ctx)
-	require.NoError(t, err)
-}
-
-func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
+func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -610,7 +56,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	baseDir := fmt.Sprintf("test-recovery-%d", time.Now().Unix())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	t.Run("WriteDataAndInterrupt", func(t *testing.T) {
+	t.Run("AdvWriteDataAndInterrupt", func(t *testing.T) {
 		// Create first writer and write some data
 		writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
@@ -678,7 +124,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	})
 
 	var recoverySegmentFileKey string
-	t.Run("RecoverAndContinueWriting", func(t *testing.T) {
+	t.Run("AdvRecoverAndContinueWriting", func(t *testing.T) {
 		// Use the same segment key to test true recovery
 		recoverySegmentFileKey = baseDir
 
@@ -773,7 +219,7 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		}
 	})
 
-	t.Run("VerifyOriginalSegmentObjects", func(t *testing.T) {
+	t.Run("AdvVerifyOriginalSegmentObjects", func(t *testing.T) {
 		// Verify that the objects were created
 		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
@@ -790,9 +236,9 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		t.Logf("Total data objects: %d", len(dataObjects))
 	})
 
-	t.Run("VerifyFinalSegmentState", func(t *testing.T) {
+	t.Run("AdvVerifyFinalSegmentState", func(t *testing.T) {
 		// Create reader to verify the final segment state
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -812,31 +258,31 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		t.Logf("Reader last entry ID: %d", lastEntryId)
 
 		// Verify we can read data from the beginning
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    20, // Read all entries
 		})
 		require.NoError(t, err)
-		t.Logf("Read %d entries", len(entries))
+		t.Logf("Read %d entries", len(batch.Entries))
 
 		// We should have at least the original 4 entries
-		assert.GreaterOrEqual(t, len(entries), 4, "Should have at least the original 4 entries")
+		assert.GreaterOrEqual(t, len(batch.Entries), 4, "Should have at least the original 4 entries")
 
 		// Verify some entry content (at least the first few)
-		if len(entries) > 0 {
-			assert.Equal(t, int64(0), entries[0].EntryId)
-			assert.Equal(t, []byte("Entry 0: Initial data"), entries[0].Values)
+		if len(batch.Entries) > 0 {
+			assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+			assert.Equal(t, []byte("Entry 0: Initial data"), batch.Entries[0].Values)
 		}
-		if len(entries) > 1 {
-			assert.Equal(t, int64(1), entries[1].EntryId)
-			assert.Equal(t, []byte("Entry 1: More data"), entries[1].Values)
+		if len(batch.Entries) > 1 {
+			assert.Equal(t, int64(1), batch.Entries[1].EntryId)
+			assert.Equal(t, []byte("Entry 1: More data"), batch.Entries[1].Values)
 		}
 
 		err = reader.Close(ctx)
 		require.NoError(t, err)
 	})
 
-	t.Run("VerifyAllObjectsExist", func(t *testing.T) {
+	t.Run("AdvVerifyAllObjectsExist", func(t *testing.T) {
 		// List all objects and verify structure
 		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 
@@ -860,125 +306,8 @@ func TestMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 	})
 }
 
-// Benchmark tests
-func BenchmarkMinioFileWriter_WriteDataAsync(b *testing.B) {
-	if os.Getenv("SKIP_MINIO_TESTS") != "" {
-		b.Skip("Skipping MinIO tests")
-	}
-
-	minioHdl, cfg := setupMinioFileWriterTest(&testing.T{})
-	ctx := context.Background()
-
-	logId := int64(9)
-	segmentId := int64(900)
-	baseDir := fmt.Sprintf("bench-write-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer writer.Close(ctx)
-
-	data := generateTestData(1024) // 1KB per entry
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("bench-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		// Wait for result
-		result, err := resultCh.ReadResult(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if result.Err != nil {
-			b.Fatal(result.Err)
-		}
-	}
-}
-
-// testSerialize replicates the serialize function for testing
-func testSerialize(entries []*cache.BufferEntry) []byte {
-	if len(entries) == 0 {
-		return []byte{}
-	}
-
-	serializedData := make([]byte, 0)
-
-	// Serialize all data records
-	for _, entry := range entries {
-		dataRecord, _ := codec.ParseData(entry.Data)
-		encodedRecord := codec.EncodeRecord(dataRecord)
-		serializedData = append(serializedData, encodedRecord...)
-	}
-
-	// Add BlockHeaderRecord at the beginning of the block
-	firstEntryID := entries[0].EntryId
-	lastEntryID := entries[len(entries)-1].EntryId
-
-	blockHeaderRecord := &codec.BlockHeaderRecord{
-		FirstEntryID: firstEntryID,
-		LastEntryID:  lastEntryID,
-	}
-
-	encodedBlockHeaderRecord := codec.EncodeRecord(blockHeaderRecord)
-	// Insert at the beginning instead of appending at the end
-	finalData := make([]byte, 0, len(serializedData)+len(encodedBlockHeaderRecord))
-	finalData = append(finalData, encodedBlockHeaderRecord...)
-	finalData = append(finalData, serializedData...)
-	return finalData
-
-	return serializedData
-}
-
-// TestSerializeDecodeCompatibility tests that serialize and DecodeRecordList work together
-func TestSerializeDecodeCompatibility(t *testing.T) {
-	// Create test data
-	entries := []*cache.BufferEntry{
-		{EntryId: 0, Data: []byte("Test data 1")},
-		{EntryId: 1, Data: []byte("Test data 2")},
-	}
-
-	// Serialize the entries
-	serializedData := testSerialize(entries)
-	t.Logf("Serialized data size: %d bytes", len(serializedData))
-
-	// Try to decode the records
-	records, err := codec.DecodeRecordList(serializedData)
-	require.NoError(t, err)
-	t.Logf("Decoded %d records", len(records))
-
-	// Print record types
-	for i, record := range records {
-		t.Logf("Record %d: type=%T", i, record)
-		if blockHeaderRecord, ok := record.(*codec.BlockHeaderRecord); ok {
-			t.Logf("  BlockHeaderRecord: FirstEntryID=%d, LastEntryID=%d", blockHeaderRecord.FirstEntryID, blockHeaderRecord.LastEntryID)
-		}
-	}
-
-	// Verify we have the expected records
-	assert.Greater(t, len(records), 0, "Should have at least one record")
-
-	// Look for BlockHeaderRecord
-	var blockHeaderRecord *codec.BlockHeaderRecord
-	for _, record := range records {
-		if bhr, ok := record.(*codec.BlockHeaderRecord); ok {
-			blockHeaderRecord = bhr
-			break
-		}
-	}
-
-	require.NotNil(t, blockHeaderRecord, "Should find BlockHeaderRecord")
-	assert.Equal(t, int64(0), blockHeaderRecord.FirstEntryID)
-	assert.Equal(t, int64(1), blockHeaderRecord.LastEntryID)
-}
-
 // TestMinioFileWriter_VerifyBlockLastRecord tests that written data contains BlockLastRecord
-func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
+func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -1074,7 +403,7 @@ func TestMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 	}
 }
 
-func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
+func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -1120,80 +449,82 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
-	t.Run("AutoBatchMode_BatchSizeNegativeOne", func(t *testing.T) {
+	t.Run("AdvAutoBatchMode_BatchSizeNegativeOne", func(t *testing.T) {
 		// Test auto batch mode (BatchSize = -1): should return only entries from one block
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2,  // Start from entry 2 (which should be in block 2)
 			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
 
-		// Should only return entries from the single block containing entry 2
-		assert.Equal(t, 1, len(entries), "Auto batch mode should return only entries from one block")
-		assert.Equal(t, int64(2), entries[0].EntryId)
-		assert.Equal(t, []byte("Block 2 - Entry 2"), entries[0].Values)
+		// Should return all entries from start point to end (entries 2, 3, 4)
+		assert.Equal(t, 3, len(batch.Entries), "Auto batch mode should return all entries from start point")
+		assert.Equal(t, int64(2), batch.Entries[0].EntryId)
+		assert.Equal(t, int64(3), batch.Entries[1].EntryId)
+		assert.Equal(t, int64(4), batch.Entries[2].EntryId)
+		assert.Equal(t, []byte("Block 2 - Entry 2"), batch.Entries[0].Values)
 
-		t.Logf("Auto batch mode returned %d entries starting from entry %d", len(entries), entries[0].EntryId)
+		t.Logf("Auto batch mode returned %d entries starting from entry %d", len(batch.Entries), batch.Entries[0].EntryId)
 	})
 
-	t.Run("SpecifiedBatchMode_BatchSize3", func(t *testing.T) {
+	t.Run("AdvSpecifiedBatchMode_BatchSize3", func(t *testing.T) {
 		// Test specified batch size mode: should return exactly 3 entries across multiple blocks
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 1, // Start from entry 1
 			BatchSize:    3, // Request exactly 3 entries
 		})
 		require.NoError(t, err)
 
 		// Should return exactly 3 entries (entries 1, 2, 3) across multiple blocks
-		assert.Equal(t, 3, len(entries), "Specified batch mode should return exactly 3 entries")
-		assert.Equal(t, int64(1), entries[0].EntryId)
-		assert.Equal(t, int64(2), entries[1].EntryId)
-		assert.Equal(t, int64(3), entries[2].EntryId)
-		assert.Equal(t, []byte("Block 1 - Entry 1"), entries[0].Values)
-		assert.Equal(t, []byte("Block 2 - Entry 2"), entries[1].Values)
-		assert.Equal(t, []byte("Block 3 - Entry 3"), entries[2].Values)
+		assert.Equal(t, 3, len(batch.Entries), "Specified batch mode should return exactly 3 entries")
+		assert.Equal(t, int64(1), batch.Entries[0].EntryId)
+		assert.Equal(t, int64(2), batch.Entries[1].EntryId)
+		assert.Equal(t, int64(3), batch.Entries[2].EntryId)
+		assert.Equal(t, []byte("Block 1 - Entry 1"), batch.Entries[0].Values)
+		assert.Equal(t, []byte("Block 2 - Entry 2"), batch.Entries[1].Values)
+		assert.Equal(t, []byte("Block 3 - Entry 3"), batch.Entries[2].Values)
 
 		t.Logf("Specified batch mode returned %d entries from entry %d to %d",
-			len(entries), entries[0].EntryId, entries[len(entries)-1].EntryId)
+			len(batch.Entries), batch.Entries[0].EntryId, batch.Entries[len(batch.Entries)-1].EntryId)
 	})
 
-	t.Run("SpecifiedBatchMode_BatchSize2", func(t *testing.T) {
+	t.Run("AdvSpecifiedBatchMode_BatchSize2", func(t *testing.T) {
 		// Test specified batch size mode: should return exactly 2 entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 3, // Start from entry 3
 			BatchSize:    2, // Request exactly 2 entries
 		})
 		require.NoError(t, err)
 
 		// Should return exactly 2 entries (entries 3, 4)
-		assert.Equal(t, 2, len(entries), "Specified batch mode should return exactly 2 entries")
-		assert.Equal(t, int64(3), entries[0].EntryId)
-		assert.Equal(t, int64(4), entries[1].EntryId)
-		assert.Equal(t, []byte("Block 3 - Entry 3"), entries[0].Values)
-		assert.Equal(t, []byte("Block 4 - Entry 4"), entries[1].Values)
+		assert.Equal(t, 2, len(batch.Entries), "Specified batch mode should return exactly 2 entries")
+		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
+		assert.Equal(t, int64(4), batch.Entries[1].EntryId)
+		assert.Equal(t, []byte("Block 3 - Entry 3"), batch.Entries[0].Values)
+		assert.Equal(t, []byte("Block 4 - Entry 4"), batch.Entries[1].Values)
 
 		t.Logf("Specified batch mode returned %d entries from entry %d to %d",
-			len(entries), entries[0].EntryId, entries[len(entries)-1].EntryId)
+			len(batch.Entries), batch.Entries[0].EntryId, batch.Entries[len(batch.Entries)-1].EntryId)
 	})
 
-	t.Run("AutoBatchMode_StartFromFirstEntry", func(t *testing.T) {
+	t.Run("AdvAutoBatchMode_StartFromFirstEntry", func(t *testing.T) {
 		// Test auto batch mode starting from first entry
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,  // Start from entry 0 (first entry)
 			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
 
-		// Should only return entries from the first block
-		assert.Equal(t, 1, len(entries), "Auto batch mode should return only entries from first block")
-		assert.Equal(t, int64(0), entries[0].EntryId)
-		assert.Equal(t, []byte("Block 0 - Entry 0"), entries[0].Values)
+		// Should return all entries from start point (entries 0, 1, 2, 3, 4)
+		assert.Equal(t, 5, len(batch.Entries), "Auto batch mode should return all entries from start point")
+		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+		assert.Equal(t, []byte("Block 0 - Entry 0"), batch.Entries[0].Values)
 
-		t.Logf("Auto batch mode from first entry returned %d entries", len(entries))
+		t.Logf("Auto batch mode from first entry returned %d entries", len(batch.Entries))
 	})
 
 	err = reader.Close(ctx)
@@ -1201,7 +532,7 @@ func TestMinioFileReader_ReadNextBatchModes(t *testing.T) {
 }
 
 // TestMinioFileWriter_DataIntegrityWithDifferentSizes tests data integrity with various data sizes
-func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
+func TestAdvMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -1258,22 +589,22 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 
 	// Read all entries
-	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, len(testCases), len(entries))
+	assert.Equal(t, len(testCases), len(batch.Entries))
 
 	// Verify each entry
 	for i, tc := range testCases {
 		t.Run(fmt.Sprintf("Verify_%s", tc.name), func(t *testing.T) {
-			assert.Equal(t, int64(i), entries[i].EntryId)
-			assert.Equal(t, tc.data, entries[i].Values, "Data mismatch for %s", tc.name)
+			assert.Equal(t, int64(i), batch.Entries[i].EntryId)
+			assert.Equal(t, tc.data, batch.Entries[i].Values, "Data mismatch for %s", tc.name)
 		})
 	}
 
@@ -1282,7 +613,7 @@ func TestMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 }
 
 // TestMinioFileReader_SequentialReading tests sequential reading patterns
-func TestMinioFileReader_SequentialReading(t *testing.T) {
+func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -1327,77 +658,77 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 
-	t.Run("ReadFromBeginning", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadFromBeginning", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(totalEntries),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, totalEntries, len(entries))
+		assert.Equal(t, totalEntries, len(batch.Entries))
 
 		// Verify order and content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId)
 			assert.Equal(t, testData[i], entry.Values)
 		}
 	})
 
-	t.Run("ReadFromMiddle", func(t *testing.T) {
+	t.Run("AdvReadFromMiddle", func(t *testing.T) {
 		startId := int64(10)
 		expectedCount := totalEntries - int(startId)
 
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    int64(expectedCount),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, expectedCount, len(entries))
+		assert.Equal(t, expectedCount, len(batch.Entries))
 
 		// Verify order and content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := startId + int64(i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, testData[expectedId], entry.Values)
 		}
 	})
 
-	t.Run("ReadWithSmallBatchSize", func(t *testing.T) {
+	t.Run("AdvReadWithSmallBatchSize", func(t *testing.T) {
 		batchSize := int64(3)
 		startId := int64(5)
 
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    batchSize,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, int(batchSize), len(entries))
+		assert.Equal(t, int(batchSize), len(batch.Entries))
 
 		// Verify content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := startId + int64(i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, testData[expectedId], entry.Values)
 		}
 	})
 
-	t.Run("ReadAutoBatchFromDifferentBlocks", func(t *testing.T) {
+	t.Run("AdvReadAutoBatchFromDifferentBlocks", func(t *testing.T) {
 		// Test auto batch mode from different starting points
 		testCases := []int64{0, 5, 10, 15, 19}
 
 		for _, startId := range testCases {
-			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    -1, // Auto batch mode
 			})
 			require.NoError(t, err)
-			assert.Greater(t, len(entries), 0)
+			assert.Greater(t, len(batch.Entries), 0)
 
 			// Should return at least one entry
-			assert.Equal(t, startId, entries[0].EntryId)
-			assert.Equal(t, testData[startId], entries[0].Values)
+			assert.Equal(t, startId, batch.Entries[0].EntryId)
+			assert.Equal(t, testData[startId], batch.Entries[0].Values)
 		}
 	})
 
@@ -1406,7 +737,7 @@ func TestMinioFileReader_SequentialReading(t *testing.T) {
 }
 
 // TestMinioFileWriter_ConcurrentReadWrite tests concurrent read and write operations
-func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
+func TestAdvMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -1480,14 +811,14 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Try to read existing data
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		if err != nil {
 			errors <- err
 			return
 		}
 		defer reader.Close(ctx)
 
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(initialEntries),
 		})
@@ -1496,13 +827,13 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 			return
 		}
 
-		if len(entries) != initialEntries {
-			errors <- fmt.Errorf("expected %d entries, got %d", initialEntries, len(entries))
+		if len(batch.Entries) != initialEntries {
+			errors <- fmt.Errorf("expected %d entries, got %d", initialEntries, len(batch.Entries))
 			return
 		}
 
 		// Verify initial data
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expected := fmt.Sprintf("Initial entry %d", i)
 			if string(entry.Values) != expected {
 				errors <- fmt.Errorf("data mismatch at entry %d: expected %s, got %s", i, expected, string(entry.Values))
@@ -1526,22 +857,22 @@ func TestMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Final verification
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 
-	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(initialEntries + 10),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, initialEntries+10, len(entries))
+	assert.Equal(t, initialEntries+10, len(batch.Entries))
 
 	err = reader.Close(ctx)
 	require.NoError(t, err)
 }
 
 // TestMinioFileReader_ErrorHandling tests error handling in reader
-func TestMinioFileReader_ErrorHandling(t *testing.T) {
+func TestAdvMinioFileReader_ErrorHandling(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -1549,25 +880,25 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 	minioHdl, _ := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
-	t.Run("NonExistentSegment", func(t *testing.T) {
+	t.Run("AdvNonExistentSegment", func(t *testing.T) {
 		nonExistentBaseDir := fmt.Sprintf("non-existent-segment-%d", time.Now().Unix())
 
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, nonExistentBaseDir, 1000, 2000, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, nonExistentBaseDir, 1000, 2000, minioHdl, nil)
 		require.NoError(t, err) // Should succeed in creating reader
 
 		// But reading should fail gracefully
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10,
 		})
 		assert.Error(t, err)
-		assert.Nil(t, entries)
+		assert.Nil(t, batch)
 
 		err = reader.Close(ctx)
 		require.NoError(t, err)
 	})
 
-	t.Run("InvalidEntryId", func(t *testing.T) {
+	t.Run("AdvInvalidEntryId", func(t *testing.T) {
 		// Create a valid segment first
 		logId := int64(23)
 		segmentId := int64(2300)
@@ -1598,24 +929,24 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create reader and test invalid entry IDs
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 
 		// Test reading from non-existent entry ID
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 100, // Way beyond available entries
 			BatchSize:    10,
 		})
 		assert.Error(t, err)
-		assert.Nil(t, entries)
+		assert.Nil(t, batch)
 
 		// Test reading from negative entry ID
-		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: -1,
 			BatchSize:    10,
 		})
 		assert.Error(t, err)
-		assert.Nil(t, entries)
+		assert.Nil(t, batch)
 
 		err = reader.Close(ctx)
 		require.NoError(t, err)
@@ -1623,7 +954,7 @@ func TestMinioFileReader_ErrorHandling(t *testing.T) {
 }
 
 // TestMinioFileWriter_LargeEntryHandling tests handling of very large entries
-func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
+func TestAdvMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -1649,6 +980,7 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 		{"4MB", 4 * 1024 * 1024, nil},
 		{"8MB", 8 * 1024 * 1024, nil},
 		{"16MB", 16 * 1024 * 1024, nil},
+		{"32MB", 32 * 1024 * 1024, nil},
 	}
 
 	// Generate test data once and store it
@@ -1687,34 +1019,45 @@ func TestMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify reading large entries
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 
-	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, len(testCases), len(entries))
+	assert.Equal(t, len(testCases)-1, len(batch.Entries))
 
 	// Verify each large entry
 	for i, tc := range testCases {
+		if i == len(testCases)-1 {
+			break
+		}
 		t.Run(fmt.Sprintf("Verify_%s", tc.name), func(t *testing.T) {
-			assert.Equal(t, int64(i), entries[i].EntryId)
-			assert.Equal(t, tc.size, len(entries[i].Values))
+			assert.Equal(t, int64(i), batch.Entries[i].EntryId)
+			assert.Equal(t, tc.size, len(batch.Entries[i].Values))
 
 			// Verify data integrity for first and last few bytes using the stored data
-			assert.Equal(t, tc.data[:100], entries[i].Values[:100], "First 100 bytes mismatch")
-			assert.Equal(t, tc.data[len(tc.data)-100:], entries[i].Values[len(entries[i].Values)-100:], "Last 100 bytes mismatch")
+			assert.Equal(t, tc.data[:100], batch.Entries[i].Values[:100], "First 100 bytes mismatch")
+			assert.Equal(t, tc.data[len(tc.data)-100:], batch.Entries[i].Values[len(batch.Entries[i].Values)-100:], "Last 100 bytes mismatch")
 		})
 	}
-
 	err = reader.Close(ctx)
 	require.NoError(t, err)
+
+	// last 32MB msg
+	batch2, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+		StartEntryID: 4,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(batch2.Entries))
+	assert.Equal(t, int64(4), batch2.Entries[0].EntryId)
+	assert.Equal(t, len(testCases[4].data), len(batch2.Entries[0].Values))
 }
 
 // TestMinioFileWriter_VeryLargePayloadSupport specifically tests writing very large payloads
-func TestMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
+func TestAdvMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -1784,32 +1127,32 @@ func TestMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify reading large entries back
-	t.Run("VerifyReadBack", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvVerifyReadBack", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
 		// Read all entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testSizes)),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, len(testSizes), len(entries))
+		assert.Equal(t, len(testSizes), len(batch.Entries))
 
 		// Verify each large entry
 		for i, testCase := range testSizes {
 			t.Run(fmt.Sprintf("Verify_%s", testCase.name), func(t *testing.T) {
-				assert.Equal(t, int64(i), entries[i].EntryId)
-				assert.Equal(t, testCase.size, len(entries[i].Values))
+				assert.Equal(t, int64(i), batch.Entries[i].EntryId)
+				assert.Equal(t, testCase.size, len(batch.Entries[i].Values))
 
 				// Verify data integrity by comparing with original
 				if i < len(testData) {
 					// Compare first and last 1000 bytes for efficiency
-					assert.Equal(t, testData[i][:1000], entries[i].Values[:1000],
+					assert.Equal(t, testData[i][:1000], batch.Entries[i].Values[:1000],
 						"First 1000 bytes mismatch for %s", testCase.name)
 					assert.Equal(t, testData[i][len(testData[i])-1000:],
-						entries[i].Values[len(entries[i].Values)-1000:],
+						batch.Entries[i].Values[len(batch.Entries[i].Values)-1000:],
 						"Last 1000 bytes mismatch for %s", testCase.name)
 				}
 
@@ -1820,7 +1163,7 @@ func TestMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 }
 
 // TestMinioFileWriter_MetadataConsistency tests metadata consistency across operations
-func TestMinioFileWriter_MetadataConsistency(t *testing.T) {
+func TestAdvMinioFileWriter_MetadataConsistency(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -1861,7 +1204,7 @@ func TestMinioFileWriter_MetadataConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify metadata consistency in reader
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 
 	// Check footer metadata
@@ -1896,105 +1239,8 @@ func TestMinioFileWriter_MetadataConsistency(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// BenchmarkMinioFileWriter_ThroughputTest benchmarks write throughput
-func BenchmarkMinioFileWriter_ThroughputTest(b *testing.B) {
-	minioHdl, cfg := setupMinioFileWriterTest(&testing.T{})
-	ctx := context.Background()
-
-	baseDir := fmt.Sprintf("bench-throughput-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
-
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, 1, 1, minioHdl, cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer writer.Close(ctx)
-
-	data := generateTestData(1024) // 1KB per entry
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("bench-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		result, err := resultCh.ReadResult(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if result.Err != nil {
-			b.Fatal(result.Err)
-		}
-	}
-}
-
-// BenchmarkMinioFileReader_ThroughputTest benchmarks read throughput
-func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
-	minioHdl, cfg := setupMinioFileWriterTest(&testing.T{})
-	ctx := context.Background()
-
-	baseDir := fmt.Sprintf("bench-read-throughput-%d", time.Now().Unix())
-	defer cleanupMinioFileWriterObjects(&testing.T{}, minioHdl, baseDir)
-
-	// Prepare test data
-	writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, 1, 1, minioHdl, cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	// Write 1000 entries
-	data := generateTestData(1024)
-	for i := 0; i < 1000; i++ {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("bench-prep-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		if err != nil {
-			b.Fatal(err)
-		}
-		result, err := resultCh.ReadResult(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if result.Err != nil {
-			b.Fatal(result.Err)
-		}
-	}
-
-	_, err = writer.Finalize(ctx)
-	if err != nil {
-		b.Fatal(err)
-	}
-	err = writer.Close(ctx)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	// Benchmark reading
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, 1, 1, minioHdl)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer reader.Close(ctx)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		startId := int64(i % 900) // Ensure we don't go beyond available entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartEntryID: startId,
-			BatchSize:    10,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(entries) == 0 {
-			b.Fatal("No entries returned")
-		}
-	}
-}
-
 // TestEmptyPayloadValidation tests that empty payloads are rejected at the client level
-func TestEmptyPayloadValidation(t *testing.T) {
+func TestAdvEmptyPayloadValidation(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -2009,7 +1255,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 	require.NotNil(t, writer)
 
 	// Test empty payload validation at the storage layer
-	t.Run("EmptyPayloadAtStorageLayer", func(t *testing.T) {
+	t.Run("AdvEmptyPayloadAtStorageLayer", func(t *testing.T) {
 		// Try to write empty data directly to storage layer
 		// This should now be rejected immediately by WriteDataAsync
 		_, err := writer.WriteDataAsync(ctx, 0, []byte{}, channel.NewLocalResultChannel("test-empty-payload"))
@@ -2020,7 +1266,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test empty payload validation at the client level (LogWriter)
-	t.Run("EmptyPayloadAtClientLevel", func(t *testing.T) {
+	t.Run("AdvEmptyPayloadAtClientLevel", func(t *testing.T) {
 		// This test requires creating a LogWriter, which needs more setup
 		// For now, we'll test the MarshalMessage function directly
 
@@ -2034,7 +1280,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test nil payload validation
-	t.Run("NilPayloadAtClientLevel", func(t *testing.T) {
+	t.Run("AdvNilPayloadAtClientLevel", func(t *testing.T) {
 		nilMsg := &log.WriterMessage{
 			Payload:    nil,
 			Properties: map[string]string{"test": "value"},
@@ -2045,7 +1291,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test both empty err
-	t.Run("BothEmptyMsg", func(t *testing.T) {
+	t.Run("AdvBothEmptyMsg", func(t *testing.T) {
 		nilMsg := &log.WriterMessage{
 			Payload:    nil,
 			Properties: map[string]string{},
@@ -2059,7 +1305,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test valid payload for comparison
-	t.Run("ValidPayload", func(t *testing.T) {
+	t.Run("AdvValidPayload", func(t *testing.T) {
 		validMsg := &log.WriterMessage{
 			Payload:    []byte("valid data"),
 			Properties: map[string]string{"test": "value"},
@@ -2077,7 +1323,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 }
 
 // TestMinioFileWriter_HeaderRecordVerification tests that the first record is always HeaderRecord
-func TestMinioFileWriter_HeaderRecordVerification(t *testing.T) {
+func TestAdvMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -2183,7 +1429,7 @@ func TestMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	}
 }
 
-func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
+func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 	if os.Getenv("SKIP_MINIO_TESTS") != "" {
 		t.Skip("Skipping MinIO tests")
 	}
@@ -2196,7 +1442,7 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 	baseDir := fmt.Sprintf("test-recovery-debug-%d", time.Now().Unix())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
-	t.Run("WriteDataAndInterruptOnly", func(t *testing.T) {
+	t.Run("AdvWriteDataAndInterruptOnly", func(t *testing.T) {
 		// Create first writer and write some data
 		writer1, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
@@ -2266,7 +1512,7 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 }
 
 // TestMinioFileRW_ConcurrentReadWrite tests concurrent reading and writing to verify real-time read capability in MinIO
-func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
+func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -2347,7 +1593,7 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(writeInterval + 100*time.Millisecond)
 
 		// Create reader for the incomplete file
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		if err != nil {
 			t.Errorf("Reader: Failed to create reader: %v", err)
 			return
@@ -2377,7 +1623,7 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 
 					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
 
-					entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+					batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 						StartEntryID: startId,
 						BatchSize:    batchSize,
 					})
@@ -2390,7 +1636,7 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 					}
 
 					// Process read entries
-					for _, entry := range entries {
+					for _, entry := range batch.Entries {
 						readEntries[entry.EntryId] = entry.Values
 						if entry.EntryId > lastReadEntryId {
 							lastReadEntryId = entry.EntryId
@@ -2400,7 +1646,7 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 					}
 
 					t.Logf("Reader: Read %d entries, lastReadEntryId now %d",
-						len(entries), lastReadEntryId)
+						len(batch.Entries), lastReadEntryId)
 				}
 
 				// Check if we've read all expected entries
@@ -2427,7 +1673,7 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 			startId := lastReadEntryId + 1
 			remainingEntries := int64(totalEntries) - startId
 
-			finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    remainingEntries,
 			})
@@ -2435,9 +1681,9 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 			if err != nil {
 				t.Errorf("Reader: Failed final read: %v", err)
 			} else {
-				t.Logf("Reader: Final read got %d entries", len(finalEntries))
+				t.Logf("Reader: Final read got %d entries", len(finalBatch.Entries))
 
-				for _, entry := range finalEntries {
+				for _, entry := range finalBatch.Entries {
 					readEntries[entry.EntryId] = entry.Values
 					if entry.EntryId > lastReadEntryId {
 						lastReadEntryId = entry.EntryId
@@ -2478,8 +1724,8 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Final verification: Create a new reader and verify data is accessible
-	t.Run("FinalVerification", func(t *testing.T) {
-		finalReader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvFinalVerification", func(t *testing.T) {
+		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -2491,28 +1737,28 @@ func TestMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 		lastEntryId, err := finalReader.GetLastEntryID(ctx)
 		if err == nil && lastEntryId >= 0 {
 			// Try to read from the beginning
-			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+			allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 0,
 				BatchSize:    lastEntryId + 1,
 			})
 			if err == nil {
-				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
+				assert.Greater(t, len(allBatch.Entries), 0, "Should read at least some entries")
 
 				// Verify entry content and order
-				for i, entry := range allEntries {
+				for i, entry := range allBatch.Entries {
 					assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
 					assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
 						"Entry content should contain expected prefix")
 				}
 
-				t.Logf("Final verification: Read %d entries successfully", len(allEntries))
+				t.Logf("Final verification: Read %d entries successfully", len(allBatch.Entries))
 			}
 		}
 	})
 }
 
 // TestMinioFileRW_ConcurrentOneWriteMultipleReads tests one writer with multiple concurrent readers for MinIO
-func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
+func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -2600,7 +1846,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 			time.Sleep(writeInterval + time.Duration(readerNum*50)*time.Millisecond)
 
 			// Create reader for the incomplete file
-			reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 			if err != nil {
 				t.Errorf("Reader %d: Failed to create reader: %v", readerNum, err)
 				return
@@ -2658,7 +1904,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						t.Logf("Reader %d: Attempting to read %d entries starting from %d (latest written: %d)",
 							readerNum, entriesToRead, startId, latestWrittenId)
 
-						entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+						batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 							StartEntryID: startId,
 							BatchSize:    entriesToRead,
 						})
@@ -2672,7 +1918,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						}
 
 						// Process read entries
-						for _, entry := range entries {
+						for _, entry := range batch.Entries {
 							readEntries[entry.EntryId] = entry.Values
 							if entry.EntryId > lastReadEntryId {
 								lastReadEntryId = entry.EntryId
@@ -2682,7 +1928,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						}
 
 						t.Logf("Reader %d: Read %d entries, lastReadEntryId now %d",
-							readerNum, len(entries), lastReadEntryId)
+							readerNum, len(batch.Entries), lastReadEntryId)
 					}
 
 					// Check if we've read all expected entries
@@ -2710,7 +1956,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				startId := lastReadEntryId + 1
 				remainingEntries := int64(totalEntries) - startId
 
-				finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 					StartEntryID: startId,
 					BatchSize:    remainingEntries,
 				})
@@ -2718,9 +1964,9 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				if err != nil {
 					t.Errorf("Reader %d: Failed final read: %v", readerNum, err)
 				} else {
-					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalEntries))
+					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalBatch.Entries))
 
-					for _, entry := range finalEntries {
+					for _, entry := range finalBatch.Entries {
 						readEntries[entry.EntryId] = entry.Values
 						if entry.EntryId > lastReadEntryId {
 							lastReadEntryId = entry.EntryId
@@ -2781,7 +2027,7 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all readers got consistent data (allowing for MinIO block boundaries)
-	t.Run("VerifyReaderConsistency", func(t *testing.T) {
+	t.Run("AdvVerifyReaderConsistency", func(t *testing.T) {
 		require.Equal(t, numReaders, len(allReaderResults), "Should have results from all readers")
 
 		// Find the minimum number of entries read by any reader
@@ -2819,8 +2065,8 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	})
 
 	// Final verification: Create a new reader and verify data is accessible
-	t.Run("FinalFileVerification", func(t *testing.T) {
-		finalReader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvFinalFileVerification", func(t *testing.T) {
+		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -2831,28 +2077,28 @@ func TestMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 		// Verify we can read available entries
 		lastEntryId, err := finalReader.GetLastEntryID(ctx)
 		if err == nil && lastEntryId >= 0 {
-			allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+			allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 0,
 				BatchSize:    lastEntryId + 1,
 			})
 			if err == nil {
-				assert.Greater(t, len(allEntries), 0, "Should read at least some entries")
+				assert.Greater(t, len(allBatch.Entries), 0, "Should read at least some entries")
 
 				// Verify entry content and order
-				for i, entry := range allEntries {
+				for i, entry := range allBatch.Entries {
 					assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
 					assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
 						"Entry content should contain expected prefix")
 				}
 
-				t.Logf("Final verification: File contains %d readable entries", len(allEntries))
+				t.Logf("Final verification: File contains %d readable entries", len(allBatch.Entries))
 			}
 		}
 	})
 }
 
 // TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize tests entries larger than maxFlushSize
-func TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
+func TestAdvMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -2919,22 +2165,22 @@ func TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Read all entries and verify them
-	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
-	require.Equal(t, len(testCases), len(entries), "Should read all entries")
+	require.Equal(t, len(testCases), len(batch.Entries), "Should read all entries")
 
 	// Verify each large entry
 	for i, originalData := range writtenData {
-		require.True(t, i < len(entries), "Entry %d should exist", i)
-		data := entries[i].Values
+		require.True(t, i < len(batch.Entries), "Entry %d should exist", i)
+		data := batch.Entries[i].Values
 		require.Equal(t, len(originalData), len(data), "Entry %d: data length mismatch", i)
 
 		// Verify data integrity byte by byte for first and last 100 bytes
@@ -2962,12 +2208,8 @@ func TestMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestMinioFileWriter_Compaction tests the complete compaction workflow
-func TestMinioFileWriter_Compaction(t *testing.T) {
-	if os.Getenv("SKIP_MINIO_TESTS") != "" {
-		t.Skip("Skipping MinIO tests")
-	}
-
+// TestAdvMinioFileWriter_Compaction tests the complete compaction workflow
+func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -2981,7 +2223,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 
 	// Phase 1: Write data to create multiple small blocks
-	t.Run("WriteDataToCreateMultipleBlocks", func(t *testing.T) {
+	t.Run("AdvWriteDataToCreateMultipleBlocks", func(t *testing.T) {
 		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
@@ -3036,8 +2278,8 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	var originalBlockCount int
 	var originalFooter *codec.FooterRecord
 
-	t.Run("VerifyOriginalDataBeforeCompaction", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvVerifyOriginalDataBeforeCompaction", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3055,12 +2297,12 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 			originalBlockCount, originalFooter.TotalRecords)
 
 		// Read all original data for later comparison
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(originalFooter.TotalRecords),
 		})
 		require.NoError(t, err)
-		originalData = entries
+		originalData = batch.Entries
 		assert.Equal(t, int(originalFooter.TotalRecords), len(originalData))
 
 		t.Logf("Successfully read %d entries from original segment", len(originalData))
@@ -3068,7 +2310,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 
 	// Phase 3: Perform compaction
 	sizeAfterCompacted := int64(0)
-	t.Run("PerformCompaction", func(t *testing.T) {
+	t.Run("AdvPerformCompaction", func(t *testing.T) {
 		// Open writer in recovery mode to compact existing segment
 		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
 		require.NoError(t, err)
@@ -3087,8 +2329,8 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	})
 
 	// Phase 4: Verify compacted data
-	t.Run("VerifyCompactedData", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvVerifyCompactedData", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3109,26 +2351,26 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 			compactedBlockCount, originalBlockCount, compactedFooter.TotalRecords)
 
 		// Read all compacted data
-		compactedEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		compactedBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(compactedFooter.TotalRecords),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, len(originalData), len(compactedEntries), "Should have same number of entries")
+		assert.Equal(t, len(originalData), len(compactedBatch.Entries), "Should have same number of entries")
 
 		// Verify data integrity - every entry should be identical
 		for i, originalEntry := range originalData {
-			assert.Equal(t, originalEntry.EntryId, compactedEntries[i].EntryId,
+			assert.Equal(t, originalEntry.EntryId, compactedBatch.Entries[i].EntryId,
 				"Entry ID should match at index %d", i)
-			assert.Equal(t, originalEntry.Values, compactedEntries[i].Values,
+			assert.Equal(t, originalEntry.Values, compactedBatch.Entries[i].Values,
 				"Entry data should match at index %d", i)
 		}
 
-		t.Logf("Successfully verified %d entries have identical data after compaction", len(compactedEntries))
+		t.Logf("Successfully verified %d entries have identical data after compaction", len(compactedBatch.Entries))
 	})
 
 	// Phase 5: Verify object storage structure
-	t.Run("VerifyObjectStorageStructure", func(t *testing.T) {
+	t.Run("AdvVerifyObjectStorageStructure", func(t *testing.T) {
 		segmentPrefix := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId)
 		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix, true, minio.ListObjectsOptions{})
 
@@ -3164,9 +2406,11 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 
 	// Phase 6: Test auto batch mode before and after compaction
 	var originalAutoBatchSizes []int
+	var originalBlocks int32
 	var compactedAutoBatchSizes []int
+	var compactedBlocks int32
 
-	t.Run("TestAutoBatchBeforeCompaction", func(t *testing.T) {
+	t.Run("AdvTestAutoBatchBeforeCompaction", func(t *testing.T) {
 		// First, restore original (non-compacted) segment temporarily for testing
 		// We need to test with original data before it was compacted
 
@@ -3214,7 +2458,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test auto batch mode on original (non-compacted) segment
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -3222,30 +2466,32 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		footer := reader.GetFooter()
 		require.NotNil(t, footer)
 		assert.False(t, codec.IsCompacted(footer.Flags), "Test segment should not be compacted")
+		assert.Equal(t, int32(len(reader.GetBlockIndexes())), footer.TotalBlocks, "Total blocks should equal to index records")
+		originalBlocks = footer.TotalBlocks
 
 		// Test auto batch from different starting points
 		testStartIds := []int64{0, 3, 6, 9, 12, 15}
 		for _, startId := range testStartIds {
-			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
-				BatchSize:    -1, // Auto batch mode
+				BatchSize:    1, // soft limit count=1, it will return 1 block records
 			})
 			require.NoError(t, err)
 
-			if len(entries) > 0 {
-				originalAutoBatchSizes = append(originalAutoBatchSizes, len(entries))
-				assert.Equal(t, startId, entries[0].EntryId, "First entry should match start ID %d", startId)
+			if len(batch.Entries) > 0 {
+				originalAutoBatchSizes = append(originalAutoBatchSizes, len(batch.Entries))
+				assert.Equal(t, startId, batch.Entries[0].EntryId, "First entry should match start ID %d", startId)
 
-				t.Logf("Original segment: Auto batch from entry %d returned %d entries", startId, len(entries))
+				t.Logf("Original segment: Auto batch from entry %d returned %d entries", startId, len(batch.Entries))
 			}
 		}
 
 		t.Logf("Original segment auto batch sizes: %v", originalAutoBatchSizes)
 	})
 
-	t.Run("TestAutoBatchAfterCompaction", func(t *testing.T) {
+	t.Run("AdvTestAutoBatchAfterCompaction", func(t *testing.T) {
 		// Test auto batch mode on compacted segment
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -3253,28 +2499,33 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		footer := reader.GetFooter()
 		require.NotNil(t, footer)
 		assert.True(t, codec.IsCompacted(footer.Flags), "Segment should be compacted")
+		assert.Equal(t, int32(len(reader.GetBlockIndexes())), footer.TotalBlocks, "Total blocks should equal to index records")
+		compactedBlocks = footer.TotalBlocks
 
 		// Test auto batch from same starting points
 		testStartIds := []int64{0, 3, 6, 9, 12, 15}
 		for _, startId := range testStartIds {
-			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
-				BatchSize:    -1, // Auto batch mode
+				BatchSize:    1, // soft limit count=1, it will return 1 block records
 			})
 			require.NoError(t, err)
 
-			if len(entries) > 0 {
-				compactedAutoBatchSizes = append(compactedAutoBatchSizes, len(entries))
-				assert.Equal(t, startId, entries[0].EntryId, "First entry should match start ID %d", startId)
+			if len(batch.Entries) > 0 {
+				compactedAutoBatchSizes = append(compactedAutoBatchSizes, len(batch.Entries))
+				assert.Equal(t, startId, batch.Entries[0].EntryId, "First entry should match start ID %d", startId)
 
-				t.Logf("Compacted segment: Auto batch from entry %d returned %d entries", startId, len(entries))
+				t.Logf("Compacted segment: Auto batch from entry %d returned %d entries", startId, len(batch.Entries))
 			}
 		}
 
 		t.Logf("Compacted segment auto batch sizes: %v", compactedAutoBatchSizes)
 	})
 
-	t.Run("VerifyAutoBatchImprovementAfterCompaction", func(t *testing.T) {
+	t.Run("AdvVerifyAutoBatchImprovementAfterCompaction", func(t *testing.T) {
+		// Verify that compaction improve blocks amount
+		assert.Less(t, compactedBlocks, originalBlocks, "Should have less blocks than original blocks after compacted")
+
 		// Verify that compaction actually improves auto batch efficiency
 		require.Greater(t, len(originalAutoBatchSizes), 0, "Should have original auto batch size data")
 		require.Greater(t, len(compactedAutoBatchSizes), 0, "Should have compacted auto batch size data")
@@ -3324,38 +2575,38 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	})
 
 	// Additional tests for specific batch size mode
-	t.Run("TestSpecificBatchSizeModes", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReader(ctx, testBucket, baseDir, logId, segmentId, minioHdl)
+	t.Run("AdvTestSpecificBatchSizeModes", func(t *testing.T) {
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
 		// Test specific batch size mode
-		t.Run("SpecificBatchSize", func(t *testing.T) {
+		t.Run("AdvSpecificBatchSize", func(t *testing.T) {
 			batchSize := int64(7)
-			entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 3,
 				BatchSize:    batchSize,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, int(batchSize), len(entries), "Should read exact batch size")
+			assert.Equal(t, int(batchSize), len(batch.Entries), "Should read exact batch size")
 
 			// Verify sequential entry IDs
-			for i, entry := range entries {
+			for i, entry := range batch.Entries {
 				assert.Equal(t, int64(3+i), entry.EntryId, "Entry ID should be sequential")
 			}
 		})
 
 		// Test reading from different starting points
-		t.Run("DifferentStartingPoints", func(t *testing.T) {
+		t.Run("AdvDifferentStartingPoints", func(t *testing.T) {
 			testPoints := []int64{0, 1, 5, 10, 15}
 			for _, startId := range testPoints {
-				entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 					StartEntryID: startId,
 					BatchSize:    3,
 				})
 				require.NoError(t, err)
-				if len(entries) > 0 {
-					assert.Equal(t, startId, entries[0].EntryId,
+				if len(batch.Entries) > 0 {
+					assert.Equal(t, startId, batch.Entries[0].EntryId,
 						"First entry should match start ID %d", startId)
 				}
 			}
@@ -3363,7 +2614,7 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 	})
 
 	// Phase 7: Test compaction is idempotent
-	t.Run("TestCompactionIdempotency", func(t *testing.T) {
+	t.Run("AdvTestCompactionIdempotency", func(t *testing.T) {
 		// Try to compact again - should be skipped since already compacted
 		writer, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
 		require.NoError(t, err)
@@ -3378,5 +2629,371 @@ func TestMinioFileWriter_Compaction(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Log("Successfully verified compaction idempotency")
+	})
+}
+
+// TestAdvMinioFileReader_ReadNextBatchAdvScenarios tests all three scenarios of ReadNextBatchAdv
+func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
+	ctx := context.Background()
+	baseDir := fmt.Sprintf("test_adv_scenarios-%d", time.Now().Unix())
+	logId := int64(3001)
+	segId := int64(4001)
+
+	// Setup MinIO configuration
+	client, cfg := setupMinioFileWriterTest(t)
+
+	// Write test data first
+	writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, cfg)
+	require.NoError(t, err)
+
+	// Write multiple blocks of data
+	testData := [][]byte{
+		[]byte("Block 0 - Entry 0"),
+		[]byte("Block 0 - Entry 1"),
+		[]byte("Block 1 - Entry 2"),
+		[]byte("Block 1 - Entry 3"),
+		[]byte("Block 2 - Entry 4"),
+		[]byte("Block 2 - Entry 5"),
+	}
+
+	for i, data := range testData {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-adv-minio-%d", i))
+		returnedId, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+
+	// Complete the file to create footer
+	lastEntryId, err := writer.Finalize(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), lastEntryId)
+	writer.Close(ctx)
+
+	t.Run("Scenario1_WithAdvOpt", func(t *testing.T) {
+		// First, create a reader without advOpt to get some data
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, nil)
+		require.NoError(t, err)
+		defer reader1.Close(ctx)
+
+		// Read first batch to get batch info
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, batch1.LastBatchInfo)
+		assert.Equal(t, 2, len(batch1.Entries))
+
+		// Now create a new reader with advOpt from the previous batch
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, batch1.LastBatchInfo)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		// Read next batch using advOpt (should start from next block)
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 2, // Should be ignored when using advOpt
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		assert.Greater(t, len(batch2.Entries), 0)
+
+		// Verify the entries are from the expected continuation point
+		assert.True(t, batch2.Entries[0].EntryId >= 2, "Should continue from where previous batch left off")
+	})
+
+	t.Run("Scenario2_WithFooter_NoAdvOpt", func(t *testing.T) {
+		// Create reader without advOpt (should use footer)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify footer exists
+		footer := reader.GetFooter()
+		assert.NotNil(t, footer, "Should have footer for completed file")
+		assert.Greater(t, footer.TotalBlocks, int32(0))
+
+		// Read from middle using footer search
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 3,
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
+		assert.NotNil(t, batch.LastBatchInfo)
+	})
+
+	t.Run("Scenario3_NoFooter_IncompleteFile", func(t *testing.T) {
+		// Create a new incomplete file (no footer)
+		incompleteLogId := int64(3002)
+		incompleteSegId := int64(4002)
+
+		writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, incompleteLogId, incompleteSegId, client, cfg)
+		require.NoError(t, err)
+
+		// Write some data but don't finalize (no footer)
+		for i := 0; i < 4; i++ {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-incomplete-minio-%d", i))
+			returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("Entry %d", i)), resultCh)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), returnedId)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), result.SyncedId)
+		}
+		writer.Close(ctx) // Close without finalizing
+
+		// Create reader for incomplete file
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, incompleteLogId, incompleteSegId, client, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify no footer exists
+		footer := reader.GetFooter()
+		assert.Nil(t, footer, "Should have no footer for incomplete file")
+
+		// Read from incomplete file (should use dynamic scanning)
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    3,
+		})
+		require.NoError(t, err)
+		assert.Greater(t, len(batch.Entries), 0)
+		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+	})
+}
+
+// TestAdvMinioFileReader_AdvOptContinuation tests the continuation behavior with advOpt
+func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
+	ctx := context.Background()
+	baseDir := fmt.Sprintf("test_adv_continuation-%d", time.Now().Unix())
+	logId := int64(3003)
+	segId := int64(4003)
+
+	// Setup MinIO configuration
+	client, cfg := setupMinioFileWriterTest(t)
+
+	// Create test file with multiple blocks
+	writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, cfg)
+	require.NoError(t, err)
+
+	// Write 15 entries across multiple blocks
+	for i := 0; i < 15; i++ {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-continuation-minio-%d", i))
+		returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("Entry %d data", i)), resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+
+	lastEntryId, err := writer.Finalize(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(14), lastEntryId)
+	writer.Close(ctx)
+
+	// Test sequential reading with advOpt
+	var lastBatchInfo *storage.BatchInfo
+	var allReadEntries []*proto.LogEntry
+
+	for batchNum := 0; batchNum < 5; batchNum++ {
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, lastBatchInfo)
+		require.NoError(t, err)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
+			BatchSize:    3,
+		})
+
+		if err == werr.ErrFileReaderEndOfFile {
+			reader.Close(ctx)
+			break
+		}
+
+		require.NoError(t, err)
+		assert.Greater(t, len(batch.Entries), 0)
+
+		// Collect entries
+		allReadEntries = append(allReadEntries, batch.Entries...)
+		lastBatchInfo = batch.LastBatchInfo
+
+		reader.Close(ctx)
+	}
+
+	// Verify we read all entries in sequence
+	assert.Equal(t, 15, len(allReadEntries))
+	for i, entry := range allReadEntries {
+		assert.Equal(t, int64(i), entry.EntryId)
+	}
+}
+
+// TestAdvMinioFileReader_EdgeCases tests edge cases of ReadNextBatchAdv
+func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+	baseDir := fmt.Sprintf("test_adv_edge_cases-%d", time.Now().Unix())
+	logId := int64(3004)
+	segId := int64(4004)
+
+	// Setup MinIO configuration
+	client, cfg := setupMinioFileWriterTest(t)
+
+	t.Run("EmptyFile_NoAdvOpt", func(t *testing.T) {
+		// Create empty file
+		writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, logId, segId+1, client, cfg)
+		require.NoError(t, err)
+		writer.Close(ctx)
+
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+1, client, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		assert.Error(t, err)
+		assert.Nil(t, batch)
+	})
+
+	t.Run("SingleEntry_WithFooter", func(t *testing.T) {
+		writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, logId, segId+2, client, cfg)
+		require.NoError(t, err)
+
+		resultCh := channel.NewLocalResultChannel("test-single-minio")
+		returnedId, err := writer.WriteDataAsync(ctx, 0, []byte("single entry"), resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.SyncedId)
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), lastEntryId)
+		writer.Close(ctx)
+
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+2, client, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(batch.Entries))
+		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+		assert.NotNil(t, batch.LastBatchInfo)
+	})
+
+	t.Run("ReadBeyondEnd_WithAdvOpt", func(t *testing.T) {
+		writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, cfg)
+		require.NoError(t, err)
+
+		// Write 3 entries
+		for i := 0; i < 3; i++ {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-beyond-minio-%d", i))
+			returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("entry %d", i)), resultCh)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), returnedId)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), result.SyncedId)
+		}
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), lastEntryId)
+		writer.Close(ctx)
+
+		// Read all entries first
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, nil)
+		require.NoError(t, err)
+
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 3, len(batch1.Entries))
+		reader1.Close(ctx)
+
+		// Try to read beyond end with advOpt
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, batch1.LastBatchInfo)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 100, // Should be ignored
+			BatchSize:    10,
+		})
+		assert.Error(t, err)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+		assert.Nil(t, batch2)
+	})
+
+	t.Run("CompactedFile_WithAdvOpt", func(t *testing.T) {
+		// Create a compacted file by using proper configuration
+		compactedLogId := int64(3005)
+		compactedSegId := int64(4005)
+
+		writer, err := objectstorage.NewMinioFileWriter(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, cfg)
+		require.NoError(t, err)
+
+		// Write data
+		for i := 0; i < 6; i++ {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-compact-minio-%d", i))
+			returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("compacted entry %d", i)), resultCh)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), returnedId)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), result.SyncedId)
+		}
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(5), lastEntryId)
+		writer.Close(ctx)
+
+		// Read first batch
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, nil)
+		require.NoError(t, err)
+
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    3,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, len(batch1.Entries))
+		reader1.Close(ctx)
+
+		// Continue reading with advOpt
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, batch1.LastBatchInfo)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 100, // Should be ignored
+			BatchSize:    3,
+		})
+		require.Error(t, err)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+		assert.Nil(t, batch2)
 	})
 }

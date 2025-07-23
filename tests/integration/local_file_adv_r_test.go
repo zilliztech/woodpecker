@@ -21,11 +21,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/cockroachdb/errors"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,501 +30,13 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-func setupLocalFileTest(t *testing.T) string {
-	// Load configuration and initialize logger for debugging
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-
-	// Set log level to debug for detailed logging
-	cfg.Log.Level = "debug"
-
-	// Initialize logger with debug level
-	logger.InitLogger(cfg)
-
-	// Create a temporary directory for test files
-	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("woodpecker-local-test-%d", time.Now().Unix()))
-	err = os.MkdirAll(tempDir, 0755)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		os.RemoveAll(tempDir)
-	})
-
-	return tempDir
-}
-
-func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
-	tempDir := setupLocalFileTest(t)
-	ctx := context.Background()
-
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	// Create LocalFileWriter
-	logId := int64(1)
-	segmentId := int64(100)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-	require.NoError(t, err)
-	require.NotNil(t, writer)
-
-	t.Run("WriteDataAsync", func(t *testing.T) {
-		// Test writing data
-		testData := [][]byte{
-			[]byte("Hello, Local FS!"),
-			[]byte("This is test data"),
-			generateTestData(1024), // 1KB
-			generateTestData(2048), // 2KB
-		}
-
-		for i, data := range testData {
-			entryId := int64(i)
-			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-basic-%d", entryId))
-
-			returnedId, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, returnedId)
-
-			// Wait for result
-			result, err := resultCh.ReadResult(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, entryId, result.SyncedId)
-		}
-
-		// Verify writer state
-		assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-		assert.Equal(t, int64(3), writer.GetLastEntryId(ctx))
-	})
-
-	t.Run("ManualSync", func(t *testing.T) {
-		// Test manual sync
-		err := writer.Sync(ctx)
-		require.NoError(t, err)
-	})
-
-	t.Run("Finalize", func(t *testing.T) {
-		// Test finalize
-		lastEntryId, err := writer.Finalize(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), lastEntryId)
-	})
-
-	// Close writer
-	err = writer.Close(ctx)
-	require.NoError(t, err)
-
-	// Verify file exists (construct expected file path)
-	expectedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
-	_, err = os.Stat(expectedFilePath)
-	require.NoError(t, err)
-}
-
-func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
-	tempDir := setupLocalFileTest(t)
-	ctx := context.Background()
-
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-	blockSize := int64(128 * 1024) // 128KB per block to test multi-block scenario
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	logId := int64(2)
-	segmentId := int64(200)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-	require.NoError(t, err)
-	defer writer.Close(ctx)
-
-	// Write data that will span multiple blocks
-	largeData := [][]byte{
-		generateTestData(100 * 1024), // 100KB
-		generateTestData(100 * 1024), // 100KB - should trigger new block
-		generateTestData(50 * 1024),  // 50KB
-		generateTestData(80 * 1024),  // 80KB - should trigger another block
-		[]byte("Final small entry"),
-	}
-
-	// Write entries sequentially to avoid out-of-order issues
-	for i, data := range largeData {
-		entryId := int64(i)
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-large-%d", entryId))
-		returnedId, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-		require.NoError(t, err)
-		assert.Equal(t, entryId, returnedId)
-
-		// Wait for result
-		result, err := resultCh.ReadResult(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, entryId, result.SyncedId)
-	}
-
-	// Verify final state
-	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-	assert.Equal(t, int64(len(largeData)-1), writer.GetLastEntryId(ctx))
-
-	// Finalize and close
-	_, err = writer.Finalize(ctx)
-	require.NoError(t, err)
-}
-
-func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
-	tempDir := setupLocalFileTest(t)
-	ctx := context.Background()
-
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-	blockSize := int64(256 * 1024)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	logId := int64(3)
-	segmentId := int64(300)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-	require.NoError(t, err)
-	defer writer.Close(ctx)
-
-	// Test sequential writes with concurrent result handling
-	// Note: LocalFileWriter expects entries to be written in order
-	const totalEntries = 50
-
-	var wg sync.WaitGroup
-	results := make(chan error, totalEntries)
-
-	// Write entries sequentially but handle results concurrently
-	for i := 0; i < totalEntries; i++ {
-		entryId := int64(i)
-		data := []byte(fmt.Sprintf("Entry %d: %s", i, generateTestData(512)))
-
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-concurrent-%d", entryId))
-		_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-		if err != nil {
-			results <- err
-			continue
-		}
-
-		// Handle result in a separate goroutine
-		wg.Add(1)
-		go func(ch channel.ResultChannel) {
-			defer wg.Done()
-			result, err := ch.ReadResult(ctx)
-			if err != nil {
-				results <- err
-			} else {
-				results <- result.Err
-			}
-		}(resultCh)
-	}
-
-	wg.Wait()
-	close(results)
-
-	// Check results
-	successCount := 0
-	for err := range results {
-		if err == nil {
-			successCount++
-		} else {
-			t.Logf("Write error: %v", err)
-		}
-	}
-
-	assert.Equal(t, totalEntries, successCount, "All sequential writes should succeed")
-
-	// Verify final state
-	assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
-	assert.Equal(t, int64(totalEntries-1), writer.GetLastEntryId(ctx))
-
-	// Finalize
-	_, err = writer.Finalize(ctx)
-	require.NoError(t, err)
-}
-
-func TestLocalFileWriter_ErrorHandling(t *testing.T) {
-	tempDir := setupLocalFileTest(t)
-	ctx := context.Background()
-
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	require.NoError(t, err)
-	blockSize := int64(256 * 1024)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	t.Run("EmptyPayloadValidation", func(t *testing.T) {
-		logId := int64(4)
-		segmentId := int64(400)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Try to write empty data
-		resultCh := channel.NewLocalResultChannel("test-empty")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte{}, resultCh)
-		require.Error(t, err)
-		assert.True(t, werr.ErrEmptyPayload.Is(err))
-	})
-
-	t.Run("WriteAfterFinalize", func(t *testing.T) {
-		logId := int64(5)
-		segmentId := int64(500)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write some data and finalize
-		resultCh1 := channel.NewLocalResultChannel("test-initial")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("initial data"), resultCh1)
-		require.NoError(t, err)
-
-		result, err := resultCh1.ReadResult(ctx)
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-
-		_, err = writer.Finalize(ctx)
-		require.NoError(t, err)
-
-		// Try to write after finalize
-		resultCh2 := channel.NewLocalResultChannel("test-after-finalize")
-		_, err = writer.WriteDataAsync(ctx, 1, []byte("should fail"), resultCh2)
-		assert.Error(t, err)
-		assert.True(t, werr.ErrFileWriterFinalized.Is(err))
-	})
-
-	t.Run("WriteAfterClose", func(t *testing.T) {
-		logId := int64(6)
-		segmentId := int64(600)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-
-		// Close writer
-		err = writer.Close(ctx)
-		require.NoError(t, err)
-
-		// Try to write after close
-		resultCh := channel.NewLocalResultChannel("test-write-after-close")
-		_, err = writer.WriteDataAsync(ctx, 1, []byte("should fail"), resultCh)
-		assert.Error(t, err)
-		assert.True(t, werr.ErrFileWriterAlreadyClosed.Is(err))
-	})
-
-	t.Run("DuplicateEntryIdWithWrittenID", func(t *testing.T) {
-		logId := int64(7)
-		segmentId := int64(700)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx)
-		require.NoError(t, err)
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		require.NoError(t, err)
-
-		// Wait for second write with timeout - this should return immediately since it's a duplicate
-		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh2.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err) // Should succeed (idempotent)
-	})
-
-	t.Run("DuplicateEntryIdInBuffer", func(t *testing.T) {
-		logId := int64(8)
-		segmentId := int64(800)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx)
-		require.NoError(t, err)
-
-		// Wait for second write with timeout - this should return immediately since it's a duplicate
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh2.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err) // Should succeed (idempotent)
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		//require.NoError(t, result.Err)
-		assert.Error(t, err)
-		assert.True(t, errors.IsAny(err, context.Canceled, context.DeadlineExceeded))
-
-	})
-
-	t.Run("DuplicateEntryIdInFlushing", func(t *testing.T) {
-		t.Skipf("sync run too fast, should mock another case instead")
-
-		logId := int64(9)
-		segmentId := int64(900)
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Write first entry
-		resultCh1 := channel.NewLocalResultChannel("test-duplicate-1")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("first"), resultCh1)
-		require.NoError(t, err)
-
-		// Force sync to ensure first entry is processed
-		err = writer.Sync(ctx) // TODO run too fast, should mock another testcase
-		require.NoError(t, err)
-
-		// Try to write same entry ID again (should be handled gracefully)
-		resultCh2 := channel.NewLocalResultChannel("test-duplicate-2")
-		_, err = writer.WriteDataAsync(ctx, 0, []byte("duplicate"), resultCh2)
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		require.Error(t, err)
-		assert.True(t, werr.ErrFileWriterInvalidEntryId.Is(err))
-
-		// Wait for first write with timeout
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := resultCh1.ReadResult(ctxWithTimeout)
-		cancel()
-		require.NoError(t, err)
-		require.NoError(t, result.Err)
-
-		//// Wait for second write with timeout - this should return immediately since it's a duplicate
-		//ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		//result, err = resultCh2.ReadResult(ctxWithTimeout)
-		//cancel()
-		//require.NoError(t, err)
-		//require.NoError(t, result.Err) // Should succeed (idempotent)
-	})
-
-	t.Run("LargePayloadSupport", func(t *testing.T) {
-		logId := int64(10)
-		segmentId := int64(1000)
-
-		// Configure for large entries
-		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 20 * 1024 * 1024 // 20MB
-
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Test writing large payloads: 2MB, 4MB, 8MB, 16MB
-		testCases := []struct {
-			name string
-			size int
-		}{
-			{"2MB", 2 * 1024 * 1024},
-			{"4MB", 4 * 1024 * 1024},
-			{"8MB", 8 * 1024 * 1024},
-			{"16MB", 16 * 1024 * 1024},
-		}
-
-		for i, testCase := range testCases {
-			t.Run(testCase.name, func(t *testing.T) {
-				// Generate large payload with pattern for verification
-				largePayload := make([]byte, testCase.size)
-				for j := 0; j < len(largePayload); j++ {
-					largePayload[j] = byte(j % 256)
-				}
-
-				entryId := int64(i)
-				resultCh := channel.NewLocalResultChannel("test-large-payload")
-
-				// Write large payload
-				_, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
-				require.NoError(t, err)
-
-				// Wait for result with extended timeout for large entries
-				ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
-				result, err := resultCh.ReadResult(ctxWithTimeout)
-				cancel()
-				require.NoError(t, err)
-				require.NoError(t, result.Err)
-				assert.Equal(t, entryId, result.SyncedId)
-
-				t.Logf("Successfully wrote %s payload (%d bytes)", testCase.name, testCase.size)
-			})
-		}
-	})
-
-	t.Run("SingleEntryLargerThanMaxFlushSize", func(t *testing.T) {
-		logId := int64(11)
-		segmentId := int64(1001)
-
-		// Configure small maxFlushSize to test the edge case
-		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 1 * 1024 * 1024 // 1MB flush size
-
-		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-		require.NoError(t, err)
-		defer writer.Close(ctx)
-
-		// Test writing entries larger than maxFlushSize
-		testCases := []struct {
-			name string
-			size int
-		}{
-			{"1.5MB", int(1.5 * 1024 * 1024)}, // 1.5MB > 1MB maxFlushSize
-			{"2MB", 2 * 1024 * 1024},          // 2MB > 1MB maxFlushSize
-			{"3MB", 3 * 1024 * 1024},          // 3MB > 1MB maxFlushSize
-		}
-
-		for i, testCase := range testCases {
-			t.Run(testCase.name, func(t *testing.T) {
-				// Generate large payload
-				largePayload := make([]byte, testCase.size)
-				for j := 0; j < len(largePayload); j++ {
-					largePayload[j] = byte((j + i*1000) % 256) // Different pattern for each test
-				}
-
-				entryId := int64(i)
-				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-oversized-entry-%d", i))
-
-				// This should succeed even though entry size > maxFlushSize
-				// because we write to buffer first, then check for flush
-				_, err := writer.WriteDataAsync(ctx, entryId, largePayload, resultCh)
-				require.NoError(t, err)
-
-				// Wait for result
-				ctxWithTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
-				result, err := resultCh.ReadResult(ctxWithTimeout)
-				cancel()
-				require.NoError(t, err)
-				require.NoError(t, result.Err)
-				assert.Equal(t, entryId, result.SyncedId)
-
-				t.Logf("Successfully wrote %s payload (%d bytes) which is larger than maxFlushSize (1MB)", testCase.name, testCase.size)
-			})
-		}
-	})
-}
-
-func TestLocalFileReader_BasicRead(t *testing.T) {
+func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -567,61 +76,61 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now test reading
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
-	t.Run("GetLastEntryID", func(t *testing.T) {
+	t.Run("AdvGetLastEntryID", func(t *testing.T) {
 		lastEntryId, err := reader.GetLastEntryID(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), lastEntryId)
 	})
 
-	t.Run("ReadAllEntries", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadAllEntries", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testData)),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, len(testData), len(entries))
+		assert.Equal(t, len(testData), len(batch.Entries))
 
 		// Verify content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId)
 			assert.Equal(t, testData[i], entry.Values)
 		}
 	})
 
-	t.Run("ReadFromMiddle", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadFromMiddle", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2,
 			BatchSize:    3,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 3, len(entries))
+		assert.Equal(t, 3, len(batch.Entries))
 
 		// Verify content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := int64(2 + i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, testData[expectedId], entry.Values)
 		}
 	})
 
-	t.Run("ReadAutoBatchMode", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadAutoBatchMode", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 1,
 			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
-		assert.Greater(t, len(entries), 0)
+		assert.Greater(t, len(batch.Entries), 0)
 
 		// Should start from entry 1
-		assert.Equal(t, int64(1), entries[0].EntryId)
-		assert.Equal(t, testData[1], entries[0].Values)
+		assert.Equal(t, int64(1), batch.Entries[0].EntryId)
+		assert.Equal(t, testData[1], batch.Entries[0].Values)
 	})
 
-	t.Run("GetMetadata", func(t *testing.T) {
+	t.Run("AdvGetMetadata", func(t *testing.T) {
 		footer := reader.GetFooter()
 		require.NotNil(t, footer)
 		assert.Greater(t, footer.TotalBlocks, int32(0))
@@ -641,7 +150,7 @@ func TestLocalFileReader_BasicRead(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestLocalFileReader_MultipleBlocks(t *testing.T) {
+func TestAdvLocalFileReader_MultipleBlocks(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -685,40 +194,40 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test reading with different batch modes
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
-	t.Run("ReadAcrossMultipleBlocks", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadAcrossMultipleBlocks", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 5,
 			BatchSize:    10, // Read across multiple blocks
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 10, len(entries))
+		assert.Equal(t, 10, len(batch.Entries))
 
 		// Verify order and content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := int64(5 + i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, testData[expectedId], entry.Values)
 		}
 	})
 
-	t.Run("ReadSingleBlockMode", func(t *testing.T) {
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	t.Run("AdvReadSingleBlockMode", func(t *testing.T) {
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 8,
 			BatchSize:    -1, // Auto batch mode - single block
 		})
 		require.NoError(t, err)
-		assert.Greater(t, len(entries), 0)
+		assert.Greater(t, len(batch.Entries), 0)
 
 		// Should start from entry 8
-		assert.Equal(t, int64(8), entries[0].EntryId)
-		assert.Equal(t, testData[8], entries[0].Values)
+		assert.Equal(t, int64(8), batch.Entries[0].EntryId)
+		assert.Equal(t, testData[8], batch.Entries[0].Values)
 	})
 
-	t.Run("VerifyBlockStructure", func(t *testing.T) {
+	t.Run("AdvVerifyBlockStructure", func(t *testing.T) {
 		blockIndexes := reader.GetBlockIndexes()
 		assert.Greater(t, len(blockIndexes), 1, "Should have multiple blocks")
 
@@ -730,7 +239,7 @@ func TestLocalFileReader_MultipleBlocks(t *testing.T) {
 	})
 }
 
-func TestLocalFileReader_ErrorHandling(t *testing.T) {
+func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -739,14 +248,14 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 	require.NoError(t, err)
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
-	t.Run("NonExistentFile", func(t *testing.T) {
+	t.Run("AdvNonExistentFile", func(t *testing.T) {
 		nonExistentPath := filepath.Join(tempDir, "non-existent.log")
-		reader, err := disk.NewLocalFileReader(context.TODO(), nonExistentPath, 1000, 2000)
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), nonExistentPath, 1000, 2000, nil)
 		assert.Error(t, err)
 		assert.Nil(t, reader)
 	})
 
-	t.Run("InvalidEntryId", func(t *testing.T) {
+	t.Run("AdvInvalidEntryId", func(t *testing.T) {
 		// Create a valid file first
 		logId := int64(13)
 		segmentId := int64(1300)
@@ -772,21 +281,21 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test reading invalid entry IDs
-		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
 		// Test reading from non-existent entry ID
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 100, // Way beyond available entries
 			BatchSize:    10,
 		})
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err), err.Error())
-		assert.Nil(t, entries)
+		assert.Nil(t, batch)
 	})
 
-	t.Run("ReadAfterClose", func(t *testing.T) {
+	t.Run("AdvReadAfterClose", func(t *testing.T) {
 		logId := int64(14)
 		segmentId := int64(1400)
 		writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
@@ -807,24 +316,24 @@ func TestLocalFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create reader and close it
-		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 
 		err = reader.Close(ctx)
 		require.NoError(t, err)
 
 		// Try to read after close
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    1,
 		})
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderAlreadyClosed.Is(err))
-		assert.Nil(t, entries)
+		assert.Nil(t, batch)
 	})
 }
 
-func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
+func TestAdvLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -877,28 +386,28 @@ func TestLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Read all entries
-	entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, len(testCases), len(entries))
+	assert.Equal(t, len(testCases), len(batch.Entries))
 
 	// Verify each entry
 	for i, tc := range testCases {
 		t.Run(fmt.Sprintf("Verify_%s", tc.name), func(t *testing.T) {
-			assert.Equal(t, int64(i), entries[i].EntryId)
-			assert.Equal(t, tc.data, entries[i].Values, "Data mismatch for %s", tc.name)
+			assert.Equal(t, int64(i), batch.Entries[i].EntryId)
+			assert.Equal(t, tc.data, batch.Entries[i].Values, "Data mismatch for %s", tc.name)
 		})
 	}
 }
 
-func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
+func TestAdvLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -914,7 +423,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	require.NotNil(t, writer)
 
 	// Test empty payload validation at the storage layer
-	t.Run("EmptyPayloadAtStorageLayer", func(t *testing.T) {
+	t.Run("AdvEmptyPayloadAtStorageLayer", func(t *testing.T) {
 		// Try to write empty data directly to storage layer
 		_, err := writer.WriteDataAsync(ctx, 0, []byte{}, channel.NewLocalResultChannel("test-empty-payload"))
 		require.Error(t, err)
@@ -924,7 +433,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test empty payload validation at the client level (LogWriter)
-	t.Run("EmptyPayloadAtClientLevel", func(t *testing.T) {
+	t.Run("AdvEmptyPayloadAtClientLevel", func(t *testing.T) {
 		emptyMsg := &log.WriterMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{"test": "value"},
@@ -936,7 +445,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test nil payload validation
-	t.Run("NilPayloadAtClientLevel", func(t *testing.T) {
+	t.Run("AdvNilPayloadAtClientLevel", func(t *testing.T) {
 		nilMsg := &log.WriterMessage{
 			Payload:    nil,
 			Properties: map[string]string{"test": "value"},
@@ -949,7 +458,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test both empty err
-	t.Run("BothEmptyMsg", func(t *testing.T) {
+	t.Run("AdvBothEmptyMsg", func(t *testing.T) {
 		nilMsg := &log.WriterMessage{
 			Payload:    nil,
 			Properties: map[string]string{},
@@ -963,7 +472,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	})
 
 	// Test valid payload for comparison
-	t.Run("ValidPayload", func(t *testing.T) {
+	t.Run("AdvValidPayload", func(t *testing.T) {
 		validMsg := &log.WriterMessage{
 			Payload:    []byte("valid data"),
 			Properties: map[string]string{"test": "value"},
@@ -980,119 +489,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// BenchmarkLocalFileWriter_WriteDataAsync benchmarks write performance
-func BenchmarkLocalFileWriter_WriteDataAsync(b *testing.B) {
-	tempDir, err := os.MkdirTemp("", "woodpecker-bench-*")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	ctx := context.Background()
-	blockSize := int64(2 * 1024 * 1024) // 2MB
-	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	logId := int64(17)
-	segmentId := int64(1700)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer writer.Close(ctx)
-
-	data := generateTestData(1024) // 1KB per entry
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("bench-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		// Wait for result
-		result, err := resultCh.ReadResult(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if result.Err != nil {
-			b.Fatal(result.Err)
-		}
-	}
-}
-
-// BenchmarkLocalFileReader_ReadNextBatch benchmarks read performance
-func BenchmarkLocalFileReader_ReadNextBatch(b *testing.B) {
-	tempDir, err := os.MkdirTemp("", "woodpecker-bench-*")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	ctx := context.Background()
-	blockSize := int64(2 * 1024 * 1024) // 2MB
-	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
-
-	// Prepare test data
-	logId := int64(18)
-	segmentId := int64(1800)
-	writer, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	// Write 1000 entries
-	data := generateTestData(1024)
-	for i := 0; i < 1000; i++ {
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("bench-prep-%d", i))
-		_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
-		if err != nil {
-			b.Fatal(err)
-		}
-		result, err := resultCh.ReadResult(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if result.Err != nil {
-			b.Fatal(result.Err)
-		}
-	}
-
-	_, err = writer.Finalize(ctx)
-	if err != nil {
-		b.Fatal(err)
-	}
-	err = writer.Close(ctx)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	// Benchmark reading
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer reader.Close(ctx)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		startId := int64(i % 900) // Ensure we don't go beyond available entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-			StartEntryID: startId,
-			BatchSize:    10,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(entries) == 0 {
-			b.Fatal("No entries returned")
-		}
-	}
-}
-
-func TestLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
+func TestAdvLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -1134,7 +531,7 @@ func TestLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader and verify block structure
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -1152,7 +549,7 @@ func TestLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 }
 
 // TestLocalFileRW_WriteInterruptionAndRecovery tests write interruption and recovery scenarios
-func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
+func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -1162,7 +559,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
 
 	// Phase 1: Write some data and simulate interruption
-	t.Run("WriteDataAndInterrupt", func(t *testing.T) {
+	t.Run("AdvWriteDataAndInterrupt", func(t *testing.T) {
 		// Create first writer and write some data
 		logId := int64(20)
 		segmentId := int64(2000)
@@ -1211,7 +608,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 2: Recover from the interrupted file and continue writing
-	t.Run("RecoverAndContinueWriting", func(t *testing.T) {
+	t.Run("AdvRecoverAndContinueWriting", func(t *testing.T) {
 		// Create a new writer in recovery mode
 		logId := int64(20)
 		segmentId := int64(2000)
@@ -1271,10 +668,10 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 3: Verify the recovered and finalized file is complete and readable
-	t.Run("VerifyRecoveredFileComplete", func(t *testing.T) {
+	t.Run("AdvVerifyRecoveredFileComplete", func(t *testing.T) {
 		// Create reader to verify the file is properly finalized
 		// Use the logId and segmentId from the RecoverAndContinueWriting test (21, 2100)
-		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, 20, 2000)
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, 20, 2000, nil)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -1294,12 +691,12 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		assert.Equal(t, int64(7), lastEntryId) // 4 original + 4 recovery entries - 1 (0-based)
 
 		// Verify we can read data from the beginning
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10, // Read all entries
 		})
 		require.NoError(t, err)
-		require.Equal(t, 8, len(entries), "Should have 8 total entries (4 original + 4 recovery)")
+		require.Equal(t, 8, len(batch.Entries), "Should have 8 total entries (4 original + 4 recovery)")
 
 		// Verify entry content and order
 		expectedEntries := []string{
@@ -1313,7 +710,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 			"Entry 7: Final recovery data",
 		}
 
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match index")
 			if expectedEntries[i] != "" {
 				assert.Equal(t, expectedEntries[i], string(entry.Values), "Entry content should match")
@@ -1325,7 +722,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 4: Test that trying to recover from a finalized file success
-	t.Run("CanRecoverFromFinalizedFile", func(t *testing.T) {
+	t.Run("AdvCanRecoverFromFinalizedFile", func(t *testing.T) {
 		// Try to create a recovery writer from the finalized file
 		logId := int64(20)
 		segmentId := int64(2000)
@@ -1334,7 +731,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 5: Test recovery from empty file
-	t.Run("RecoveryFromEmptyFile", func(t *testing.T) {
+	t.Run("AdvRecoveryFromEmptyFile", func(t *testing.T) {
 		// Try to recover from empty file
 		logId := int64(23)
 		segmentId := int64(2300)
@@ -1370,7 +767,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 6: Test recovery from non-existent file
-	t.Run("RecoveryFromNonExistentFile", func(t *testing.T) {
+	t.Run("AdvRecoveryFromNonExistentFile", func(t *testing.T) {
 		// Try to recover from non-existent file
 		logId := int64(24)
 		segmentId := int64(2400)
@@ -1399,7 +796,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	})
 
 	// Phase 7: Test recovery from corrupted file (truncated in middle of record)
-	t.Run("RecoveryFromCorruptedFile", func(t *testing.T) {
+	t.Run("AdvRecoveryFromCorruptedFile", func(t *testing.T) {
 		// Create a file with valid data first
 		logId := int64(25)
 		segmentId := int64(2500)
@@ -1468,7 +865,7 @@ func TestLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 }
 
 // TestLocalFileReader_ReadIncompleteFile tests reading a file that is still being written (no footer)
-func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
+func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -1511,8 +908,8 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now test reading the incomplete file
-	t.Run("ReadIncompleteFileWithFullScan", func(t *testing.T) {
-		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	t.Run("AdvReadIncompleteFileWithFullScan", func(t *testing.T) {
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -1523,7 +920,7 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 
 		// Verify that block indexes were built from full scan
 		blockIndexes := reader.GetBlockIndexes()
-		assert.Greater(t, len(blockIndexes), 0, "Should have block indexes from full scan")
+		assert.Equal(t, len(blockIndexes), 0, "Should have 0 block indexes from due to advReader lazy scan")
 
 		// Verify we can get the last entry ID
 		lastEntryId, err := reader.GetLastEntryID(ctx)
@@ -1531,43 +928,43 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		assert.Equal(t, int64(3), lastEntryId)
 
 		// Verify we can read all entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testData)),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, len(testData), len(entries))
+		assert.Equal(t, len(testData), len(batch.Entries))
 
 		// Verify content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId)
 			assert.Equal(t, testData[i], entry.Values)
 		}
 
 		// Verify we can read from middle
-		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 1,
 			BatchSize:    2,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, len(entries))
-		assert.Equal(t, int64(1), entries[0].EntryId)
-		assert.Equal(t, testData[1], entries[0].Values)
-		assert.Equal(t, int64(2), entries[1].EntryId)
-		assert.Equal(t, testData[2], entries[1].Values)
+		assert.Equal(t, 2, len(batch.Entries))
+		assert.Equal(t, int64(1), batch.Entries[0].EntryId)
+		assert.Equal(t, testData[1], batch.Entries[0].Values)
+		assert.Equal(t, int64(2), batch.Entries[1].EntryId)
+		assert.Equal(t, testData[2], batch.Entries[1].Values)
 
 		// Verify auto batch mode works
-		entries, err = reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2,
 			BatchSize:    -1, // Auto batch mode
 		})
 		require.NoError(t, err)
-		assert.Greater(t, len(entries), 0)
-		assert.Equal(t, int64(2), entries[0].EntryId)
-		assert.Equal(t, testData[2], entries[0].Values)
+		assert.Greater(t, len(batch.Entries), 0)
+		assert.Equal(t, int64(2), batch.Entries[0].EntryId)
+		assert.Equal(t, testData[2], batch.Entries[0].Values)
 	})
 
-	t.Run("CompareWithFinalizedFile", func(t *testing.T) {
+	t.Run("AdvCompareWithFinalizedFile", func(t *testing.T) {
 		// Create another writer and write the same data, but finalize it
 		logId2 := int64(31)
 		segmentId2 := int64(3100)
@@ -1591,7 +988,7 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read finalized file
-		reader2, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId2, segmentId2)
+		reader2, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId2, segmentId2, nil)
 		require.NoError(t, err)
 		defer reader2.Close(ctx)
 
@@ -1600,34 +997,34 @@ func TestLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		assert.NotNil(t, footer2, "Footer should exist for finalized file")
 
 		// Read incomplete file
-		reader1, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		reader1, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 		defer reader1.Close(ctx)
 
 		// Compare data from both files
-		entries1, err := reader1.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testData)),
 		})
 		require.NoError(t, err)
 
-		entries2, err := reader2.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testData)),
 		})
 		require.NoError(t, err)
 
 		// Data should be identical
-		assert.Equal(t, len(entries1), len(entries2))
-		for i := range entries1 {
-			assert.Equal(t, entries1[i].EntryId, entries2[i].EntryId)
-			assert.Equal(t, entries1[i].Values, entries2[i].Values)
+		assert.Equal(t, len(batch1.Entries), len(batch2.Entries))
+		for i := range batch1.Entries {
+			assert.Equal(t, batch1.Entries[i].EntryId, batch2.Entries[i].EntryId)
+			assert.Equal(t, batch1.Entries[i].Values, batch2.Entries[i].Values)
 		}
 	})
 }
 
 // TestLocalFileReader_DynamicScanning tests dynamic scanning of incomplete files
-func TestLocalFileReader_DynamicScanning(t *testing.T) {
+func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -1664,38 +1061,38 @@ func TestLocalFileReader_DynamicScanning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 2: Create reader for incomplete file
-	reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 	defer reader.Close(ctx)
 
-	t.Run("ReadInitialData", func(t *testing.T) {
+	t.Run("AdvReadInitialData", func(t *testing.T) {
 		// Read initial data
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    2,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, len(entries))
+		assert.Equal(t, 2, len(batch.Entries))
 
 		// Verify content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId)
 			assert.Equal(t, initialData[i], entry.Values)
 		}
 	})
 
-	t.Run("TryReadBeyondAvailableData", func(t *testing.T) {
+	t.Run("AdvTryReadBeyondAvailableData", func(t *testing.T) {
 		// Try to read beyond available data - should return what's available
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 1,
 			BatchSize:    5, // Request more than available
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 1, len(entries)) // Should only get entry 1
+		assert.Equal(t, 1, len(batch.Entries)) // Should only get entry 1
 
-		assert.Equal(t, int64(1), entries[0].EntryId)
-		assert.Equal(t, initialData[1], entries[0].Values)
+		assert.Equal(t, int64(1), batch.Entries[0].EntryId)
+		assert.Equal(t, initialData[1], batch.Entries[0].Values)
 	})
 
 	// Phase 3: Write more data to the same file
@@ -1720,35 +1117,35 @@ func TestLocalFileReader_DynamicScanning(t *testing.T) {
 	err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	t.Run("ReadNewDataAfterDynamicScan", func(t *testing.T) {
+	t.Run("AdvReadNewDataAfterDynamicScan", func(t *testing.T) {
 		// Now try to read the new data - should trigger dynamic scanning
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2,
 			BatchSize:    3, // Request the 3 new entries
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 3, len(entries))
+		assert.Equal(t, 3, len(batch.Entries))
 
 		// Verify new content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := int64(2 + i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, moreData[i], entry.Values)
 		}
 	})
 
-	t.Run("ReadAllDataAfterDynamicScan", func(t *testing.T) {
+	t.Run("AdvReadAllDataAfterDynamicScan", func(t *testing.T) {
 		// Read all data from the beginning
 		allData := append(initialData, moreData...)
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(allData)),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, len(allData), len(entries))
+		assert.Equal(t, len(allData), len(batch.Entries))
 
 		// Verify all content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId)
 			assert.Equal(t, allData[i], entry.Values)
 		}
@@ -1774,34 +1171,34 @@ func TestLocalFileReader_DynamicScanning(t *testing.T) {
 	err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	t.Run("ReadFinalDataWithDynamicScan", func(t *testing.T) {
+	t.Run("AdvReadFinalDataWithDynamicScan", func(t *testing.T) {
 		// Read the final data
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 5,
 			BatchSize:    2,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, len(entries))
+		assert.Equal(t, 2, len(batch.Entries))
 
 		// Verify final content
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := int64(5 + i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, finalData[i], entry.Values)
 		}
 	})
 
-	t.Run("ReadFromMiddleWithDynamicScan", func(t *testing.T) {
+	t.Run("AdvReadFromMiddleWithDynamicScan", func(t *testing.T) {
 		// Read from middle, spanning across dynamically scanned blocks
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 3,
 			BatchSize:    4, // Should get entries 3, 4, 5, 6
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 4, len(entries))
+		assert.Equal(t, 4, len(batch.Entries))
 
 		expectedData := append(moreData[1:], finalData...)
-		for i, entry := range entries {
+		for i, entry := range batch.Entries {
 			expectedId := int64(3 + i)
 			assert.Equal(t, expectedId, entry.EntryId)
 			assert.Equal(t, expectedData[i], entry.Values)
@@ -1814,7 +1211,7 @@ func TestLocalFileReader_DynamicScanning(t *testing.T) {
 }
 
 // TestLocalFileRW_ConcurrentReadWrite tests concurrent reading and writing to verify real-time read capability
-func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
+func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -1895,7 +1292,7 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		defer close(readerDone)
 
 		// Create reader for the incomplete file
-		reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		if err != nil {
 			t.Errorf("Failed to create reader: %v", err)
 			return
@@ -1925,7 +1322,7 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 
 					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
 
-					entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+					batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 						StartEntryID: startId,
 						BatchSize:    batchSize,
 					})
@@ -1938,7 +1335,7 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 					}
 
 					// Process read entries
-					for _, entry := range entries {
+					for _, entry := range batch.Entries {
 						readEntries[entry.EntryId] = entry.Values
 						if entry.EntryId > lastReadEntryId {
 							lastReadEntryId = entry.EntryId
@@ -1948,7 +1345,7 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 					}
 
 					t.Logf("Reader: Read %d entries, lastReadEntryId now %d",
-						len(entries), lastReadEntryId)
+						len(batch.Entries), lastReadEntryId)
 				}
 
 				// Check if we've read all expected entries
@@ -1969,7 +1366,7 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		// Wait a bit for any pending writes to complete
 		time.Sleep(200 * time.Millisecond)
 
-		finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(totalEntries),
 		})
@@ -1979,12 +1376,12 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 			return
 		}
 
-		t.Logf("Reader: Final read got %d entries", len(finalEntries))
+		t.Logf("Reader: Final read got %d entries", len(finalBatch.Entries))
 
 		// Verify all entries were read
 		for i := 0; i < totalEntries; i++ {
-			if i < len(finalEntries) {
-				readEntries[int64(i)] = finalEntries[i].Values
+			if i < len(finalBatch.Entries) {
+				readEntries[int64(i)] = finalBatch.Entries[i].Values
 			}
 		}
 
@@ -2020,8 +1417,8 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Final verification: Create a new reader and verify all data is accessible
-	t.Run("FinalVerification", func(t *testing.T) {
-		finalReader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	t.Run("AdvFinalVerification", func(t *testing.T) {
+		finalReader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -2030,27 +1427,27 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		assert.Nil(t, footer, "File should be incomplete (no footer)")
 
 		// Verify we can read all entries
-		allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+		allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(totalEntries),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, totalEntries, len(allEntries), "Should read all entries")
+		assert.Equal(t, totalEntries, len(allBatch.Entries), "Should read all entries")
 
 		// Verify entry content and order
-		for i, entry := range allEntries {
+		for i, entry := range allBatch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
 			assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
 				"Entry content should contain expected prefix")
 		}
 
 		// Verify dynamic scanning works by reading from different positions
-		midEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+		midBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: int64(totalEntries / 2),
 			BatchSize:    5,
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 5, len(midEntries), "Should read 5 entries from middle")
+		assert.Equal(t, 5, len(midBatch.Entries), "Should read 5 entries from middle")
 
 		lastEntryId, err := finalReader.GetLastEntryID(ctx)
 		require.NoError(t, err)
@@ -2058,8 +1455,8 @@ func TestLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 	})
 }
 
-// TestLocalFileRW_ConcurrentOneWriteMultipleReads tests one writer with multiple concurrent readers
-func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
+// TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads tests one writer with multiple concurrent readers
+func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
 
@@ -2147,7 +1544,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 			t.Logf("Reader %d: Starting", readerNum)
 
 			// Create reader for the incomplete file
-			reader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+			reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 			if err != nil {
 				t.Errorf("Reader %d: Failed to create reader: %v", readerNum, err)
 				return
@@ -2205,7 +1602,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						t.Logf("Reader %d: Attempting to read %d entries starting from %d (latest written: %d)",
 							readerNum, entriesToRead, startId, latestWrittenId)
 
-						entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+						batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 							StartEntryID: startId,
 							BatchSize:    entriesToRead,
 						})
@@ -2219,7 +1616,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						}
 
 						// Process read entries
-						for _, entry := range entries {
+						for _, entry := range batch.Entries {
 							readEntries[entry.EntryId] = entry.Values
 							if entry.EntryId > lastReadEntryId {
 								lastReadEntryId = entry.EntryId
@@ -2229,7 +1626,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						}
 
 						t.Logf("Reader %d: Read %d entries, lastReadEntryId now %d",
-							readerNum, len(entries), lastReadEntryId)
+							readerNum, len(batch.Entries), lastReadEntryId)
 					}
 
 					// Check if we've read all expected entries
@@ -2257,7 +1654,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				startId := lastReadEntryId + 1
 				remainingEntries := int64(totalEntries) - startId
 
-				finalEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+				finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 					StartEntryID: startId,
 					BatchSize:    remainingEntries,
 				})
@@ -2265,9 +1662,9 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				if err != nil {
 					t.Errorf("Reader %d: Failed final read: %v", readerNum, err)
 				} else {
-					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalEntries))
+					t.Logf("Reader %d: Final read got %d entries", readerNum, len(finalBatch.Entries))
 
-					for _, entry := range finalEntries {
+					for _, entry := range finalBatch.Entries {
 						readEntries[entry.EntryId] = entry.Values
 						if entry.EntryId > lastReadEntryId {
 							lastReadEntryId = entry.EntryId
@@ -2328,7 +1725,7 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all readers got the same data
-	t.Run("VerifyReaderConsistency", func(t *testing.T) {
+	t.Run("AdvVerifyReaderConsistency", func(t *testing.T) {
 		require.Equal(t, numReaders, len(allReaderResults), "Should have results from all readers")
 
 		// Check that all readers read all entries
@@ -2364,8 +1761,8 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	})
 
 	// Final verification: Create a new reader and verify all data is accessible
-	t.Run("FinalFileVerification", func(t *testing.T) {
-		finalReader, err := disk.NewLocalFileReader(context.TODO(), tempDir, logId, segmentId)
+	t.Run("AdvFinalFileVerification", func(t *testing.T) {
+		finalReader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -2374,15 +1771,15 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 		assert.Nil(t, footer, "File should be incomplete (no footer)")
 
 		// Verify we can read all entries
-		allEntries, err := finalReader.ReadNextBatch(ctx, storage.ReaderOpt{
+		allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(totalEntries),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, totalEntries, len(allEntries), "Should read all entries")
+		assert.Equal(t, totalEntries, len(allBatch.Entries), "Should read all entries")
 
 		// Verify entry content and order
-		for i, entry := range allEntries {
+		for i, entry := range allBatch.Entries {
 			assert.Equal(t, int64(i), entry.EntryId, "Entry ID should match")
 			assert.Contains(t, string(entry.Values), fmt.Sprintf("Entry %d:", i),
 				"Entry content should contain expected prefix")
@@ -2396,10 +1793,325 @@ func TestLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	})
 }
 
-// Helper function for min calculation
-func min(a, b int64) int64 {
-	if a < b {
-		return a
+// TestAdvLocalFileReader_ReadNextBatchAdvScenarios tests all three scenarios of ReadNextBatchAdv
+func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
+	ctx := context.Background()
+	baseDir := t.TempDir()
+	logId := int64(1001)
+	segId := int64(2001)
+
+	// Setup configuration
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	// Write test data first
+	writer, err := disk.NewLocalFileWriter(ctx, baseDir, logId, segId, cfg)
+	require.NoError(t, err)
+
+	// Write multiple blocks of data
+	testData := [][]byte{
+		[]byte("Block 0 - Entry 0"),
+		[]byte("Block 0 - Entry 1"),
+		[]byte("Block 1 - Entry 2"),
+		[]byte("Block 1 - Entry 3"),
+		[]byte("Block 2 - Entry 4"),
+		[]byte("Block 2 - Entry 5"),
 	}
-	return b
+
+	for i, data := range testData {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-adv-%d", i))
+		returnedId, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+
+	// Complete the file to create footer
+	lastEntryId, err := writer.Finalize(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), lastEntryId)
+	writer.Close(ctx)
+
+	t.Run("Scenario1_WithAdvOpt", func(t *testing.T) {
+		// First, create a reader without advOpt to get some data
+		reader1, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId, nil)
+		require.NoError(t, err)
+		defer reader1.Close(ctx)
+
+		// Read first batch to get batch info
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, batch1.LastBatchInfo)
+		assert.Equal(t, 2, len(batch1.Entries))
+
+		// Now create a new reader with advOpt from the previous batch
+		reader2, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId, batch1.LastBatchInfo)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		// Read next batch using advOpt (should start from next block)
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 2, // Should be ignored when using advOpt
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		assert.Greater(t, len(batch2.Entries), 0)
+
+		// Verify the entries are from the expected continuation point
+		assert.True(t, batch2.Entries[0].EntryId >= 2, "Should continue from where previous batch left off")
+	})
+
+	t.Run("Scenario2_WithFooter_NoAdvOpt", func(t *testing.T) {
+		// Create reader without advOpt (should use footer)
+		reader, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify footer exists
+		footer := reader.GetFooter()
+		assert.NotNil(t, footer, "Should have footer for completed file")
+		assert.Greater(t, footer.TotalBlocks, int32(0))
+
+		// Read from middle using footer search
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 3,
+			BatchSize:    2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
+		assert.NotNil(t, batch.LastBatchInfo)
+	})
+
+	t.Run("Scenario3_NoFooter_IncompleteFile", func(t *testing.T) {
+		// Create a new incomplete file (no footer)
+		incompleteBaseDir := t.TempDir()
+		incompleteLogId := int64(1002)
+		incompleteSegId := int64(2002)
+
+		writer, err := disk.NewLocalFileWriter(ctx, incompleteBaseDir, incompleteLogId, incompleteSegId, cfg)
+		require.NoError(t, err)
+
+		// Write some data but don't finalize (no footer)
+		for i := 0; i < 4; i++ {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-incomplete-%d", i))
+			returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("Entry %d", i)), resultCh)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), returnedId)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), result.SyncedId)
+		}
+		writer.Close(ctx) // Close without finalizing
+
+		// Create reader for incomplete file
+		reader, err := disk.NewLocalFileReaderAdv(ctx, incompleteBaseDir, incompleteLogId, incompleteSegId, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Verify no footer exists
+		footer := reader.GetFooter()
+		assert.Nil(t, footer, "Should have no footer for incomplete file")
+
+		// Read from incomplete file (should use dynamic scanning)
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    3,
+		})
+		require.NoError(t, err)
+		assert.Greater(t, len(batch.Entries), 0)
+		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+	})
+}
+
+// TestAdvLocalFileReader_AdvOptContinuation tests the continuation behavior with advOpt
+func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
+	ctx := context.Background()
+	baseDir := t.TempDir()
+	logId := int64(1003)
+	segId := int64(2003)
+
+	// Setup configuration
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	// Create test file with multiple blocks
+	writer, err := disk.NewLocalFileWriter(ctx, baseDir, logId, segId, cfg)
+	require.NoError(t, err)
+
+	// Write 15 entries across multiple blocks
+	for i := 0; i < 15; i++ {
+		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-continuation-%d", i))
+		returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("Entry %d data", i)), resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+
+	lastEntryId, err := writer.Finalize(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(14), lastEntryId)
+	writer.Close(ctx)
+
+	// Test sequential reading with advOpt
+	var lastBatchInfo *storage.BatchInfo
+	var allReadEntries []*proto.LogEntry
+
+	for batchNum := 0; batchNum < 5; batchNum++ {
+		reader, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId, lastBatchInfo)
+		require.NoError(t, err)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
+			BatchSize:    3,
+		})
+
+		if err == werr.ErrFileReaderEndOfFile {
+			reader.Close(ctx)
+			break
+		}
+
+		require.NoError(t, err)
+		assert.Greater(t, len(batch.Entries), 0)
+
+		// Collect entries
+		allReadEntries = append(allReadEntries, batch.Entries...)
+		lastBatchInfo = batch.LastBatchInfo
+
+		reader.Close(ctx)
+	}
+
+	// Verify we read all entries in sequence
+	assert.Equal(t, 15, len(allReadEntries))
+	for i, entry := range allReadEntries {
+		assert.Equal(t, int64(i), entry.EntryId)
+	}
+}
+
+// TestAdvLocalFileReader_EdgeCases tests edge cases of ReadNextBatchAdv
+func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+	baseDir := t.TempDir()
+	logId := int64(1004)
+	segId := int64(2004)
+
+	// Setup configuration
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	require.NoError(t, err)
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	t.Run("EmptyFile_NoAdvOpt", func(t *testing.T) {
+		// Create empty file
+		writer, err := disk.NewLocalFileWriter(ctx, baseDir, logId, segId+1, cfg)
+		require.NoError(t, err)
+		writer.Close(ctx)
+
+		reader, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId+1, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		assert.Error(t, err)
+		assert.Nil(t, batch)
+	})
+
+	t.Run("SingleEntry_WithFooter", func(t *testing.T) {
+		writer, err := disk.NewLocalFileWriter(ctx, baseDir, logId, segId+2, cfg)
+		require.NoError(t, err)
+
+		resultCh := channel.NewLocalResultChannel("test-single")
+		returnedId, err := writer.WriteDataAsync(ctx, 0, []byte("single entry"), resultCh)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), returnedId)
+
+		// Wait for result
+		result, err := resultCh.ReadResult(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.SyncedId)
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), lastEntryId)
+		writer.Close(ctx)
+
+		reader, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId+2, nil)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(batch.Entries))
+		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
+		assert.NotNil(t, batch.LastBatchInfo)
+	})
+
+	t.Run("ReadBeyondEnd_WithAdvOpt", func(t *testing.T) {
+		writer, err := disk.NewLocalFileWriter(ctx, baseDir, logId, segId+3, cfg)
+		require.NoError(t, err)
+
+		// Write 3 entries
+		for i := 0; i < 3; i++ {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-beyond-%d", i))
+			returnedId, err := writer.WriteDataAsync(ctx, int64(i), []byte(fmt.Sprintf("entry %d", i)), resultCh)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), returnedId)
+
+			// Wait for result
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, int64(i), result.SyncedId)
+		}
+
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), lastEntryId)
+		writer.Close(ctx)
+
+		// Read all entries first
+		reader1, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId+3, nil)
+		require.NoError(t, err)
+
+		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    10,
+		})
+		require.NoError(t, err)
+		reader1.Close(ctx)
+
+		// Try to read beyond end with advOpt
+		reader2, err := disk.NewLocalFileReaderAdv(ctx, baseDir, logId, segId+3, batch1.LastBatchInfo)
+		require.NoError(t, err)
+		defer reader2.Close(ctx)
+
+		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID: 100, // Should be ignored
+			BatchSize:    10,
+		})
+		assert.Error(t, err)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+		assert.Nil(t, batch2)
+	})
 }

@@ -260,11 +260,11 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
+	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
 	c.logHandles[logName] = newLogHandle
 	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.GetLogId()))
+	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
 }
 
