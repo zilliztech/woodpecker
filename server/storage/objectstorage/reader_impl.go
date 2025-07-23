@@ -166,12 +166,11 @@ func (f *MinioFileReader) prefetchAllBlockInfo(ctx context.Context) (int, error)
 		}
 
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       int32(blockID),
-			StartOffset:       blockID,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(objInfo.Size), // Use object size as block size
-			FirstEntryID:      blockHeaderRecord.FirstEntryID,
-			LastEntryID:       blockHeaderRecord.LastEntryID,
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(objInfo.Size), // Use object size as block size
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
 
 		existsBlocks = append(existsBlocks, indexRecord)
@@ -355,12 +354,11 @@ func (f *MinioFileReader) prefetchIncrementalBlockInfo(ctx context.Context) (boo
 		}
 
 		fetchedLastBlock = &codec.IndexRecord{
-			BlockNumber:       int32(blockID),
-			StartOffset:       blockID,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(blockObjInfo.Size),
-			FirstEntryID:      blockHeaderRecord.FirstEntryID,
-			LastEntryID:       blockHeaderRecord.LastEntryID,
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(blockObjInfo.Size),
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
 		f.blocks = append(f.blocks, fetchedLastBlock)
 		existsNewBlock = true

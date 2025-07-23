@@ -573,12 +573,11 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	// Create index record for this block
 	actualDataSize := w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
-		BlockNumber:       task.blockNumber,
-		StartOffset:       blockStartOffset,
-		FirstRecordOffset: blockStartOffset,
-		BlockSize:         uint32(actualDataSize), // Size of this block including header and data
-		FirstEntryID:      task.firstEntryId,
-		LastEntryID:       task.lastEntryId,
+		BlockNumber:  task.blockNumber,
+		StartOffset:  blockStartOffset,
+		BlockSize:    uint32(actualDataSize), // Size of this block including header and data
+		FirstEntryID: task.firstEntryId,
+		LastEntryID:  task.lastEntryId,
 	}
 
 	// Lock to protect blockIndexes from concurrent access
@@ -1272,12 +1271,11 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 			if inBlock {
 				// Create index record for the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       int32(currentBlockNumber),
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: currentBlockStart,
-					BlockSize:         uint32(int64(offset) - currentBlockStart), // Calculate block size
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  int32(currentBlockNumber),
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(int64(offset) - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				w.blockIndexes = append(w.blockIndexes, indexRecord)
 				currentBlockNumber++
@@ -1300,12 +1298,11 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 	// Handle the last block if we were still in one
 	if inBlock {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       int32(currentBlockNumber),
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: currentBlockStart,
-			BlockSize:         uint32(int64(offset) - currentBlockStart), // Calculate block size
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  int32(currentBlockNumber),
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(offset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		w.blockIndexes = append(w.blockIndexes, indexRecord)
 		currentBlockNumber++

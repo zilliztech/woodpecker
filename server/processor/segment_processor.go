@@ -155,7 +155,7 @@ func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Complete")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
+	logger.Ctx(ctx).Debug("segment processor call complete", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
 
 	if s.fenced.Load() {
 		// fast return if fenced
@@ -173,7 +173,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entry.EntryId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
+	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entry.EntryId), zap.String("ch", fmt.Sprintf("%p", resultCh)), zap.String("inst", fmt.Sprintf("%p", s)))
 
 	if s.fenced.Load() {
 		// fast return if fenced

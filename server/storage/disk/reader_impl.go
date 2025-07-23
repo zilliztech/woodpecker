@@ -346,12 +346,11 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			if inBlock {
 				// Finalize the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       currentBlockNumber,
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: 0,
-					BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  currentBlockNumber,
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -393,12 +392,11 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 	// Handle case where file ends without completing the current block (incomplete block still being written)
 	if inBlock && currentBlockFirstEntryID != -1 {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       currentBlockNumber,
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  currentBlockNumber,
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -420,19 +418,18 @@ func (r *LocalFileReader) scanFileForBlocksUnsafe(ctx context.Context) error {
 			// StartOffset should be 0 to include the HeaderRecord in the block
 			// This ensures that when reading the block, we process all records including the header
 			indexRecord := &codec.IndexRecord{
-				BlockNumber:       0,
-				StartOffset:       0,              // Start from beginning to include HeaderRecord
-				FirstRecordOffset: headerSize,     // First data record offset after header
-				BlockSize:         uint32(r.size), // Total file size as block size
-				FirstEntryID:      0,
-				LastEntryID:       currentEntryID - 1,
+				BlockNumber:  0,
+				StartOffset:  0,              // Start from beginning to include HeaderRecord
+				BlockSize:    uint32(r.size), // Total file size as block size
+				FirstEntryID: 0,
+				LastEntryID:  currentEntryID - 1,
 			}
 			r.blockIndexes = append(r.blockIndexes, indexRecord)
 
 			logger.Ctx(ctx).Debug("created single block for headerless data",
 				zap.String("filePath", r.filePath),
 				zap.Int64("startOffset", int64(0)),
-				zap.Int64("firstRecordOffset", headerSize),
+				zap.Int64("headerSize", headerSize),
 				zap.Int64("firstEntryID", int64(0)),
 				zap.Int64("lastEntryID", currentEntryID-1))
 		}
@@ -569,12 +566,11 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 			if inBlock {
 				// Finalize the previous block
 				indexRecord := &codec.IndexRecord{
-					BlockNumber:       currentBlockNumber,
-					StartOffset:       currentBlockStart,
-					FirstRecordOffset: 0,
-					BlockSize:         uint32(currentOffset - currentBlockStart), // Calculate block size
-					FirstEntryID:      currentBlockFirstEntryID,
-					LastEntryID:       currentBlockLastEntryID,
+					BlockNumber:  currentBlockNumber,
+					StartOffset:  currentBlockStart,
+					BlockSize:    uint32(currentOffset - currentBlockStart), // Calculate block size
+					FirstEntryID: currentBlockFirstEntryID,
+					LastEntryID:  currentBlockLastEntryID,
 				}
 				r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -615,12 +611,11 @@ func (r *LocalFileReader) scanForNewBlocks(ctx context.Context) error {
 	// Handle case where new data ends with incomplete block
 	if inBlock && currentBlockFirstEntryID != -1 {
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       currentBlockNumber,
-			StartOffset:       currentBlockStart,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
-			FirstEntryID:      currentBlockFirstEntryID,
-			LastEntryID:       currentBlockLastEntryID,
+			BlockNumber:  currentBlockNumber,
+			StartOffset:  currentBlockStart,
+			BlockSize:    uint32(int64(currentOffset) - currentBlockStart), // Calculate block size
+			FirstEntryID: currentBlockFirstEntryID,
+			LastEntryID:  currentBlockLastEntryID,
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
@@ -943,8 +938,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 	currentEntryID := blockInfo.FirstEntryID
 
 	// Check if this block starts with a HeaderRecord
-	// If StartOffset is 0 and FirstRecordOffset > 0, then this block includes a HeaderRecord
-	skipHeaderRecord := blockInfo.StartOffset == 0 && blockInfo.FirstRecordOffset > 0
+	// Only the first block (BlockNumber == 0) can contain a HeaderRecord
+	skipHeaderRecord := blockInfo.BlockNumber == 0
 	readBytes := 0
 
 	for _, record := range records {
@@ -1127,8 +1122,8 @@ func (r *LocalFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 		currentEntryID := blockInfo.FirstEntryID
 
 		// Check if this block starts with a HeaderRecord
-		// If StartOffset is 0 and FirstRecordOffset > 0, then this block includes a HeaderRecord
-		skipHeaderRecord := blockInfo.StartOffset == 0 && blockInfo.FirstRecordOffset > 0
+		// Only the first block (BlockNumber == 0) can contain a HeaderRecord
+		skipHeaderRecord := blockInfo.BlockNumber == 0
 
 		for recordIndex, record := range records {
 			logger.Ctx(ctx).Debug("processing record",

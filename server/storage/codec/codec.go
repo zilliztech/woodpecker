@@ -41,13 +41,12 @@ func EncodeRecord(r Record) []byte {
 		payload = append([]byte(nil), record.Payload...)
 
 	case *IndexRecord:
-		payload = make([]byte, IndexRecordSize) // BlockNumber(4) + StartOffset(8) + FirstRecordOffset(8) + BlockSize(4) + FirstEntryID(8) + LastEntryID(8)
+		payload = make([]byte, IndexRecordSize) // BlockNumber(4) + StartOffset(8) + BlockSize(4) + FirstEntryID(8) + LastEntryID(8)
 		binary.LittleEndian.PutUint32(payload[0:], uint32(record.BlockNumber))
 		binary.LittleEndian.PutUint64(payload[4:], uint64(record.StartOffset))
-		binary.LittleEndian.PutUint64(payload[12:], uint64(record.FirstRecordOffset))
-		binary.LittleEndian.PutUint32(payload[20:], record.BlockSize)
-		binary.LittleEndian.PutUint64(payload[24:], uint64(record.FirstEntryID))
-		binary.LittleEndian.PutUint64(payload[32:], uint64(record.LastEntryID))
+		binary.LittleEndian.PutUint32(payload[12:], record.BlockSize)
+		binary.LittleEndian.PutUint64(payload[16:], uint64(record.FirstEntryID))
+		binary.LittleEndian.PutUint64(payload[24:], uint64(record.LastEntryID))
 
 	case *BlockHeaderRecord:
 		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
@@ -222,12 +221,11 @@ func ParseBlockIndex(payload []byte) (*IndexRecord, error) {
 	}
 
 	return &IndexRecord{
-		BlockNumber:       int32(binary.LittleEndian.Uint32(payload[0:])),
-		StartOffset:       int64(binary.LittleEndian.Uint64(payload[4:])),
-		FirstRecordOffset: int64(binary.LittleEndian.Uint64(payload[12:])),
-		BlockSize:         binary.LittleEndian.Uint32(payload[20:]),
-		FirstEntryID:      int64(binary.LittleEndian.Uint64(payload[24:])),
-		LastEntryID:       int64(binary.LittleEndian.Uint64(payload[32:])),
+		BlockNumber:  int32(binary.LittleEndian.Uint32(payload[0:])),
+		StartOffset:  int64(binary.LittleEndian.Uint64(payload[4:])),
+		BlockSize:    binary.LittleEndian.Uint32(payload[12:]),
+		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[16:])),
+		LastEntryID:  int64(binary.LittleEndian.Uint64(payload[24:])),
 	}, nil
 }
 

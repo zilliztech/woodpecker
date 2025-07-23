@@ -409,12 +409,11 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfo(ctx context.Context) error {
 		// CRC verification passed, create index record
 		totalBlockSize := uint32(blockHeaderRecordSize + blockDataLength)
 		indexRecord := &codec.IndexRecord{
-			BlockNumber:       blockNumber,
-			StartOffset:       blockStartOffset,
-			FirstRecordOffset: 0,
-			BlockSize:         totalBlockSize,
-			FirstEntryID:      blockHeader.FirstEntryID,
-			LastEntryID:       blockHeader.LastEntryID,
+			BlockNumber:  blockNumber,
+			StartOffset:  blockStartOffset,
+			BlockSize:    totalBlockSize,
+			FirstEntryID: blockHeader.FirstEntryID,
+			LastEntryID:  blockHeader.LastEntryID,
 		}
 
 		tmpBlockIndexes = append(tmpBlockIndexes, indexRecord)
@@ -694,12 +693,11 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int("collectedBytes", readBytes))
 
 		lastBlockInfo = &codec.IndexRecord{
-			BlockNumber:       int32(currentBlockID),
-			StartOffset:       startOffset,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(headersLen + blockDataLen),
-			FirstEntryID:      blockHeaderRecord.FirstEntryID,
-			LastEntryID:       blockHeaderRecord.LastEntryID,
+			BlockNumber:  int32(currentBlockID),
+			StartOffset:  startOffset,
+			BlockSize:    uint32(headersLen + blockDataLen),
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
 
 		// Move to the next block

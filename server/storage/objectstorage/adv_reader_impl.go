@@ -260,12 +260,11 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfo(ctx context.Context) (
 		}
 
 		fetchedLastBlock = &codec.IndexRecord{
-			BlockNumber:       int32(blockID),
-			StartOffset:       blockID,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(blockObjInfo.Size),
-			FirstEntryID:      blockHeaderRecord.FirstEntryID,
-			LastEntryID:       blockHeaderRecord.LastEntryID,
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(blockObjInfo.Size),
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
 		f.blocks = append(f.blocks, fetchedLastBlock)
 		existsNewBlock = true
@@ -549,12 +548,11 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int("collectedBytes", readBytes))
 
 		lastBlockInfo = &codec.IndexRecord{
-			BlockNumber:       int32(currentBlockID),
-			StartOffset:       currentBlockID,
-			FirstRecordOffset: 0,
-			BlockSize:         uint32(objInfo.Size),
-			FirstEntryID:      blockHeaderRecord.FirstEntryID,
-			LastEntryID:       blockHeaderRecord.LastEntryID,
+			BlockNumber:  int32(currentBlockID),
+			StartOffset:  currentBlockID,
+			BlockSize:    uint32(objInfo.Size),
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
 	}
 

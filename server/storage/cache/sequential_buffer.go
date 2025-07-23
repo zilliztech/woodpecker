@@ -374,13 +374,15 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue))
+			zap.Int64("notifyValue", notifyValue),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	} else {
 		logger.Ctx(ctx).Debug("Notified pending entry directly with fail",
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("result", result))
+			zap.Int64("result", result),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	}
 	sendErr := notifyChan.SendResult(ctx, &channel.AppendResult{
 		SyncedId: notifyValue,
@@ -390,13 +392,14 @@ func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64
 		logger.Ctx(ctx).Warn("Send result to channel failed",
 			zap.Int64("entryId", entryId),
 			zap.Int64("notifyValue", notifyValue),
-			zap.Error(sendErr),
-		)
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)),
+			zap.Error(sendErr))
 	} else {
 		logger.Ctx(ctx).Debug("Notified pending entry finish",
 			zap.Int64("logId", logId),
 			zap.Int64("segId", segId),
 			zap.Int64("entryId", entryId),
-			zap.Int64("notifyValue", notifyValue))
+			zap.Int64("notifyValue", notifyValue),
+			zap.String("ch", fmt.Sprintf("%p", notifyChan)))
 	}
 }

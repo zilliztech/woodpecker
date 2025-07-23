@@ -62,6 +62,7 @@ func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResul
 		logger.Ctx(ctx).Debug("sent result to local channel",
 			zap.String("identifier", l.identifier),
 			zap.Int64("syncedId", result.SyncedId),
+			zap.String("ch", fmt.Sprintf("%p", l)),
 			zap.Error(result.Err))
 		return nil
 	case <-ctx.Done():
@@ -70,6 +71,7 @@ func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResul
 		logger.Ctx(ctx).Warn("local channel is full or closed",
 			zap.String("identifier", l.identifier),
 			zap.Int64("syncedId", result.SyncedId),
+			zap.String("ch", fmt.Sprintf("%p", l)),
 			zap.Error(result.Err))
 		return fmt.Errorf("local channel %s is full or closed", l.identifier)
 	}
@@ -85,6 +87,7 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 		logger.Ctx(ctx).Debug("read result from local channel",
 			zap.String("identifier", l.identifier),
 			zap.Int64("identifier", r.SyncedId),
+			zap.String("ch", fmt.Sprintf("%p", l)),
 			zap.Error(r.Err),
 		)
 		return r, nil
@@ -101,7 +104,8 @@ func (l *LocalResultChannel) Close(ctx context.Context) error {
 		close(l.ch)
 	}
 	logger.Ctx(ctx).Debug("closed local result channel and underlying channel",
-		zap.String("identifier", l.identifier))
+		zap.String("identifier", l.identifier),
+		zap.String("ch", fmt.Sprintf("%p", l)))
 	return nil
 }
 
