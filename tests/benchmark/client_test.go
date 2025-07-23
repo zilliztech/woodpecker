@@ -974,3 +974,307 @@ func TestReadFromSpecifiedPosition(t *testing.T) {
 		})
 	}
 }
+
+// TestSequentialWriteAndReadPerformance tests the performance of sequential writes followed by sequential reads
+// This creates many small files by writing one record at a time synchronously, then measures read performance
+func TestSequentialWriteAndReadPerformance(t *testing.T) {
+	utils.StartGopsAgentWithPort(6060)
+	utils.StartMetrics()
+	utils.StartReporting()
+
+	entrySize := 100_000 // 100KB per record to create reasonably sized files
+	writeCount := 1_000  // Total records to write sequentially
+
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    "/tmp/TestSequentialWriteRead",
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// ### Create client
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			//cfg.Log.Level = "debug"
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			if err != nil {
+				t.Logf("Failed to create client: %v", err)
+				return
+			}
+
+			// ###  CreateLog if not exists
+			logName := "test_sequential_log_" + t.Name() + "_" + time.Now().Format("20060102150405")
+			client.CreateLog(context.Background(), logName)
+
+			// ### OpenLog
+			logHandle, openErr := client.OpenLog(context.Background(), logName)
+			if openErr != nil {
+				t.Logf("Open log failed, err:%v\n", openErr)
+				panic(openErr)
+			}
+
+			//	### OpenWriter
+			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			if openWriterErr != nil {
+				t.Logf("Open writer failed, err:%v\n", openWriterErr)
+				panic(openWriterErr)
+			}
+
+			// Generate static data for consistency
+			payloadStaticData, err := utils.GenerateRandomBytes(entrySize)
+			assert.NoError(t, err)
+
+			// === PHASE 1: Sequential Synchronous Writes ===
+			t.Logf("\n=== Starting Sequential Write Phase ===\n")
+			t.Logf("Writing %d records of %d bytes each, one at a time...\n", writeCount, entrySize)
+
+			var writeStats struct {
+				totalWriteTime time.Duration
+				minWriteTime   time.Duration
+				maxWriteTime   time.Duration
+				successCount   int
+				totalAttempts  int
+				writeTimes     []time.Duration // Store individual write times for analysis
+			}
+			writeStats.minWriteTime = time.Hour // Initialize to a large value
+
+			writeStartTime := time.Now()
+
+			for i := 0; i < writeCount; i++ {
+				msg := &log.WriterMessage{
+					Payload: payloadStaticData,
+					Properties: map[string]string{
+						"sequence": fmt.Sprintf("%d", i),
+						"size":     fmt.Sprintf("%d", entrySize),
+					},
+				}
+
+				// Retry loop for this single message until success
+				for {
+					writeStats.totalAttempts++
+					singleWriteStart := time.Now()
+
+					resultChan := logWriter.WriteAsync(context.Background(), msg)
+					writeResult := <-resultChan
+
+					singleWriteDuration := time.Since(singleWriteStart)
+
+					if writeResult.Err != nil {
+						t.Logf("Write failed for record %d (attempt %d), retrying: %v\n",
+							i, writeStats.totalAttempts, writeResult.Err)
+						time.Sleep(100 * time.Millisecond) // Brief pause before retry
+						continue
+					} else {
+						// Success - record timing statistics
+						writeStats.successCount++
+						writeStats.totalWriteTime += singleWriteDuration
+						writeStats.writeTimes = append(writeStats.writeTimes, singleWriteDuration)
+
+						if singleWriteDuration < writeStats.minWriteTime {
+							writeStats.minWriteTime = singleWriteDuration
+						}
+						if singleWriteDuration > writeStats.maxWriteTime {
+							writeStats.maxWriteTime = singleWriteDuration
+						}
+
+						// Log progress every 100 writes
+						if (i+1)%100 == 0 {
+							t.Logf("Completed %d/%d writes, avg time: %.2f ms\n",
+								i+1, writeCount, float64(writeStats.totalWriteTime.Milliseconds())/float64(writeStats.successCount))
+						}
+						break
+					}
+				}
+			}
+
+			totalWriteElapsed := time.Since(writeStartTime)
+
+			// Close writer to ensure all data is flushed
+			t.Logf("Closing writer to flush all data...\n")
+			closeErr := logWriter.Close(context.Background())
+			if closeErr != nil {
+				t.Logf("Close writer failed, err:%v\n", closeErr)
+				panic(closeErr)
+			}
+
+			// === Write Statistics ===
+			avgWriteTime := writeStats.totalWriteTime / time.Duration(writeStats.successCount)
+			writeOpsPerSec := float64(writeStats.successCount) / totalWriteElapsed.Seconds()
+			writeMBPerSec := float64(writeStats.successCount*entrySize) / (1024 * 1024) / totalWriteElapsed.Seconds()
+
+			t.Logf("\n=== Write Phase Results ===\n")
+			t.Logf("Total write time: %v\n", totalWriteElapsed)
+			t.Logf("Successfully written: %d/%d records\n", writeStats.successCount, writeCount)
+			t.Logf("Total write attempts: %d\n", writeStats.totalAttempts)
+			t.Logf("Success rate: %.2f%%\n", float64(writeStats.successCount)/float64(writeStats.totalAttempts)*100)
+			t.Logf("Average write time: %v\n", avgWriteTime)
+			t.Logf("Min write time: %v\n", writeStats.minWriteTime)
+			t.Logf("Max write time: %v\n", writeStats.maxWriteTime)
+			t.Logf("Write throughput: %.2f ops/sec\n", writeOpsPerSec)
+			t.Logf("Write data throughput: %.2f MB/sec\n", writeMBPerSec)
+
+			// Sleep a bit to ensure all data is properly stored
+			t.Logf("Waiting 2 seconds for data to be fully committed...\n")
+			time.Sleep(2 * time.Second)
+
+			// === PHASE 2: Sequential Reads with Detailed Performance Analysis ===
+			t.Logf("\n=== Starting Sequential Read Phase ===\n")
+
+			//	### OpenReader
+			earliest := log.EarliestLogMessageID()
+			logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "TestSequentialWriteRead")
+			if openReaderErr != nil {
+				t.Logf("Open reader failed, err:%v\n", openReaderErr)
+				panic(openReaderErr)
+			}
+
+			// Read statistics
+			var readStats struct {
+				totalEntries    int64
+				totalBytes      int64
+				totalReadTime   time.Duration
+				minReadTime     time.Duration
+				maxReadTime     time.Duration
+				readTimes       []time.Duration // Store individual read times for analysis
+				successfulReads int
+				failedReads     int
+			}
+			readStats.minReadTime = time.Hour // Initialize to a large value
+
+			readStartTime := time.Now()
+			lastSuccessTime := readStartTime
+			consecutiveTimeouts := 0
+			maxConsecutiveTimeouts := 5
+			readTimeout := 10 * time.Second // Longer timeout for more stable measurement
+
+			t.Logf("Starting to read back %d records...\n", writeStats.successCount)
+
+			for {
+				// Create context with timeout for ReadNext
+				ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+
+				singleReadStart := time.Now()
+				msg, err := logReader.ReadNext(ctx)
+				singleReadDuration := time.Since(singleReadStart)
+
+				cancel() // Always cancel context to avoid resource leak
+
+				if err != nil {
+					readStats.failedReads++
+					consecutiveTimeouts++
+					t.Logf("Read failed (timeout %d/%d), err:%v\n", consecutiveTimeouts, maxConsecutiveTimeouts, err)
+
+					// Check if we've exceeded the maximum consecutive timeouts
+					if consecutiveTimeouts >= maxConsecutiveTimeouts {
+						t.Logf("Reached maximum consecutive timeouts (%d), stopping read loop\n", maxConsecutiveTimeouts)
+						break
+					}
+					continue
+				} else {
+					// Reset timeout counter on successful read
+					consecutiveTimeouts = 0
+					readStats.successfulReads++
+					lastSuccessTime = time.Now()
+
+					// Update statistics
+					readStats.totalReadTime += singleReadDuration
+					readStats.readTimes = append(readStats.readTimes, singleReadDuration)
+					readStats.totalBytes += int64(len(msg.Payload))
+					readStats.totalEntries++
+
+					if singleReadDuration < readStats.minReadTime {
+						readStats.minReadTime = singleReadDuration
+					}
+					if singleReadDuration > readStats.maxReadTime {
+						readStats.maxReadTime = singleReadDuration
+					}
+
+					// Log progress every 100 reads
+					if readStats.totalEntries%100 == 0 {
+						avgReadTime := readStats.totalReadTime / time.Duration(readStats.successfulReads)
+						t.Logf("Read %d entries, avg read time: %v, current msg(seg:%d,entry:%d)\n",
+							readStats.totalEntries, avgReadTime, msg.Id.SegmentId, msg.Id.EntryId)
+					}
+				}
+			}
+
+			totalReadElapsed := lastSuccessTime.Sub(readStartTime)
+
+			// === Read Statistics ===
+			if readStats.successfulReads > 0 {
+				avgReadTime := readStats.totalReadTime / time.Duration(readStats.successfulReads)
+				readOpsPerSec := float64(readStats.totalEntries) / totalReadElapsed.Seconds()
+				readMBPerSec := float64(readStats.totalBytes) / (1024 * 1024) / totalReadElapsed.Seconds()
+
+				t.Logf("\n=== Read Phase Results ===\n")
+				t.Logf("Total read time: %v\n", totalReadElapsed)
+				t.Logf("Records read: %d\n", readStats.totalEntries)
+				t.Logf("Successful reads: %d\n", readStats.successfulReads)
+				t.Logf("Failed reads: %d\n", readStats.failedReads)
+				t.Logf("Total bytes read: %d (%.2f MB)\n", readStats.totalBytes, float64(readStats.totalBytes)/(1024*1024))
+				t.Logf("Average read time: %v\n", avgReadTime)
+				t.Logf("Min read time: %v\n", readStats.minReadTime)
+				t.Logf("Max read time: %v\n", readStats.maxReadTime)
+				t.Logf("Read throughput: %.2f ops/sec\n", readOpsPerSec)
+				t.Logf("Read data throughput: %.2f MB/sec\n", readMBPerSec)
+
+				// Additional analysis: Check read time stability
+				if len(readStats.readTimes) > 10 {
+					// Calculate standard deviation
+					sum := int64(0)
+					for _, d := range readStats.readTimes {
+						sum += d.Microseconds()
+					}
+					mean := sum / int64(len(readStats.readTimes))
+
+					variance := int64(0)
+					for _, d := range readStats.readTimes {
+						diff := d.Microseconds() - mean
+						variance += diff * diff
+					}
+					variance /= int64(len(readStats.readTimes))
+					stdDev := time.Duration(int64(float64(variance)*0.5)) * time.Microsecond
+
+					t.Logf("\n=== Read Time Stability Analysis ===\n")
+					t.Logf("Mean read time: %v\n", time.Duration(mean)*time.Microsecond)
+					t.Logf("Standard deviation: %v\n", stdDev)
+					t.Logf("Coefficient of variation: %.2f%%\n", float64(stdDev)/float64(mean)*100)
+				}
+
+				// === Overall Performance Comparison ===
+				t.Logf("\n=== Overall Performance Summary ===\n")
+				t.Logf("Write vs Read throughput ratio: %.2fx\n", writeOpsPerSec/readOpsPerSec)
+				t.Logf("Average write time vs read time ratio: %.2fx\n",
+					float64(avgWriteTime)/float64(avgReadTime))
+				t.Logf("Data verification: Written %d records, Read %d records\n",
+					writeStats.successCount, readStats.totalEntries)
+			}
+
+			// stop embed LogStore singleton
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+
+			t.Logf("\nTestSequentialWriteAndReadPerformance completed successfully!\n")
+		})
+	}
+}

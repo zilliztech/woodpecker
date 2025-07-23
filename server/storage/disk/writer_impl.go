@@ -351,7 +351,7 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 		zap.Int64("entryCount", entryCount))
 
 	if needSync {
-		logger.Ctx(ctx).Info("Sync: triggering rollBufferAndFlush")
+		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		// Add global writer lock to prevent race conditions with WriteDataAsync
 		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
 	}
@@ -450,19 +450,19 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	}()
 
 	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced")
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrSegmentFenced)
 		return
 	}
 
 	if w.finalized.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrFileWriterFinalized)
 		return
 	}
 
 	if !w.storageWritable.Load() {
-		logger.Ctx(ctx).Warn("process flush task: storage not writable", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId))
+		logger.Ctx(ctx).Warn("process flush task: storage not writable", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable)
 		return
 	}
@@ -470,7 +470,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	// Write header if not written yet
 	if !w.headerWritten.Load() {
 		if err := w.writeHeader(ctx); err != nil {
-			logger.Ctx(ctx).Warn("write header error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+			logger.Ctx(ctx).Warn("write header error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId), zap.Error(err))
 			w.storageWritable.Store(false)
 			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 			return
@@ -507,6 +507,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	logger.Ctx(ctx).Debug("calculated block metadata",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
 		zap.Uint32("blockLength", blockLength),
 		zap.Uint32("blockCrc", blockCrc),
 		zap.Int("dataRecordsCount", len(task.entries)))
@@ -519,7 +520,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		BlockCrc:     blockCrc,
 	}
 	if err := w.writeRecord(ctx, blockHeaderRecord); err != nil {
-		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
@@ -528,18 +529,19 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	logger.Ctx(ctx).Debug("block header written, now writing data records",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segId", w.segmentId),
+		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int("blockDataSize", len(blockDataBuffer)))
 
 	// Write the pre-serialized data records
 	n, err := w.file.Write(blockDataBuffer)
 	if err != nil {
-		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
+		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 	if n != len(blockDataBuffer) {
-		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
+		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
 		w.storageWritable.Store(false)
 		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(fmt.Errorf("incomplete write: wrote %d of %d bytes", n, len(blockDataBuffer))))
 		return
