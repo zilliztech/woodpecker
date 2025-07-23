@@ -473,9 +473,9 @@ func (_c *LogHandle_GetNextSegmentId_Call) RunAndReturn(run func() (int64, error
 	return _c
 }
 
-// GetOrCreateWritableSegmentHandle provides a mock function with given fields: _a0
-func (_m *LogHandle) GetOrCreateWritableSegmentHandle(_a0 context.Context) (segment.SegmentHandle, error) {
-	ret := _m.Called(_a0)
+// GetOrCreateWritableSegmentHandle provides a mock function with given fields: _a0, _a1
+func (_m *LogHandle) GetOrCreateWritableSegmentHandle(_a0 context.Context, _a1 func(context.Context, string)) (segment.SegmentHandle, error) {
+	ret := _m.Called(_a0, _a1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetOrCreateWritableSegmentHandle")
@@ -483,19 +483,19 @@ func (_m *LogHandle) GetOrCreateWritableSegmentHandle(_a0 context.Context) (segm
 
 	var r0 segment.SegmentHandle
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (segment.SegmentHandle, error)); ok {
-		return rf(_a0)
+	if rf, ok := ret.Get(0).(func(context.Context, func(context.Context, string)) (segment.SegmentHandle, error)); ok {
+		return rf(_a0, _a1)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) segment.SegmentHandle); ok {
-		r0 = rf(_a0)
+	if rf, ok := ret.Get(0).(func(context.Context, func(context.Context, string)) segment.SegmentHandle); ok {
+		r0 = rf(_a0, _a1)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(segment.SegmentHandle)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+	if rf, ok := ret.Get(1).(func(context.Context, func(context.Context, string)) error); ok {
+		r1 = rf(_a0, _a1)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -510,13 +510,14 @@ type LogHandle_GetOrCreateWritableSegmentHandle_Call struct {
 
 // GetOrCreateWritableSegmentHandle is a helper method to define mock.On call
 //   - _a0 context.Context
-func (_e *LogHandle_Expecter) GetOrCreateWritableSegmentHandle(_a0 interface{}) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
-	return &LogHandle_GetOrCreateWritableSegmentHandle_Call{Call: _e.mock.On("GetOrCreateWritableSegmentHandle", _a0)}
+//   - _a1 func(context.Context , string)
+func (_e *LogHandle_Expecter) GetOrCreateWritableSegmentHandle(_a0 interface{}, _a1 interface{}) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
+	return &LogHandle_GetOrCreateWritableSegmentHandle_Call{Call: _e.mock.On("GetOrCreateWritableSegmentHandle", _a0, _a1)}
 }
 
-func (_c *LogHandle_GetOrCreateWritableSegmentHandle_Call) Run(run func(_a0 context.Context)) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
+func (_c *LogHandle_GetOrCreateWritableSegmentHandle_Call) Run(run func(_a0 context.Context, _a1 func(context.Context, string))) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(func(context.Context, string)))
 	})
 	return _c
 }
@@ -526,7 +527,7 @@ func (_c *LogHandle_GetOrCreateWritableSegmentHandle_Call) Return(_a0 segment.Se
 	return _c
 }
 
-func (_c *LogHandle_GetOrCreateWritableSegmentHandle_Call) RunAndReturn(run func(context.Context) (segment.SegmentHandle, error)) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
+func (_c *LogHandle_GetOrCreateWritableSegmentHandle_Call) RunAndReturn(run func(context.Context, func(context.Context, string)) (segment.SegmentHandle, error)) *LogHandle_GetOrCreateWritableSegmentHandle_Call {
 	_c.Call.Return(run)
 	return _c
 }

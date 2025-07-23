@@ -699,7 +699,7 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	if !w.storageWritable.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrFileWriterAlreadyClosed
+		return entryId, werr.ErrStorageNotWritable
 	}
 
 	// Validate empty payload

@@ -66,9 +66,15 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		session:            session,
 	}
-
 	// Set sessionValid to true
 	w.sessionValid.Store(true)
+
+	// Set trigger expired
+	onWriterInvalidated := func(ctx context.Context, reason string) {
+		w.sessionValid.Store(false)
+		logger.Ctx(ctx).Warn("trigger writer lock session expired", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.String("reason", reason))
+	}
+	w.onWriterInvalidated = onWriterInvalidated
 
 	// Monitor keepAlive channel
 	go w.monitorSession()
@@ -89,8 +95,9 @@ type logWriterImpl struct {
 	cleanupManager     segment.SegmentCleanupManager
 
 	// Session related fields
-	session      *concurrency.Session
-	sessionValid atomic.Bool
+	session             *concurrency.Session
+	sessionValid        atomic.Bool
+	onWriterInvalidated func(ctx context.Context, reason string)
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
@@ -143,8 +150,12 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 			Err: err,
 		}
 		close(ch)
+		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
+		}
 	}
-	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
 	if err != nil {
 		callback(-1, -1, err)
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -221,8 +232,12 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 			Err: err,
 		}
 		close(ch)
+		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
+		}
 	}
-	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
 	if err != nil {
 		logger.Ctx(ctx).Warn("get writable segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
 		callback(-1, -1, err)

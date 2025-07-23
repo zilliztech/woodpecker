@@ -85,6 +85,8 @@ type SegmentHandle interface {
 	IsForceRollingReady(context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
 	GetLastAccessTime() int64
+	// SetWriterInvalidationNotifier set the expired trigger
+	SetWriterInvalidationNotifier(context.Context, func(ctx context.Context, reason string))
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
@@ -180,9 +182,10 @@ type segmentHandleImpl struct {
 	commitedSize     atomic.Int64
 	submittedSize    atomic.Int64
 
-	fencedState   atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
-	canWriteState atomic.Bool
-	rollingState  atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
+	fencedState    atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
+	canWriteState  atomic.Bool
+	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
+	expiredTrigger func(ctx context.Context, reason string)
 
 	executor *SequentialExecutor
 
@@ -587,39 +590,6 @@ func (s *segmentHandleImpl) ForceCompleteAndClose(ctx context.Context) error {
 	return s.doCompleteAndCloseUnsafe(ctx)
 }
 
-func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error {
-	var lastError error
-	// complete this segment and close
-	lastFlushedEntryId, err := s.doCompleteUnsafe(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		lastError = err
-	}
-	err = s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
-	if err != nil {
-		logger.Ctx(ctx).Info("close segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		if lastError == nil {
-			lastError = werr.Combine(err, lastError)
-		}
-	}
-
-	// mark segment as readonly
-	if lastError == nil {
-		s.canWriteState.Store(false)
-	}
-	return lastError
-}
-
 func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Close")
 	defer sp.End()
@@ -659,9 +629,9 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	}
 	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
 	if err != nil && werr.ErrMetadataRevisionInvalid.Is(err) {
-		// metadata revision is invalid or outdated, some one updated it, fence this segmentHandle to let client reopen new writer
+		// metadata revision is invalid or outdated, some one updated it, trigger fence this segmentHandle to let client reopen new writer
 		// new append will fail with ErrSegmentFenced, and application client should reopen new logWriter instead.
-		s.fencedState.Store(true)
+		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d meta update revision invalid", s.segmentId))
 		logger.Ctx(ctx).Warn("segment close failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime), zap.Error(err))
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -679,6 +649,40 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
+}
+
+func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error {
+	var lastError error
+	// complete this segment and close
+	lastFlushedEntryId, err := s.doCompleteUnsafe(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId),
+			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
+			zap.Error(err))
+		lastError = err
+		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed", s.segmentId))
+	}
+	err = s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
+	if err != nil {
+		logger.Ctx(ctx).Info("close segment failed when closing logHandle",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId),
+			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
+			zap.Error(err))
+		if lastError == nil {
+			lastError = werr.Combine(err, lastError)
+		}
+	}
+
+	// mark segment as readonly
+	if lastError == nil {
+		s.canWriteState.Store(false)
+	}
+	return lastError
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
@@ -1078,7 +1082,17 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 	s.Lock()
 	defer s.Unlock()
+	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
+	if s.appendOpsQueue.Len() > 0 {
+		logger.Ctx(ctx).Warn("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
+		return
+	}
+	// trigger immediately
+	err := s.doCompleteAndCloseUnsafe(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to complete segment after setting to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Error(err))
+	}
 }
 
 // IsForceRollingReady check if the segment is ready for rolling
@@ -1094,4 +1108,14 @@ func (s *segmentHandleImpl) updateAccessTime() {
 
 func (s *segmentHandleImpl) GetLastAccessTime() int64 {
 	return s.lastAccessTime.Load()
+}
+
+func (s *segmentHandleImpl) SetWriterInvalidationNotifier(ctx context.Context, f func(ctx context.Context, reason string)) {
+	s.expiredTrigger = f
+}
+
+func (s *segmentHandleImpl) NotifyWriterInvalidation(ctx context.Context, reason string) {
+	if s.expiredTrigger != nil {
+		s.expiredTrigger(ctx, reason)
+	}
 }

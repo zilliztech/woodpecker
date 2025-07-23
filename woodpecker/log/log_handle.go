@@ -61,7 +61,7 @@ type LogHandle interface {
 	// GetMetadataProvider returns the metadata provider instance.
 	GetMetadataProvider() meta.MetadataProvider
 	// GetOrCreateWritableSegmentHandle returns the writable segment handle for the log, means creating a new one
-	GetOrCreateWritableSegmentHandle(context.Context) (segment.SegmentHandle, error)
+	GetOrCreateWritableSegmentHandle(context.Context, func(ctx context.Context, reason string)) (segment.SegmentHandle, error)
 	// GetExistsReadonlySegmentHandle returns the segment handle for the specified segment ID if it exists.
 	GetExistsReadonlySegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
 	// GetRecoverableSegmentHandle returns the segment handle for the specified segment ID if it exists and is in recovery state.
@@ -198,21 +198,6 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 		return nil, err
 	}
 
-	// getOrCreate writable segment handle
-	_, err = l.GetOrCreateWritableSegmentHandle(ctx)
-	if err != nil {
-		// Release the acquired lock before returning error
-		if releaseErr := l.Metadata.ReleaseLogWriterLock(ctx, l.Name); releaseErr != nil {
-			logger.Ctx(ctx).Warn("failed to release log writer lock after error",
-				zap.String("logName", l.Name),
-				zap.Int64("logId", l.Id),
-				zap.Error(releaseErr))
-		}
-		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "error").Inc()
-		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("failed to get or create writable segment handle", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
-		return nil, err
-	}
 	// return LogWriter instance if writableSegmentHandle is created
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -376,7 +361,7 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	return nil
 }
 
-func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetOrCreateWritableSegmentHandle")
 	defer sp.End()
 
@@ -387,7 +372,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 
 	// create new segment handle if not exists
 	if !writableExists {
-		handle, err := l.createAndCacheWritableSegmentHandle(ctx)
+		handle, err := l.createAndCacheWritableSegmentHandle(ctx, writerInvalidationNotifier)
 		if err != nil {
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
@@ -397,13 +382,29 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context) (s
 
 	// Check if the writable segment handle needs to be rolling close and create a new one
 	if l.shouldRollingCloseAndCreateWritableSegmentHandle(ctx, writeableSegmentHandle) {
-		// close old writable segment handle
-		newSeg, err := l.doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe(ctx, writeableSegmentHandle)
+		logger.Ctx(ctx).Debug("start to close segment",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.GetId()),
+			zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
+		// 1. close segmentHandle,
+		//  it will send complete request to logStores
+		//  and error out all pendingAppendOps with segmentCloseError
+		logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
+		writeableSegmentHandle.SetRollingReady(ctx)
+
+		// 2. create new segMeta(active)
+		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
+		newSegmentHandle, err := l.createAndCacheWritableSegmentHandle(ctx, writerInvalidationNotifier)
 		if err != nil {
-			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
-		return newSeg, nil
+
+		// 3. return new segmentHandle
+		logger.Ctx(ctx).Debug("doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe success",
+			zap.String("logName", l.Name),
+			zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
+			zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
+		return newSegmentHandle, nil
 	}
 
 	// return existing writable segment handle
@@ -469,12 +470,13 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 	return nil, nil
 }
 
-func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context) (segment.SegmentHandle, error) {
+func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
 	newSegMeta, err := l.createNewSegmentMeta(ctx)
 	if err != nil {
 		return nil, err
 	}
 	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
+	newSegHandle.SetWriterInvalidationNotifier(ctx, writerInvalidationNotifier)
 	l.SegmentHandles[newSegMeta.Metadata.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.Metadata.SegNo
 	l.lastRolloverTimeMs = newSegMeta.Metadata.CreateTime
@@ -492,32 +494,6 @@ func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx con
 	size := segmentHandle.GetSize(ctx)
 	last := l.lastRolloverTimeMs
 	return l.rollingPolicy.ShouldRollover(ctx, size, last)
-}
-
-func (l *logHandleImpl) doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe(ctx context.Context, oldSegmentHandle segment.SegmentHandle) (segment.SegmentHandle, error) {
-	logger.Ctx(ctx).Debug("start to close segment",
-		zap.String("logName", l.Name),
-		zap.Int64("logId", l.GetId()),
-		zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	// 1. close segmentHandle,
-	//  it will send complete request to logStores
-	//  and error out all pendingAppendOps with segmentCloseError
-	logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", oldSegmentHandle.GetId(ctx)))
-	oldSegmentHandle.SetRollingReady(ctx)
-
-	// 2. create new segMeta(active)
-	logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
-	newSegmentHandle, err := l.createAndCacheWritableSegmentHandle(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. return new segmentHandle
-	logger.Ctx(ctx).Debug("doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe success",
-		zap.String("logName", l.Name),
-		zap.Int64("oldSegmentId", oldSegmentHandle.GetId(ctx)),
-		zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
-	return newSegmentHandle, nil
 }
 
 func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.SegmentMeta, error) {

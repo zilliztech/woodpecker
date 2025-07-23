@@ -194,7 +194,7 @@ func TestCreateAndCacheNewSegmentHandle_SetsAccessTime(t *testing.T) {
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(nil)
 
 	// Call createAndCacheNewSegmentHandle
-	handle, err := logHandle.createAndCacheWritableSegmentHandle(ctx)
+	handle, err := logHandle.createAndCacheWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -220,7 +220,7 @@ func TestGetOrCreateWritableSegmentHandle_ErrorHandling(t *testing.T) {
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(errors.New("storage error"))
 
 	// Call GetOrCreateWritableSegmentHandle and expect error
-	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.Error(t, err)
@@ -372,7 +372,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling
-	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -414,7 +414,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling due to time
-	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -455,7 +455,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_ForceRolling(t *testing.T) {
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should trigger rolling due to force rolling
-	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -486,7 +486,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_NoRollingNeeded(t *testing.T
 	mockSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // Small size
 
 	// Call GetOrCreateWritableSegmentHandle - should return existing segment
-	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -513,7 +513,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_CreateFirstSegment(t *testin
 	})).Return(nil)
 
 	// Call GetOrCreateWritableSegmentHandle - should create first segment
-	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -661,7 +661,7 @@ func TestLogHandle_Rolling_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx)
+			handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
 			results[index] = handle
 			errors[index] = err
 		}(i)

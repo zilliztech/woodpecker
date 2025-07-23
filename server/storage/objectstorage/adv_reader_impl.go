@@ -415,6 +415,8 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	defer sp.End()
 	startTime := time.Now()
 
+	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("requestedBatchSize", opt.BatchSize))
+
 	// Soft limitation
 	maxEntries := opt.BatchSize // soft count limit: Read the minimum number of blocks exceeding the count limit
 	if maxEntries <= 0 {
@@ -434,6 +436,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
 		currentBlockID := i
 		blockObjKey := f.getBlockObjectKey(currentBlockID)
+		logger.Ctx(ctx).Debug("try to read block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockNumber", currentBlockID))
 
 		// Get object info to determine the actual size
 		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
@@ -488,6 +491,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 				zap.Error(decodeErr))
 			break // Stop reading on error, return what we have so far
 		}
+		logger.Ctx(ctx).Debug("decoded data from block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockNumber", currentBlockID), zap.Int("records", len(records)))
 
 		// Find BlockHeaderRecord and verify data integrity
 		var blockHeaderRecord *codec.BlockHeaderRecord
