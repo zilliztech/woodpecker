@@ -689,8 +689,11 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		logger.Ctx(ctx).Debug("Extracted data from block",
 			zap.String("filePath", r.filePath),
 			zap.Int64("blockNumber", currentBlockID),
-			zap.Int64("collectedEntries", entriesCollected),
-			zap.Int("collectedBytes", readBytes))
+			zap.Int64("blockFirstEntryID", blockHeaderRecord.FirstEntryID),
+			zap.Int64("blockLastEntryID", blockHeaderRecord.LastEntryID),
+			zap.Int64("lastCollectedEntryID", currentEntryID),
+			zap.Int64("totalCollectedEntries", entriesCollected),
+			zap.Int("totalCollectedBytes", readBytes))
 
 		lastBlockInfo = &codec.IndexRecord{
 			BlockNumber:  int32(currentBlockID),
