@@ -92,10 +92,10 @@ type LocalFileWriter struct {
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask
-	storageWritable              atomic.Bool  // Indicates whether the segment is writable
-	flushingSize                 atomic.Int64 // The size of data being flushed
+	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
+	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
 
 	// Close management
 	fileClose chan struct{} // Close signal
@@ -115,6 +115,8 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
+	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes
+	flushQueueSize := max(int(maxBytes/blockSize), 300)
 	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
 	logger.Ctx(ctx).Debug("creating new local file writer",
 		zap.String("baseDir", baseDir),
@@ -123,6 +125,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		zap.Int64("maxBlockSize", blockSize),
 		zap.Int("maxBufferEntries", maxBufferEntries),
 		zap.Int("maxInterval", maxInterval),
+		zap.Int("flushQueueSize", flushQueueSize),
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
@@ -151,9 +154,9 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,
-		maxBufferEntries: int64(maxBufferEntries),         // Default max entries per buffer
-		maxIntervalMs:    maxInterval,                     // 10ms default sync interval for more responsive syncing
-		flushTaskChan:    make(chan *blockFlushTask, 100), // Increased buffer size to reduce blocking
+		maxBufferEntries: int64(maxBufferEntries),                    // Default max entries per buffer
+		maxIntervalMs:    maxInterval,                                // 10ms default sync interval for more responsive syncing
+		flushTaskChan:    make(chan *blockFlushTask, flushQueueSize), // Increased buffer size to reduce blocking
 		runCtx:           runCtx,
 		runCancel:        runCancel,
 	}
@@ -168,7 +171,6 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
-	writer.flushingSize.Store(0)
 	writer.lastSubmittedFlushingEntryID.Store(-1)
 	writer.allUploadingTaskDone.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
@@ -235,6 +237,14 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 			zap.Bool("recoveryMode", recoveryMode),
 			zap.Error(err))
 		runCancel()
+		if file != nil {
+			closeFdErr := file.Close()
+			if closeFdErr != nil {
+				logger.Ctx(ctx).Warn("failed to close file",
+					zap.String("filePath", filePath),
+					zap.Error(closeFdErr))
+			}
+		}
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 
@@ -295,9 +305,11 @@ func (w *LocalFileWriter) run() {
 			}
 			// Process flush task synchronously
 			logger.Ctx(w.runCtx).Debug("Processing flush task from channel",
+				zap.Int64("logId", w.logId),
+				zap.Int64("segId", w.segmentId),
+				zap.Int32("blockNumber", flushTask.blockNumber),
 				zap.Int64("firstEntryId", flushTask.firstEntryId),
 				zap.Int64("lastEntryId", flushTask.lastEntryId),
-				zap.Int32("blockNumber", flushTask.blockNumber),
 				zap.Int("entriesCount", len(flushTask.entries)))
 			w.processFlushTask(w.runCtx, flushTask)
 			logger.Ctx(w.runCtx).Debug("Flush task processing completed")
@@ -396,35 +408,35 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 	}
 
 	// Update flushing size
-	bufferSize := currentBuffer.DataSize.Load()
-	w.flushingSize.Add(bufferSize)
 	w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
 
 	// Increment block number for next block
 	w.currentBlockNumber.Add(1)
 	w.lastSyncTimestamp.Store(time.Now().UnixMilli())
 
-	// Submit flush task asynchronously to avoid deadlock
-	go func() {
-		logger.Ctx(ctx).Debug("Submitting flush task to channel",
+	// Submit flush task
+	logger.Ctx(ctx).Debug("Submitting flush task to channel",
+		zap.Int64("firstEntryId", flushTask.firstEntryId),
+		zap.Int64("lastEntryId", flushTask.lastEntryId),
+		zap.Int32("blockNumber", flushTask.blockNumber),
+		zap.Int("entriesCount", len(flushTask.entries)))
+
+	select {
+	case w.flushTaskChan <- flushTask:
+		logger.Ctx(ctx).Debug("Flush task submitted successfully",
 			zap.Int64("firstEntryId", flushTask.firstEntryId),
 			zap.Int64("lastEntryId", flushTask.lastEntryId),
 			zap.Int32("blockNumber", flushTask.blockNumber),
 			zap.Int("entriesCount", len(flushTask.entries)))
-
-		select {
-		case w.flushTaskChan <- flushTask:
-			logger.Ctx(ctx).Debug("Flush task submitted successfully")
-		case <-ctx.Done():
-			logger.Ctx(ctx).Warn("Context cancelled while submitting flush task")
-			// Notify entries of cancellation
-			w.notifyFlushError(flushTask.entries, ctx.Err())
-		case <-w.runCtx.Done():
-			logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task")
-			// Notify entries of cancellation
-			w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
-		}
-	}()
+	case <-ctx.Done():
+		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
+		// Notify entries of cancellation
+		w.notifyFlushError(flushTask.entries, ctx.Err())
+	case <-w.runCtx.Done():
+		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
+		// Notify entries of cancellation
+		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
+	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "rollBuffer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -435,19 +447,13 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
 	startTime := time.Now()
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
+
 	// Add nil check for safety
 	if task == nil {
 		return
 	}
-
-	defer func() {
-		// Calculate flushed size and update counter
-		flushedSize := int64(0)
-		for _, entry := range task.entries {
-			flushedSize += int64(len(entry.Data))
-		}
-		w.flushingSize.Add(-flushedSize)
-	}()
 
 	if w.fenced.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -514,6 +520,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 
 	// Write block header record with calculated values
 	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  task.blockNumber,
 		FirstEntryID: task.firstEntryId,
 		LastEntryID:  task.lastEntryId,
 		BlockLength:  blockLength,
@@ -583,9 +590,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	}
 
 	// Lock to protect blockIndexes from concurrent access
-	w.mu.Lock()
 	w.blockIndexes = append(w.blockIndexes, indexRecord)
-	w.mu.Unlock()
 
 	// Update entry tracking
 	if w.firstEntryID.Load() == -1 {
@@ -669,7 +674,7 @@ func (w *LocalFileWriter) notifyFlushError(entries []*cache.BufferEntry, err err
 	}
 }
 
-// notifyFlushError notifies all result channels of flush error
+// notifyFlushSuccess notifies all result channels of flush success
 func (w *LocalFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
@@ -1285,6 +1290,14 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 
 			// Start new block with this BlockHeaderRecord
 			currentBlockStart = int64(offset)
+			if currentBlockNumber != int64(blockHeaderRecord.BlockNumber) {
+				logger.Ctx(ctx).Warn("Block number mismatch",
+					zap.Int64("logId", w.logId),
+					zap.Int64("segId", w.segmentId),
+					zap.Int32("expectedBlockNumber", blockHeaderRecord.BlockNumber),
+					zap.Int64("actualBlockNumber", currentBlockNumber))
+				currentBlockNumber = int64(blockHeaderRecord.BlockNumber)
+			}
 			currentBlockFirstEntryID = blockHeaderRecord.FirstEntryID
 			currentBlockLastEntryID = blockHeaderRecord.LastEntryID
 			inBlock = true
@@ -1332,7 +1345,7 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 
 // createSegmentLock creates a lock file for the segment to ensure exclusive access
 func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "createSegmentLock")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "createSegmentLock")
 	defer sp.End()
 
 	// Create lock file path
@@ -1382,7 +1395,7 @@ func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
 
 // releaseSegmentLock releases the segment lock and removes the lock file
 func (s *LocalFileWriter) releaseSegmentLock(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "releaseSegmentLock")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "releaseSegmentLock")
 	defer sp.End()
 
 	if s.lockFile == nil {

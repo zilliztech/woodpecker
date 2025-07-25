@@ -419,6 +419,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		logger.Ctx(ctx).Debug("recovered block during recovery",
 			zap.String("blockKey", blockKey),
 			zap.Int64("blockID", blockID),
+			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
 			zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
 
@@ -550,6 +551,7 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 
 		if blockHeaderRecord, ok := records[i].(*codec.BlockHeaderRecord); ok {
 			logger.Ctx(ctx).Info("found BlockHeaderRecord",
+				zap.Int32("blockNumber", blockHeaderRecord.BlockNumber),
 				zap.Int64("firstEntryID", blockHeaderRecord.FirstEntryID),
 				zap.Int64("lastEntryID", blockHeaderRecord.LastEntryID))
 			return blockHeaderRecord, nil
@@ -1576,6 +1578,7 @@ func (f *MinioFileWriter) serialize(blockId int64, entries []*cache.BufferEntry)
 	firstEntryID := entries[0].EntryId
 	lastEntryID := entries[len(entries)-1].EntryId
 	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  int32(blockId),
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
 		BlockLength:  blockLength,
@@ -1767,6 +1770,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 
 	// Add block header record with calculated values
 	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  int32(mergedBlockID),
 		FirstEntryID: blockFirstEntryID,
 		LastEntryID:  blockLastEntryID,
 		BlockLength:  blockLength,

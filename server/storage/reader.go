@@ -26,9 +26,6 @@ import (
 
 // Reader defines the interface for reading log entries from different storage backends
 type Reader interface {
-	// ReadNextBatch returns the next batch of entries in the log according to the Reader's direction
-	ReadNextBatch(ctx context.Context, opt ReaderOpt) ([]*proto.LogEntry, error)
-
 	// ReadNextBatchAdv returns the next batch of entries in the log according to the Reader's direction
 	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt) (*Batch, error)
 

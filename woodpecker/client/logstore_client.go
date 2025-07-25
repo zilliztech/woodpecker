@@ -29,9 +29,6 @@ import (
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
 	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error)
-	// ReadEntriesBatch reads a batch of entries from the specified log segment and returns the entries and an error if any.
-	// Deprecated
-	ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
 	ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
@@ -60,10 +57,6 @@ func (l *logStoreClientLocal) CompleteSegment(ctx context.Context, logId int64, 
 
 func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
-}
-
-func (l *logStoreClientLocal) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {
-	return l.store.GetBatchEntries(ctx, logId, segmentId, fromEntryId, maxSize)
 }
 
 func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
@@ -102,10 +95,6 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, logId int64,
 // TODO use ResultChannel abstract instead of chan
 func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) ReadEntriesBatch(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64) ([]*processor.SegmentEntry, error) {
 	panic("implement me")
 }
 

@@ -36,6 +36,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
+var (
+	SegmentReaderScope = "LocalFileReader"
+)
+
 var _ storage.Reader = (*LocalFileReaderAdv)(nil)
 
 // LocalFileReaderAdv implements AbstractFileReader for local filesystem storage
@@ -225,6 +229,10 @@ func (r *LocalFileReaderAdv) parseIndexRecords(ctx context.Context) error {
 
 	indexStartOffset := r.size - footerRecordSize - totalIndexSize
 
+	if indexStartOffset < 0 {
+		return fmt.Errorf("invalid index start offset: %d", indexStartOffset)
+	}
+
 	// Read all index data
 	indexData, err := r.readAt(ctx, indexStartOffset, int(totalIndexSize))
 	if err != nil {
@@ -378,6 +386,7 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfo(ctx context.Context) error {
 			logger.Ctx(ctx).Debug("not enough data for complete block",
 				zap.String("filePath", r.filePath),
 				zap.Int32("blockNumber", blockNumber),
+				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Int64("blockDataOffset", blockDataOffset),
 				zap.Int("blockDataLength", blockDataLength),
 				zap.Int64("remainingSize", currentFileSize-blockDataOffset))
@@ -389,6 +398,7 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfo(ctx context.Context) error {
 			logger.Ctx(ctx).Warn("failed to read block data for verification",
 				zap.String("filePath", r.filePath),
 				zap.Int32("blockNumber", blockNumber),
+				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Int64("blockDataOffset", blockDataOffset),
 				zap.Error(err))
 			break
@@ -399,6 +409,7 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfo(ctx context.Context) error {
 			logger.Ctx(ctx).Warn("block CRC verification failed, skipping block",
 				zap.String("filePath", r.filePath),
 				zap.Int32("blockNumber", blockNumber),
+				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Uint32("expectedCrc", blockHeader.BlockCrc),
 				zap.Error(err))
 			currentOffset = blockDataOffset + int64(blockDataLength)
@@ -423,6 +434,7 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfo(ctx context.Context) error {
 			zap.Int32("blockNumber", blockNumber),
 			zap.Int64("startOffset", blockStartOffset),
 			zap.Uint32("blockSize", totalBlockSize),
+			zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 			zap.Int64("firstEntryID", blockHeader.FirstEntryID),
 			zap.Int64("lastEntryID", blockHeader.LastEntryID),
 			zap.Uint32("blockCrc", blockHeader.BlockCrc))
@@ -454,6 +466,10 @@ func (r *LocalFileReaderAdv) readAt(ctx context.Context, offset int64, length in
 		zap.Int("length", length),
 		zap.Int64("fileSize", r.size),
 		zap.String("filePath", r.filePath))
+
+	if offset < 0 || length < 0 {
+		return nil, fmt.Errorf("invalid read parameters: offset=%d, length=%d", offset, length)
+	}
 
 	// Seek to offset
 	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
@@ -545,7 +561,7 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	} else if r.footer != nil {
 		// Scenario 2: First read with footer (completed file)
 		// When we have footer, find the block containing the start entry ID
-		foundStartBlock, err := r.searchBlock(r.blockIndexes, opt.StartEntryID)
+		foundStartBlock, err := codec.SearchBlock(r.blockIndexes, opt.StartEntryID)
 		if err != nil {
 			logger.Ctx(ctx).Warn("search block failed", zap.String("filePath", r.filePath), zap.Int64("entryId", opt.StartEntryID), zap.Error(err))
 			return nil, err
@@ -689,8 +705,12 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		logger.Ctx(ctx).Debug("Extracted data from block",
 			zap.String("filePath", r.filePath),
 			zap.Int64("blockNumber", currentBlockID),
-			zap.Int64("collectedEntries", entriesCollected),
-			zap.Int("collectedBytes", readBytes))
+			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
+			zap.Int64("blockFirstEntryID", blockHeaderRecord.FirstEntryID),
+			zap.Int64("blockLastEntryID", blockHeaderRecord.LastEntryID),
+			zap.Int64("lastCollectedEntryID", currentEntryID),
+			zap.Int64("totalCollectedEntries", entriesCollected),
+			zap.Int("totalCollectedBytes", readBytes))
 
 		lastBlockInfo = &codec.IndexRecord{
 			BlockNumber:  int32(currentBlockID),
@@ -796,6 +816,7 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 		logger.Ctx(ctx).Warn("block data integrity verification failed",
 			zap.String("filePath", r.filePath),
 			zap.Int64("blockNumber", currentBlockID),
+			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Error(err))
 		return err // Stop reading on error, return what we have so far
 	}
@@ -803,33 +824,10 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 	logger.Ctx(ctx).Debug("block data integrity verified successfully",
 		zap.String("filePath", r.filePath),
 		zap.Int64("blockNumber", currentBlockID),
+		zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 		zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 		zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	return nil
-}
-
-func (r *LocalFileReaderAdv) searchBlock(list []*codec.IndexRecord, entryId int64) (*codec.IndexRecord, error) {
-	low, high := 0, len(list)-1
-	var candidate *codec.IndexRecord
-
-	for low <= high {
-		mid := (low + high) / 2
-		block := list[mid]
-
-		firstEntryID := block.FirstEntryID
-		if firstEntryID > entryId {
-			high = mid - 1
-		} else {
-			lastEntryID := block.LastEntryID
-			if lastEntryID >= entryId {
-				candidate = block
-				return candidate, nil
-			} else {
-				low = mid + 1
-			}
-		}
-	}
-	return candidate, nil
 }
 
 // ReadNextBatch reads the next batch of entries

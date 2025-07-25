@@ -49,9 +49,7 @@ type SegmentHandle interface {
 	GetId(context.Context) int64
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
-	// ReadBatch num of entries from the segment
-	// Deprecated
-	ReadBatch(context.Context, int64, int64) ([]*processor.SegmentEntry, error)
+	// ReadBatchAdv num of entries from the segment
 	ReadBatchAdv(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
@@ -418,35 +416,6 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 			logger.Ctx(ctx).Debug("completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		}
 	}
-}
-
-// ReadBatch reads batch entries from segment.
-func (s *segmentHandleImpl) ReadBatch(ctx context.Context, from int64, maxSize int64) ([]*processor.SegmentEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
-	defer sp.End()
-	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize))
-	// write data to quorum
-	quorumInfo, err := s.GetQuorumInfo(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
-	}
-
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return nil, err
-	}
-
-	segmentEntryList, err := cli.ReadEntriesBatch(ctx, s.logId, s.segmentId, from, maxSize)
-	if err != nil {
-		return nil, err
-	}
-	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize), zap.Int("count", len(segmentEntryList)))
-	return segmentEntryList, nil
 }
 
 func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {

@@ -36,6 +36,32 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
+func TestReadAndPrint(t *testing.T) {
+	t.Skipf("for debug only")
+
+	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
+	cfg.Log.Level = "debug"
+	logger.InitLogger(cfg)
+
+	var LastBatchInfo *storage.BatchInfo
+	for {
+		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), "/tmp/wp/", 3926, 1, LastBatchInfo)
+		require.NoError(t, err)
+		batch, readErr := reader.ReadNextBatchAdv(context.TODO(), storage.ReaderOpt{
+			StartEntryID: 0,
+			BatchSize:    100,
+		})
+		if readErr != nil {
+			break
+		}
+		t.Logf("Read %d entries", len(batch.Entries))
+		for i, entry := range batch.Entries {
+			t.Logf("Entry %d: %d/%d", i, entry.SegId, entry.EntryId)
+		}
+		LastBatchInfo = batch.LastBatchInfo
+	}
+}
+
 func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 	tempDir := setupLocalFileTest(t)
 	ctx := context.Background()
