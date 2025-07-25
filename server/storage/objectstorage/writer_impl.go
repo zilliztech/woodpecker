@@ -1784,7 +1784,7 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 		// For first block: header + blockHeader + data
 		headerRecord := &codec.HeaderRecord{
 			Version:      codec.FormatVersion,
-			Flags:        0,
+			Flags:        codec.SetCompacted(f.footerRecord.Flags),
 			FirstEntryID: firstEntryID,
 		}
 		encodedHeader := codec.EncodeRecord(headerRecord)
