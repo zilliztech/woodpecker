@@ -50,8 +50,6 @@ type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
 	AddEntry(context.Context, *SegmentEntry, channel.ResultChannel) (int64, error)
-	// Deprecated
-	ReadBatchEntries(context.Context, int64, int64) ([]*SegmentEntry, error)
 	ReadBatchEntriesAdv(context.Context, int64, int64, *LastReadState) (*BatchData, error)
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context) (int64, error)
@@ -250,45 +248,6 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 	return batchData, nil
 }
 
-func (s *segmentProcessor) ReadBatchEntries(ctx context.Context, fromEntryId int64, maxSize int64) ([]*SegmentEntry, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
-	defer sp.End()
-	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize))
-	reader, err := s.getNewSegmentReader(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close(ctx)
-
-	// read batch entries
-	batchEntries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
-		StartEntryID: fromEntryId,
-		EndEntryID:   0, // means no stop point
-		BatchSize:    maxSize,
-	})
-	if err != nil {
-		if werr.ErrEntryNotFound.Is(err) {
-			logger.Ctx(ctx).Debug("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
-		} else {
-			logger.Ctx(ctx).Warn("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
-		}
-		return nil, err
-	}
-	// batch result
-	result := make([]*SegmentEntry, 0, len(batchEntries))
-	for _, entry := range batchEntries {
-		segmentEntry := &SegmentEntry{
-			SegmentId: s.segId,
-			EntryId:   entry.EntryId,
-			Data:      entry.Values,
-		}
-		result = append(result, segmentEntry)
-	}
-	// return
-	return result, nil
-}
-
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
@@ -387,36 +346,6 @@ func (s *segmentProcessor) getNewSegmentReaderAdv(ctx context.Context, lastReadS
 			s.segId,
 			s.minioClient,
 			lastBlockInfo)
-		if getReaderErr != nil {
-			return nil, getReaderErr
-		}
-		logger.Ctx(ctx).Info("created segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", minioReader)))
-		return minioReader, nil
-	}
-}
-
-// Deprecated
-func (s *segmentProcessor) getNewSegmentReader(ctx context.Context) (storage.Reader, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "getNewSegmentReader")
-	defer sp.End()
-	//Initialize reader
-	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
-		// use local FileSystem or local FileSystem + minio-compatible
-		localReader, err := disk.NewLocalFileReader(
-			ctx,
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
-			s.logId,
-			s.segId)
-		logger.Ctx(ctx).Info("created segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", localReader)))
-		return localReader, err
-	} else {
-		minioReader, getReaderErr := objectstorage.NewMinioFileReader(
-			ctx,
-			s.getInstanceBucket(),
-			s.getLogBaseDir(),
-			s.logId,
-			s.segId,
-			s.minioClient)
 		if getReaderErr != nil {
 			return nil, getReaderErr
 		}

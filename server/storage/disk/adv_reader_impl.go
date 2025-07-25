@@ -36,6 +36,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
+var (
+	SegmentReaderScope = "LocalFileReader"
+)
+
 var _ storage.Reader = (*LocalFileReaderAdv)(nil)
 
 // LocalFileReaderAdv implements AbstractFileReader for local filesystem storage
@@ -557,7 +561,7 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	} else if r.footer != nil {
 		// Scenario 2: First read with footer (completed file)
 		// When we have footer, find the block containing the start entry ID
-		foundStartBlock, err := r.searchBlock(r.blockIndexes, opt.StartEntryID)
+		foundStartBlock, err := codec.SearchBlock(r.blockIndexes, opt.StartEntryID)
 		if err != nil {
 			logger.Ctx(ctx).Warn("search block failed", zap.String("filePath", r.filePath), zap.Int64("entryId", opt.StartEntryID), zap.Error(err))
 			return nil, err
@@ -824,30 +828,6 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 		zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 		zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	return nil
-}
-
-func (r *LocalFileReaderAdv) searchBlock(list []*codec.IndexRecord, entryId int64) (*codec.IndexRecord, error) {
-	low, high := 0, len(list)-1
-	var candidate *codec.IndexRecord
-
-	for low <= high {
-		mid := (low + high) / 2
-		block := list[mid]
-
-		firstEntryID := block.FirstEntryID
-		if firstEntryID > entryId {
-			high = mid - 1
-		} else {
-			lastEntryID := block.LastEntryID
-			if lastEntryID >= entryId {
-				candidate = block
-				return candidate, nil
-			} else {
-				low = mid + 1
-			}
-		}
-	}
-	return candidate, nil
 }
 
 // ReadNextBatch reads the next batch of entries

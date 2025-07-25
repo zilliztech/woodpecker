@@ -36,6 +36,10 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
+var (
+	SegmentReaderScope = "MinioFileReader"
+)
+
 var _ storage.Reader = (*MinioFileReaderAdv)(nil)
 
 // MinioFileReaderAdv is an implementation of AbstractFileReader, offering enhanced options for advanced batch reading features.
@@ -389,7 +393,7 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 		startBlockID = int64(f.advOpt.LastBlockInfo.BlockNumber + 1)
 	} else if f.footer != nil {
 		// When we have footer, find the block containing the start entry ID
-		foundStartBlock, err := SearchBlock(f.blocks, opt.StartEntryID)
+		foundStartBlock, err := codec.SearchBlock(f.blocks, opt.StartEntryID)
 		if err != nil {
 			logger.Ctx(ctx).Warn("search block failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", opt.StartEntryID), zap.Error(err))
 			return nil, err
@@ -658,10 +662,6 @@ func (f *MinioFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 			zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	}
 	return nil
-}
-
-func (f *MinioFileReaderAdv) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
-	return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("not support simple read")
 }
 
 func (f *MinioFileReaderAdv) getBlockObjectKey(blockNumber int64) string {
