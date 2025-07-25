@@ -521,6 +521,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			logger.Ctx(ctx).Warn("verify block data integrity failed, stop reading",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", currentBlockID),
+				zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
 				zap.Error(verifyBlockErr))
 			break // Stop reading on data integrity error, return what we have so far
 		}
@@ -548,6 +549,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		logger.Ctx(ctx).Debug("Extracted data from block",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", currentBlockID),
+			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Int64("collectedEntries", entriesCollected),
 			zap.Int("collectedBytes", readBytes))
 
@@ -651,6 +653,7 @@ func (f *MinioFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 		logger.Ctx(ctx).Debug("block data integrity verified successfully",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("blockNumber", currentBlockID),
+			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 			zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	}

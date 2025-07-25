@@ -758,6 +758,7 @@ func (f *MinioFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 			logger.Ctx(ctx).Debug("block data integrity verified successfully",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+				zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 				zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 				zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 		}
@@ -900,6 +901,7 @@ func (f *MinioFileReader) readMultipleBlocks(ctx context.Context, allBlocks []*c
 				logger.Ctx(ctx).Debug("block data integrity verified successfully",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("blockNumber", int64(blockInfo.BlockNumber)),
+					zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 			}

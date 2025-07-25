@@ -32,6 +32,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"hash/crc32"
+
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -920,9 +922,16 @@ func testSerialize(entries []*cache.BufferEntry) []byte {
 	firstEntryID := entries[0].EntryId
 	lastEntryID := entries[len(entries)-1].EntryId
 
+	// Calculate block length and CRC for the serialized data
+	blockLength := uint32(len(serializedData))
+	blockCrc := crc32.ChecksumIEEE(serializedData)
+
 	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  0, // Test block number
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
 	}
 
 	encodedBlockHeaderRecord := codec.EncodeRecord(blockHeaderRecord)

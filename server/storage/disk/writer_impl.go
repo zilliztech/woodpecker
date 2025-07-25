@@ -92,8 +92,7 @@ type LocalFileWriter struct {
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask
-	storageWritable              atomic.Bool  // Indicates whether the segment is writable
-	flushingSize                 atomic.Int64 // The size of data being flushed
+	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
 	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
@@ -172,7 +171,6 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
-	writer.flushingSize.Store(0)
 	writer.lastSubmittedFlushingEntryID.Store(-1)
 	writer.allUploadingTaskDone.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
@@ -239,6 +237,14 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 			zap.Bool("recoveryMode", recoveryMode),
 			zap.Error(err))
 		runCancel()
+		if file != nil {
+			closeFdErr := file.Close()
+			if closeFdErr != nil {
+				logger.Ctx(ctx).Warn("failed to close file",
+					zap.String("filePath", filePath),
+					zap.Error(closeFdErr))
+			}
+		}
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 
@@ -402,8 +408,6 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 	}
 
 	// Update flushing size
-	bufferSize := currentBuffer.DataSize.Load()
-	w.flushingSize.Add(bufferSize)
 	w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
 
 	// Increment block number for next block
@@ -450,15 +454,6 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	if task == nil {
 		return
 	}
-
-	defer func() {
-		// Calculate flushed size and update counter
-		flushedSize := int64(0)
-		for _, entry := range task.entries {
-			flushedSize += int64(len(entry.Data))
-		}
-		w.flushingSize.Add(-flushedSize)
-	}()
 
 	if w.fenced.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -525,6 +520,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 
 	// Write block header record with calculated values
 	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  task.blockNumber,
 		FirstEntryID: task.firstEntryId,
 		LastEntryID:  task.lastEntryId,
 		BlockLength:  blockLength,
@@ -678,7 +674,7 @@ func (w *LocalFileWriter) notifyFlushError(entries []*cache.BufferEntry, err err
 	}
 }
 
-// notifyFlushError notifies all result channels of flush error
+// notifyFlushSuccess notifies all result channels of flush success
 func (w *LocalFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
@@ -1294,6 +1290,14 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 
 			// Start new block with this BlockHeaderRecord
 			currentBlockStart = int64(offset)
+			if currentBlockNumber != int64(blockHeaderRecord.BlockNumber) {
+				logger.Ctx(ctx).Warn("Block number mismatch",
+					zap.Int64("logId", w.logId),
+					zap.Int64("segId", w.segmentId),
+					zap.Int32("expectedBlockNumber", blockHeaderRecord.BlockNumber),
+					zap.Int64("actualBlockNumber", currentBlockNumber))
+				currentBlockNumber = int64(blockHeaderRecord.BlockNumber)
+			}
 			currentBlockFirstEntryID = blockHeaderRecord.FirstEntryID
 			currentBlockLastEntryID = blockHeaderRecord.LastEntryID
 			inBlock = true
@@ -1341,7 +1345,7 @@ func (w *LocalFileWriter) recoverBlocksFromFullScanUnsafe(ctx context.Context, f
 
 // createSegmentLock creates a lock file for the segment to ensure exclusive access
 func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "createSegmentLock")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "createSegmentLock")
 	defer sp.End()
 
 	// Create lock file path
@@ -1391,7 +1395,7 @@ func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
 
 // releaseSegmentLock releases the segment lock and removes the lock file
 func (s *LocalFileWriter) releaseSegmentLock(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentScopeName, "releaseSegmentLock")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "releaseSegmentLock")
 	defer sp.End()
 
 	if s.lockFile == nil {

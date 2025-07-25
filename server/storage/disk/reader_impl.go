@@ -917,9 +917,8 @@ func (r *LocalFileReader) readSingleBlock(ctx context.Context, blockInfo *codec.
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("reading block is incomplete")
 			} else {
 				logger.Ctx(ctx).Debug("block data integrity verified successfully",
-					zap.Int64("logId", r.logId),
-					zap.Int64("segId", r.segId),
-					zap.Int32("blockNumber", blockInfo.BlockNumber),
+					zap.String("filePath", r.filePath),
+					zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 					zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 					zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 			}

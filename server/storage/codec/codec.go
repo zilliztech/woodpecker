@@ -49,11 +49,12 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint64(payload[24:], uint64(record.LastEntryID))
 
 	case *BlockHeaderRecord:
-		payload = make([]byte, BlockHeaderRecordSize) // FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
-		binary.LittleEndian.PutUint64(payload[0:], uint64(record.FirstEntryID))
-		binary.LittleEndian.PutUint64(payload[8:], uint64(record.LastEntryID))
-		binary.LittleEndian.PutUint32(payload[16:], record.BlockLength)
-		binary.LittleEndian.PutUint32(payload[20:], record.BlockCrc)
+		payload = make([]byte, BlockHeaderRecordSize) // BlockNumber(4) + FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
+		binary.LittleEndian.PutUint32(payload[0:], uint32(record.BlockNumber))
+		binary.LittleEndian.PutUint64(payload[4:], uint64(record.FirstEntryID))
+		binary.LittleEndian.PutUint64(payload[12:], uint64(record.LastEntryID))
+		binary.LittleEndian.PutUint32(payload[20:], record.BlockLength)
+		binary.LittleEndian.PutUint32(payload[24:], record.BlockCrc)
 
 	case *FooterRecord:
 		payload = make([]byte, FooterRecordSize) // TotalBlocks(4) + TotalRecords(4) + TotalSize(8) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
@@ -277,10 +278,11 @@ func ParseBlockHeader(payload []byte) (*BlockHeaderRecord, error) {
 	}
 
 	b := &BlockHeaderRecord{
-		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[0:])),
-		LastEntryID:  int64(binary.LittleEndian.Uint64(payload[8:])),
-		BlockLength:  binary.LittleEndian.Uint32(payload[16:]),
-		BlockCrc:     binary.LittleEndian.Uint32(payload[20:]),
+		BlockNumber:  int32(binary.LittleEndian.Uint32(payload[0:])),
+		FirstEntryID: int64(binary.LittleEndian.Uint64(payload[4:])),
+		LastEntryID:  int64(binary.LittleEndian.Uint64(payload[12:])),
+		BlockLength:  binary.LittleEndian.Uint32(payload[20:]),
+		BlockCrc:     binary.LittleEndian.Uint32(payload[24:]),
 	}
 
 	return b, nil
