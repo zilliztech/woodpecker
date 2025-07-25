@@ -298,7 +298,7 @@ var (
 		prometheus.HistogramOpts{
 			Namespace: woodpeckerNamespace,
 			Subsystem: serverRole,
-			Name:      "read_flush_latency",
+			Name:      "read_batch_latency",
 			Help:      "Latency of read batch operations",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to 1024ms
 		},
@@ -426,6 +426,10 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpFileOperationsTotal)
 		registerer.MustRegister(WpFileOperationLatency)
 		registerer.MustRegister(WpFileWriters)
+		registerer.MustRegister(WpFileReadBatchLatency)
+		registerer.MustRegister(WpFileReadBatchBytes)
+		registerer.MustRegister(WpFileFlushLatency)
+		registerer.MustRegister(WpFileFlushBytesWritten)
 		registerer.MustRegister(WpFileCompactLatency)
 		registerer.MustRegister(WpFileCompactBytesWritten)
 		// Object storage metrics
