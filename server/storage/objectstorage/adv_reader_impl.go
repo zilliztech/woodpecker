@@ -25,8 +25,11 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
@@ -63,6 +66,9 @@ type MinioFileReaderAdv struct {
 	flags       uint16
 	version     uint16
 
+	// thread pool for concurrent block reading
+	pool *conc.Pool[*BlockReadResult]
+
 	// close state
 	closed atomic.Bool
 }
@@ -89,6 +95,8 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		footer:  nil,
 		flags:   0,
 		version: codec.FormatVersion,
+
+		pool: conc.NewPool[*BlockReadResult](32, conc.WithPreAlloc(true)),
 	}
 	reader.closed.Store(false)
 	reader.isCompacted.Store(false)
@@ -414,6 +422,23 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	return f.readDataBlocks(ctx, opt, startBlockID)
 }
 
+// BlockToRead represents a block that needs to be read
+type BlockToRead struct {
+	blockID int64
+	objKey  string
+	size    int64
+}
+
+// BlockReadResult represents the result of reading a single block
+type BlockReadResult struct {
+	blockID   int64
+	size      int64
+	err       error
+	blockInfo *codec.IndexRecord
+	entries   []*proto.LogEntry
+	readBytes int
+}
+
 func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.ReaderOpt, startBlockID int64) (*storage.Batch, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
@@ -421,42 +446,36 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 
 	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("requestedBatchSize", opt.BatchSize))
 
-	// Soft limitation
-	maxEntries := opt.BatchSize // soft count limit: Read the minimum number of blocks exceeding the count limit
-	if maxEntries <= 0 {
-		maxEntries = 100
-	}
-	maxBytes := 16 * 1024 * 1024 // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
+	maxBytes := 16 * 1024 * 1024 // 16MB limit
 
-	// read data result
-	entries := make([]*proto.LogEntry, 0, maxEntries)
-	var lastBlockInfo *codec.IndexRecord
+	// 1. StatObject and submit tasks
+	// Submit the required block reading task: Whether it is sequential and not a fence object
+	currentBlockID := startBlockID
+	totalSize := int64(0)
+	futures := make([]*conc.Future[*BlockReadResult], 0)
 
-	// read stats
-	entriesCollected := int64(0)
-	readBytes := 0
+	logger.Ctx(ctx).Debug("stat objects and submit tasks start",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("startBlockID", startBlockID),
+		zap.Int("maxBytes", maxBytes))
 
-	// extract data from blocks
-	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
-		currentBlockID := i
+	for totalSize < int64(maxBytes) {
 		blockObjKey := f.getBlockObjectKey(currentBlockID)
-		logger.Ctx(ctx).Debug("try to read block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockNumber", currentBlockID))
 
-		// Get object info to determine the actual size
+		// StatObject to get size (very fast: 1-5ms)
 		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
 		if statErr != nil {
 			if minioHandler.IsObjectNotExists(statErr) {
-				// Block doesn't exist, we've reached the end
 				logger.Ctx(ctx).Debug("block not found, reached end of data",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("blockNumber", currentBlockID))
 				break
 			}
-			logger.Ctx(ctx).Warn("Failed to get block object info",
+			logger.Ctx(ctx).Warn("Failed to stat block object",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(statErr))
-			break // Stop reading on error, return what we have so far
+			break
 		}
 
 		if minioHandler.IsFencedObject(objInfo) {
@@ -468,103 +487,99 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			break
 		}
 
-		blockObj, getErr := f.client.GetObject(ctx, f.bucket, blockObjKey, minio.GetObjectOptions{})
-		if getErr != nil {
-			logger.Ctx(ctx).Warn("Failed to get block",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(getErr))
-			break // Stop reading on error, return what we have so far
+		// Submit task immediately
+		blockInfo := BlockToRead{
+			blockID: currentBlockID,
+			objKey:  blockObjKey,
+			size:    objInfo.Size,
 		}
 
-		blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, objInfo.Size)
-		blockObj.Close() // Always close the object
-		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to read block data",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(err))
-			break // Stop reading on error, return what we have so far
-		}
+		future := f.pool.Submit(func() (*BlockReadResult, error) {
+			return f.fetchAndProcessBlock(ctx, blockInfo, opt.StartEntryID), nil
+		})
 
-		records, decodeErr := codec.DecodeRecordList(blockData)
-		if decodeErr != nil {
-			logger.Ctx(ctx).Warn("Failed to decode block",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(decodeErr))
-			break // Stop reading on error, return what we have so far
-		}
-		logger.Ctx(ctx).Debug("decoded data from block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockNumber", currentBlockID), zap.Int("records", len(records)))
+		futures = append(futures, future)
+		totalSize += objInfo.Size
+		currentBlockID++
 
-		// Find BlockHeaderRecord and verify data integrity
-		var blockHeaderRecord *codec.BlockHeaderRecord
-		for _, record := range records {
-			if record.Type() == codec.HeaderRecordType {
-				// if no footer/no advOpt, it may start from 0, and header record will be read to init version&flags
-				fileHeaderRecord := record.(*codec.HeaderRecord)
-				f.version = fileHeaderRecord.Version
-				f.flags = fileHeaderRecord.Flags
-				continue
+		logger.Ctx(ctx).Debug("submitted reading task for block",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", currentBlockID-1),
+			zap.Int64("blockSize", objInfo.Size),
+			zap.Int64("totalSize", totalSize))
+	}
+
+	sp.AddEvent("submit", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+
+	if len(futures) == 0 {
+		logger.Ctx(ctx).Debug("no blocks to fetch", zap.String("segmentFileKey", f.segmentFileKey))
+		if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		}
+		if f.footer != nil || f.isFooterExists(ctx) {
+			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		}
+		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
+	}
+
+	logger.Ctx(ctx).Debug("stat objects and submit tasks completed",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("taskSubmitted", len(futures)),
+		zap.Int64("totalSize", totalSize))
+
+	// 2. Collect results from futures
+	results := make([]*BlockReadResult, 0, len(futures))
+	for _, future := range futures {
+		result := future.Value()
+		results = append(results, result)
+	}
+
+	sp.AddEvent("collect", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+
+	logger.Ctx(ctx).Debug("Collect results from futures completed",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("resultsCollected", len(results)))
+
+	// 3. Sort results by blockID to maintain order
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[i].blockID > results[j].blockID {
+				*results[i], *results[j] = *results[j], *results[i]
 			}
-			if record.Type() == codec.BlockHeaderRecordType {
-				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-				break
-			}
 		}
-		if blockHeaderRecord == nil {
-			logger.Ctx(ctx).Warn("block header record not found, stop reading",
+	}
+
+	sp.AddEvent("sort", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+
+	logger.Ctx(ctx).Debug("Combine results in order start",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("resultsCollected", len(results)))
+
+	// 4. Combine results in order
+	entries := make([]*proto.LogEntry, 0)
+	var lastBlockInfo *codec.IndexRecord
+	entriesCollected := int64(0)
+	readBytes := 0
+
+	for _, result := range results {
+		if result.err != nil {
+			logger.Ctx(ctx).Warn("Failed to process block",
 				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID))
+				zap.Int64("blockNumber", result.blockID),
+				zap.Error(result.err))
+			// should have no hole
 			break
 		}
 
-		// Verify the block data integrity
-		verifyBlockErr := f.verifyBlockDataIntegrity(ctx, blockHeaderRecord, currentBlockID, blockData)
-		if verifyBlockErr != nil {
-			logger.Ctx(ctx).Warn("verify block data integrity failed, stop reading",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
-				zap.Error(verifyBlockErr))
-			break // Stop reading on data integrity error, return what we have so far
-		}
-
-		currentEntryID := blockHeaderRecord.FirstEntryID
-		// Parse all data records in the block even if it exceeds the maxSize or maxBytes, because one block should be read once
-		for j := 0; j < len(records); j++ {
-			if records[j].Type() != codec.DataRecordType {
-				continue
-			}
-			// Only include entries from the start sequence number onwards
-			if opt.StartEntryID <= currentEntryID {
-				r := records[j].(*codec.DataRecord)
-				entry := &proto.LogEntry{
-					EntryId: currentEntryID,
-					Values:  r.Payload,
-				}
-				entries = append(entries, entry)
-				entriesCollected++
-				readBytes += len(r.Payload)
-			}
-			currentEntryID++
-		}
-
-		logger.Ctx(ctx).Debug("Extracted data from block",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("blockNumber", currentBlockID),
-			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
-			zap.Int64("collectedEntries", entriesCollected),
-			zap.Int("collectedBytes", readBytes))
-
-		lastBlockInfo = &codec.IndexRecord{
-			BlockNumber:  int32(currentBlockID),
-			StartOffset:  currentBlockID,
-			BlockSize:    uint32(objInfo.Size),
-			FirstEntryID: blockHeaderRecord.FirstEntryID,
-			LastEntryID:  blockHeaderRecord.LastEntryID,
+		entries = append(entries, result.entries...)
+		entriesCollected += int64(len(result.entries))
+		readBytes += result.readBytes
+		if result.blockInfo != nil {
+			lastBlockInfo = result.blockInfo
 		}
 	}
+
+	sp.AddEvent("combine", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	if len(entries) == 0 {
 		logger.Ctx(ctx).Debug("no entry extracted",
@@ -606,6 +621,130 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		Entries:       entries,
 	}
 	return batch, nil
+}
+
+// fetchAndProcessBlock fetches and processes a single block
+func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block BlockToRead, startEntryID int64) *BlockReadResult {
+	result := &BlockReadResult{
+		blockID: block.blockID,
+		size:    block.size,
+		err:     nil,
+	}
+
+	// Get the object
+	blockObj, getErr := f.client.GetObject(ctx, f.bucket, block.objKey, minio.GetObjectOptions{})
+	if getErr != nil {
+		result.err = getErr
+		return result
+	}
+
+	// Read the full object data
+	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, block.size)
+	blockObj.Close() // release immediately
+	if err != nil {
+		result.err = err
+		return result
+	}
+
+	// Process the block data
+	entries, readBytes, blockInfo, processErr := f.processBlockData(ctx, block.blockID, blockData, startEntryID)
+	if processErr != nil {
+		result.err = processErr
+		return result
+	}
+
+	result.entries = entries
+	result.readBytes = readBytes
+	result.blockInfo = blockInfo
+
+	return result
+}
+
+// processBlockData decodes block data and extracts entries
+func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64, blockData []byte, startEntryID int64) ([]*proto.LogEntry, int, *codec.IndexRecord, error) {
+	// Decode the block data
+	records, decodeErr := codec.DecodeRecordList(blockData)
+	if decodeErr != nil {
+		logger.Ctx(ctx).Warn("Failed to decode block",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", blockID),
+			zap.Error(decodeErr))
+		return nil, 0, nil, decodeErr
+	}
+
+	// Find BlockHeaderRecord and verify data integrity
+	var blockHeaderRecord *codec.BlockHeaderRecord
+	for _, record := range records {
+		if record.Type() == codec.HeaderRecordType {
+			// if no footer/no advOpt, it may start from 0, and header record will be read to init version&flags
+			fileHeaderRecord := record.(*codec.HeaderRecord)
+			f.version = fileHeaderRecord.Version
+			f.flags = fileHeaderRecord.Flags
+			continue
+		}
+		if record.Type() == codec.BlockHeaderRecordType {
+			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
+			break
+		}
+	}
+	if blockHeaderRecord == nil {
+		err := fmt.Errorf("block header record not found")
+		logger.Ctx(ctx).Warn("block header record not found",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", blockID))
+		return nil, 0, nil, err
+	}
+
+	// Verify the block data integrity
+	verifyBlockErr := f.verifyBlockDataIntegrity(ctx, blockHeaderRecord, blockID, blockData)
+	if verifyBlockErr != nil {
+		logger.Ctx(ctx).Warn("verify block data integrity failed",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", blockID),
+			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
+			zap.Error(verifyBlockErr))
+		return nil, 0, nil, verifyBlockErr
+	}
+
+	// Extract entries from this block
+	entries := make([]*proto.LogEntry, 0)
+	readBytes := 0
+	currentEntryID := blockHeaderRecord.FirstEntryID
+
+	// Parse all data records in the block
+	for j := 0; j < len(records); j++ {
+		if records[j].Type() != codec.DataRecordType {
+			continue
+		}
+		// Only include entries from the start sequence number onwards
+		if startEntryID <= currentEntryID {
+			r := records[j].(*codec.DataRecord)
+			entry := &proto.LogEntry{
+				EntryId: currentEntryID,
+				Values:  r.Payload,
+			}
+			entries = append(entries, entry)
+			readBytes += len(r.Payload)
+		}
+		currentEntryID++
+	}
+
+	blockInfo := &codec.IndexRecord{
+		BlockNumber:  int32(blockID),
+		StartOffset:  blockID,
+		BlockSize:    uint32(len(blockData)),
+		FirstEntryID: blockHeaderRecord.FirstEntryID,
+		LastEntryID:  blockHeaderRecord.LastEntryID,
+	}
+
+	logger.Ctx(ctx).Debug("processed block data",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("blockNumber", blockID),
+		zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
+		zap.Int("extractedEntries", len(entries)),
+		zap.Int("readBytes", readBytes))
+
+	return entries, readBytes, blockInfo, nil
 }
 
 func (f *MinioFileReaderAdv) isFooterExists(ctx context.Context) bool {
