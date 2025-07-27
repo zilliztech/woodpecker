@@ -629,7 +629,11 @@ func (f *MinioFileWriter) ack() {
 					}
 				}
 
-				logger.Ctx(context.TODO()).Info("flush success, fast success ack", zap.String("flushSuccessBlock", task.flushFuture.Value().block.BlockKey), zap.Int64("flushBlockSize", task.flushFuture.Value().block.Size))
+				logger.Ctx(context.TODO()).Info("flush success, fast success ack",
+					zap.String("block", task.flushFuture.Value().block.BlockKey),
+					zap.Int64("firstEntryID", task.flushFuture.Value().block.FirstEntryID),
+					zap.Int64("lastEntryID", task.flushFuture.Value().block.LastEntryID),
+					zap.Int64("blockSize", task.flushFuture.Value().block.Size))
 				// flush success ack
 				f.fastFlushSuccessUnsafe(context.TODO(), task.flushFuture.Value().block, task.flushData)
 				f.lastModifiedTime = time.Now().UnixMilli()
@@ -645,7 +649,10 @@ func (f *MinioFileWriter) ack() {
 				// when put object fail cause by fence object exists, mark storage not writable
 				f.fenced.Store(true)
 			}
-			logger.Ctx(context.TODO()).Info("flush error first encountered, trigger fast flush fail",
+			logger.Ctx(context.TODO()).Info("flush error encountered, trigger fast flush fail",
+				zap.String("block", task.flushFuture.Value().block.BlockKey),
+				zap.Int64("firstEntryID", task.flushFuture.Value().block.FirstEntryID),
+				zap.Int64("lastEntryID", task.flushFuture.Value().block.LastEntryID),
 				zap.String("firstFlushErrBlock", firstUploadErrTask.flushFuture.Value().block.BlockKey))
 			f.fastFlushFailUnsafe(context.TODO(), task.flushData, task.flushFuture.Value().err)
 		}
