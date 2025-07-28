@@ -561,11 +561,11 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
 			metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 			logger.Ctx(ctx).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
-			return err
 		}
 
 		// Close the associated session
 		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+			// Orphan session
 			closeErr := session.Close()
 			if closeErr != nil {
 				metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
