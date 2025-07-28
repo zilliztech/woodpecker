@@ -37,6 +37,9 @@ type Writer interface {
 	// GetLastEntryId returns the last entry ID written
 	GetLastEntryId(ctx context.Context) int64
 
+	// GetBlockCount returns the number of blocks in the segment
+	GetBlockCount(ctx context.Context) int64
+
 	// Finalize write indexes and footer, return last entry ID
 	Finalize(ctx context.Context) (int64, error)
 

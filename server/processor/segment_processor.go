@@ -55,6 +55,7 @@ type SegmentProcessor interface {
 	Complete(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
+	GetBlocksCount(ctx context.Context) (int64, error)
 	GetLastAccessTime() int64
 	Clean(ctx context.Context, flag int) error
 	Close(ctx context.Context) error
@@ -264,6 +265,19 @@ func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int6
 	}
 
 	return lastEntryId, nil
+}
+
+func (s *segmentProcessor) GetBlocksCount(ctx context.Context) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "GetBlocksCount")
+	defer sp.End()
+	s.updateAccessTime()
+
+	writer, err := s.getOrCreateSegmentWriter(ctx, false)
+	if err != nil {
+		return -1, err
+	}
+
+	return writer.GetBlockCount(ctx), nil
 }
 
 func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.Segment, error) {

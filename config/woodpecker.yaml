@@ -29,6 +29,7 @@ woodpecker:
     segmentRollingPolicy:
       maxSize: 256000000 # Maximum segment size in bytes, default is 2GB. Increase this value for high write throughput scenarios to minimize frequent segment rolling.
       maxInterval: 600 # Maximum interval between two segments in seconds, default is 10 minutes
+      maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
   # Configuration of Woodpecker LogStore Server.
@@ -44,6 +45,8 @@ woodpecker:
       maxFlushThreads: 32 # Maximum number of threads to flush data
     segmentCompactionPolicy:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
+      maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
+      maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

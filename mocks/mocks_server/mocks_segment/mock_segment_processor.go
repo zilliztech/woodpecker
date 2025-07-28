@@ -348,6 +348,62 @@ func (_c *SegmentProcessor_Fence_Call) RunAndReturn(run func(context.Context) (i
 	return _c
 }
 
+// GetBlocksCount provides a mock function with given fields: ctx
+func (_m *SegmentProcessor) GetBlocksCount(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlocksCount")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// SegmentProcessor_GetBlocksCount_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlocksCount'
+type SegmentProcessor_GetBlocksCount_Call struct {
+	*mock.Call
+}
+
+// GetBlocksCount is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *SegmentProcessor_Expecter) GetBlocksCount(ctx interface{}) *SegmentProcessor_GetBlocksCount_Call {
+	return &SegmentProcessor_GetBlocksCount_Call{Call: _e.mock.On("GetBlocksCount", ctx)}
+}
+
+func (_c *SegmentProcessor_GetBlocksCount_Call) Run(run func(ctx context.Context)) *SegmentProcessor_GetBlocksCount_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_GetBlocksCount_Call) Return(_a0 int64, _a1 error) *SegmentProcessor_GetBlocksCount_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *SegmentProcessor_GetBlocksCount_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_GetBlocksCount_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetLastAccessTime provides a mock function with no fields
 func (_m *SegmentProcessor) GetLastAccessTime() int64 {
 	ret := _m.Called()

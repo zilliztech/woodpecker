@@ -40,6 +40,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 3, config.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, int64(256000000), config.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, 200, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
@@ -50,6 +51,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize)
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes)
+	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
+	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -105,6 +108,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, int64(100000000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
@@ -115,6 +119,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes)
+	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
+	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
@@ -177,6 +183,7 @@ func TestConfigurationOverwrite(t *testing.T) {
     segmentRollingPolicy:
       maxSize: 22220000000
       maxInterval: 2200
+      maxBlocks: 2000
     auditor:
       maxInterval: 10`
 	extraCfgFile, err := os.CreateTemp("/tmp", "custom_*.yaml")
@@ -193,5 +200,6 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 22, config.Woodpecker.Client.SegmentAppend.MaxRetries)
 	assert.Equal(t, int64(22220000000), config.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
 	assert.Equal(t, 2200, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
+	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 }

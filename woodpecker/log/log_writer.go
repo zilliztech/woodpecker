@@ -72,6 +72,11 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
 		w.sessionValid.Store(false)
+		if session != nil {
+			if closeSessionErr := w.session.Close(); closeSessionErr != nil {
+				logger.Ctx(ctx).Warn("failed to close session", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Error(closeSessionErr))
+			}
+		}
 		logger.Ctx(ctx).Warn("trigger writer lock session expired", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.String("reason", reason))
 	}
 	w.onWriterInvalidated = onWriterInvalidated
@@ -281,18 +286,11 @@ func (l *logWriterImpl) runAuditor() {
 				sp.End()
 				continue
 			}
-			nextSegId, err := l.logHandle.GetNextSegmentId()
-			if err != nil {
-				logger.Ctx(ctx).Warn("get next segment id failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(err))
-				sp.End()
-				continue
-			}
 
 			logger.Ctx(ctx).Info("Auditor loaded segment metadata",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
-				zap.Int("totalSegments", len(segmentMetaList)),
-				zap.Int64("nextSegmentId", nextSegId))
+				zap.Int("totalSegments", len(segmentMetaList)))
 
 			// compact/recover if necessary
 			truncatedSegmentExists := make([]int64, 0)
@@ -301,10 +299,6 @@ func (l *logWriterImpl) runAuditor() {
 			segmentsFailed := 0
 
 			for _, seg := range segmentMetaList {
-				if seg.Metadata.SegNo >= nextSegId-2 {
-					// last segment maybe in-progress, no need to recover it
-					continue
-				}
 				stateBefore := seg.Metadata.State
 				if stateBefore == proto.SegmentState_Completed {
 					segmentsProcessed++

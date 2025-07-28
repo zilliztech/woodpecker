@@ -33,6 +33,7 @@ type MetaConfig struct {
 type SegmentRollingPolicyConfig struct {
 	MaxSize     int64 `yaml:"maxSize"`
 	MaxInterval int   `yaml:"maxInterval"`
+	MaxBlocks   int64 `yaml:"maxBlocks"`
 }
 
 type SegmentAppendConfig struct {
@@ -64,7 +65,9 @@ type SegmentSyncPolicyConfig struct {
 }
 
 type SegmentCompactionPolicy struct {
-	MaxBytes int64 `yaml:"maxBytes"`
+	MaxBytes           int64 `yaml:"maxBytes"`
+	MaxParallelUploads int   `yaml:"maxParallelUploads"`
+	MaxParallelReads   int   `yaml:"maxParallelReads"`
 }
 
 // FragmentManagerConfig stores the fragment manager configuration.
@@ -278,6 +281,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     100000000,
 				MaxInterval: 800,
+				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
 				MaxInterval: 5,
@@ -295,7 +299,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxFlushThreads:            8,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes: 32000000,
+				MaxBytes:           32000000,
+				MaxParallelUploads: 4,
+				MaxParallelReads:   8,
 			},
 		},
 		Storage: StorageConfig{

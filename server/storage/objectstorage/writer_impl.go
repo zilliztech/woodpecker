@@ -70,10 +70,11 @@ type MinioFileWriter struct {
 	segmentIdStr   string // for metrics label only
 
 	// configuration
-	maxBufferSize    int64 // Max buffer size to sync buffer to object storage
-	maxBufferEntries int64 // Maximum number of entries per buffer
-	maxIntervalMs    int   // Max interval to sync buffer to object storage
-	syncPolicyConfig *config.SegmentSyncPolicyConfig
+	maxBufferSize       int64 // Max buffer size to sync buffer to object storage
+	maxBufferEntries    int64 // Maximum number of entries per buffer
+	maxIntervalMs       int   // Max interval to sync buffer to object storage
+	syncPolicyConfig    *config.SegmentSyncPolicyConfig
+	compactPolicyConfig *config.SegmentCompactionPolicy
 
 	// write buffer
 	buffer            atomic.Pointer[cache.SequentialBuffer] // Write buffer
@@ -128,11 +129,12 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
 
-		maxBufferSize:    syncPolicyConfig.MaxBytes,
-		maxBufferEntries: maxBufferEntries,
-		maxIntervalMs:    syncPolicyConfig.MaxInterval,
-		syncPolicyConfig: syncPolicyConfig,
-		fileClose:        make(chan struct{}, 1),
+		maxBufferSize:       syncPolicyConfig.MaxBytes,
+		maxBufferEntries:    maxBufferEntries,
+		maxIntervalMs:       syncPolicyConfig.MaxInterval,
+		syncPolicyConfig:    syncPolicyConfig,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		fileClose:           make(chan struct{}, 1),
 
 		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
@@ -583,7 +585,7 @@ func (f *MinioFileWriter) run() {
 			ctx, sp := logger.NewIntentCtx(SegmentWriterScope, "run_sync")
 			err := f.Sync(ctx)
 			if err != nil {
-				logger.Ctx(ctx).Warn("sync error",
+				logger.Ctx(ctx).Info("sync error",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Error(err))
 			}
@@ -760,6 +762,10 @@ func (f *MinioFileWriter) GetLastEntryId(ctx context.Context) int64 {
 	return f.lastEntryID.Load()
 }
 
+func (f *MinioFileWriter) GetBlockCount(ctx context.Context) int64 {
+	return f.lastSubmittedUploadingBlockID.Load()
+}
+
 func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "waitIfFlushingBufferSizeExceededUnsafe")
 	defer sp.End()
@@ -833,7 +839,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	}
 
 	// Get target block size for compaction (use maxFlushSize as target)
-	targetBlockSize := f.syncPolicyConfig.MaxFlushSize
+	targetBlockSize := f.compactPolicyConfig.MaxBytes
 	if targetBlockSize <= 0 {
 		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
@@ -886,7 +892,8 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
-		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact))
+		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
+		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "compact", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
@@ -907,7 +914,7 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	sp.AddEvent("wait syncMu lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	if !f.storageWritable.Load() {
-		logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
+		logger.Ctx(ctx).Info("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
 		return f.quickSyncFailUnsafe(ctx, werr.ErrStorageNotWritable)
 	}
 
@@ -1600,8 +1607,13 @@ func (f *MinioFileWriter) serialize(blockId int64, entries []*cache.BufferEntry)
 	return serializedData
 }
 
-// streamMergeAndUploadBlocks streams through blocks, merges them and uploads immediately
+// streamMergeAndUploadBlocks streams through blocks, merges them and uploads in parallel
+// Each merge block is processed as a separate task to control memory usage
 func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, targetBlockSize int64) ([]*codec.IndexRecord, int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "streamMergeAndUploadBlocks")
+	defer sp.End()
+	startTime := time.Now()
+
 	if len(f.blockIndexes) == 0 {
 		return nil, -1, nil
 	}
@@ -1611,108 +1623,255 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 		return f.blockIndexes[i].BlockNumber < f.blockIndexes[j].BlockNumber
 	})
 
-	var newBlockIndexes []*codec.IndexRecord
-	var currentMergedBlock []byte
-	var currentMergedSize int64
-	var currentEntryID int64
-	var mergedBlockID int64 = 0
-	var isFirstMergedBlock = true
+	// Plan merge block tasks - determine which original blocks go into each merge block
+	mergeBlockTasks := f.planMergeBlockTasks(targetBlockSize)
+	sp.AddEvent("plan merge block tasks", trace.WithAttributes(attribute.Int64("planTime", time.Now().Sub(startTime).Milliseconds())))
+	logger.Ctx(ctx).Info("plan merge block tasks",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("originalBlockCount", len(f.blockIndexes)),
+		zap.Int("mergeBlockTasks", len(mergeBlockTasks)))
 
-	// Initialize current entry ID
+	// Create a pool for merge block tasks (each task handles: read blocks -> merge -> upload)
+	maxMergeBlockTasks := f.compactPolicyConfig.MaxParallelUploads
+	mergeTaskPool := conc.NewPool[*mergedBlockUploadResult](maxMergeBlockTasks, conc.WithPreAlloc(true))
+
+	// Submit all merge block tasks
+	var mergeFutures []*conc.Future[*mergedBlockUploadResult]
+
+	// Initialize entry ID tracking
+	currentEntryID := int64(0)
 	if f.firstEntryID.Load() != -1 {
 		currentEntryID = f.firstEntryID.Load()
-	} else {
-		currentEntryID = 0
 	}
 
-	// Track file size after compact
+	for mergedBlockID, task := range mergeBlockTasks {
+		// Capture variables for closure
+		taskBlocks := task.blocks
+		taskFirstEntryID := currentEntryID
+		isFirstMergedBlock := (mergedBlockID == 0)
+		blockID := int64(mergedBlockID)
+
+		// Submit merge block task
+		future := mergeTaskPool.Submit(func() (*mergedBlockUploadResult, error) {
+			return f.processMergeBlockTask(ctx, taskBlocks, blockID, taskFirstEntryID, isFirstMergedBlock)
+		})
+
+		mergeFutures = append(mergeFutures, future)
+
+		// Update entry ID for next merge block
+		currentEntryID = task.nextEntryID
+	}
+
+	// Wait for all merge block tasks to complete and collect results
+	var newBlockIndexes []*codec.IndexRecord
 	fileSizeAfterCompact := int64(0)
 
-	// Helper function to upload current merged block
-	uploadCurrentBlock := func() error {
-		uploadCompactedBlockStartTime := time.Now()
-		if len(currentMergedBlock) == 0 {
-			return nil
+	for _, future := range mergeFutures {
+		result := future.Value()
+		if result.error != nil {
+			return nil, -1, fmt.Errorf("failed to process merge block: %w", result.error)
 		}
 
-		blockIndex, blockSizeAfterCompact, err := f.uploadSingleMergedBlock(ctx, currentMergedBlock, mergedBlockID, currentEntryID, isFirstMergedBlock)
-		if err != nil {
-			return err
-		}
-
-		// update block compact metrics
-		metrics.WpFileCompactLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(uploadCompactedBlockStartTime).Milliseconds()))
-		metrics.WpFileCompactBytesWritten.WithLabelValues(f.logIdStr).Add(float64(blockSizeAfterCompact))
-
-		newBlockIndexes = append(newBlockIndexes, blockIndex)
-		fileSizeAfterCompact += blockSizeAfterCompact
-
-		// Update for next block
-		currentEntryID = blockIndex.LastEntryID + 1
-		mergedBlockID++
-		isFirstMergedBlock = false
-		currentMergedBlock = nil
-		currentMergedSize = 0
-
-		return nil
+		newBlockIndexes = append(newBlockIndexes, result.blockIndex)
+		fileSizeAfterCompact += result.blockSize
 	}
 
-	// Process each original block
-	for _, blockIndex := range f.blockIndexes {
-		// Read the block data
-		blockKey := getBlockKey(f.segmentFileKey, int64(blockIndex.BlockNumber))
-		blockData, err := f.readBlockData(ctx, blockKey)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read block data",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.String("blockKey", blockKey),
-				zap.Error(err))
-			return nil, -1, fmt.Errorf("failed to read block %d: %w", blockIndex.BlockNumber, err)
-		}
-
-		// Extract only data records (skip header and block last records)
-		dataRecords, err := f.extractDataRecords(blockData)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to extract data records",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.String("blockKey", blockKey),
-				zap.Error(err))
-			return nil, -1, fmt.Errorf("failed to extract data records from block %d: %w", blockIndex.BlockNumber, err)
-		}
-
-		// Add data records to current merged block first
-		currentMergedBlock = append(currentMergedBlock, dataRecords...)
-		currentMergedSize += int64(len(dataRecords))
-
-		// Check if current merged block exceeds target size after adding data
-		if currentMergedSize >= targetBlockSize {
-			// Upload current merged block since it has reached the target size
-			if err := uploadCurrentBlock(); err != nil {
-				return nil, -1, fmt.Errorf("failed to upload merged block %d: %w", mergedBlockID, err)
-			}
-		}
-
-		logger.Ctx(ctx).Debug("processed block for streaming merge",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int32("blockNumber", blockIndex.BlockNumber),
-			zap.Int("dataRecordsSize", len(dataRecords)),
-			zap.Int64("currentMergedSize", currentMergedSize))
-	}
-
-	// Upload the last merged block if it has data
-	if len(currentMergedBlock) > 0 {
-		if err := uploadCurrentBlock(); err != nil {
-			return nil, -1, fmt.Errorf("failed to upload final merged block %d: %w", mergedBlockID, err)
-		}
-	}
-
-	logger.Ctx(ctx).Info("completed streaming merge and upload",
+	logger.Ctx(ctx).Info("completed parallel merge block processing",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", len(f.blockIndexes)),
 		zap.Int("mergedBlockCount", len(newBlockIndexes)),
-		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact))
+		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
+		zap.Int("mergeBlockTasks", len(mergeBlockTasks)))
 
 	return newBlockIndexes, fileSizeAfterCompact, nil
+}
+
+// mergeBlockTask represents a single merge block task
+type mergeBlockTask struct {
+	blocks      []*codec.IndexRecord // Original blocks to be merged
+	nextEntryID int64                // Next entry ID after this merge block
+}
+
+// planMergeBlockTasks analyzes blocks and plans how to group them into merge blocks
+func (f *MinioFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBlockTask {
+	var tasks []*mergeBlockTask
+	var currentTask *mergeBlockTask
+	var currentSize int64 = 0
+
+	// Initialize entry ID tracking
+	currentEntryID := int64(0)
+	if f.firstEntryID.Load() != -1 {
+		currentEntryID = f.firstEntryID.Load()
+	}
+
+	for _, blockIndex := range f.blockIndexes {
+		// Estimate the size of data records in this block (use BlockSize as approximation)
+		estimatedDataSize := int64(blockIndex.BlockSize)
+
+		// Check if adding this block would exceed target size
+		if currentTask != nil && currentSize+estimatedDataSize >= targetBlockSize {
+			// Complete current task
+			currentTask.nextEntryID = currentEntryID
+			tasks = append(tasks, currentTask)
+
+			// Start new task
+			currentTask = &mergeBlockTask{
+				blocks: []*codec.IndexRecord{blockIndex},
+			}
+			currentSize = estimatedDataSize
+		} else {
+			// Add to current task or start new task
+			if currentTask == nil {
+				currentTask = &mergeBlockTask{
+					blocks: []*codec.IndexRecord{blockIndex},
+				}
+				currentSize = estimatedDataSize
+			} else {
+				currentTask.blocks = append(currentTask.blocks, blockIndex)
+				currentSize += estimatedDataSize
+			}
+		}
+
+		// Update entry ID based on this block's entry range
+		if blockIndex.LastEntryID >= currentEntryID {
+			currentEntryID = blockIndex.LastEntryID + 1
+		}
+	}
+
+	// Add the last task if it has blocks
+	if currentTask != nil && len(currentTask.blocks) > 0 {
+		currentTask.nextEntryID = currentEntryID
+		tasks = append(tasks, currentTask)
+	}
+
+	return tasks
+}
+
+// processMergeBlockTask processes a single merge block task:
+// 1. Concurrently read all blocks needed for this merge block
+// 2. Merge the data records
+// 3. Upload the merged block
+func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*codec.IndexRecord, mergedBlockID int64, firstEntryID int64, isFirstBlock bool) (*mergedBlockUploadResult, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "processMergeBlockTask")
+	defer sp.End()
+
+	startTime := time.Now()
+
+	logger.Ctx(ctx).Debug("process merge block task",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("originalBlockCount", len(blocks)),
+		zap.Int64("mergedBlockID", mergedBlockID),
+		zap.Int64("firstEntryID", firstEntryID),
+		zap.Bool("isFirstBlock", isFirstBlock))
+
+	// Phase 1: Concurrently read all blocks for this merge block
+	maxReadConcurrency := min(f.compactPolicyConfig.MaxParallelReads, len(blocks))
+	if maxReadConcurrency <= 0 {
+		maxReadConcurrency = min(8, len(blocks)) // Fallback to 8
+	}
+
+	readPool := conc.NewPool[*blockDataResult](maxReadConcurrency, conc.WithPreAlloc(true))
+
+	// Submit read tasks for all blocks in this merge block
+	var readFutures []*conc.Future[*blockDataResult]
+	for _, blockIndex := range blocks {
+		blockIdx := blockIndex // Capture for closure
+		future := readPool.Submit(func() (*blockDataResult, error) {
+			blockKey := getBlockKey(f.segmentFileKey, int64(blockIdx.BlockNumber))
+			blockData, err := f.readBlockData(ctx, blockKey)
+			if err != nil {
+				logger.Ctx(ctx).Warn("failed to read block data in merge task",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.String("blockKey", blockKey),
+					zap.Int64("mergedBlockID", mergedBlockID),
+					zap.Error(err))
+				return &blockDataResult{
+					blockIndex: blockIdx,
+					blockData:  nil,
+					error:      err,
+				}, err
+			}
+
+			// Extract only data records (skip header and block header records)
+			dataRecords, err := f.extractDataRecords(blockData)
+			if err != nil {
+				logger.Ctx(ctx).Warn("failed to extract data records in merge task",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.String("blockKey", blockKey),
+					zap.Int64("mergedBlockID", mergedBlockID),
+					zap.Error(err))
+				return &blockDataResult{
+					blockIndex: blockIdx,
+					blockData:  nil,
+					error:      err,
+				}, err
+			}
+
+			return &blockDataResult{
+				blockIndex: blockIdx,
+				blockData:  dataRecords,
+				error:      nil,
+			}, nil
+		})
+		readFutures = append(readFutures, future)
+	}
+
+	// Wait for all reads to complete and collect results
+	blockDataResults := make([]*blockDataResult, len(readFutures))
+	for i, future := range readFutures {
+		result := future.Value()
+		blockDataResults[i] = result
+		if result.error != nil {
+			return &mergedBlockUploadResult{
+				blockIndex: nil,
+				blockSize:  0,
+				error:      fmt.Errorf("failed to read block %d for merge block %d: %w", result.blockIndex.BlockNumber, mergedBlockID, result.error),
+			}, result.error
+		}
+	}
+
+	// Sort results by block number to maintain order
+	sort.Slice(blockDataResults, func(i, j int) bool {
+		return blockDataResults[i].blockIndex.BlockNumber < blockDataResults[j].blockIndex.BlockNumber
+	})
+
+	// Phase 2: Merge all data records
+	var mergedData []byte
+	for _, result := range blockDataResults {
+		mergedData = append(mergedData, result.blockData...)
+	}
+
+	readCompleteTime := time.Now()
+	sp.AddEvent("read complete", trace.WithAttributes(attribute.Int64("readTime", readCompleteTime.Sub(startTime).Milliseconds())))
+
+	// Phase 3: Upload merged block
+	blockIndex, blockSize, err := f.uploadSingleMergedBlock(ctx, mergedData, mergedBlockID, firstEntryID, isFirstBlock)
+	if err != nil {
+		return &mergedBlockUploadResult{
+			blockIndex: nil,
+			blockSize:  0,
+			error:      fmt.Errorf("failed to upload merge block %d: %w", mergedBlockID, err),
+		}, err
+	}
+
+	// Update metrics
+	totalTime := time.Since(startTime)
+	metrics.WpFileCompactLatency.WithLabelValues(f.logIdStr).Observe(float64(totalTime.Milliseconds()))
+	metrics.WpFileCompactBytesWritten.WithLabelValues(f.logIdStr).Add(float64(blockSize))
+
+	logger.Ctx(ctx).Debug("completed merge block task",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("mergedBlockID", mergedBlockID),
+		zap.Int("originalBlockCount", len(blocks)),
+		zap.Int64("mergedBlockSize", blockSize),
+		zap.Int64("readTime", readCompleteTime.Sub(startTime).Milliseconds()),
+		zap.Int64("totalTime", totalTime.Milliseconds()))
+
+	return &mergedBlockUploadResult{
+		blockIndex: blockIndex,
+		blockSize:  blockSize,
+		error:      nil,
+	}, nil
 }
 
 // readBlockData reads the complete data of a block
@@ -1879,6 +2038,20 @@ type blockUploadTask struct {
 type blockUploadResult struct {
 	block *BlockInfo
 	err   error
+}
+
+// mergedBlockUploadResult is the result of merged block upload operation
+type mergedBlockUploadResult struct {
+	blockIndex *codec.IndexRecord
+	blockSize  int64
+	error      error
+}
+
+// blockDataResult is the result of block data reading operation
+type blockDataResult struct {
+	blockIndex *codec.IndexRecord
+	blockData  []byte
+	error      error
 }
 
 // utils for block key

@@ -42,6 +42,7 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
 					MaxInterval: 10,
 					MaxSize:     64 * 1024 * 1024,
+					MaxBlocks:   1000,
 				},
 			},
 		},
@@ -360,6 +361,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	// Mock old segment behavior - it should exceed size threshold
 	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(65 * 1024 * 1024)) // 65MB > 64MB threshold
+	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(500))       // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
 
@@ -401,7 +403,8 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 
 	// Mock old segment behavior - size is small but time exceeds threshold
 	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
-	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // Small size
+	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024))       // Small size
+	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(100)) // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
 
@@ -483,7 +486,8 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_NoRollingNeeded(t *testing.T
 
 	// Mock segment behavior - no rolling needed
 	mockSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(false)
-	mockSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024)) // Small size
+	mockSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024))       // Small size
+	mockSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(100)) // Below blocks threshold
 
 	// Call GetOrCreateWritableSegmentHandle - should return existing segment
 	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
@@ -609,8 +613,8 @@ func TestLogHandle_Rolling_RollingPolicyBehavior(t *testing.T) {
 	ctx := context.Background()
 
 	// Test size-based rolling policy (MaxSize = 64MB in config)
-	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 65*1024*1024, time.Now().UnixMilli()))
-	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, time.Now().UnixMilli()))
+	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 65*1024*1024, 500, time.Now().UnixMilli()))
+	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, time.Now().UnixMilli()))
 
 	// Test time-based rolling policy
 	// Note: MaxInterval is 10 minutes, and it's converted to milliseconds in NewDefaultRollingPolicy
@@ -619,10 +623,10 @@ func TestLogHandle_Rolling_RollingPolicyBehavior(t *testing.T) {
 
 	// Debug: print values to understand the behavior
 	t.Logf("Testing time-based rolling: oldTime=%d, recentTime=%d", oldTime, recentTime)
-	t.Logf("Should rollover old time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, oldTime))
-	t.Logf("Should rollover recent time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, recentTime))
+	t.Logf("Should rollover old time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, oldTime))
+	t.Logf("Should rollover recent time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, recentTime))
 
-	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, oldTime))
+	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, oldTime))
 	// This might be failing - let's be more lenient and just check that old time triggers rolling
 	// assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, recentTime))
 }
@@ -642,6 +646,7 @@ func TestLogHandle_Rolling_ConcurrentAccess(t *testing.T) {
 	// Mock old segment to trigger rolling
 	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(false).Maybe()
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(65 * 1024 * 1024)).Maybe() // Exceeds threshold
+	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(500)).Maybe()       // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Maybe()
 

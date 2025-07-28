@@ -94,6 +94,7 @@ type LocalFileWriter struct {
 	flushTaskChan                chan *blockFlushTask
 	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
+	lastSubmittedFlushingBlockID atomic.Int64
 	allUploadingTaskDone         atomic.Bool
 	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
 
@@ -172,6 +173,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
 	writer.lastSubmittedFlushingEntryID.Store(-1)
+	writer.lastSubmittedFlushingBlockID.Store(-1)
 	writer.allUploadingTaskDone.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
 
@@ -409,6 +411,7 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 
 	// Update flushing size
 	w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
+	w.lastSubmittedFlushingBlockID.Store(int64(flushTask.blockNumber))
 
 	// Increment block number for next block
 	w.currentBlockNumber.Add(1)
@@ -909,6 +912,10 @@ func (w *LocalFileWriter) GetLastEntryId(ctx context.Context) int64 {
 // GetFirstEntryId returns the first entry ID written
 func (w *LocalFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 	return w.firstEntryID.Load()
+}
+
+func (w *LocalFileWriter) GetBlockCount(ctx context.Context) int64 {
+	return w.lastSubmittedFlushingBlockID.Load()
 }
 
 // Close closes the writer

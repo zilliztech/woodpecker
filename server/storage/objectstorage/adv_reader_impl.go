@@ -504,6 +504,8 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 
 		logger.Ctx(ctx).Debug("submitted reading task for block",
 			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.String("blockKey", blockObjKey),
+			zap.Bool("compacted", f.isCompacted.Load()),
 			zap.Int64("blockNumber", currentBlockID-1),
 			zap.Int64("blockSize", objInfo.Size),
 			zap.Int64("totalSize", totalSize))
