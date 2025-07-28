@@ -146,6 +146,7 @@ func newLogger(format string, level string) (*zap.Logger, error) {
 	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	config.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
 	config.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+	config.OutputPaths = []string{"stdout"}
 
 	logger, err := config.Build()
 	if err != nil {
