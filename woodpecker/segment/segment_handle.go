@@ -744,7 +744,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	logIdStr := fmt.Sprintf("%d", s.logId)
 	currentBlockCounts, err := cli.GetBlockCount(ctx, s.logId, currentSegmentMeta.Metadata.SegNo)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get blocks count",
+		logger.Ctx(ctx).Info("Failed to get blocks count",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
