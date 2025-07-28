@@ -272,7 +272,8 @@ func (s *segmentProcessor) GetBlocksCount(ctx context.Context) (int64, error) {
 	defer sp.End()
 	s.updateAccessTime()
 
-	writer, err := s.getOrCreateSegmentWriter(ctx, false)
+	// get exists file writer
+	writer, err := s.getSegmentWriter(ctx)
 	if err != nil {
 		return -1, err
 	}
