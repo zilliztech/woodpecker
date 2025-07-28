@@ -20,9 +20,10 @@ package server
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/channel"
 	"sync"
 	"time"
+
+	"github.com/zilliztech/woodpecker/common/channel"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -55,6 +56,7 @@ type LogStore interface {
 	CompleteSegment(context.Context, int64, int64) (int64, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
+	GetSegmentBlockCount(context.Context, int64, int64) (int64, error)
 	CleanSegment(context.Context, int64, int64, int) error
 }
 
@@ -341,6 +343,33 @@ func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, 
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return lac, err
+}
+
+func (l *logStore) GetSegmentBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentBlockCount")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("get segment block count failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return -1, err
+	}
+
+	blockCount, err := segmentProcessor.GetBlocksCount(ctx)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("get segment block count failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		return -1, err
+	}
+
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return blockCount, nil
 }
 
 // CompactSegment merge all files in a segment into bigger files

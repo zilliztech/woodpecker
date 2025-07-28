@@ -27,10 +27,10 @@ import (
 
 type RollingPolicy interface {
 	// ShouldRollover returns true if the current segment should be rolled over.
-	ShouldRollover(ctx context.Context, currentSegmentSize int64, lastRolloverTimeMs int64) bool
+	ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) bool
 }
 
-func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64) RollingPolicy {
+func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64, rolloverBlocksCount int64) RollingPolicy {
 	// Validate parameters
 	if rolloverIntervalMs <= 0 {
 		logger.Ctx(context.Background()).Warn("Invalid rolloverIntervalMs, using default 10 minutes",
@@ -42,24 +42,35 @@ func NewDefaultRollingPolicy(rolloverIntervalMs int64, rolloverSizeBytes int64) 
 			zap.Int64("provided", rolloverSizeBytes))
 		rolloverSizeBytes = 64 * 1024 * 1024 // 64MB default
 	}
+	if rolloverBlocksCount <= 0 {
+		logger.Ctx(context.Background()).Warn("Invalid rolloverBlocksCount, using default 1000 blocks",
+			zap.Int64("provided", rolloverBlocksCount))
+		rolloverBlocksCount = 1000 // 1000 blocks default
+	}
 
 	return &DefaultRollingPolicy{
-		rolloverIntervalMs: rolloverIntervalMs,
-		rolloverSizeBytes:  rolloverSizeBytes,
+		rolloverIntervalMs:  rolloverIntervalMs,
+		rolloverSizeBytes:   rolloverSizeBytes,
+		rolloverBlocksCount: rolloverBlocksCount,
 	}
 }
 
 var _ RollingPolicy = &DefaultRollingPolicy{}
 
 type DefaultRollingPolicy struct {
-	rolloverIntervalMs int64
-	rolloverSizeBytes  int64
+	rolloverIntervalMs  int64
+	rolloverSizeBytes   int64
+	rolloverBlocksCount int64
 }
 
-func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, lastRolloverTimeMs int64) bool {
+func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) bool {
 	// Validate input parameters
 	if currentSegmentSize < 0 {
 		logger.Ctx(ctx).Warn("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
+		return false
+	}
+	if currentBlocksCount < 0 {
+		logger.Ctx(ctx).Info("Invalid currentBlocksCount", zap.Int64("currentBlocksCount", currentBlocksCount))
 		return false
 	}
 
@@ -71,6 +82,14 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 		logger.Ctx(ctx).Debug("Rolling by size",
 			zap.Int64("rolloverSizeBytes", p.rolloverSizeBytes),
 			zap.Int64("actualSize", currentSegmentSize))
+		return true
+	}
+
+	// Check blocks-based rollover
+	if currentBlocksCount >= p.rolloverBlocksCount {
+		logger.Ctx(ctx).Debug("Rolling by blocks count",
+			zap.Int64("rolloverBlocksCount", p.rolloverBlocksCount),
+			zap.Int64("actualBlocksCount", currentBlocksCount))
 		return true
 	}
 
@@ -93,7 +112,8 @@ func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmen
 			logger.Ctx(ctx).Debug("Rolling by time interval",
 				zap.Int64("rolloverIntervalMs", p.rolloverIntervalMs),
 				zap.Int64("actualIntervalMs", timeSinceLastRollover),
-				zap.Int64("actualSize", currentSegmentSize))
+				zap.Int64("actualSize", currentSegmentSize),
+				zap.Int64("actualBlocksCount", currentBlocksCount))
 			return true
 		}
 	}

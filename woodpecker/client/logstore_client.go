@@ -41,6 +41,8 @@ type LogStoreClient interface {
 	SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
 	GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	// GetBlockCount gets the block count of the specified log segment and returns it and an error if any.
+	GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
 }
 
 var _ LogStoreClient = (*logStoreClientLocal)(nil)
@@ -69,6 +71,10 @@ func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, seg
 
 func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	return l.store.GetSegmentLastAddConfirmed(ctx, logId, segmentId)
+}
+
+func (l *logStoreClientLocal) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	return l.store.GetSegmentBlockCount(ctx, logId, segmentId)
 }
 
 func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
@@ -114,6 +120,11 @@ func (l *logStoreClientRemote) IsSegmentFenced(ctx context.Context, logId int64,
 }
 
 func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }

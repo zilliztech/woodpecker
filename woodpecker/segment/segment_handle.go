@@ -71,6 +71,8 @@ type SegmentHandle interface {
 	SendAppendErrorCallbacks(context.Context, int64, error)
 	// GetSize get the size of the segment
 	GetSize(context.Context) int64
+	// GetBlocksCount get the number of blocks in the segment
+	GetBlocksCount(context.Context) int64
 	// Complete the segment writing
 	Complete(context.Context) (int64, error)
 	// Fence the segment in all nodes
@@ -691,6 +693,67 @@ func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEnt
 // GetSize returns the size of the segment
 func (s *segmentHandleImpl) GetSize(ctx context.Context) int64 {
 	return s.submittedSize.Load() + s.commitedSize.Load()
+}
+
+// GetBlocksCount returns the number of blocks in the segment
+// If an error occurs, return 0 to indicate that blocks count should not be used as a basis for rolling
+// TODO If in the future it is in remote mode, frequent access is not necessary, only once every 5-10 seconds is ok
+func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "GetLastAddConfirmed")
+	defer sp.End()
+	s.updateAccessTime()
+	currentSegmentMeta := s.segmentMetaCache.Load()
+	// should get from meta if seg completed, other wise get from data
+	if currentSegmentMeta.Metadata.State != proto.SegmentState_Active {
+		// quick return, this method is only used during the data writing process of active segments, otherwise the call is meaningless
+		return 0
+	}
+
+	// write data to quorum
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get quorum info during get blocks count, return 0",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
+		return 0
+	}
+
+	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration during get blocks count, return 0",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("quorumId", quorumInfo.Id),
+			zap.Int("nodeCount", len(quorumInfo.Nodes)))
+		return 0
+	}
+
+	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get blocks count",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
+		return 0
+	}
+
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", s.logId)
+	currentBlockCounts, err := cli.GetBlockCount(ctx, s.logId, currentSegmentMeta.Metadata.SegNo)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get blocks count",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(err))
+		return 0
+	}
+	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "get_blocks_count", "success").Inc()
+	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "get_blocks_count", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return currentBlockCounts
 }
 
 func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {

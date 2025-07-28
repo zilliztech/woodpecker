@@ -33,6 +33,7 @@ type MetaConfig struct {
 type SegmentRollingPolicyConfig struct {
 	MaxSize     int64 `yaml:"maxSize"`
 	MaxInterval int   `yaml:"maxInterval"`
+	MaxBlocks   int64 `yaml:"maxBlocks"`
 }
 
 type SegmentAppendConfig struct {
@@ -278,6 +279,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
 				MaxSize:     100000000,
 				MaxInterval: 800,
+				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
 				MaxInterval: 5,

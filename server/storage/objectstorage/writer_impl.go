@@ -70,10 +70,11 @@ type MinioFileWriter struct {
 	segmentIdStr   string // for metrics label only
 
 	// configuration
-	maxBufferSize    int64 // Max buffer size to sync buffer to object storage
-	maxBufferEntries int64 // Maximum number of entries per buffer
-	maxIntervalMs    int   // Max interval to sync buffer to object storage
-	syncPolicyConfig *config.SegmentSyncPolicyConfig
+	maxBufferSize       int64 // Max buffer size to sync buffer to object storage
+	maxBufferEntries    int64 // Maximum number of entries per buffer
+	maxIntervalMs       int   // Max interval to sync buffer to object storage
+	syncPolicyConfig    *config.SegmentSyncPolicyConfig
+	compactPolicyConfig *config.SegmentCompactionPolicy
 
 	// write buffer
 	buffer            atomic.Pointer[cache.SequentialBuffer] // Write buffer
@@ -128,11 +129,12 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
 
-		maxBufferSize:    syncPolicyConfig.MaxBytes,
-		maxBufferEntries: maxBufferEntries,
-		maxIntervalMs:    syncPolicyConfig.MaxInterval,
-		syncPolicyConfig: syncPolicyConfig,
-		fileClose:        make(chan struct{}, 1),
+		maxBufferSize:       syncPolicyConfig.MaxBytes,
+		maxBufferEntries:    maxBufferEntries,
+		maxIntervalMs:       syncPolicyConfig.MaxInterval,
+		syncPolicyConfig:    syncPolicyConfig,
+		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		fileClose:           make(chan struct{}, 1),
 
 		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
@@ -760,6 +762,10 @@ func (f *MinioFileWriter) GetLastEntryId(ctx context.Context) int64 {
 	return f.lastEntryID.Load()
 }
 
+func (f *MinioFileWriter) GetBlockCount(ctx context.Context) int64 {
+	return f.lastSubmittedUploadingBlockID.Load()
+}
+
 func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "waitIfFlushingBufferSizeExceededUnsafe")
 	defer sp.End()
@@ -833,7 +839,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	}
 
 	// Get target block size for compaction (use maxFlushSize as target)
-	targetBlockSize := f.syncPolicyConfig.MaxFlushSize
+	targetBlockSize := f.compactPolicyConfig.MaxBytes
 	if targetBlockSize <= 0 {
 		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
@@ -886,7 +892,8 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
-		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact))
+		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
+		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "compact", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 

@@ -105,7 +105,7 @@ type logHandleImpl struct {
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
-	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
+	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize, cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	lastSegmentNo := int64(-1)
 	for _, segmentMeta := range segments {
 		if lastSegmentNo < segmentMeta.Metadata.SegNo {
@@ -492,8 +492,9 @@ func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx con
 		return true
 	}
 	size := segmentHandle.GetSize(ctx)
+	blocksCount := segmentHandle.GetBlocksCount(ctx)
 	last := l.lastRolloverTimeMs
-	return l.rollingPolicy.ShouldRollover(ctx, size, last)
+	return l.rollingPolicy.ShouldRollover(ctx, size, blocksCount, last)
 }
 
 func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.SegmentMeta, error) {

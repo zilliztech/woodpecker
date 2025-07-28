@@ -265,6 +265,52 @@ func (_c *SegmentHandle_ForceCompleteAndClose_Call) RunAndReturn(run func(contex
 	return _c
 }
 
+// GetBlocksCount provides a mock function with given fields: _a0
+func (_m *SegmentHandle) GetBlocksCount(_a0 context.Context) int64 {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlocksCount")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(_a0)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// SegmentHandle_GetBlocksCount_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlocksCount'
+type SegmentHandle_GetBlocksCount_Call struct {
+	*mock.Call
+}
+
+// GetBlocksCount is a helper method to define mock.On call
+//   - _a0 context.Context
+func (_e *SegmentHandle_Expecter) GetBlocksCount(_a0 interface{}) *SegmentHandle_GetBlocksCount_Call {
+	return &SegmentHandle_GetBlocksCount_Call{Call: _e.mock.On("GetBlocksCount", _a0)}
+}
+
+func (_c *SegmentHandle_GetBlocksCount_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetBlocksCount_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_GetBlocksCount_Call) Return(_a0 int64) *SegmentHandle_GetBlocksCount_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *SegmentHandle_GetBlocksCount_Call) RunAndReturn(run func(context.Context) int64) *SegmentHandle_GetBlocksCount_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetId provides a mock function with given fields: _a0
 func (_m *SegmentHandle) GetId(_a0 context.Context) int64 {
 	ret := _m.Called(_a0)

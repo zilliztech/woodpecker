@@ -202,6 +202,64 @@ func (_c *LogStoreClient_FenceSegment_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// GetBlockCount provides a mock function with given fields: ctx, logId, segmentId
+func (_m *LogStoreClient) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	ret := _m.Called(ctx, logId, segmentId)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlockCount")
+	}
+
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
+		return rf(ctx, logId, segmentId)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
+		r0 = rf(ctx, logId, segmentId)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
+		r1 = rf(ctx, logId, segmentId)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_GetBlockCount_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlockCount'
+type LogStoreClient_GetBlockCount_Call struct {
+	*mock.Call
+}
+
+// GetBlockCount is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+func (_e *LogStoreClient_Expecter) GetBlockCount(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_GetBlockCount_Call {
+	return &LogStoreClient_GetBlockCount_Call{Call: _e.mock.On("GetBlockCount", ctx, logId, segmentId)}
+}
+
+func (_c *LogStoreClient_GetBlockCount_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_GetBlockCount_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_GetBlockCount_Call) Return(_a0 int64, _a1 error) *LogStoreClient_GetBlockCount_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_GetBlockCount_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_GetBlockCount_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetLastAddConfirmed provides a mock function with given fields: ctx, logId, segmentId
 func (_m *LogStoreClient) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
 	ret := _m.Called(ctx, logId, segmentId)
