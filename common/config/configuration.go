@@ -65,7 +65,9 @@ type SegmentSyncPolicyConfig struct {
 }
 
 type SegmentCompactionPolicy struct {
-	MaxBytes int64 `yaml:"maxBytes"`
+	MaxBytes           int64 `yaml:"maxBytes"`
+	MaxParallelUploads int   `yaml:"maxParallelUploads"`
+	MaxParallelReads   int   `yaml:"maxParallelReads"`
 }
 
 // FragmentManagerConfig stores the fragment manager configuration.
@@ -297,7 +299,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxFlushThreads:            8,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes: 32000000,
+				MaxBytes:           32000000,
+				MaxParallelUploads: 4,
+				MaxParallelReads:   8,
 			},
 		},
 		Storage: StorageConfig{

@@ -769,7 +769,7 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Failed to get quorum info during fence, reverting fenced state",
+		logger.Ctx(ctx).Warn("Failed to get quorum info during doComplete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -778,7 +778,7 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 	}
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
 		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration during fence, reverting fenced state",
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration during doComplete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -789,7 +789,7 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
 	if err != nil {
 		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Failed to get logstore client during fence, reverting fenced state",
+		logger.Ctx(ctx).Warn("Failed to get logstore client during doComplete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -798,7 +798,7 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 		return -1, err
 	}
 
-	logger.Ctx(ctx).Info("Sending fence request to logstore",
+	logger.Ctx(ctx).Info("Sending complete segment request to logStore",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
