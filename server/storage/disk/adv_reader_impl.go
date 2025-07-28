@@ -52,7 +52,8 @@ type LocalFileReaderAdv struct {
 	size     int64
 
 	// adv reading options
-	advOpt *storage.BatchInfo
+	advOpt       *storage.BatchInfo
+	batchMaxSize int64
 
 	// When no advanced options are provided, Prefetch block information from exists the footer
 	footer           *codec.FooterRecord
@@ -65,7 +66,7 @@ type LocalFileReaderAdv struct {
 }
 
 // NewLocalFileReaderAdv creates a new local filesystem reader
-func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, advOpt *storage.BatchInfo) (*LocalFileReaderAdv, error) {
+func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, advOpt *storage.BatchInfo, batchMaxSize int64) (*LocalFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
 
@@ -122,6 +123,8 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		file:     file,
 		size:     stat.Size(),
 		advOpt:   advOpt,
+
+		batchMaxSize: batchMaxSize,
 	}
 	reader.closed.Store(false)
 	reader.isIncompleteFile = true
@@ -593,7 +596,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	if maxEntries <= 0 {
 		maxEntries = 100
 	}
-	maxBytes := 16 * 1024 * 1024 // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
+	maxBytes := r.batchMaxSize // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
 
 	// read data result
 	entries := make([]*proto.LogEntry, 0, maxEntries)
@@ -602,7 +605,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	// read stats
 	startOffset := startBlockOffset
 	entriesCollected := int64(0)
-	readBytes := 0
+	readBytes := int64(0)
 
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
@@ -697,7 +700,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 				}
 				entries = append(entries, entry)
 				entriesCollected++
-				readBytes += len(r.Payload)
+				readBytes += int64(len(r.Payload))
 			}
 			currentEntryID++
 		}
@@ -710,7 +713,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int64("blockLastEntryID", blockHeaderRecord.LastEntryID),
 			zap.Int64("lastCollectedEntryID", currentEntryID),
 			zap.Int64("totalCollectedEntries", entriesCollected),
-			zap.Int("totalCollectedBytes", readBytes))
+			zap.Int64("totalCollectedBytes", readBytes))
 
 		lastBlockInfo = &codec.IndexRecord{
 			BlockNumber:  int32(currentBlockID),

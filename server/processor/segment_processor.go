@@ -349,7 +349,8 @@ func (s *segmentProcessor) getNewSegmentReaderAdv(ctx context.Context, lastReadS
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			lastBlockInfo)
+			lastBlockInfo,
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
 		logger.Ctx(ctx).Info("created segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", localReader)))
 		return localReader, err
 	} else {
@@ -360,7 +361,9 @@ func (s *segmentProcessor) getNewSegmentReaderAdv(ctx context.Context, lastReadS
 			s.logId,
 			s.segId,
 			s.minioClient,
-			lastBlockInfo)
+			lastBlockInfo,
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize,
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 		if getReaderErr != nil {
 			return nil, getReaderErr
 		}

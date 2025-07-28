@@ -47,6 +47,9 @@ woodpecker:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
+    segmentReadPolicy:
+      maxBatchSize: 16000000 # Maximum size of a batch in bytes, default is 16MB
+      maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.
