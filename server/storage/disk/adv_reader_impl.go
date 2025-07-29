@@ -606,6 +606,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	startOffset := startBlockOffset
 	entriesCollected := int64(0)
 	readBytes := int64(0)
+	hasDataReadError := false
 
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
@@ -624,6 +625,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 				zap.String("filePath", r.filePath),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(readErr))
+			hasDataReadError = true
 			break
 		}
 		headerRecords, decodeErr := codec.DecodeRecordList(headersData)
@@ -664,6 +666,7 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 				zap.String("filePath", r.filePath),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(err))
+			hasDataReadError = true
 			break // Stop reading on error, return what we have so far
 		}
 		// Verify the block data integrity
@@ -733,12 +736,16 @@ func (r *LocalFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("requestedBatchSize", opt.BatchSize),
 			zap.Int("entriesReturned", len(entries)))
-		if !r.isIncompleteFile || r.footer != nil {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		if !hasDataReadError {
+			// only read without dataReadError, determine whether it is an EOF
+			if !r.isIncompleteFile || r.footer != nil {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
+			if r.isFooterExists(ctx) {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
 		}
-		if r.isFooterExists(ctx) {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-		}
+		// return entryNotFound to let read caller retry later
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	} else {
 		logger.Ctx(ctx).Debug("read data blocks completed",

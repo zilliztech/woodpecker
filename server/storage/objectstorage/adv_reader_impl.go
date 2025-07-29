@@ -456,11 +456,17 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	var lastBlockInfo *codec.IndexRecord
 	totalReadBytes := 0
 	totalCollectedSize := int64(0)
+	hasDataReadError := false
 
 	// Keep reading batches until we have data or reach end
 	for {
 		// 1. Read one batch of blocks (up to maxBytes)
-		batchFutures, nextBlockID, batchRawSize, hasMoreBlocks := f.readBlockBatch(ctx, currentBlockID, maxBytes, opt.StartEntryID)
+		batchFutures, nextBlockID, batchRawSize, hasMoreBlocks, hasReadBlockBatchErr := f.readBlockBatch(ctx, currentBlockID, maxBytes, opt.StartEntryID)
+
+		if hasReadBlockBatchErr {
+			// mark readBlockBatch encounter error
+			hasDataReadError = true
+		}
 
 		if len(batchFutures) == 0 {
 			// No blocks to read
@@ -472,6 +478,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int64("currentBlockID", currentBlockID),
 			zap.Int("batchTasks", len(batchFutures)),
 			zap.Int64("batchRawSize", batchRawSize),
+			zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr),
 			zap.Bool("hasMoreBlocks", hasMoreBlocks))
 
 		// 2. Collect and process batch results
@@ -493,7 +500,6 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		// 4. Process batch results and collect entries
 		batchEntries := make([]*proto.LogEntry, 0)
 		batchReadBytes := 0
-		hasError := false
 
 		for _, result := range batchResults {
 			if result.err != nil {
@@ -501,7 +507,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("blockNumber", result.blockID),
 					zap.Error(result.err))
-				hasError = true
+				hasDataReadError = true
 				break
 			}
 
@@ -510,11 +516,6 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			if result.blockInfo != nil {
 				lastBlockInfo = result.blockInfo
 			}
-		}
-
-		// Stop if there was an error in this batch
-		if hasError {
-			break
 		}
 
 		// Accumulate batch results
@@ -536,18 +537,12 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		// 1. We have collected enough data (>= maxBytes)
 		// 2. We have collected some data and no more blocks available
 		// 3. We reached the end of available blocks
+		// 4. We encounter expected read error, data incomplete verification error / network/service unavailable, etc.
 		if totalCollectedSize >= int64(maxBytes) {
 			logger.Ctx(ctx).Debug("reached max collected size limit",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("totalCollectedSize", totalCollectedSize),
 				zap.Int64("maxBytes", int64(maxBytes)))
-			break
-		}
-
-		if !hasMoreBlocks {
-			logger.Ctx(ctx).Debug("no more blocks available",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int("totalEntries", len(allEntries)))
 			break
 		}
 
@@ -557,6 +552,19 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int("totalEntries", len(allEntries)),
 				zap.Int64("requestedBatchSize", opt.BatchSize))
+			break
+		}
+
+		// Stop if there was an error in this batch
+		if hasDataReadError {
+			break
+		}
+
+		// Stop if no more blocks to read
+		if !hasMoreBlocks {
+			logger.Ctx(ctx).Debug("no more blocks available",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int("totalEntries", len(allEntries)))
 			break
 		}
 	}
@@ -571,12 +579,16 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 			zap.Int64("requestedBatchSize", opt.BatchSize),
 			zap.Int("entriesReturned", len(allEntries)))
 
-		if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+		if !hasDataReadError {
+			// only if no data read error, determine if it is EOF
+			if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
+			if f.footer != nil || f.isFooterExists(ctx) {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
 		}
-		if f.footer != nil || f.isFooterExists(ctx) {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-		}
+		// otherwise return EntryNotFound to let reader caller retry later
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	}
 
@@ -829,11 +841,12 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 
 // readBlockBatch reads a single batch of blocks up to maxBytes raw size
 // Returns: futures, nextBlockID, totalRawSize, hasMoreBlocks
-func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID int64, maxBytes int64, startEntryID int64) ([]*conc.Future[*BlockReadResult], int64, int64, bool) {
+func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID int64, maxBytes int64, startEntryID int64) ([]*conc.Future[*BlockReadResult], int64, int64, bool, bool) {
 	futures := make([]*conc.Future[*BlockReadResult], 0)
 	currentBlockID := startBlockID
 	totalRawSize := int64(0)
-	hasMoreBlocks := false
+	hasMoreBlocks := true
+	hasReadBlockBatchErr := false
 
 	// Read blocks until we reach maxBytes raw size
 	for totalRawSize < maxBytes {
@@ -846,12 +859,14 @@ func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID in
 				logger.Ctx(ctx).Debug("block not found, reached end of data",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Int64("blockNumber", currentBlockID))
+				hasMoreBlocks = false
 				break
 			}
 			logger.Ctx(ctx).Warn("Failed to stat block object",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(statErr))
+			hasReadBlockBatchErr = true
 			break
 		}
 
@@ -861,6 +876,7 @@ func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID in
 				zap.Int64("fenceBlockID", currentBlockID),
 				zap.String("blockKey", blockObjKey))
 			f.isFenced.Store(true)
+			hasMoreBlocks = false
 			break
 		}
 
@@ -888,24 +904,14 @@ func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID in
 			zap.Int64("totalRawSize", totalRawSize))
 	}
 
-	// Check if there are more blocks available
-	if totalRawSize < int64(maxBytes) {
-		// We stopped because no more blocks, not because of size limit
-		hasMoreBlocks = false
-	} else {
-		// Check if next block exists to determine hasMoreBlocks
-		nextBlockObjKey := f.getBlockObjectKey(currentBlockID)
-		_, statErr := f.client.StatObject(ctx, f.bucket, nextBlockObjKey, minio.StatObjectOptions{})
-		hasMoreBlocks = (statErr == nil || !minioHandler.IsObjectNotExists(statErr))
-	}
-
 	logger.Ctx(ctx).Debug("readBlockBatch completed",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int64("startBlockID", startBlockID),
 		zap.Int64("nextBlockID", currentBlockID),
 		zap.Int("batchSize", len(futures)),
 		zap.Int64("totalRawSize", totalRawSize),
-		zap.Bool("hasMoreBlocks", hasMoreBlocks))
+		zap.Bool("hasMoreBlocks", hasMoreBlocks),
+		zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr))
 
-	return futures, currentBlockID, totalRawSize, hasMoreBlocks
+	return futures, currentBlockID, totalRawSize, hasMoreBlocks, hasReadBlockBatchErr
 }
