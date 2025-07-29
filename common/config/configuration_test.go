@@ -53,6 +53,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes)
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, int64(16000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -121,6 +123,8 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes)
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
+	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)
@@ -185,7 +189,11 @@ func TestConfigurationOverwrite(t *testing.T) {
       maxInterval: 2200
       maxBlocks: 2000
     auditor:
-      maxInterval: 10`
+      maxInterval: 10
+  logstore:
+    segmentReadPolicy:
+      maxBatchSize: 32000000
+      maxFetchThreads: 64`
 	extraCfgFile, err := os.CreateTemp("/tmp", "custom_*.yaml")
 	defer extraCfgFile.Close()
 	assert.NoError(t, err)
@@ -202,4 +210,6 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 2200, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
+	assert.Equal(t, int64(32000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+	assert.Equal(t, 64, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 }

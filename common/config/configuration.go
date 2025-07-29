@@ -52,6 +52,12 @@ type AuditorConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
 }
 
+// SegmentReadPolicyConfig stores the segment read policy configuration.
+type SegmentReadPolicyConfig struct {
+	MaxBatchSize    int64 `yaml:"maxBatchSize"`
+	MaxFetchThreads int   `yaml:"maxFetchThreads"`
+}
+
 // SegmentSyncPolicyConfig stores the log file sync policy configuration.
 type SegmentSyncPolicyConfig struct {
 	MaxInterval                int   `yaml:"maxInterval"`
@@ -197,6 +203,7 @@ type MinioConfig struct {
 type LogstoreConfig struct {
 	SegmentSyncPolicy       SegmentSyncPolicyConfig `yaml:"segmentSyncPolicy"`
 	SegmentCompactionPolicy SegmentCompactionPolicy `yaml:"segmentCompactionPolicy"`
+	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
 }
 
 type StorageConfig struct {
@@ -302,6 +309,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBytes:           32000000,
 				MaxParallelUploads: 4,
 				MaxParallelReads:   8,
+			},
+			SegmentReadPolicy: SegmentReadPolicyConfig{
+				MaxBatchSize:    16000000,
+				MaxFetchThreads: 32,
 			},
 		},
 		Storage: StorageConfig{

@@ -67,7 +67,8 @@ type MinioFileReaderAdv struct {
 	version     uint16
 
 	// thread pool for concurrent block reading
-	pool *conc.Pool[*BlockReadResult]
+	pool         *conc.Pool[*BlockReadResult]
+	batchMaxSize int64
 
 	// close state
 	closed atomic.Bool
@@ -75,7 +76,7 @@ type MinioFileReaderAdv struct {
 
 // NewMinioFileReaderAdv creates a new MinIO reader
 func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler,
-	advOpt *storage.BatchInfo) (*MinioFileReaderAdv, error) {
+	advOpt *storage.BatchInfo, batchMaxSize int64, maxFetchThreads int) (*MinioFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewMinioFileReaderAdv")
 	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
@@ -96,7 +97,8 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		flags:   0,
 		version: codec.FormatVersion,
 
-		pool: conc.NewPool[*BlockReadResult](32, conc.WithPreAlloc(true)),
+		batchMaxSize: batchMaxSize,
+		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads, conc.WithPreAlloc(true)),
 	}
 	reader.closed.Store(false)
 	reader.isCompacted.Store(false)
@@ -444,168 +446,162 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 	defer sp.End()
 	startTime := time.Now()
 
-	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("requestedBatchSize", opt.BatchSize))
+	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startBlockID", startBlockID), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("requestedBatchSize", opt.BatchSize))
 
-	maxBytes := 16 * 1024 * 1024 // 16MB limit
-
-	// 1. StatObject and submit tasks
-	// Submit the required block reading task: Whether it is sequential and not a fence object
+	maxBytes := f.batchMaxSize // default 16MB limit per batch
 	currentBlockID := startBlockID
-	totalSize := int64(0)
-	futures := make([]*conc.Future[*BlockReadResult], 0)
 
-	logger.Ctx(ctx).Debug("stat objects and submit tasks start",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int64("startBlockID", startBlockID),
-		zap.Int("maxBytes", maxBytes))
+	// Final collected results
+	allEntries := make([]*proto.LogEntry, 0)
+	var lastBlockInfo *codec.IndexRecord
+	totalReadBytes := 0
+	totalCollectedSize := int64(0)
+	hasDataReadError := false
 
-	for totalSize < int64(maxBytes) {
-		blockObjKey := f.getBlockObjectKey(currentBlockID)
+	// Keep reading batches until we have data or reach end
+	for {
+		// 1. Read one batch of blocks (up to maxBytes)
+		batchFutures, nextBlockID, batchRawSize, hasMoreBlocks, hasReadBlockBatchErr := f.readBlockBatch(ctx, currentBlockID, maxBytes, opt.StartEntryID)
 
-		// StatObject to get size (very fast: 1-5ms)
-		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
-		if statErr != nil {
-			if minioHandler.IsObjectNotExists(statErr) {
-				logger.Ctx(ctx).Debug("block not found, reached end of data",
+		if hasReadBlockBatchErr {
+			// mark readBlockBatch encounter error
+			hasDataReadError = true
+		}
+
+		if len(batchFutures) == 0 {
+			// No blocks to read
+			break
+		}
+
+		logger.Ctx(ctx).Debug("submitted batch reading tasks",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("currentBlockID", currentBlockID),
+			zap.Int("batchTasks", len(batchFutures)),
+			zap.Int64("batchRawSize", batchRawSize),
+			zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr),
+			zap.Bool("hasMoreBlocks", hasMoreBlocks))
+
+		// 2. Collect and process batch results
+		batchResults := make([]*BlockReadResult, 0, len(batchFutures))
+		for _, future := range batchFutures {
+			result := future.Value()
+			batchResults = append(batchResults, result)
+		}
+
+		// 3. Sort batch results by blockID to maintain order
+		for i := 0; i < len(batchResults); i++ {
+			for j := i + 1; j < len(batchResults); j++ {
+				if batchResults[i].blockID > batchResults[j].blockID {
+					*batchResults[i], *batchResults[j] = *batchResults[j], *batchResults[i]
+				}
+			}
+		}
+
+		// 4. Process batch results and collect entries
+		batchEntries := make([]*proto.LogEntry, 0)
+		batchReadBytes := 0
+
+		for _, result := range batchResults {
+			if result.err != nil {
+				logger.Ctx(ctx).Warn("Failed to process block",
 					zap.String("segmentFileKey", f.segmentFileKey),
-					zap.Int64("blockNumber", currentBlockID))
+					zap.Int64("blockNumber", result.blockID),
+					zap.Error(result.err))
+				hasDataReadError = true
 				break
 			}
-			logger.Ctx(ctx).Warn("Failed to stat block object",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(statErr))
-			break
-		}
 
-		if minioHandler.IsFencedObject(objInfo) {
-			logger.Ctx(ctx).Warn("object is fenced, stop reading",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("fenceBlockID", currentBlockID),
-				zap.String("blockKey", blockObjKey))
-			f.isFenced.Store(true)
-			break
-		}
-
-		// Submit task immediately
-		blockInfo := BlockToRead{
-			blockID: currentBlockID,
-			objKey:  blockObjKey,
-			size:    objInfo.Size,
-		}
-
-		future := f.pool.Submit(func() (*BlockReadResult, error) {
-			return f.fetchAndProcessBlock(ctx, blockInfo, opt.StartEntryID), nil
-		})
-
-		futures = append(futures, future)
-		totalSize += objInfo.Size
-		currentBlockID++
-
-		logger.Ctx(ctx).Debug("submitted reading task for block",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.String("blockKey", blockObjKey),
-			zap.Bool("compacted", f.isCompacted.Load()),
-			zap.Int64("blockNumber", currentBlockID-1),
-			zap.Int64("blockSize", objInfo.Size),
-			zap.Int64("totalSize", totalSize))
-	}
-
-	sp.AddEvent("submit", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
-
-	if len(futures) == 0 {
-		logger.Ctx(ctx).Debug("no blocks to fetch", zap.String("segmentFileKey", f.segmentFileKey))
-		if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-		}
-		if f.footer != nil || f.isFooterExists(ctx) {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-		}
-		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
-	}
-
-	logger.Ctx(ctx).Debug("stat objects and submit tasks completed",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("taskSubmitted", len(futures)),
-		zap.Int64("totalSize", totalSize))
-
-	// 2. Collect results from futures
-	results := make([]*BlockReadResult, 0, len(futures))
-	for _, future := range futures {
-		result := future.Value()
-		results = append(results, result)
-	}
-
-	sp.AddEvent("collect", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
-
-	logger.Ctx(ctx).Debug("Collect results from futures completed",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("resultsCollected", len(results)))
-
-	// 3. Sort results by blockID to maintain order
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[i].blockID > results[j].blockID {
-				*results[i], *results[j] = *results[j], *results[i]
+			batchEntries = append(batchEntries, result.entries...)
+			batchReadBytes += result.readBytes
+			if result.blockInfo != nil {
+				lastBlockInfo = result.blockInfo
 			}
 		}
-	}
 
-	sp.AddEvent("sort", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+		// Accumulate batch results
+		allEntries = append(allEntries, batchEntries...)
+		totalReadBytes += batchReadBytes
+		totalCollectedSize += int64(batchReadBytes)
 
-	logger.Ctx(ctx).Debug("Combine results in order start",
-		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("resultsCollected", len(results)))
+		logger.Ctx(ctx).Debug("processed batch",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int("batchEntries", len(batchEntries)),
+			zap.Int("batchReadBytes", batchReadBytes),
+			zap.Int("totalEntries", len(allEntries)),
+			zap.Int64("totalCollectedSize", totalCollectedSize))
 
-	// 4. Combine results in order
-	entries := make([]*proto.LogEntry, 0)
-	var lastBlockInfo *codec.IndexRecord
-	entriesCollected := int64(0)
-	readBytes := 0
+		// Move to next batch
+		currentBlockID = nextBlockID
 
-	for _, result := range results {
-		if result.err != nil {
-			logger.Ctx(ctx).Warn("Failed to process block",
+		// Stop conditions:
+		// 1. We have collected enough data (>= maxBytes)
+		// 2. We have collected some data and no more blocks available
+		// 3. We reached the end of available blocks
+		// 4. We encounter expected read error, data incomplete verification error / network/service unavailable, etc.
+		if totalCollectedSize >= int64(maxBytes) {
+			logger.Ctx(ctx).Debug("reached max collected size limit",
 				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Int64("blockNumber", result.blockID),
-				zap.Error(result.err))
-			// should have no hole
+				zap.Int64("totalCollectedSize", totalCollectedSize),
+				zap.Int64("maxBytes", int64(maxBytes)))
 			break
 		}
 
-		entries = append(entries, result.entries...)
-		entriesCollected += int64(len(result.entries))
-		readBytes += result.readBytes
-		if result.blockInfo != nil {
-			lastBlockInfo = result.blockInfo
+		// If we have some data and approaching batch size limit, we can also stop
+		if len(allEntries) > 0 && int64(len(allEntries)) >= opt.BatchSize {
+			logger.Ctx(ctx).Debug("reached requested batch size",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int("totalEntries", len(allEntries)),
+				zap.Int64("requestedBatchSize", opt.BatchSize))
+			break
+		}
+
+		// Stop if there was an error in this batch
+		if hasDataReadError {
+			break
+		}
+
+		// Stop if no more blocks to read
+		if !hasMoreBlocks {
+			logger.Ctx(ctx).Debug("no more blocks available",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int("totalEntries", len(allEntries)))
+			break
 		}
 	}
 
-	sp.AddEvent("combine", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+	sp.AddEvent("all_batches_completed", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
-	if len(entries) == 0 {
-		logger.Ctx(ctx).Debug("no entry extracted",
+	// Check final results
+	if len(allEntries) == 0 {
+		logger.Ctx(ctx).Debug("no entry extracted after reading all available blocks",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("requestedBatchSize", opt.BatchSize),
-			zap.Int("entriesReturned", len(entries)))
-		if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			zap.Int("entriesReturned", len(allEntries)))
+
+		if !hasDataReadError {
+			// only if no data read error, determine if it is EOF
+			if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
+			if f.footer != nil || f.isFooterExists(ctx) {
+				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			}
 		}
-		if f.footer != nil || f.isFooterExists(ctx) {
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-		}
+		// otherwise return EntryNotFound to let reader caller retry later
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
-	} else {
-		logger.Ctx(ctx).Debug("read data blocks completed",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("requestedBatchSize", opt.BatchSize),
-			zap.Int("entriesReturned", len(entries)),
-			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(readBytes))
+	logger.Ctx(ctx).Debug("read data blocks completed",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("startEntryId", opt.StartEntryID),
+		zap.Int64("requestedBatchSize", opt.BatchSize),
+		zap.Int("entriesReturned", len(allEntries)),
+		zap.Int("totalReadBytes", totalReadBytes),
+		zap.Int64("totalCollectedSize", totalCollectedSize),
+		zap.Any("lastBlockInfo", lastBlockInfo))
+
+	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(totalReadBytes))
 	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
@@ -620,7 +616,7 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 
 	batch := &storage.Batch{
 		LastBatchInfo: batchInfo,
-		Entries:       entries,
+		Entries:       allEntries,
 	}
 	return batch, nil
 }
@@ -841,4 +837,81 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 		return errors.New("already close")
 	}
 	return nil
+}
+
+// readBlockBatch reads a single batch of blocks up to maxBytes raw size
+// Returns: futures, nextBlockID, totalRawSize, hasMoreBlocks
+func (f *MinioFileReaderAdv) readBlockBatch(ctx context.Context, startBlockID int64, maxBytes int64, startEntryID int64) ([]*conc.Future[*BlockReadResult], int64, int64, bool, bool) {
+	futures := make([]*conc.Future[*BlockReadResult], 0)
+	currentBlockID := startBlockID
+	totalRawSize := int64(0)
+	hasMoreBlocks := true
+	hasReadBlockBatchErr := false
+
+	// Read blocks until we reach maxBytes raw size
+	for totalRawSize < maxBytes {
+		blockObjKey := f.getBlockObjectKey(currentBlockID)
+
+		// StatObject to get size (very fast: 1-5ms)
+		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
+		if statErr != nil {
+			if minioHandler.IsObjectNotExists(statErr) {
+				logger.Ctx(ctx).Debug("block not found, reached end of data",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.Int64("blockNumber", currentBlockID))
+				hasMoreBlocks = false
+				break
+			}
+			logger.Ctx(ctx).Warn("Failed to stat block object",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", currentBlockID),
+				zap.Error(statErr))
+			hasReadBlockBatchErr = true
+			break
+		}
+
+		if minioHandler.IsFencedObject(objInfo) {
+			logger.Ctx(ctx).Warn("object is fenced, stop reading",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("fenceBlockID", currentBlockID),
+				zap.String("blockKey", blockObjKey))
+			f.isFenced.Store(true)
+			hasMoreBlocks = false
+			break
+		}
+
+		// Submit task immediately
+		blockInfo := BlockToRead{
+			blockID: currentBlockID,
+			objKey:  blockObjKey,
+			size:    objInfo.Size,
+		}
+
+		future := f.pool.Submit(func() (*BlockReadResult, error) {
+			return f.fetchAndProcessBlock(ctx, blockInfo, startEntryID), nil
+		})
+
+		futures = append(futures, future)
+		totalRawSize += objInfo.Size
+		currentBlockID++
+
+		logger.Ctx(ctx).Debug("submitted reading task for block",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.String("blockKey", blockObjKey),
+			zap.Bool("compacted", f.isCompacted.Load()),
+			zap.Int64("blockNumber", currentBlockID-1),
+			zap.Int64("blockSize", objInfo.Size),
+			zap.Int64("totalRawSize", totalRawSize))
+	}
+
+	logger.Ctx(ctx).Debug("readBlockBatch completed",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("startBlockID", startBlockID),
+		zap.Int64("nextBlockID", currentBlockID),
+		zap.Int("batchSize", len(futures)),
+		zap.Int64("totalRawSize", totalRawSize),
+		zap.Bool("hasMoreBlocks", hasMoreBlocks),
+		zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr))
+
+	return futures, currentBlockID, totalRawSize, hasMoreBlocks, hasReadBlockBatchErr
 }
