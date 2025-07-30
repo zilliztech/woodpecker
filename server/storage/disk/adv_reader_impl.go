@@ -840,11 +840,6 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 	return nil
 }
 
-// ReadNextBatch reads the next batch of entries
-func (r *LocalFileReaderAdv) ReadNextBatch(ctx context.Context, opt storage.ReaderOpt) ([]*proto.LogEntry, error) {
-	return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("not support simple read, use ReadNextBatchAdv instead")
-}
-
 // GetBlockIndexes returns all block indexes
 func (r *LocalFileReaderAdv) GetBlockIndexes() []*codec.IndexRecord {
 	return r.blockIndexes

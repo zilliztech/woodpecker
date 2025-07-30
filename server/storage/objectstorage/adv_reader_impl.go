@@ -836,6 +836,9 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if !f.closed.CompareAndSwap(false, true) {
 		return errors.New("already close")
 	}
+	if f.pool != nil {
+		f.pool.Release()
+	}
 	return nil
 }
 

@@ -150,7 +150,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
 		}
 
-		if segId > l.pendingReadSegmentId || l.lastRead+UpdateReaderInfoIntervalMs > time.Now().UnixMilli() {
+		if segId > l.pendingReadSegmentId || l.lastRead+UpdateReaderInfoIntervalMs < time.Now().UnixMilli() {
 			// update reader info
 			updateReaderErr := l.logHandle.GetMetadataProvider().UpdateReaderTempInfo(ctx, l.logId, l.readerName, segId, entryId)
 			if updateReaderErr != nil {

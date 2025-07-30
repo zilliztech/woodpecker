@@ -82,7 +82,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_FileDeleted_ShouldReturnEntryNotFound
 	assert.True(t, errors.Is(err, werr.ErrEntryNotFound))
 	assert.Contains(t, err.Error(), "no record extract")
 
-	t.Logf("✅ BUG FIX VERIFIED: File with footer + read error = EntryNotFound (not EOF)")
+	t.Logf("BUG FIX VERIFIED: File with footer + read error = EntryNotFound (not EOF)")
 }
 
 func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotFound(t *testing.T) {
@@ -122,7 +122,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	assert.Nil(t, batch)
 	assert.True(t, errors.Is(err, werr.ErrEntryNotFound))
 
-	t.Logf("✅ Permission error correctly returns EntryNotFound")
+	t.Logf("Permission error correctly returns EntryNotFound")
 }
 
 func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(t *testing.T) {
@@ -156,7 +156,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(
 	assert.Nil(t, batch)
 	assert.True(t, errors.Is(err, werr.ErrFileReaderEndOfFile))
 
-	t.Logf("✅ Completed file without errors correctly returns EOF")
+	t.Logf("Completed file without errors correctly returns EOF")
 }
 
 func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEntryNotFound(t *testing.T) {
@@ -189,7 +189,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEnt
 	assert.Nil(t, batch)
 	assert.True(t, errors.Is(err, werr.ErrEntryNotFound))
 
-	t.Logf("✅ Incomplete file correctly returns EntryNotFound")
+	t.Logf("Incomplete file correctly returns EntryNotFound")
 }
 
 func TestLocalFileReaderAdv_ReadAt_FileNotExist_ShouldReturnError(t *testing.T) {
@@ -224,7 +224,7 @@ func TestLocalFileReaderAdv_ReadAt_FileNotExist_ShouldReturnError(t *testing.T) 
 	assert.Error(t, err)
 	assert.Nil(t, data)
 
-	t.Logf("✅ readAt correctly handles file deletion errors")
+	t.Logf("readAt correctly handles file deletion errors")
 }
 
 func TestLocalFileReaderAdv_verifyBlockDataIntegrity_ErrorHandling(t *testing.T) {

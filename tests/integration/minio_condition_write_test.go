@@ -17,7 +17,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-// TODO: Ensure MinIO version is v20240510 or later due to a known issue with the 'if-not-match:*' condition.
+// TODO: Verify that the MinIO version is v20240510 or newer to address a known issue with the 'if-not-match:*' condition.
 
 func TestMinioPutIfMatch(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -331,10 +331,18 @@ func TestMinioHandlePutIfNotMatchWithFencedObject(t *testing.T) {
 			// api does not support list objects with metadata, even if WithMetadata is set
 			// Here checking this api does not meet the requirements yet.
 			assert.False(t, minioHandler.IsFencedObject(objInfo))
+
 			// only statObject api will return UseMetadata correctly
-			objInfoStat, statErr := minioCli.StatObject(ctx, bucketName, objectName, minio.GetObjectOptions{})
+			objInfoStat, statErr := minioCli.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
 			assert.NoError(t, statErr)
 			assert.True(t, minioHandler.IsFencedObject(objInfoStat))
+
+			// getObject api also will return UseMetadata correctly, because it will do a request like stateObject
+			obj, getErr := minioCli.GetObject(ctx, bucketName, objectName, minio.GetObjectOptions{})
+			assert.NoError(t, getErr)
+			info, objStatErr := obj.Stat()
+			assert.NoError(t, objStatErr)
+			assert.True(t, minioHandler.IsFencedObject(info))
 		}
 	}
 

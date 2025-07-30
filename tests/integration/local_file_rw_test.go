@@ -708,14 +708,14 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		startId := int64(i % 900) // Ensure we don't go beyond available entries
-		entries, err := reader.ReadNextBatch(ctx, storage.ReaderOpt{
+		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    10,
 		})
 		if err != nil {
 			b.Fatal(err)
 		}
-		if len(entries) == 0 {
+		if len(batch.Entries) == 0 {
 			b.Fatal("No entries returned")
 		}
 	}
