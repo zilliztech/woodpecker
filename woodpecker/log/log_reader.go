@@ -115,22 +115,18 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// get if cache fragment exists
 		if l.batch != nil && l.next < len(l.batch.Entries) {
 			readEntryData := l.batch.Entries[l.next]
-			logMsg, err := UnmarshalMessage(readEntryData.Data)
+			logMsg, err := l.unmarshalAndCreateLogMessage(ctx, readEntryData.Data, readEntryData.SegmentId, readEntryData.EntryId)
 			if err != nil {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-				logger.Ctx(ctx).Warn("read one entry error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", readEntryData.SegmentId), zap.Int64("entryId", readEntryData.EntryId), zap.Int("cacheBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Error(err))
-				// clear cache
+				// clear cache to avoid re-processing corrupted data
 				l.batch = nil
 				l.next = 0
-				return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
+				return nil, err
 			}
 			logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Int64("actualReadSegmentId", readEntryData.SegmentId), zap.Int64("actualReadEntryId", readEntryData.EntryId), zap.Int("cacheBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next))
-			logMsg.Id = &LogMessageId{
-				SegmentId: readEntryData.SegmentId,
-				EntryId:   readEntryData.EntryId,
-			}
 			l.pendingReadEntryId += 1
 			l.next += 1
+			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(readEntryData.Data)))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
@@ -157,23 +153,8 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				logger.Ctx(ctx).Warn("update reader info failed", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("nextReadSegmentId", segId), zap.Error(updateReaderErr))
 			}
 		}
-		if segHandle == nil {
-			l.pendingReadSegmentId = segId
-			l.pendingReadEntryId = entryId
-			logger.Ctx(ctx).Debug("no segment to read, wait and retry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", segId), zap.Int64("pendingReadEntryId", entryId))
-			// Use a ticker for backoff with context timeout support
-			ticker := time.NewTicker(NoDataReadWaitIntervalMs * time.Millisecond)
-			select {
-			case <-ticker.C:
-				ticker.Stop()
-				continue
-			case <-ctx.Done():
-				ticker.Stop()
-				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-				return nil, ctx.Err()
-			}
-		}
 
+		// assert segHandle != nil, and read the next batch
 		// read next batch
 		var lastReadState *processor.LastReadState
 		if l.batch != nil && l.batch.ReadState != nil && l.batch.ReadState.SegmentId == segId {
@@ -193,17 +174,11 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			if werr.ErrEntryNotFound.Is(err) {
 				// just wait and retry
 				logger.Ctx(ctx).Debug("segment has no entry to read, wait and retry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId))
-				// Use a ticker for backoff with context timeout support
-				ticker := time.NewTicker(NoDataReadWaitIntervalMs * time.Millisecond)
-				select {
-				case <-ticker.C:
-					ticker.Stop()
-					continue
-				case <-ctx.Done():
-					ticker.Stop()
+				if err := l.waitWithContext(ctx); err != nil {
 					metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-					return nil, ctx.Err()
+					return nil, err
 				}
+				continue
 			}
 
 			// For other errors, return them directly
@@ -212,34 +187,27 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
 		}
 
-		if len(batchResult.Entries) < 1 {
-			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-			readErr := werr.ErrLogReaderReadFailed.WithCauseErrMsg(fmt.Sprintf("should read at lease one entry, but got %d", len(batchResult.Entries)))
-			logger.Ctx(ctx).Warn("read batch entries error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(readErr))
-			return nil, readErr
-		}
-
+		// assert batchResult.Entries is not empty, and extract one entry from batchResult.Entries
 		// update batch
 		l.batch = batchResult
 		l.next = 0
 		// get one entry
 		oneEntry := l.batch.Entries[l.next]
-		logMsg, err := UnmarshalMessage(oneEntry.Data)
+		logMsg, err := l.unmarshalAndCreateLogMessage(ctx, oneEntry.Data, segId, entryId)
 		if err != nil {
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-			logger.Ctx(ctx).Warn("read one entry error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(err))
-			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
+			// clear cache to avoid re-processing corrupted data
+			l.batch = nil
+			l.next = 0
+			return nil, err
 		}
 		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("actualReadSegmentId", segId), zap.Int64("actualReadEntryId", entryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.ReadState))
-		logMsg.Id = &LogMessageId{
-			SegmentId: segId,
-			EntryId:   entryId,
-		}
 		// move cursor
 		l.currentSegmentHandle = segHandle
 		l.pendingReadSegmentId = oneEntry.SegmentId
 		l.pendingReadEntryId = oneEntry.EntryId + 1
 		l.next += 1
+		l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 
 		// update metrics
 		metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(oneEntry.Data)))
@@ -472,4 +440,40 @@ func (l *logBatchReaderImpl) findNextReadableSegment(ctx context.Context, latest
 
 func (l *logBatchReaderImpl) GetName() string {
 	return l.readerName
+}
+
+// unmarshalAndCreateLogMessage is a helper function to reduce code duplication
+func (l *logBatchReaderImpl) unmarshalAndCreateLogMessage(ctx context.Context, data []byte, segmentId, entryId int64) (*LogMessage, error) {
+	logMsg, err := UnmarshalMessage(data)
+	if err != nil {
+		logger.Ctx(ctx).Warn("unmarshal message error",
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
+			zap.Int64("segmentId", segmentId),
+			zap.Int64("entryId", entryId),
+			zap.Error(err))
+		return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
+	}
+
+	logMsg.Id = &LogMessageId{
+		SegmentId: segmentId,
+		EntryId:   entryId,
+	}
+	return logMsg, nil
+}
+
+// waitWithContext is a helper function to handle backoff with context cancellation
+func (l *logBatchReaderImpl) waitWithContext(ctx context.Context) error {
+	select {
+	case <-time.After(NoDataReadWaitIntervalMs * time.Millisecond):
+		return nil
+	case <-ctx.Done():
+		logger.Ctx(ctx).Debug("wait with context done",
+			zap.String("logName", l.logName),
+			zap.Int64("logId", l.logId),
+			zap.String("readerName", l.readerName),
+			zap.Int64("segmentId", l.pendingReadSegmentId),
+			zap.Int64("entryId", l.pendingReadEntryId))
+		return ctx.Err()
+	}
 }

@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -489,13 +490,9 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		}
 
 		// 3. Sort batch results by blockID to maintain order
-		for i := 0; i < len(batchResults); i++ {
-			for j := i + 1; j < len(batchResults); j++ {
-				if batchResults[i].blockID > batchResults[j].blockID {
-					*batchResults[i], *batchResults[j] = *batchResults[j], *batchResults[i]
-				}
-			}
-		}
+		sort.Slice(batchResults, func(i, j int) bool {
+			return batchResults[i].blockID < batchResults[j].blockID
+		})
 
 		// 4. Process batch results and collect entries
 		batchEntries := make([]*proto.LogEntry, 0)
@@ -638,7 +635,7 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 
 	// Read the full object data
 	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, block.size)
-	blockObj.Close() // release immediately
+	blockObj.Close() // release immediately after reading
 	if err != nil {
 		result.err = err
 		return result
