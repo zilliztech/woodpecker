@@ -99,7 +99,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		version: codec.FormatVersion,
 
 		batchMaxSize: batchMaxSize,
-		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads, conc.WithPreAlloc(true)),
+		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads),
 	}
 	reader.closed.Store(false)
 	reader.isCompacted.Store(false)
@@ -115,6 +115,8 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		// try read footer and extract block index infos
 		err := reader.tryReadFooterAndIndex(ctx)
 		if err != nil {
+			// release immediately
+			reader.pool.Release()
 			return nil, err
 		}
 	}
