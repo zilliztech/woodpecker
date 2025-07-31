@@ -60,6 +60,14 @@ message LogMessageLayout{
   map<string, string> properties = 2;
 }
 
+message LastReadState {
+  int64 segment_id = 1;
+  uint32 flags = 2;
+  uint32 version = 3;
+  int32 last_block_id = 4;
+  int64 block_offset = 5;
+  uint32 block_size = 6;
+}
 
 /**
  * Represents all the possible status.

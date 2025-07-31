@@ -358,7 +358,7 @@ func (_c *LogStore_GetAddress_Call) RunAndReturn(run func() string) *LogStore_Ge
 }
 
 // GetBatchEntriesAdv provides a mock function with given fields: _a0, _a1, _a2, _a3, _a4, _a5
-func (_m *LogStore) GetBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *processor.LastReadState) (*processor.BatchData, error) {
+func (_m *LogStore) GetBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *proto.LastReadState) (*processor.BatchData, error) {
 	ret := _m.Called(_a0, _a1, _a2, _a3, _a4, _a5)
 
 	if len(ret) == 0 {
@@ -367,10 +367,10 @@ func (_m *LogStore) GetBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64
 
 	var r0 *processor.BatchData
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)); ok {
 		return rf(_a0, _a1, _a2, _a3, _a4, _a5)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) *processor.BatchData); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) *processor.BatchData); ok {
 		r0 = rf(_a0, _a1, _a2, _a3, _a4, _a5)
 	} else {
 		if ret.Get(0) != nil {
@@ -378,7 +378,7 @@ func (_m *LogStore) GetBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *processor.LastReadState) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) error); ok {
 		r1 = rf(_a0, _a1, _a2, _a3, _a4, _a5)
 	} else {
 		r1 = ret.Error(1)
@@ -398,14 +398,14 @@ type LogStore_GetBatchEntriesAdv_Call struct {
 //   - _a2 int64
 //   - _a3 int64
 //   - _a4 int64
-//   - _a5 *processor.LastReadState
+//   - _a5 *proto.LastReadState
 func (_e *LogStore_Expecter) GetBatchEntriesAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}, _a4 interface{}, _a5 interface{}) *LogStore_GetBatchEntriesAdv_Call {
 	return &LogStore_GetBatchEntriesAdv_Call{Call: _e.mock.On("GetBatchEntriesAdv", _a0, _a1, _a2, _a3, _a4, _a5)}
 }
 
-func (_c *LogStore_GetBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *processor.LastReadState)) *LogStore_GetBatchEntriesAdv_Call {
+func (_c *LogStore_GetBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 int64, _a4 int64, _a5 *proto.LastReadState)) *LogStore_GetBatchEntriesAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*processor.LastReadState))
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*proto.LastReadState))
 	})
 	return _c
 }
@@ -415,7 +415,7 @@ func (_c *LogStore_GetBatchEntriesAdv_Call) Return(_a0 *processor.BatchData, _a1
 	return _c
 }
 
-func (_c *LogStore_GetBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)) *LogStore_GetBatchEntriesAdv_Call {
+func (_c *LogStore_GetBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)) *LogStore_GetBatchEntriesAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }

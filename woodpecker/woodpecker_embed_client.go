@@ -272,7 +272,7 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 // It should remove the log and its associated metadata.
 func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) error {
 	// This is just a stub - you'll need to implement this
-	panic("implement me")
+	return werr.ErrOperationNotSupported.WithCauseErrMsg("delete log is not supported currently")
 }
 
 // LogExists checks if a log with the specified name exists.

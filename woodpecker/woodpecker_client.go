@@ -194,7 +194,7 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error {
 	// Implement the DeleteLog method
 	// This is just a stub - you'll need to implement this
-	panic("implement me")
+	return werr.ErrOperationNotSupported.WithCauseErrMsg("delete log is not supported currently")
 }
 
 // LogExists checks if a log with the specified name exists.

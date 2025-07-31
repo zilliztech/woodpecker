@@ -156,7 +156,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 
 		// assert segHandle != nil, and read the next batch
 		// read next batch
-		var lastReadState *processor.LastReadState
+		var lastReadState *proto.LastReadState
 		if l.batch != nil && l.batch.ReadState != nil && l.batch.ReadState.SegmentId == segId {
 			lastReadState = l.batch.ReadState
 		}

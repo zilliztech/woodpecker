@@ -46,6 +46,8 @@ type LogHandle interface {
 	GetSegments(context.Context) (map[int64]*meta.SegmentMeta, error)
 	// OpenLogWriter opens a writer for the log.
 	OpenLogWriter(context.Context) (LogWriter, error)
+	// OpenInternalLogWriter opens an internal writer for the log.
+	OpenInternalLogWriter(context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
 	OpenLogReader(context.Context, *LogMessageId, string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
@@ -203,6 +205,29 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
 	logger.Ctx(ctx).Info("open log writer success", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 	return NewLogWriter(ctx, l, l.cfg, se), nil
+}
+
+func (l *logHandleImpl) OpenInternalLogWriter(ctx context.Context) (LogWriter, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenInternalLogWriter")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", l.Id)
+	logger.Ctx(ctx).Info("open internal log writer start", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
+
+	// Fence all active segments to prevent split-brain scenarios
+	err := l.fenceAllActiveSegments(ctx)
+	if err != nil {
+		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "fence_error").Inc()
+		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "fence_error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("failed to fence all active segments", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
+		return nil, err
+	}
+
+	// return LogWriter instance if writableSegmentHandle is created
+	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "success").Inc()
+	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
+	logger.Ctx(ctx).Info("open log writer success", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
+	return NewInternalLogWriter(ctx, l, l.cfg), nil
 }
 
 // fenceAllActiveSegments fences all active segments to prevent split-brain scenarios
