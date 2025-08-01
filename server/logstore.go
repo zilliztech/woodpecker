@@ -51,7 +51,7 @@ type LogStore interface {
 	SetEtcdClient(*clientv3.Client)
 	Register(context.Context) error
 	AddEntry(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)
-	GetBatchEntriesAdv(context.Context, int64, int64, int64, int64, *processor.LastReadState) (*processor.BatchData, error)
+	GetBatchEntriesAdv(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)
 	FenceSegment(context.Context, int64, int64) (int64, error)
 	CompleteSegment(context.Context, int64, int64) (int64, error)
 	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
@@ -255,7 +255,7 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 	return nil
 }
 
-func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
+func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
 	defer sp.End()
 	start := time.Now()

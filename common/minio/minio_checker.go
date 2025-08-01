@@ -30,16 +30,14 @@ func CheckIfConditionWriteSupport(ctx context.Context, minioHandler MinioHandler
 // CheckIfConditionWriteSupport checks if MinioHandler supports PutObjectIfNoneMatch and PutFencedObject
 // If not supported, it will panic to prevent runtime errors
 func doCheckIfConditionWriteSupport(ctx context.Context, minioHandler MinioHandler, bucketName string, basePath string) {
-	testObjectName := fmt.Sprintf("%s/%s", basePath, generateUniqueTestID())
+	var testObjectName = fmt.Sprintf("%s/%s", basePath, generateUniqueTestID())
 
 	// Create a temporary bucket for testing (if it doesn't exist)
 	// Note: This assumes the minioHandler has access to create buckets or the bucket exists
 
 	defer func() {
 		// Clean up test objects with proper error handling and logging
-		fencedObjectName := testObjectName + "-fenced"
-
-		// Clean up regular test object
+		var fencedObjectName = testObjectName + "-fenced" // Clean up regular test object
 		if err := minioHandler.RemoveObject(ctx, bucketName, testObjectName, minio.RemoveObjectOptions{}); err != nil {
 			// Only log if it's not a "object not found" error
 			if !IsObjectNotExists(err) {

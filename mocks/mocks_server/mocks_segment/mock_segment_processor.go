@@ -596,7 +596,7 @@ func (_c *SegmentProcessor_GetSegmentLastAddConfirmed_Call) RunAndReturn(run fun
 }
 
 // ReadBatchEntriesAdv provides a mock function with given fields: _a0, _a1, _a2, _a3
-func (_m *SegmentProcessor) ReadBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 *processor.LastReadState) (*processor.BatchData, error) {
+func (_m *SegmentProcessor) ReadBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState) (*processor.BatchData, error) {
 	ret := _m.Called(_a0, _a1, _a2, _a3)
 
 	if len(ret) == 0 {
@@ -605,10 +605,10 @@ func (_m *SegmentProcessor) ReadBatchEntriesAdv(_a0 context.Context, _a1 int64, 
 
 	var r0 *processor.BatchData
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)); ok {
 		return rf(_a0, _a1, _a2, _a3)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *processor.LastReadState) *processor.BatchData); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) *processor.BatchData); ok {
 		r0 = rf(_a0, _a1, _a2, _a3)
 	} else {
 		if ret.Get(0) != nil {
@@ -616,7 +616,7 @@ func (_m *SegmentProcessor) ReadBatchEntriesAdv(_a0 context.Context, _a1 int64, 
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, *processor.LastReadState) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, *proto.LastReadState) error); ok {
 		r1 = rf(_a0, _a1, _a2, _a3)
 	} else {
 		r1 = ret.Error(1)
@@ -634,14 +634,14 @@ type SegmentProcessor_ReadBatchEntriesAdv_Call struct {
 //   - _a0 context.Context
 //   - _a1 int64
 //   - _a2 int64
-//   - _a3 *processor.LastReadState
+//   - _a3 *proto.LastReadState
 func (_e *SegmentProcessor_Expecter) ReadBatchEntriesAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	return &SegmentProcessor_ReadBatchEntriesAdv_Call{Call: _e.mock.On("ReadBatchEntriesAdv", _a0, _a1, _a2, _a3)}
 }
 
-func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 *processor.LastReadState)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(*processor.LastReadState))
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(*proto.LastReadState))
 	})
 	return _c
 }
@@ -651,7 +651,7 @@ func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Return(_a0 *processor.Batch
 	return _c
 }
 
-func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }

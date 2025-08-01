@@ -1321,6 +1321,9 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 	f.fileClose <- struct{}{}
 	close(f.fileClose)
 	close(f.flushingTaskList)
+	if f.pool != nil {
+		f.pool.Release()
+	}
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "close", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
@@ -1634,6 +1637,7 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 	// Create a pool for merge block tasks (each task handles: read blocks -> merge -> upload)
 	maxMergeBlockTasks := f.compactPolicyConfig.MaxParallelUploads
 	mergeTaskPool := conc.NewPool[*mergedBlockUploadResult](maxMergeBlockTasks, conc.WithPreAlloc(true))
+	defer mergeTaskPool.Release()
 
 	// Submit all merge block tasks
 	var mergeFutures []*conc.Future[*mergedBlockUploadResult]
@@ -1771,6 +1775,7 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 	}
 
 	readPool := conc.NewPool[*blockDataResult](maxReadConcurrency, conc.WithPreAlloc(true))
+	defer readPool.Release()
 
 	// Submit read tasks for all blocks in this merge block
 	var readFutures []*conc.Future[*blockDataResult]

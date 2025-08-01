@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -98,7 +99,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		version: codec.FormatVersion,
 
 		batchMaxSize: batchMaxSize,
-		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads, conc.WithPreAlloc(true)),
+		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads),
 	}
 	reader.closed.Store(false)
 	reader.isCompacted.Store(false)
@@ -114,6 +115,8 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		// try read footer and extract block index infos
 		err := reader.tryReadFooterAndIndex(ctx)
 		if err != nil {
+			// release immediately
+			reader.pool.Release()
 			return nil, err
 		}
 	}
@@ -489,13 +492,9 @@ func (f *MinioFileReaderAdv) readDataBlocks(ctx context.Context, opt storage.Rea
 		}
 
 		// 3. Sort batch results by blockID to maintain order
-		for i := 0; i < len(batchResults); i++ {
-			for j := i + 1; j < len(batchResults); j++ {
-				if batchResults[i].blockID > batchResults[j].blockID {
-					*batchResults[i], *batchResults[j] = *batchResults[j], *batchResults[i]
-				}
-			}
-		}
+		sort.Slice(batchResults, func(i, j int) bool {
+			return batchResults[i].blockID < batchResults[j].blockID
+		})
 
 		// 4. Process batch results and collect entries
 		batchEntries := make([]*proto.LogEntry, 0)
@@ -638,7 +637,7 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 
 	// Read the full object data
 	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, block.size)
-	blockObj.Close() // release immediately
+	blockObj.Close() // release immediately after reading
 	if err != nil {
 		result.err = err
 		return result
@@ -835,6 +834,9 @@ func (f *MinioFileReaderAdv) GetTotalBlocks() int32 {
 func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if !f.closed.CompareAndSwap(false, true) {
 		return errors.New("already close")
+	}
+	if f.pool != nil {
+		f.pool.Release()
 	}
 	return nil
 }

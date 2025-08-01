@@ -11,9 +11,11 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/grafana/pyroscope-go/godeltaprof v0.1.8
 	github.com/json-iterator/go v1.1.12
+	github.com/klauspost/compress v1.17.9
 	github.com/labstack/gommon v0.3.0
 	github.com/minio/minio-go/v7 v7.0.73
 	github.com/panjf2000/ants/v2 v2.11.3
+	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10
 	github.com/prometheus/client_golang v1.14.0
 	github.com/samber/lo v1.27.0
@@ -69,7 +71,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.16.0 // indirect
 	github.com/jonboulle/clockwork v0.2.2 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect

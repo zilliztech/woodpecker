@@ -50,7 +50,7 @@ type SegmentHandle interface {
 	// AppendAsync data to the segment asynchronously
 	AppendAsync(context.Context, []byte, func(int64, int64, error))
 	// ReadBatchAdv num of entries from the segment
-	ReadBatchAdv(context.Context, int64, int64, *processor.LastReadState) (*processor.BatchData, error)
+	ReadBatchAdv(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)
 	// GetLastAddConfirmed entryId for the segment
 	GetLastAddConfirmed(context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
@@ -420,7 +420,7 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 	}
 }
 
-func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *processor.LastReadState) (*processor.BatchData, error) {
+func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
 	s.updateAccessTime()

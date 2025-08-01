@@ -50,7 +50,7 @@ type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
 	AddEntry(context.Context, *SegmentEntry, channel.ResultChannel) (int64, error)
-	ReadBatchEntriesAdv(context.Context, int64, int64, *LastReadState) (*BatchData, error)
+	ReadBatchEntriesAdv(context.Context, int64, int64, *proto.LastReadState) (*BatchData, error)
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
@@ -196,7 +196,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	return bufferedSeqNo, nil
 }
 
-func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxSize int64, lastReadState *LastReadState) (*BatchData, error) {
+func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*BatchData, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
 	s.updateAccessTime()
@@ -236,11 +236,11 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 
 	batchData := &BatchData{
 		Entries: result,
-		ReadState: &LastReadState{
+		ReadState: &proto.LastReadState{
 			SegmentId:   s.segId,
-			Flags:       batch.LastBatchInfo.Flags,
-			Version:     batch.LastBatchInfo.Version,
-			LastBlockID: batch.LastBatchInfo.LastBlockInfo.BlockNumber,
+			Flags:       uint32(batch.LastBatchInfo.Flags),
+			Version:     uint32(batch.LastBatchInfo.Version),
+			LastBlockId: batch.LastBatchInfo.LastBlockInfo.BlockNumber,
 			BlockOffset: batch.LastBatchInfo.LastBlockInfo.StartOffset,
 			BlockSize:   batch.LastBatchInfo.LastBlockInfo.BlockSize,
 		},
@@ -325,16 +325,16 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	return s.currentSegmentImpl, nil
 }
 
-func (s *segmentProcessor) getNewSegmentReaderAdv(ctx context.Context, lastReadState *LastReadState) (storage.Reader, error) {
+func (s *segmentProcessor) getNewSegmentReaderAdv(ctx context.Context, lastReadState *proto.LastReadState) (storage.Reader, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "getNewSegmentReader")
 	defer sp.End()
 	var lastBlockInfo *storage.BatchInfo
 	if lastReadState != nil && lastReadState.SegmentId == s.segId {
 		lastBlockInfo = &storage.BatchInfo{
-			Flags:   lastReadState.Flags,
-			Version: lastReadState.Version,
+			Flags:   uint16(lastReadState.Flags),
+			Version: uint16(lastReadState.Version),
 			LastBlockInfo: &codec.IndexRecord{
-				BlockNumber: lastReadState.LastBlockID,
+				BlockNumber: lastReadState.LastBlockId,
 				StartOffset: lastReadState.BlockOffset,
 				BlockSize:   lastReadState.BlockSize,
 			},

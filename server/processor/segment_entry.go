@@ -17,22 +17,15 @@
 
 package processor
 
+import "github.com/zilliztech/woodpecker/proto"
+
 type SegmentEntry struct {
 	SegmentId int64
 	EntryId   int64
 	Data      []byte
 }
 
-type LastReadState struct {
-	SegmentId   int64
-	Flags       uint16
-	Version     uint16
-	LastBlockID int32
-	BlockOffset int64
-	BlockSize   uint32
-}
-
 type BatchData struct {
 	Entries   []*SegmentEntry
-	ReadState *LastReadState
+	ReadState *proto.LastReadState
 }
