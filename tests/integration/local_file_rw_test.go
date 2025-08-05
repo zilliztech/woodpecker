@@ -699,7 +699,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, nil, 16_000_000)
+	reader, err := disk.NewLocalFileReaderAdv(context.TODO(), tempDir, logId, segmentId, 16_000_000)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -711,7 +711,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    10,
-		})
+		}, nil)
 		if err != nil {
 			b.Fatal(err)
 		}

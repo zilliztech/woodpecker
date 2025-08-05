@@ -27,22 +27,10 @@ import (
 // Reader defines the interface for reading log entries from different storage backends
 type Reader interface {
 	// ReadNextBatchAdv returns the next batch of entries in the log according to the Reader's direction
-	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt) (*Batch, error)
-
-	// GetBlockIndexes returns all block indexes
-	GetBlockIndexes() []*codec.IndexRecord
+	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt, lastReadBatchInfo *BatchInfo) (*Batch, error)
 
 	// GetLastEntryID returns the last entry ID written
 	GetLastEntryID(ctx context.Context) (int64, error)
-
-	// GetFooter returns the footer record
-	GetFooter() *codec.FooterRecord
-
-	// GetTotalRecords returns the total number of records
-	GetTotalRecords() uint32
-
-	// GetTotalBlocks returns the total number of blocks
-	GetTotalBlocks() int32
 
 	Close(ctx context.Context) error
 }

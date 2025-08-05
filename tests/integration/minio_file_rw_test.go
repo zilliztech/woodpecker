@@ -892,7 +892,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, 1, 1, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, 1, 1, minioHdl, 16_000_000, 32)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -904,7 +904,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 		entries, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    10,
-		})
+		}, nil)
 		if err != nil {
 			b.Fatal(err)
 		}

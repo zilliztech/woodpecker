@@ -238,7 +238,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("AdvVerifyFinalSegmentState", func(t *testing.T) {
 		// Create reader to verify the final segment state
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, recoverySegmentFileKey, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -261,7 +261,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    20, // Read all entries
-		})
+		}, nil)
 		require.NoError(t, err)
 		t.Logf("Read %d entries", len(batch.Entries))
 
@@ -449,7 +449,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 	require.NotNil(t, reader)
 
@@ -458,7 +458,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2,  // Start from entry 2 (which should be in block 2)
 			BatchSize:    -1, // Auto batch mode
-		})
+		}, nil)
 		require.NoError(t, err)
 
 		// Should return all entries from start point to end (entries 2, 3, 4)
@@ -476,7 +476,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 1, // Start from entry 1
 			BatchSize:    3, // Request exactly 3 entries
-		})
+		}, nil)
 		require.NoError(t, err)
 
 		// Should return exactly 3 entries (entries 1, 2, 3) across multiple blocks
@@ -497,7 +497,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 3, // Start from entry 3
 			BatchSize:    2, // Request exactly 2 entries
-		})
+		}, nil)
 		require.NoError(t, err)
 
 		// Should return exactly 2 entries (entries 3, 4)
@@ -516,7 +516,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,  // Start from entry 0 (first entry)
 			BatchSize:    -1, // Auto batch mode
-		})
+		}, nil)
 		require.NoError(t, err)
 
 		// Should return all entries from start point (entries 0, 1, 2, 3, 4)
@@ -589,14 +589,14 @@ func TestAdvMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 
 	// Read all entries
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, len(testCases), len(batch.Entries))
 
@@ -658,14 +658,14 @@ func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create reader
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 
 	t.Run("AdvReadFromBeginning", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(totalEntries),
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, totalEntries, len(batch.Entries))
 
@@ -683,7 +683,7 @@ func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    int64(expectedCount),
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, expectedCount, len(batch.Entries))
 
@@ -702,7 +702,7 @@ func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: startId,
 			BatchSize:    batchSize,
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, int(batchSize), len(batch.Entries))
 
@@ -722,7 +722,7 @@ func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    -1, // Auto batch mode
-			})
+			}, nil)
 			require.NoError(t, err)
 			assert.Greater(t, len(batch.Entries), 0)
 
@@ -811,7 +811,7 @@ func TestAdvMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Try to read existing data
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		if err != nil {
 			errors <- err
 			return
@@ -821,7 +821,7 @@ func TestAdvMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(initialEntries),
-		})
+		}, nil)
 		if err != nil {
 			errors <- err
 			return
@@ -857,13 +857,13 @@ func TestAdvMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Final verification
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(initialEntries + 10),
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, initialEntries+10, len(batch.Entries))
 
@@ -883,14 +883,14 @@ func TestAdvMinioFileReader_ErrorHandling(t *testing.T) {
 	t.Run("AdvNonExistentSegment", func(t *testing.T) {
 		nonExistentBaseDir := fmt.Sprintf("non-existent-segment-%d", time.Now().Unix())
 
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, nonExistentBaseDir, 1000, 2000, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, nonExistentBaseDir, 1000, 2000, minioHdl, 16_000_000, 32)
 		require.NoError(t, err) // Should succeed in creating reader
 
 		// But reading should fail gracefully
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10,
-		})
+		}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, batch)
 
@@ -929,14 +929,14 @@ func TestAdvMinioFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create reader and test invalid entry IDs
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 
 		// Test reading from non-existent entry ID
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 100, // Way beyond available entries
 			BatchSize:    10,
-		})
+		}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, batch)
 
@@ -944,7 +944,7 @@ func TestAdvMinioFileReader_ErrorHandling(t *testing.T) {
 		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: -1,
 			BatchSize:    10,
-		})
+		}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, batch)
 
@@ -1019,13 +1019,13 @@ func TestAdvMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify reading large entries
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, len(testCases)-1, len(batch.Entries))
 
@@ -1049,7 +1049,7 @@ func TestAdvMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	// last 32MB msg
 	batch2, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 4,
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(batch2.Entries))
 	assert.Equal(t, int64(4), batch2.Entries[0].EntryId)
@@ -1128,7 +1128,7 @@ func TestAdvMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 
 	// Verify reading large entries back
 	t.Run("AdvVerifyReadBack", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -1136,7 +1136,7 @@ func TestAdvMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(len(testSizes)),
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, len(testSizes), len(batch.Entries))
 
@@ -1204,7 +1204,7 @@ func TestAdvMinioFileWriter_MetadataConsistency(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify metadata consistency in reader
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 
 	// Check footer metadata
@@ -1593,7 +1593,7 @@ func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(writeInterval + 100*time.Millisecond)
 
 		// Create reader for the incomplete file
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		if err != nil {
 			t.Errorf("Reader: Failed to create reader: %v", err)
 			return
@@ -1626,7 +1626,7 @@ func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 					batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 						StartEntryID: startId,
 						BatchSize:    batchSize,
-					})
+					}, nil)
 
 					if err != nil {
 						t.Logf("Reader: Failed to read entries %d to %d: %v", startId, latestWrittenId, err)
@@ -1676,7 +1676,7 @@ func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 			finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    remainingEntries,
-			})
+			}, nil)
 
 			if err != nil {
 				t.Errorf("Reader: Failed final read: %v", err)
@@ -1725,7 +1725,7 @@ func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 
 	// Final verification: Create a new reader and verify data is accessible
 	t.Run("AdvFinalVerification", func(t *testing.T) {
-		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -1740,7 +1740,7 @@ func TestAdvMinioFileRW_ConcurrentReadWrite(t *testing.T) {
 			allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 0,
 				BatchSize:    lastEntryId + 1,
-			})
+			}, nil)
 			if err == nil {
 				assert.Greater(t, len(allBatch.Entries), 0, "Should read at least some entries")
 
@@ -1846,7 +1846,7 @@ func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 			time.Sleep(writeInterval + time.Duration(readerNum*50)*time.Millisecond)
 
 			// Create reader for the incomplete file
-			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 			if err != nil {
 				t.Errorf("Reader %d: Failed to create reader: %v", readerNum, err)
 				return
@@ -1907,7 +1907,7 @@ func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 						batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 							StartEntryID: startId,
 							BatchSize:    entriesToRead,
-						})
+						}, nil)
 
 						if err != nil {
 							t.Logf("Reader %d: Failed to read entries %d to %d: %v",
@@ -1959,7 +1959,7 @@ func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 					StartEntryID: startId,
 					BatchSize:    remainingEntries,
-				})
+				}, nil)
 
 				if err != nil {
 					t.Errorf("Reader %d: Failed final read: %v", readerNum, err)
@@ -2066,7 +2066,7 @@ func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 
 	// Final verification: Create a new reader and verify data is accessible
 	t.Run("AdvFinalFileVerification", func(t *testing.T) {
-		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		finalReader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer finalReader.Close(ctx)
 
@@ -2080,7 +2080,7 @@ func TestAdvMinioFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 			allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 0,
 				BatchSize:    lastEntryId + 1,
-			})
+			}, nil)
 			if err == nil {
 				assert.Greater(t, len(allBatch.Entries), 0, "Should read at least some entries")
 
@@ -2165,7 +2165,7 @@ func TestAdvMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
@@ -2173,7 +2173,7 @@ func TestAdvMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 		StartEntryID: 0,
 		BatchSize:    int64(len(testCases)),
-	})
+	}, nil)
 	require.NoError(t, err)
 	require.Equal(t, len(testCases), len(batch.Entries), "Should read all entries")
 
@@ -2279,7 +2279,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 	var originalFooter *codec.FooterRecord
 
 	t.Run("AdvVerifyOriginalDataBeforeCompaction", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -2300,7 +2300,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(originalFooter.TotalRecords),
-		})
+		}, nil)
 		require.NoError(t, err)
 		originalData = batch.Entries
 		assert.Equal(t, int(originalFooter.TotalRecords), len(originalData))
@@ -2330,7 +2330,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 
 	// Phase 4: Verify compacted data
 	t.Run("AdvVerifyCompactedData", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -2354,7 +2354,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		compactedBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    int64(compactedFooter.TotalRecords),
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, len(originalData), len(compactedBatch.Entries), "Should have same number of entries")
 
@@ -2458,7 +2458,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test auto batch mode on original (non-compacted) segment
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, tempBaseDir, tempLogId, tempSegmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -2475,7 +2475,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    1, // soft limit count=1, it will return 1 block records
-			})
+			}, nil)
 			require.NoError(t, err)
 
 			if len(batch.Entries) > 0 {
@@ -2491,7 +2491,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 
 	t.Run("AdvTestAutoBatchAfterCompaction", func(t *testing.T) {
 		// Test auto batch mode on compacted segment
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -2508,7 +2508,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: startId,
 				BatchSize:    1, // soft limit count=1, it will return 1 block records
-			})
+			}, nil)
 			require.NoError(t, err)
 
 			if len(batch.Entries) > 0 {
@@ -2576,7 +2576,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 
 	// Additional tests for specific batch size mode
 	t.Run("AdvTestSpecificBatchSizeModes", func(t *testing.T) {
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -2586,7 +2586,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 			batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 				StartEntryID: 3,
 				BatchSize:    batchSize,
-			})
+			}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, int(batchSize), len(batch.Entries), "Should read exact batch size")
 
@@ -2603,7 +2603,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 				batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 					StartEntryID: startId,
 					BatchSize:    3,
-				})
+				}, nil)
 				require.NoError(t, err)
 				if len(batch.Entries) > 0 {
 					assert.Equal(t, startId, batch.Entries[0].EntryId,
@@ -2676,7 +2676,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 	t.Run("Scenario1_WithAdvOpt", func(t *testing.T) {
 		// First, create a reader without advOpt to get some data
-		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, nil, 16_000_000, 32)
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader1.Close(ctx)
 
@@ -2684,13 +2684,13 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    2,
-		})
+		}, nil)
 		require.NoError(t, err)
 		require.NotNil(t, batch1.LastBatchInfo)
 		assert.Equal(t, 2, len(batch1.Entries))
 
 		// Now create a new reader with advOpt from the previous batch
-		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, batch1.LastBatchInfo, 16_000_000, 32)
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader2.Close(ctx)
 
@@ -2698,7 +2698,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 2, // Should be ignored when using advOpt
 			BatchSize:    2,
-		})
+		}, batch1.LastBatchInfo)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch2.Entries), 0)
 
@@ -2708,7 +2708,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 	t.Run("Scenario2_WithFooter_NoAdvOpt", func(t *testing.T) {
 		// Create reader without advOpt (should use footer)
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -2721,7 +2721,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 3,
 			BatchSize:    2,
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
 		assert.NotNil(t, batch.LastBatchInfo)
@@ -2750,7 +2750,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		writer.Close(ctx) // Close without finalizing
 
 		// Create reader for incomplete file
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, incompleteLogId, incompleteSegId, client, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, incompleteLogId, incompleteSegId, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -2762,7 +2762,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    3,
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch.Entries), 0)
 		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
@@ -2806,13 +2806,13 @@ func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
 	var allReadEntries []*proto.LogEntry
 
 	for batchNum := 0; batchNum < 5; batchNum++ {
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, lastBatchInfo, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId, client, 16_000_000, 32)
 		require.NoError(t, err)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
 			BatchSize:    3,
-		})
+		}, lastBatchInfo)
 
 		if err == werr.ErrFileReaderEndOfFile {
 			reader.Close(ctx)
@@ -2852,14 +2852,14 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		writer.Close(ctx)
 
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+1, client, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+1, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10,
-		})
+		}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, batch)
 	})
@@ -2883,14 +2883,14 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		assert.Equal(t, int64(0), lastEntryId)
 		writer.Close(ctx)
 
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+2, client, nil, 16_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+2, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10,
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(batch.Entries))
 		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
@@ -2920,26 +2920,26 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		writer.Close(ctx)
 
 		// Read all entries first
-		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, nil, 16_000_000, 32)
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, 16_000_000, 32)
 		require.NoError(t, err)
 
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    10,
-		})
+		}, nil)
 		require.NoError(t, err)
 		require.Equal(t, 3, len(batch1.Entries))
 		reader1.Close(ctx)
 
 		// Try to read beyond end with advOpt
-		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, batch1.LastBatchInfo, 16_000_000, 32)
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, logId, segId+3, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader2.Close(ctx)
 
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 100, // Should be ignored
 			BatchSize:    10,
-		})
+		}, batch1.LastBatchInfo)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 		assert.Nil(t, batch2)
@@ -2972,26 +2972,26 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		writer.Close(ctx)
 
 		// Read first batch
-		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, nil, 16_000_000, 32)
+		reader1, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, 16_000_000, 32)
 		require.NoError(t, err)
 
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 0,
 			BatchSize:    3,
-		})
+		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 3, len(batch1.Entries))
 		reader1.Close(ctx)
 
 		// Continue reading with advOpt
-		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, batch1.LastBatchInfo, 16_000_000, 32)
+		reader2, err := objectstorage.NewMinioFileReaderAdv(ctx, cfg.Minio.BucketName, baseDir, compactedLogId, compactedSegId, client, 16_000_000, 32)
 		require.NoError(t, err)
 		defer reader2.Close(ctx)
 
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: 100, // Should be ignored
 			BatchSize:    3,
-		})
+		}, batch1.LastBatchInfo)
 		require.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 		assert.Nil(t, batch2)
@@ -3075,7 +3075,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 
 	t.Run("AdvTestBugFix_LargeStartEntryId", func(t *testing.T) {
 		// Create reader for the incomplete file (no footer)
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 4_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 4_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3093,7 +3093,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: largeStartEntryId,
 			BatchSize:    10, // Request 10 entries
-		})
+		}, nil)
 
 		// This should succeed with the bug fix
 		require.NoError(t, err, "Should be able to read from large startEntryId")
@@ -3118,7 +3118,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 
 	t.Run("AdvTestBugFix_VeryLargeStartEntryId", func(t *testing.T) {
 		// Create reader for the incomplete file (no footer)
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 4_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 4_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3131,7 +3131,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: veryLargeStartEntryId,
 			BatchSize:    5, // Request 5 entries
-		})
+		}, nil)
 
 		// This should also succeed with the bug fix
 		require.NoError(t, err, "Should be able to read from very large startEntryId")
@@ -3155,7 +3155,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 
 	t.Run("AdvTestBugFix_StartFromMiddleOfRange", func(t *testing.T) {
 		// Create reader for the incomplete file (no footer)
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 4_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 4_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3170,7 +3170,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: middleStartEntryId,
 			BatchSize:    largeBatchSize,
-		})
+		}, nil)
 
 		// This should succeed and return at least the requested batch size
 		require.NoError(t, err, "Should be able to read large batch from middle")
@@ -3201,7 +3201,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 
 	t.Run("AdvTestBugFix_EdgeCaseNearEnd", func(t *testing.T) {
 		// Create reader for the incomplete file (no footer)
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 4_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 4_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3214,7 +3214,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: nearEndStartEntryId,
 			BatchSize:    200, // Request more than available
-		})
+		}, nil)
 
 		// This should succeed and return available entries
 		require.NoError(t, err, "Should be able to read from near end")
@@ -3240,7 +3240,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		// that would fail before the fix: reading from a point where >16MB of raw data
 		// needs to be skipped before finding the target entry
 
-		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, nil, 4_000_000, 32)
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId, minioHdl, 4_000_000, 32)
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
@@ -3256,7 +3256,7 @@ func TestAdvMinioFileReader_LargeStartEntryIdWithoutFooter(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID: problematicStartEntryId,
 			BatchSize:    1, // Just need one entry to prove it works
-		})
+		}, nil)
 		duration := time.Since(start)
 
 		// The key assertions that prove the bug is fixed:

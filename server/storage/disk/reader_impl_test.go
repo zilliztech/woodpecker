@@ -59,13 +59,13 @@ func TestLocalFileReaderAdv_ReadDataBlocks_FileDeleted_ShouldReturnEntryNotFound
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, nil, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Set file as completed (has footer) to test the bug fix
 	reader.footer = &codec.FooterRecord{}
-	reader.isIncompleteFile = false
+	reader.isIncompleteFile.Store(false)
 
 	// Delete the file after opening (simulates file being deleted during operation)
 	os.Remove(filePath)
@@ -75,7 +75,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_FileDeleted_ShouldReturnEntryNotFound
 		BatchSize:    10,
 	}
 
-	batch, err := reader.readDataBlocks(ctx, opt, 0, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
 
 	// Should return EntryNotFound because read error occurred, even though file is completed
 	assert.Nil(t, batch)
@@ -98,13 +98,13 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	}()
 
 	// Create reader first
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, nil, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Set as completed file to test bug fix
 	reader.footer = &codec.FooterRecord{}
-	reader.isIncompleteFile = false
+	reader.isIncompleteFile.Store(false)
 
 	// Close the file and change permissions to make it unreadable
 	reader.file.Close()
@@ -116,7 +116,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 		BatchSize:    10,
 	}
 
-	batch, err := reader.readDataBlocks(ctx, opt, 0, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
 
 	// Should return EntryNotFound because of permission error
 	assert.Nil(t, batch)
@@ -135,13 +135,13 @@ func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, nil, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Set as completed file (has footer)
 	reader.footer = &codec.FooterRecord{}
-	reader.isIncompleteFile = false
+	reader.isIncompleteFile.Store(false)
 	reader.blockIndexes = []*codec.IndexRecord{} // No blocks
 
 	opt := storage.ReaderOpt{
@@ -150,7 +150,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(
 	}
 
 	// TODO mock no error exists when read data blocks
-	batch, err := reader.readDataBlocks(ctx, opt, 0, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
 
 	// Should return EOF because file is completed and no read errors occurred
 	assert.Nil(t, batch)
@@ -168,13 +168,13 @@ func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEnt
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, nil, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Set as incomplete file (no footer)
 	reader.footer = nil
-	reader.isIncompleteFile = true
+	reader.isIncompleteFile.Store(true)
 	reader.blockIndexes = []*codec.IndexRecord{} // No blocks
 
 	opt := storage.ReaderOpt{
@@ -183,7 +183,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEnt
 	}
 
 	// TODO mock no error exists when read data blocks
-	batch, err := reader.readDataBlocks(ctx, opt, 0, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
 
 	// Should return EntryNotFound because file is incomplete
 	assert.Nil(t, batch)
@@ -205,12 +205,12 @@ func TestLocalFileReaderAdv_ReadAt_FileNotExist_ShouldReturnError(t *testing.T) 
 	defer os.RemoveAll(baseDir)
 
 	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, nil, 4*1024*1024)
+	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
 	require.NoError(t, err)
 	defer reader.Close(ctx)
 
 	// Test normal read first
-	data, err := reader.readAt(ctx, 0, 100)
+	data, err := reader.readAtUnsafe(ctx, 0, 100)
 	assert.NoError(t, err)
 	assert.Len(t, data, 100)
 
@@ -220,7 +220,7 @@ func TestLocalFileReaderAdv_ReadAt_FileNotExist_ShouldReturnError(t *testing.T) 
 	assert.NoError(t, removeErr)
 
 	// This should now fail
-	data, err = reader.readAt(ctx, 0, 100)
+	data, err = reader.readAtUnsafe(ctx, 0, 100)
 	assert.Error(t, err)
 	assert.Nil(t, data)
 

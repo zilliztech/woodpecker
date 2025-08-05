@@ -74,7 +74,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EOF_CompletedFile(t *testing.
 		BatchSize:    10,
 	}
 
-	batch, err := reader.readDataBlocks(ctx, opt, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
 
 	// Should return EOF because file is completed and no read errors occurred
 	assert.Nil(t, batch)
@@ -112,7 +112,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EntryNotFound_IncompleteFile(
 		BatchSize:    10,
 	}
 
-	batch, err := reader.readDataBlocks(ctx, opt, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
 
 	// Should return EntryNotFound because file is incomplete and no read errors occurred
 	assert.Nil(t, batch)
@@ -149,7 +149,7 @@ func TestMinioFileReaderAdv_readDataBlocks_WithStatError_ShouldReturnEntryNotFou
 		BatchSize:    10,
 	}
 
-	batch, err := reader.readDataBlocks(ctx, opt, 0)
+	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
 
 	// Should return EntryNotFound because read error occurred, even though file is completed
 	assert.Nil(t, batch)
@@ -180,7 +180,7 @@ func TestMinioFileReaderAdv_readBlockBatch_ErrorHandling(t *testing.T) {
 		Return(minio.ObjectInfo{}, statError).
 		Once()
 
-	futures, nextBlockID, totalRawSize, hasMoreBlocks, hasReadBlockBatchErr := reader.readBlockBatch(ctx, 0, 4*1024*1024, 0)
+	futures, nextBlockID, totalRawSize, hasMoreBlocks, hasReadBlockBatchErr := reader.readBlockBatchUnsafe(ctx, 0, 4*1024*1024, 0)
 
 	assert.Empty(t, futures)
 	assert.Equal(t, int64(0), nextBlockID)
@@ -327,7 +327,7 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 				BatchSize:    10,
 			}
 
-			batch, err := reader.readDataBlocks(ctx, opt, 0)
+			batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
 
 			// Verify results
 			assert.Nil(t, batch)
