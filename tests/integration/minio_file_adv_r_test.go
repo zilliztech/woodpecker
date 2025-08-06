@@ -2910,7 +2910,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
-		require.NotNil(t, batch1.LastBatchInfo)
+		require.NotNil(t, batch1.LastReadState)
 		// With small batch size, should get around 2 blocks/entries (due to batch collection behavior)
 		assert.GreaterOrEqual(t, len(batch1.Entries), 1)
 		assert.LessOrEqual(t, len(batch1.Entries), 3) // Allow some flexibility due to batch collection
@@ -2924,7 +2924,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    2, // Should be ignored when using advOpt
 			MaxBatchEntries: 2,
-		}, batch1.LastBatchInfo)
+		}, batch1.LastReadState)
 
 		// The test might result in EOF if we've read all blocks in the first batch
 		// This is expected with the new batch collection logic
@@ -2962,7 +2962,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		// With batch collection logic, may get more than 2 entries but should start from entry 3
 		assert.GreaterOrEqual(t, len(batch.Entries), 1)
 		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
-		assert.NotNil(t, batch.LastBatchInfo)
+		assert.NotNil(t, batch.LastReadState)
 		t.Logf("Scenario2: Got %d entries starting from entry %d", len(batch.Entries), batch.Entries[0].EntryId)
 	})
 
@@ -3041,7 +3041,7 @@ func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
 	writer.Close(ctx)
 
 	// Test sequential reading with advOpt
-	var lastBatchInfo *storage.BatchInfo
+	var lastReadState *proto.LastReadState
 	var allReadEntries []*proto.LogEntry
 
 	for batchNum := 0; batchNum < 5; batchNum++ {
@@ -3054,7 +3054,7 @@ func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
 			MaxBatchEntries: 3,
-		}, lastBatchInfo)
+		}, lastReadState)
 
 		if werr.ErrFileReaderEndOfFile.Is(err) {
 			reader.Close(ctx)
@@ -3067,7 +3067,7 @@ func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
 
 		// Collect entries
 		allReadEntries = append(allReadEntries, batch.Entries...)
-		lastBatchInfo = batch.LastBatchInfo
+		lastReadState = batch.LastReadState
 
 		t.Logf("Batch %d: Read %d entries (entry IDs %d to %d)",
 			batchNum, len(batch.Entries), batch.Entries[0].EntryId, batch.Entries[len(batch.Entries)-1].EntryId)
@@ -3146,7 +3146,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(batch.Entries))
 		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
-		assert.NotNil(t, batch.LastBatchInfo)
+		assert.NotNil(t, batch.LastReadState)
 	})
 
 	t.Run("ReadBeyondEnd_WithAdvOpt", func(t *testing.T) {
@@ -3191,7 +3191,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    100, // Should be ignored
 			MaxBatchEntries: 10,
-		}, batch1.LastBatchInfo)
+		}, batch1.LastReadState)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 		assert.Nil(t, batch2)
@@ -3246,7 +3246,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    100, // Should be ignored
 			MaxBatchEntries: 3,
-		}, batch1.LastBatchInfo)
+		}, batch1.LastReadState)
 		require.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 		assert.Nil(t, batch2)

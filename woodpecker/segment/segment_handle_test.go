@@ -37,7 +37,6 @@ import (
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 func init() {
@@ -132,10 +131,10 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
-		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-			SegmentId: 1,
-			EntryId:   int64(i),
-			Data:      []byte(fmt.Sprintf("test_%d", i)),
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
+			SegId:   1,
+			EntryId: int64(i),
+			Values:  []byte(fmt.Sprintf("test_%d", i)),
 		}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
 	cfg := &config.Configuration{
@@ -215,17 +214,17 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		close(ch)
 		if i != 2 {
 			// 0,1,3,4 success
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
+				SegId:   1,
+				EntryId: int64(i),
+				Values:  []byte(fmt.Sprintf("test_%d", i)),
 			}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 		} else {
 			// 2 fail, and retry 3 times
-			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &processor.SegmentEntry{
-				SegmentId: 1,
-				EntryId:   int64(i),
-				Data:      []byte(fmt.Sprintf("test_%d", i)),
+			mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
+				SegId:   1,
+				EntryId: int64(i),
+				Values:  []byte(fmt.Sprintf("test_%d", i)),
 			}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), errors.New("test error"))
 		}
 	}

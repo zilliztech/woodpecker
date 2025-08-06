@@ -69,6 +69,11 @@ message LastReadState {
   uint32 block_size = 6;
 }
 
+message BatchReadResult {
+  repeated LogEntry entries = 1;
+  LastReadState lastReadState = 2;
+}
+
 /**
  * Represents all the possible status.
  */

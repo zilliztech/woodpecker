@@ -37,21 +37,21 @@ import (
 
 type Client interface {
 	// CreateLog creates a new log with the specified name.
-	CreateLog(context.Context, string) error
+	CreateLog(ctx context.Context, logName string) error
 	// OpenLog opens an existing log with the specified name and returns a log handle.
-	OpenLog(context.Context, string) (log.LogHandle, error)
+	OpenLog(ctx context.Context, logName string) (log.LogHandle, error)
 	// DeleteLog deletes the log with the specified name.
-	DeleteLog(context.Context, string) error
+	DeleteLog(ctx context.Context, logName string) error
 	// LogExists checks if a log with the specified name exists.
-	LogExists(context.Context, string) (bool, error)
+	LogExists(ctx context.Context, logName string) (bool, error)
 	// GetAllLogs retrieves all log names.
-	GetAllLogs(context.Context) ([]string, error)
+	GetAllLogs(ctx context.Context) ([]string, error)
 	// GetLogsWithPrefix retrieves log names that start with the specified prefix.
-	GetLogsWithPrefix(context.Context, string) ([]string, error)
+	GetLogsWithPrefix(ctx context.Context, logNamePrefix string) ([]string, error)
 	// GetMetadataProvider returns the metadata provider associated with the client.
 	GetMetadataProvider() meta.MetadataProvider
 	// Close closes the client.
-	Close(context.Context) error
+	Close(ctx context.Context) error
 }
 
 var _ Client = (*woodpeckerClient)(nil)

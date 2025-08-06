@@ -43,15 +43,15 @@ const (
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	Write(context.Context, *WriterMessage) *WriteResult
+	Write(ctx context.Context, msg *WriterMessage) *WriteResult
 
 	// WriteAsync writes a log message asynchronously and returns a channel that will receive a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	WriteAsync(context.Context, *WriterMessage) <-chan *WriteResult
+	WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult
 
 	// Close closes the log writer.
 	// It takes a context and returns an error if any occurs.
-	Close(context.Context) error
+	Close(ctx context.Context) error
 }
 
 func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {

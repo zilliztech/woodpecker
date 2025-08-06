@@ -409,12 +409,12 @@ func TestAppendOp_toSegmentEntry(t *testing.T) {
 		value:     []byte("test data"),
 	}
 
-	entry := op.toSegmentEntry()
+	entry := op.toLogEntry()
 
 	assert.NotNil(t, entry)
-	assert.Equal(t, int64(2), entry.SegmentId)
+	assert.Equal(t, int64(2), entry.SegId)
 	assert.Equal(t, int64(3), entry.EntryId)
-	assert.Equal(t, []byte("test data"), entry.Data)
+	assert.Equal(t, []byte("test data"), entry.Values)
 }
 
 func TestAppendOp_receivedAckCallback_Timeout(t *testing.T) {

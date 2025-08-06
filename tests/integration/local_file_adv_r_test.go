@@ -43,14 +43,14 @@ func TestReadAndPrint(t *testing.T) {
 	cfg.Log.Level = "debug"
 	logger.InitLogger(cfg)
 
-	var LastBatchInfo *storage.BatchInfo
+	var lastReadState *proto.LastReadState
 	for {
 		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), "/tmp/wp/", 3926, 1, 16_000_000)
 		require.NoError(t, err)
 		batch, readErr := reader.ReadNextBatchAdv(context.TODO(), storage.ReaderOpt{
 			StartEntryID:    0,
 			MaxBatchEntries: 100,
-		}, LastBatchInfo)
+		}, lastReadState)
 		if readErr != nil {
 			break
 		}
@@ -58,7 +58,7 @@ func TestReadAndPrint(t *testing.T) {
 		for i, entry := range batch.Entries {
 			t.Logf("Entry %d: %d/%d", i, entry.SegId, entry.EntryId)
 		}
-		LastBatchInfo = batch.LastBatchInfo
+		lastReadState = batch.LastReadState
 	}
 }
 
@@ -1876,7 +1876,7 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
-		require.NotNil(t, batch1.LastBatchInfo)
+		require.NotNil(t, batch1.LastReadState)
 		assert.Equal(t, 2, len(batch1.Entries))
 
 		// Now create a new reader with advOpt from the previous batch
@@ -1888,7 +1888,7 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    2, // Should be ignored when using advOpt
 			MaxBatchEntries: 2,
-		}, batch1.LastBatchInfo)
+		}, batch1.LastReadState)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch2.Entries), 0)
 
@@ -1914,7 +1914,7 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
-		assert.NotNil(t, batch.LastBatchInfo)
+		assert.NotNil(t, batch.LastReadState)
 	})
 
 	t.Run("Scenario3_NoFooter_IncompleteFile", func(t *testing.T) {
@@ -1996,7 +1996,7 @@ func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
 	writer.Close(ctx)
 
 	// Test sequential reading with advOpt
-	var lastBatchInfo *storage.BatchInfo
+	var lastReadState *proto.LastReadState
 	var allReadEntries []*proto.LogEntry
 
 	for batchNum := 0; batchNum < 5; batchNum++ {
@@ -2006,7 +2006,7 @@ func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
 			MaxBatchEntries: 3,
-		}, lastBatchInfo)
+		}, lastReadState)
 
 		if err == werr.ErrFileReaderEndOfFile {
 			reader.Close(ctx)
@@ -2018,7 +2018,7 @@ func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
 
 		// Collect entries
 		allReadEntries = append(allReadEntries, batch.Entries...)
-		lastBatchInfo = batch.LastBatchInfo
+		lastReadState = batch.LastReadState
 
 		reader.Close(ctx)
 	}
@@ -2091,7 +2091,7 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(batch.Entries))
 		assert.Equal(t, int64(0), batch.Entries[0].EntryId)
-		assert.NotNil(t, batch.LastBatchInfo)
+		assert.NotNil(t, batch.LastReadState)
 	})
 
 	t.Run("ReadBeyondEnd_WithAdvOpt", func(t *testing.T) {
@@ -2135,7 +2135,7 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    100, // Should be ignored
 			MaxBatchEntries: 10,
-		}, batch1.LastBatchInfo)
+		}, batch1.LastReadState)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
 		assert.Nil(t, batch2)

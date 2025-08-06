@@ -34,7 +34,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 )
@@ -49,8 +48,8 @@ const (
 type SegmentProcessor interface {
 	GetLogId() int64
 	GetSegmentId() int64
-	AddEntry(context.Context, *SegmentEntry, channel.ResultChannel) (int64, error)
-	ReadBatchEntriesAdv(context.Context, int64, int64, *proto.LastReadState) (*BatchData, error)
+	AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error)
+	ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	Fence(ctx context.Context) (int64, error)
 	Complete(ctx context.Context) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
@@ -169,7 +168,7 @@ func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
 	return writer.Finalize(ctx)
 }
 
-func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, resultCh channel.ResultChannel) (int64, error) {
+func (s *segmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "AddEntry")
 	defer sp.End()
 	s.updateAccessTime()
@@ -185,7 +184,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 		return -1, err
 	}
 
-	bufferedSeqNo, err := writer.WriteDataAsync(ctx, entry.EntryId, entry.Data, resultCh)
+	bufferedSeqNo, err := writer.WriteDataAsync(ctx, entry.EntryId, entry.Values, resultCh)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to append to log file", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(err))
 		return -1, err
@@ -197,7 +196,7 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	return bufferedSeqNo, nil
 }
 
-func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*BatchData, error) {
+func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
 	s.updateAccessTime()
@@ -208,17 +207,9 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 	}
 
 	// apply last read blocks state if possible
-	var lastBlockInfo *storage.BatchInfo
+	var lastState *proto.LastReadState
 	if lastReadState != nil && lastReadState.SegmentId == s.segId {
-		lastBlockInfo = &storage.BatchInfo{
-			Flags:   uint16(lastReadState.Flags),
-			Version: uint16(lastReadState.Version),
-			LastBlockInfo: &codec.IndexRecord{
-				BlockNumber: lastReadState.LastBlockId,
-				StartOffset: lastReadState.BlockOffset,
-				BlockSize:   lastReadState.BlockSize,
-			},
-		}
+		lastState = lastReadState
 	}
 
 	// read batch entries
@@ -226,7 +217,7 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		StartEntryID:    fromEntryId,
 		EndEntryID:      0, // means no stop point, currently not use
 		MaxBatchEntries: maxEntries,
-	}, lastBlockInfo)
+	}, lastState)
 	if err != nil {
 		if werr.ErrEntryNotFound.Is(err) {
 			logger.Ctx(ctx).Debug("failed to read entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Error(err))
@@ -237,30 +228,7 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 		}
 		return nil, err
 	}
-	// batch result
-	result := make([]*SegmentEntry, 0, len(batch.Entries))
-	for _, entry := range batch.Entries {
-		segmentEntry := &SegmentEntry{
-			SegmentId: s.segId,
-			EntryId:   entry.EntryId,
-			Data:      entry.Values,
-		}
-		result = append(result, segmentEntry)
-	}
-
-	batchData := &BatchData{
-		Entries: result,
-		ReadState: &proto.LastReadState{
-			SegmentId:   s.segId,
-			Flags:       uint32(batch.LastBatchInfo.Flags),
-			Version:     uint32(batch.LastBatchInfo.Version),
-			LastBlockId: batch.LastBatchInfo.LastBlockInfo.BlockNumber,
-			BlockOffset: batch.LastBatchInfo.LastBlockInfo.StartOffset,
-			BlockSize:   batch.LastBatchInfo.LastBlockInfo.BlockSize,
-		},
-	}
-	// return
-	return batchData, nil
+	return batch, nil
 }
 
 func (s *segmentProcessor) GetSegmentLastAddConfirmed(ctx context.Context) (int64, error) {

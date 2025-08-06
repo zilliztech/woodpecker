@@ -393,7 +393,7 @@ func (f *MinioFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error) 
 	return lastBlockInfo.LastEntryID, nil
 }
 
-func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt, lastReadBatchInfo *storage.BatchInfo) (*storage.Batch, error) {
+func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt, lastReadBatchInfo *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatchAdv")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
@@ -405,7 +405,7 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 
 	// apply adv options if possible
 	if lastReadBatchInfo != nil {
-		isCompacted := codec.IsCompacted(lastReadBatchInfo.Flags)
+		isCompacted := codec.IsCompacted(uint16(lastReadBatchInfo.Flags))
 		f.version.Store(uint32(lastReadBatchInfo.Version))
 		f.flags.Store(uint32(lastReadBatchInfo.Flags))
 		f.isCompacted.Store(isCompacted)
@@ -430,7 +430,7 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	startBlockID := int64(0)
 	if lastReadBatchInfo != nil {
 		// When we have lastReadBatchInfo, start from the block after the last read block
-		startBlockID = int64(lastReadBatchInfo.LastBlockInfo.BlockNumber + 1)
+		startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
 	} else if f.footer != nil {
 		// When we have footer, find the block containing the start entry ID
 		foundStartBlock, err := codec.SearchBlock(f.blocks, opt.StartEntryID)
@@ -489,7 +489,7 @@ type BlockReadResult struct {
 	readBytes int
 }
 
-func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64) (*storage.Batch, error) {
+func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
 	startTime := time.Now()
@@ -653,18 +653,21 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
-	var batchInfo *storage.BatchInfo
+	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
-		batchInfo = &storage.BatchInfo{
-			Flags:         uint16(f.flags.Load()),
-			Version:       uint16(f.version.Load()),
-			LastBlockInfo: lastBlockInfo,
+		lastReadState = &proto.LastReadState{
+			SegmentId:   f.segmentId,
+			Flags:       f.flags.Load(),
+			Version:     f.version.Load(),
+			LastBlockId: lastBlockInfo.BlockNumber,
+			BlockOffset: lastBlockInfo.StartOffset,
+			BlockSize:   lastBlockInfo.BlockSize,
 		}
 	}
 
-	batch := &storage.Batch{
-		LastBatchInfo: batchInfo,
+	batch := &proto.BatchReadResult{
 		Entries:       allEntries,
+		LastReadState: lastReadState,
 	}
 	return batch, nil
 }
@@ -764,13 +767,14 @@ func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64
 		}
 		// Only include entries from the start sequence number onwards
 		if startEntryID <= currentEntryID {
-			r := records[j].(*codec.DataRecord)
+			dr := records[j].(*codec.DataRecord)
 			entry := &proto.LogEntry{
+				SegId:   f.segmentId,
 				EntryId: currentEntryID,
-				Values:  r.Payload,
+				Values:  dr.Payload,
 			}
 			entries = append(entries, entry)
-			readBytes += len(r.Payload)
+			readBytes += len(dr.Payload)
 		}
 		currentEntryID++
 	}

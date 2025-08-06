@@ -43,19 +43,19 @@ type LogHandle interface {
 	// GetId returns the ID of the log.
 	GetId() int64
 	// GetSegments retrieves the segment metadata for the log.
-	GetSegments(context.Context) (map[int64]*meta.SegmentMeta, error)
+	GetSegments(ctx context.Context) (map[int64]*meta.SegmentMeta, error)
 	// OpenLogWriter opens a writer for the log.
-	OpenLogWriter(context.Context) (LogWriter, error)
+	OpenLogWriter(ctx context.Context) (LogWriter, error)
 	// OpenInternalLogWriter opens an internal writer for the log.
-	OpenInternalLogWriter(context.Context) (LogWriter, error)
+	OpenInternalLogWriter(ctx context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
-	OpenLogReader(context.Context, *LogMessageId, string) (LogReader, error)
+	OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
-	GetLastRecordId(context.Context) (*LogMessageId, error)
+	GetLastRecordId(ctx context.Context) (*LogMessageId, error)
 	// Truncate truncates the log to the specified record ID (inclusive).
-	Truncate(context.Context, *LogMessageId) error
+	Truncate(ctx context.Context, recordId *LogMessageId) error
 	// GetTruncatedRecordId returns the last truncated record ID of the log.
-	GetTruncatedRecordId(context.Context) (*LogMessageId, error)
+	GetTruncatedRecordId(ctx context.Context) (*LogMessageId, error)
 	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
 	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
@@ -63,15 +63,15 @@ type LogHandle interface {
 	// GetMetadataProvider returns the metadata provider instance.
 	GetMetadataProvider() meta.MetadataProvider
 	// GetOrCreateWritableSegmentHandle returns the writable segment handle for the log, means creating a new one
-	GetOrCreateWritableSegmentHandle(context.Context, func(ctx context.Context, reason string)) (segment.SegmentHandle, error)
+	GetOrCreateWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error)
 	// GetExistsReadonlySegmentHandle returns the segment handle for the specified segment ID if it exists.
-	GetExistsReadonlySegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
+	GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error)
 	// GetRecoverableSegmentHandle returns the segment handle for the specified segment ID if it exists and is in recovery state.
-	GetRecoverableSegmentHandle(context.Context, int64) (segment.SegmentHandle, error)
+	GetRecoverableSegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error)
 	// CompleteAllActiveSegmentIfExists completes all active segment handles for the log.
 	CompleteAllActiveSegmentIfExists(ctx context.Context) error
 	// Close closes the log handle.
-	Close(context.Context) error
+	Close(ctx context.Context) error
 }
 
 const (

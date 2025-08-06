@@ -295,7 +295,7 @@ func (r *LocalFileReaderAdv) parseIndexRecordsUnsafe(ctx context.Context, curren
 	return nil
 }
 
-func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt, lastReadBatchInfo *storage.BatchInfo) (*storage.Batch, error) {
+func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.ReaderOpt, lastReadBatchInfo *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "ReadNextBatchAdv")
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
@@ -333,10 +333,10 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	if lastReadBatchInfo != nil {
 		// Scenario 1: Subsequent reads with advanced options
 		// When we have lastReadBatchInfo, start from the block after the last read block
-		startBlockID = int64(lastReadBatchInfo.LastBlockInfo.BlockNumber + 1)
-		startBlockOffset = lastReadBatchInfo.LastBlockInfo.StartOffset + int64(lastReadBatchInfo.LastBlockInfo.BlockSize)
+		startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
+		startBlockOffset = lastReadBatchInfo.BlockOffset + int64(lastReadBatchInfo.BlockSize)
 		logger.Ctx(ctx).Debug("using advOpt mode",
-			zap.Int64("lastBlockNumber", int64(lastReadBatchInfo.LastBlockInfo.BlockNumber)),
+			zap.Int64("lastBlockNumber", int64(lastReadBatchInfo.LastBlockId)),
 			zap.Int64("startBlockID", startBlockID),
 			zap.Int64("startBlockOffset", startBlockOffset))
 	} else if !r.isIncompleteFile.Load() {
@@ -625,7 +625,7 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 	return nil
 }
 
-func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*storage.Batch, error) {
+func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
 	startTime := time.Now()
@@ -737,14 +737,15 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			}
 			// Only include entries from the start sequence number onwards
 			if opt.StartEntryID <= currentEntryID {
-				r := records[j].(*codec.DataRecord)
+				dr := records[j].(*codec.DataRecord)
 				entry := &proto.LogEntry{
+					SegId:   r.segId,
 					EntryId: currentEntryID,
-					Values:  r.Payload,
+					Values:  dr.Payload,
 				}
 				entries = append(entries, entry)
 				entriesCollected++
-				readBytes += int64(len(r.Payload))
+				readBytes += int64(len(dr.Payload))
 			}
 			currentEntryID++
 		}
@@ -801,18 +802,20 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
-	var batchInfo *storage.BatchInfo
+	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
-		batchInfo = &storage.BatchInfo{
-			Flags:         uint16(r.flags.Load()),
-			Version:       uint16(r.version.Load()),
-			LastBlockInfo: lastBlockInfo,
+		lastReadState = &proto.LastReadState{
+			Flags:       r.flags.Load(),
+			Version:     r.version.Load(),
+			LastBlockId: lastBlockInfo.BlockNumber,
+			BlockOffset: lastBlockInfo.StartOffset,
+			BlockSize:   lastBlockInfo.BlockSize,
 		}
 	}
 
-	batch := &storage.Batch{
-		LastBatchInfo: batchInfo,
+	batch := &proto.BatchReadResult{
 		Entries:       entries,
+		LastReadState: lastReadState,
 	}
 	return batch, nil
 }

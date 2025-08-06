@@ -24,6 +24,8 @@ import (
 )
 
 // Writer defines the interface for writing log entries to different storage backends
+//
+//go:generate mockery --dir=./server/storage --name=Writer --structname=Writer --output=mocks/mocks_server/mocks_storage --filename=mock_writer.go --with-expecter=true  --outpkg=mocks_storage
 type Writer interface {
 	// WriteDataAsync writes a log entry to the storage asynchronously
 	WriteDataAsync(ctx context.Context, entryId int64, data []byte, resultCh channel.ResultChannel) (int64, error)
