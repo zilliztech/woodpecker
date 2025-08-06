@@ -41,10 +41,12 @@ type ReaderOpt struct {
 	StartEntryID int64
 
 	// EndEntryID is the entryID to stop reading at.
+	// Note: Reserved field, not used in batch read mode currently
 	EndEntryID int64
 
-	// BatchSize is the maxSize of entries to read in a batch.
-	BatchSize int64
+	// MaxBatchEntries is the maximum number of entries in a batch.
+	// Note: this is a suggestion value, not a guarantee. The actual batch size may be less or more than this value.
+	MaxBatchEntries int64
 }
 
 // Batch represents a batch of entries, and its block infos using for next batch reading position hint.

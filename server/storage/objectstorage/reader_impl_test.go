@@ -58,7 +58,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EOF_CompletedFile(t *testing.
 		logId:          1,
 		segmentId:      1,
 		logIdStr:       "1",
-		batchMaxSize:   4 * 1024 * 1024, // 4MB
+		maxBatchSize:   4 * 1024 * 1024, // 4MB
 		pool:           conc.NewPool[*BlockReadResult](4, conc.WithPreAlloc(true)),
 		footer:         &codec.FooterRecord{}, // Has footer = completed
 	}
@@ -70,8 +70,8 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EOF_CompletedFile(t *testing.
 		Maybe()
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 100,
-		BatchSize:    10,
+		StartEntryID:    100,
+		MaxBatchEntries: 10,
 	}
 
 	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
@@ -94,7 +94,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EntryNotFound_IncompleteFile(
 		logId:          1,
 		segmentId:      1,
 		logIdStr:       "1",
-		batchMaxSize:   4 * 1024 * 1024, // 4MB
+		maxBatchSize:   4 * 1024 * 1024, // 4MB
 		pool:           conc.NewPool[*BlockReadResult](4, conc.WithPreAlloc(true)),
 		footer:         nil, // No footer = incomplete
 	}
@@ -108,8 +108,8 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EntryNotFound_IncompleteFile(
 		Maybe()
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 100,
-		BatchSize:    10,
+		StartEntryID:    100,
+		MaxBatchEntries: 10,
 	}
 
 	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
@@ -132,7 +132,7 @@ func TestMinioFileReaderAdv_readDataBlocks_WithStatError_ShouldReturnEntryNotFou
 		logId:          1,
 		segmentId:      1,
 		logIdStr:       "1",
-		batchMaxSize:   4 * 1024 * 1024, // 4MB
+		maxBatchSize:   4 * 1024 * 1024, // 4MB
 		pool:           conc.NewPool[*BlockReadResult](4, conc.WithPreAlloc(true)),
 		footer:         &codec.FooterRecord{}, // Has footer = completed
 	}
@@ -145,8 +145,8 @@ func TestMinioFileReaderAdv_readDataBlocks_WithStatError_ShouldReturnEntryNotFou
 		Once()
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 100,
-		BatchSize:    10,
+		StartEntryID:    100,
+		MaxBatchEntries: 10,
 	}
 
 	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)
@@ -170,7 +170,7 @@ func TestMinioFileReaderAdv_readBlockBatch_ErrorHandling(t *testing.T) {
 		logId:          1,
 		segmentId:      1,
 		logIdStr:       "1",
-		batchMaxSize:   4 * 1024 * 1024, // 4MB
+		maxBatchSize:   4 * 1024 * 1024, // 4MB
 		pool:           conc.NewPool[*BlockReadResult](4, conc.WithPreAlloc(true)),
 	}
 
@@ -297,7 +297,7 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 				logId:          1,
 				segmentId:      1,
 				logIdStr:       "1",
-				batchMaxSize:   4 * 1024 * 1024, // 4MB
+				maxBatchSize:   4 * 1024 * 1024, // 4MB
 				pool:           conc.NewPool[*BlockReadResult](4, conc.WithPreAlloc(true)),
 			}
 
@@ -323,8 +323,8 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 			}
 
 			opt := storage.ReaderOpt{
-				StartEntryID: 100,
-				BatchSize:    10,
+				StartEntryID:    100,
+				MaxBatchEntries: 10,
 			}
 
 			batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0)

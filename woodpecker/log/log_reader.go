@@ -36,7 +36,7 @@ const (
 	ReaderScopeName            = "LogReader"
 	UpdateReaderInfoIntervalMs = 30000
 	NoDataReadWaitIntervalMs   = 200
-	DefaultBatchLimit          = 200
+	DefaultBatchEntriesLimit   = 200
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle
@@ -160,7 +160,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		if l.batch != nil && l.batch.ReadState != nil && l.batch.ReadState.SegmentId == segId {
 			lastReadState = l.batch.ReadState
 		}
-		batchResult, err := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchLimit, lastReadState)
+		batchResult, err := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
 		if err != nil {
 			// Check if it's end of file error - this is the only reliable way to know segment is finished
 			if werr.ErrFileReaderEndOfFile.Is(err) {

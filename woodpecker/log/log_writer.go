@@ -90,6 +90,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 
 var _ LogWriter = (*logWriterImpl)(nil)
 
+// TODO maybe wrap internalLogWriter to reuse some logic
 type logWriterImpl struct {
 	sync.RWMutex
 	logIdStr           string // for metrics label only

@@ -902,8 +902,8 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		startId := int64(i % 900) // Ensure we don't go beyond available entries
 		entries, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: startId,
-			BatchSize:    10,
+			StartEntryID:    startId,
+			MaxBatchEntries: 10,
 		}, nil)
 		if err != nil {
 			b.Fatal(err)

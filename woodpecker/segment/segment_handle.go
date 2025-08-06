@@ -420,11 +420,11 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 	}
 }
 
-func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
+func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize))
+	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries))
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -441,11 +441,11 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSiz
 		return nil, err
 	}
 
-	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxSize, lastReadState)
+	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, lastReadState)
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize), zap.Int("count", len(batchResult.Entries)))
+	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries), zap.Int("count", len(batchResult.Entries)))
 	return batchResult, nil
 }
 

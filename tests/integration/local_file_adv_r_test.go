@@ -48,8 +48,8 @@ func TestReadAndPrint(t *testing.T) {
 		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), "/tmp/wp/", 3926, 1, 16_000_000)
 		require.NoError(t, err)
 		batch, readErr := reader.ReadNextBatchAdv(context.TODO(), storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    100,
+			StartEntryID:    0,
+			MaxBatchEntries: 100,
 		}, LastBatchInfo)
 		if readErr != nil {
 			break
@@ -114,8 +114,8 @@ func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 
 	t.Run("AdvReadAllEntries", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(len(testData)),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(len(testData)),
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, len(testData), len(batch.Entries))
@@ -129,8 +129,8 @@ func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 
 	t.Run("AdvReadFromMiddle", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 2,
-			BatchSize:    3,
+			StartEntryID:    2,
+			MaxBatchEntries: 3,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 3, len(batch.Entries))
@@ -145,8 +145,8 @@ func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 
 	t.Run("AdvReadAutoBatchMode", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 1,
-			BatchSize:    -1, // Auto batch mode
+			StartEntryID:    1,
+			MaxBatchEntries: -1, // Auto batch mode
 		}, nil)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch.Entries), 0)
@@ -226,8 +226,8 @@ func TestAdvLocalFileReader_MultipleBlocks(t *testing.T) {
 
 	t.Run("AdvReadAcrossMultipleBlocks", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 5,
-			BatchSize:    10, // Read across multiple blocks
+			StartEntryID:    5,
+			MaxBatchEntries: 10, // Read across multiple blocks
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 10, len(batch.Entries))
@@ -242,8 +242,8 @@ func TestAdvLocalFileReader_MultipleBlocks(t *testing.T) {
 
 	t.Run("AdvReadSingleBlockMode", func(t *testing.T) {
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 8,
-			BatchSize:    -1, // Auto batch mode - single block
+			StartEntryID:    8,
+			MaxBatchEntries: -1, // Auto batch mode - single block
 		}, nil)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch.Entries), 0)
@@ -313,8 +313,8 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 
 		// Test reading from non-existent entry ID
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 100, // Way beyond available entries
-			BatchSize:    10,
+			StartEntryID:    100, // Way beyond available entries
+			MaxBatchEntries: 10,
 		}, nil)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err), err.Error())
@@ -350,8 +350,8 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 
 		// Try to read after close
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    1,
+			StartEntryID:    0,
+			MaxBatchEntries: 1,
 		}, nil)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderAlreadyClosed.Is(err))
@@ -418,8 +418,8 @@ func TestAdvLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 
 	// Read all entries
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-		StartEntryID: 0,
-		BatchSize:    int64(len(testCases)),
+		StartEntryID:    0,
+		MaxBatchEntries: int64(len(testCases)),
 	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, len(testCases), len(batch.Entries))
@@ -718,8 +718,8 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 
 		// Verify we can read data from the beginning
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    10, // Read all entries
+			StartEntryID:    0,
+			MaxBatchEntries: 10, // Read all entries
 		}, nil)
 		require.NoError(t, err)
 		require.Equal(t, 8, len(batch.Entries), "Should have 8 total entries (4 original + 4 recovery)")
@@ -955,8 +955,8 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 
 		// Verify we can read all entries
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(len(testData)),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(len(testData)),
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, len(testData), len(batch.Entries))
@@ -969,8 +969,8 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 
 		// Verify we can read from middle
 		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 1,
-			BatchSize:    2,
+			StartEntryID:    1,
+			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, len(batch.Entries))
@@ -981,8 +981,8 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 
 		// Verify auto batch mode works
 		batch, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 2,
-			BatchSize:    -1, // Auto batch mode
+			StartEntryID:    2,
+			MaxBatchEntries: -1, // Auto batch mode
 		}, nil)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch.Entries), 0)
@@ -1029,14 +1029,14 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 
 		// Compare data from both files
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(len(testData)),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(len(testData)),
 		}, nil)
 		require.NoError(t, err)
 
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(len(testData)),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(len(testData)),
 		}, nil)
 		require.NoError(t, err)
 
@@ -1095,8 +1095,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	t.Run("AdvReadInitialData", func(t *testing.T) {
 		// Read initial data
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    2,
+			StartEntryID:    0,
+			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, len(batch.Entries))
@@ -1111,8 +1111,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	t.Run("AdvTryReadBeyondAvailableData", func(t *testing.T) {
 		// Try to read beyond available data - should return what's available
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 1,
-			BatchSize:    5, // Request more than available
+			StartEntryID:    1,
+			MaxBatchEntries: 5, // Request more than available
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(batch.Entries)) // Should only get entry 1
@@ -1146,8 +1146,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	t.Run("AdvReadNewDataAfterDynamicScan", func(t *testing.T) {
 		// Now try to read the new data - should trigger dynamic scanning
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 2,
-			BatchSize:    3, // Request the 3 new entries
+			StartEntryID:    2,
+			MaxBatchEntries: 3, // Request the 3 new entries
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 3, len(batch.Entries))
@@ -1164,8 +1164,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 		// Read all data from the beginning
 		allData := append(initialData, moreData...)
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(len(allData)),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(len(allData)),
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, len(allData), len(batch.Entries))
@@ -1200,8 +1200,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	t.Run("AdvReadFinalDataWithDynamicScan", func(t *testing.T) {
 		// Read the final data
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 5,
-			BatchSize:    2,
+			StartEntryID:    5,
+			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, len(batch.Entries))
@@ -1217,8 +1217,8 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	t.Run("AdvReadFromMiddleWithDynamicScan", func(t *testing.T) {
 		// Read from middle, spanning across dynamically scanned blocks
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 3,
-			BatchSize:    4, // Should get entries 3, 4, 5, 6
+			StartEntryID:    3,
+			MaxBatchEntries: 4, // Should get entries 3, 4, 5, 6
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 4, len(batch.Entries))
@@ -1349,8 +1349,8 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 					t.Logf("Reader: Attempting to read entries %d to %d", startId, latestWrittenId)
 
 					batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-						StartEntryID: startId,
-						BatchSize:    batchSize,
+						StartEntryID:    startId,
+						MaxBatchEntries: batchSize,
 					}, nil)
 
 					if err != nil {
@@ -1393,8 +1393,8 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 
 		finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(totalEntries),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(totalEntries),
 		}, nil)
 
 		if err != nil {
@@ -1454,8 +1454,8 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 
 		// Verify we can read all entries
 		allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(totalEntries),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(totalEntries),
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, totalEntries, len(allBatch.Entries), "Should read all entries")
@@ -1469,8 +1469,8 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 
 		// Verify dynamic scanning works by reading from different positions
 		midBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: int64(totalEntries / 2),
-			BatchSize:    5,
+			StartEntryID:    int64(totalEntries / 2),
+			MaxBatchEntries: 5,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 5, len(midBatch.Entries), "Should read 5 entries from middle")
@@ -1629,8 +1629,8 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 							readerNum, entriesToRead, startId, latestWrittenId)
 
 						batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-							StartEntryID: startId,
-							BatchSize:    entriesToRead,
+							StartEntryID:    startId,
+							MaxBatchEntries: entriesToRead,
 						}, nil)
 
 						if err != nil {
@@ -1681,8 +1681,8 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 				remainingEntries := int64(totalEntries) - startId
 
 				finalBatch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-					StartEntryID: startId,
-					BatchSize:    remainingEntries,
+					StartEntryID:    startId,
+					MaxBatchEntries: remainingEntries,
 				}, nil)
 
 				if err != nil {
@@ -1798,8 +1798,8 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 
 		// Verify we can read all entries
 		allBatch, err := finalReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    int64(totalEntries),
+			StartEntryID:    0,
+			MaxBatchEntries: int64(totalEntries),
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, totalEntries, len(allBatch.Entries), "Should read all entries")
@@ -1872,8 +1872,8 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 		// Read first batch to get batch info
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    2,
+			StartEntryID:    0,
+			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
 		require.NotNil(t, batch1.LastBatchInfo)
@@ -1886,8 +1886,8 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 		// Read next batch using advOpt (should start from next block)
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 2, // Should be ignored when using advOpt
-			BatchSize:    2,
+			StartEntryID:    2, // Should be ignored when using advOpt
+			MaxBatchEntries: 2,
 		}, batch1.LastBatchInfo)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch2.Entries), 0)
@@ -1909,8 +1909,8 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 		// Read from middle using footer search
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 3,
-			BatchSize:    2,
+			StartEntryID:    3,
+			MaxBatchEntries: 2,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), batch.Entries[0].EntryId)
@@ -1951,8 +1951,8 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 
 		// Read from incomplete file (should use dynamic scanning)
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    3,
+			StartEntryID:    0,
+			MaxBatchEntries: 3,
 		}, nil)
 		require.NoError(t, err)
 		assert.Greater(t, len(batch.Entries), 0)
@@ -2004,8 +2004,8 @@ func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
 		require.NoError(t, err)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
-			BatchSize:    3,
+			StartEntryID:    int64(batchNum * 3), // This should be ignored when lastBatchInfo is provided
+			MaxBatchEntries: 3,
 		}, lastBatchInfo)
 
 		if err == werr.ErrFileReaderEndOfFile {
@@ -2054,8 +2054,8 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		defer reader.Close(ctx)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    10,
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
 		}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, batch)
@@ -2085,8 +2085,8 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		defer reader.Close(ctx)
 
 		batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    10,
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(batch.Entries))
@@ -2121,8 +2121,8 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		batch1, err := reader1.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 0,
-			BatchSize:    10,
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
 		}, nil)
 		require.NoError(t, err)
 		reader1.Close(ctx)
@@ -2133,8 +2133,8 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		defer reader2.Close(ctx)
 
 		batch2, err := reader2.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: 100, // Should be ignored
-			BatchSize:    10,
+			StartEntryID:    100, // Should be ignored
+			MaxBatchEntries: 10,
 		}, batch1.LastBatchInfo)
 		assert.Error(t, err)
 		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))

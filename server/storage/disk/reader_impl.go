@@ -45,13 +45,11 @@ var _ storage.Reader = (*LocalFileReaderAdv)(nil)
 
 // LocalFileReaderAdv implements AbstractFileReader for local filesystem storage
 type LocalFileReaderAdv struct {
-	logId    int64
-	segId    int64
-	logIdStr string // for metrics only
-	filePath string
-
-	// read config
-	batchMaxSize int64
+	logId        int64
+	segId        int64
+	logIdStr     string // for metrics only
+	filePath     string
+	maxBatchSize int64
 
 	// file access
 	mu   sync.RWMutex
@@ -67,14 +65,15 @@ type LocalFileReaderAdv struct {
 }
 
 // NewLocalFileReaderAdv creates a new local filesystem reader
-func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, batchMaxSize int64) (*LocalFileReaderAdv, error) {
+func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, segId int64, maxBatchSize int64) (*LocalFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewLocalFileReader")
 	defer sp.End()
 
 	logger.Ctx(ctx).Debug("creating new local file reader",
 		zap.String("baseDir", baseDir),
 		zap.Int64("logId", logId),
-		zap.Int64("segId", segId))
+		zap.Int64("segId", segId),
+		zap.Int64("maxBatchSize", maxBatchSize))
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
@@ -117,13 +116,12 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 	currentSize := stat.Size()
 	reader := &LocalFileReaderAdv{
-		logId:    logId,
-		segId:    segId,
-		logIdStr: fmt.Sprintf("%d", logId),
-		filePath: filePath,
-		file:     file,
-
-		batchMaxSize: batchMaxSize,
+		logId:        logId,
+		segId:        segId,
+		logIdStr:     fmt.Sprintf("%d", logId),
+		filePath:     filePath,
+		maxBatchSize: maxBatchSize,
+		file:         file,
 	}
 	reader.flags.Store(0)
 	reader.version.Store(codec.FormatVersion)
@@ -302,9 +300,8 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
 		zap.Int64("startEntryID", opt.StartEntryID),
-		zap.Int64("batchSize", opt.BatchSize),
+		zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 		zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
-		zap.Bool("footerExists", r.footer != nil),
 		zap.Any("opt", opt),
 		zap.Any("lastReadBatchInfo", lastReadBatchInfo))
 
@@ -634,11 +631,11 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	startTime := time.Now()
 
 	// Soft limitation
-	maxEntries := opt.BatchSize // soft count limit: Read the minimum number of blocks exceeding the count limit
+	maxEntries := opt.MaxBatchEntries // soft count limit: Read the minimum number of blocks exceeding the count limit
 	if maxEntries <= 0 {
 		maxEntries = 100
 	}
-	maxBytes := r.batchMaxSize // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
+	maxBytes := r.maxBatchSize // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
 
 	// read data result
 	entries := make([]*proto.LogEntry, 0, maxEntries)
@@ -778,7 +775,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		logger.Ctx(ctx).Debug("no entry extracted",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("requestedBatchSize", opt.BatchSize),
+			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(entries)))
 		if !hasDataReadError {
 			// only read without dataReadError, determine whether it is an EOF
@@ -795,7 +792,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		logger.Ctx(ctx).Debug("read data blocks completed",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("requestedBatchSize", opt.BatchSize),
+			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(entries)),
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}

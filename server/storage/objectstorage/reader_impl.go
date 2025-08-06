@@ -69,18 +69,18 @@ type MinioFileReaderAdv struct {
 
 	// thread pool for concurrent block reading
 	pool         *conc.Pool[*BlockReadResult]
-	batchMaxSize int64
+	maxBatchSize int64
 
 	// close state
 	closed atomic.Bool
 }
 
 // NewMinioFileReaderAdv creates a new MinIO reader
-func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler, batchMaxSize int64, maxFetchThreads int) (*MinioFileReaderAdv, error) {
+func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler, maxBatchSize int64, maxFetchThreads int) (*MinioFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewMinioFileReaderAdv")
 	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
-	logger.Ctx(ctx).Debug("creating new minio file reader", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
+	logger.Ctx(ctx).Debug("creating new minio file reader", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Int64("maxBatchSize", maxBatchSize), zap.Int("maxFetchThreads", maxFetchThreads))
 	// Get object size
 	reader := &MinioFileReaderAdv{
 		logId:          logId,
@@ -93,7 +93,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		blocks: make([]*codec.IndexRecord, 0),
 		footer: nil,
 
-		batchMaxSize: batchMaxSize,
+		maxBatchSize: maxBatchSize,
 		pool:         conc.NewPool[*BlockReadResult](maxFetchThreads),
 	}
 	reader.flags.Store(0)
@@ -110,7 +110,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		return nil, readFooterErr
 	}
 
-	logger.Ctx(ctx).Debug("create new minio file readerAdv finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId))
+	logger.Ctx(ctx).Info("create new minio file readerAdv finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Int64("maxBatchSize", maxBatchSize), zap.Int("maxFetchThreads", maxFetchThreads))
 	return reader, nil
 }
 
@@ -398,9 +398,8 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	defer sp.End()
 	logger.Ctx(ctx).Debug("ReadNextBatchAdv called",
 		zap.Int64("startEntryID", opt.StartEntryID),
-		zap.Int64("batchSize", opt.BatchSize),
+		zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 		zap.Bool("isCompacted", f.isCompacted.Load()),
-		zap.Bool("footerExists", f.footer != nil),
 		zap.Any("opt", opt),
 		zap.Any("lastReadBatchInfo", lastReadBatchInfo))
 
@@ -421,6 +420,11 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 	// read lock
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+
+	if f.closed.Load() {
+		logger.Ctx(ctx).Info("ReadNextBatchAdv closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId), zap.Int64("startEntryID", opt.StartEntryID), zap.Int64("maxBatchEntries", opt.MaxBatchEntries))
+		return nil, werr.ErrFileReaderAlreadyClosed
+	}
 
 	// start to read batch from a certain point
 	startBlockID := int64(0)
@@ -490,9 +494,13 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	defer sp.End()
 	startTime := time.Now()
 
-	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startBlockID", startBlockID), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("requestedBatchSize", opt.BatchSize))
+	logger.Ctx(ctx).Debug("read data blocks start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("startBlockID", startBlockID), zap.Int64("startEntryId", opt.StartEntryID), zap.Int64("maxBatchEntries", opt.MaxBatchEntries))
 
-	maxBytes := f.batchMaxSize // default 16MB limit per batch
+	maxEntries := opt.MaxBatchEntries // soft count limit: Read the minimum number of blocks exceeding the count limit
+	if maxEntries <= 0 {
+		maxEntries = 100
+	}
+	maxBytes := f.maxBatchSize // default 16MB limit per batch
 	currentBlockID := startBlockID
 
 	// Final collected results
@@ -587,11 +595,11 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		}
 
 		// If we have some data and approaching batch size limit, we can also stop
-		if len(allEntries) > 0 && int64(len(allEntries)) >= opt.BatchSize {
+		if len(allEntries) > 0 && int64(len(allEntries)) >= maxEntries {
 			logger.Ctx(ctx).Debug("reached requested batch size",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int("totalEntries", len(allEntries)),
-				zap.Int64("requestedBatchSize", opt.BatchSize))
+				zap.Int64("maxBatchEntries", maxEntries))
 			break
 		}
 
@@ -616,7 +624,7 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		logger.Ctx(ctx).Debug("no entry extracted after reading all available blocks",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("requestedBatchSize", opt.BatchSize),
+			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(allEntries)))
 
 		if !hasDataReadError {
@@ -635,7 +643,7 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	logger.Ctx(ctx).Debug("read data blocks completed",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int64("startEntryId", opt.StartEntryID),
-		zap.Int64("requestedBatchSize", opt.BatchSize),
+		zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 		zap.Int("entriesReturned", len(allEntries)),
 		zap.Int("totalReadBytes", totalReadBytes),
 		zap.Int64("totalCollectedSize", totalCollectedSize),

@@ -71,8 +71,8 @@ func TestLocalFileReaderAdv_ReadDataBlocks_FileDeleted_ShouldReturnEntryNotFound
 	os.Remove(filePath)
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 0,
-		BatchSize:    10,
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
 	}
 
 	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
@@ -112,8 +112,8 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	require.NoError(t, err)
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 0,
-		BatchSize:    10,
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
 	}
 
 	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
@@ -145,8 +145,8 @@ func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(
 	reader.blockIndexes = []*codec.IndexRecord{} // No blocks
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 0,
-		BatchSize:    10,
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
 	}
 
 	// TODO mock no error exists when read data blocks
@@ -178,8 +178,8 @@ func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEnt
 	reader.blockIndexes = []*codec.IndexRecord{} // No blocks
 
 	opt := storage.ReaderOpt{
-		StartEntryID: 0,
-		BatchSize:    10,
+		StartEntryID:    0,
+		MaxBatchEntries: 10,
 	}
 
 	// TODO mock no error exists when read data blocks

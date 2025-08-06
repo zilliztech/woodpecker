@@ -851,7 +851,11 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 // new append operations are rejected with ErrSegmentHandleSegmentRolling
 func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -1255,7 +1259,11 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 // TestSegmentHandle_Rolling_ConcurrentAppends tests rolling behavior with concurrent append attempts
 func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1359,7 +1367,7 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 	// Should still be writable until ForceCompleteAndClose is called
 	writable, err = segmentHandle.IsWritable(context.Background())
 	assert.NoError(t, err)
-	assert.True(t, writable)
+	assert.False(t, writable) // because empty segmentHandle is force closing when SetRollingReady
 
 	// Force complete and close
 	err = segmentHandle.ForceCompleteAndClose(context.Background())

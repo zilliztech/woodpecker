@@ -197,11 +197,11 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *SegmentEntry, re
 	return bufferedSeqNo, nil
 }
 
-func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*BatchData, error) {
+func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*BatchData, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "ReadBatchEntries")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize))
+	logger.Ctx(ctx).Debug("segment processor read batch entries", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries))
 	reader, err := s.getOrCreateSegmentReader(ctx)
 	if err != nil {
 		return nil, err
@@ -223,9 +223,9 @@ func (s *segmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId 
 
 	// read batch entries
 	batch, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-		StartEntryID: fromEntryId,
-		EndEntryID:   0, // means no stop point
-		BatchSize:    maxSize,
+		StartEntryID:    fromEntryId,
+		EndEntryID:      0, // means no stop point, currently not use
+		MaxBatchEntries: maxEntries,
 	}, lastBlockInfo)
 	if err != nil {
 		if werr.ErrEntryNotFound.Is(err) {
