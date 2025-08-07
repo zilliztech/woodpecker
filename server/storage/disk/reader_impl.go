@@ -899,6 +899,7 @@ func (r *LocalFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "Close")
 	defer sp.End()
+	logger.Ctx(ctx).Info("Closing segment reader", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -914,7 +915,7 @@ func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 		}
 		r.file = nil
 	}
-
+	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }
 

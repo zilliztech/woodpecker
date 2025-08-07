@@ -334,9 +334,12 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			s.logId,
 			s.segId,
 			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+		if err != nil {
+			return nil, err
+		}
 		logger.Ctx(ctx).Info("created segment local reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", localReader)))
 		s.currentSegmentReader = localReader
-		return localReader, err
+		return localReader, nil
 	} else {
 		minioReader, getReaderErr := objectstorage.NewMinioFileReaderAdv(
 			ctx,
@@ -562,7 +565,7 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 
 	// close reader
 	if s.currentSegmentReader != nil {
-		logger.Ctx(ctx).Info("Closing segment writer",
+		logger.Ctx(ctx).Info("Closing segment reader",
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segId))
 

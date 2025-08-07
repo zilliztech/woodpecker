@@ -457,6 +457,7 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "Close")
 	defer sp.End()
+	logger.Ctx(ctx).Info("Closing segment reader", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId))
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -469,6 +470,7 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if f.pool != nil {
 		f.pool.Release()
 	}
+	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId))
 	return nil
 }
 
