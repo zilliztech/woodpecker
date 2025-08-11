@@ -570,8 +570,14 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 		status = "error"
 	}
 
+	closeLogHandleErr := l.logHandle.Close(ctx)
+	if closeLogHandleErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+		status = "error"
+	}
+
 	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, releaseLockErr, closeLogHandleErr)
 }
 
 // GetWriterSessionForTest For Test only

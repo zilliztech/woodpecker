@@ -526,13 +526,13 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 			status = "success"
 		}
 	}
-	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
-	if releaseLockErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+	closeLogHandleErr := l.logHandle.Close(ctx)
+	if closeLogHandleErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 		status = "error"
 	}
 
 	logger.Ctx(ctx).Info("log writer closed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, closeLogHandleErr)
 }

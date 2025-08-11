@@ -93,7 +93,6 @@ type woodpeckerEmbedClient struct {
 
 	Metadata   meta.MetadataProvider
 	clientPool client.LogStoreClientPool
-	logHandles map[string]log.LogHandle
 
 	managedCli bool
 	etcdCli    *clientv3.Client
@@ -145,7 +144,6 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		cfg:        cfg,
 		Metadata:   meta.NewMetadataProvider(ctx, etcdCli),
 		clientPool: clientPool,
-		logHandles: make(map[string]log.LogHandle),
 		managedCli: managed,
 		etcdCli:    etcdCli,
 		minioCli:   minioCli,
@@ -186,15 +184,7 @@ func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) e
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	// early return if cache exists
-	if _, exists := c.logHandles[logName]; exists {
-		metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("create log failed, log already exists", zap.String("logName", logName))
-		return werr.ErrLogHandleLogAlreadyExists
-	}
-
-	// otherwise try create new log
+	// try create new log
 	// Add retry logic for CreateLog when encountering ErrCreateLogMetadataTxn
 	const maxRetries = 5
 	var lastErr error
@@ -246,12 +236,6 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	// early return if cache exists
-	if logHandle, exists := c.logHandles[logName]; exists {
-		metrics.WpClientOperationsTotal.WithLabelValues("open_log", "cache_hit").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("open_log", "cache_hit").Observe(float64(time.Since(start).Milliseconds()))
-		return logHandle, nil
-	}
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
 	if err != nil {
@@ -261,7 +245,6 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 		return nil, err
 	}
 	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
-	c.logHandles[logName] = newLogHandle
 	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
@@ -283,12 +266,6 @@ func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return false, werr.ErrWoodpeckerClientClosed
-	}
-	// early return if cache exists
-	if _, exists := c.logHandles[logName]; exists {
-		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", "cache_hit").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("log_exists", "cache_hit").Observe(float64(time.Since(start).Milliseconds()))
-		return true, nil
 	}
 	// Check if log exists in meta
 	exists, err := c.Metadata.CheckExists(ctx, logName)
@@ -353,11 +330,6 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 	if !c.closeState.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Info("client already closed, skip")
 		return werr.ErrWoodpeckerClientClosed
-	}
-
-	// close all logHandle
-	for _, logHandle := range c.logHandles {
-		logHandle.Close(ctx)
 	}
 
 	// Decrement active connections metric
