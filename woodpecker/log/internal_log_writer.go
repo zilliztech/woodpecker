@@ -117,7 +117,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -199,7 +199,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessa
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}

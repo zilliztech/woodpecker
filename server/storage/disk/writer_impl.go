@@ -84,6 +84,7 @@ type LocalFileWriter struct {
 	firstEntryID  atomic.Int64 // The first entryId written to disk
 	lastEntryID   atomic.Int64 // The last entryId written to disk
 	headerWritten atomic.Bool  // Ensures header is written before data
+	finalizeMu    sync.Mutex   // Ensures that the finalize operation is done in a single thread
 	finalized     atomic.Bool
 	fenced        atomic.Bool
 	recovered     atomic.Bool
@@ -695,6 +696,12 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		zap.Int64("entryId", entryId),
 		zap.Int("dataLen", len(data)))
 
+	// Validate that data is not empty
+	if len(data) == 0 {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, data cannot be empty", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrEmptyPayload
+	}
+
 	if w.closed.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
 		return entryId, werr.ErrFileWriterAlreadyClosed
@@ -703,6 +710,12 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
 		return entryId, werr.ErrFileWriterFinalized
+	}
+
+	if w.fenced.Load() {
+		// quick fail and return a fenced Err
+		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrSegmentFenced
 	}
 
 	if !w.storageWritable.Load() {
@@ -832,7 +845,10 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	defer sp.End()
 	startTime := time.Now()
 
-	if !w.finalized.CompareAndSwap(false, true) {
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
+
+	if w.finalized.Load() {
 		// if already finalized, return fast
 		return w.lastEntryID.Load(), nil
 	}
