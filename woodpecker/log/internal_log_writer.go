@@ -88,7 +88,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 	return w
 }
 
-func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Write")
 	defer sp.End()
 	start := time.Now()
@@ -152,7 +152,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *
 	return result
 }
 
-func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
 	defer sp.End()
 	start := time.Now()

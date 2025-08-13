@@ -57,7 +57,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	assert.NoError(t, err, "Failed to open log writer")
 
 	// 1. Normal write should succeed
-	msg := &log.WriterMessage{
+	msg := &log.WriteMessage{
 		Payload: []byte("test message 1"),
 	}
 	result := writer.Write(context.Background(), msg)
@@ -76,7 +76,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 2. After session expiry, write should fail
-	msg = &log.WriterMessage{
+	msg = &log.WriteMessage{
 		Payload: []byte("test message 2 - should fail"),
 	}
 	result = writer.Write(context.Background(), msg)
@@ -93,7 +93,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	defer newWriter.Close(context.Background())
 
 	// 5. Writing with the new writer should succeed
-	msg = &log.WriterMessage{
+	msg = &log.WriteMessage{
 		Payload: []byte("test message 3 - new writer"),
 	}
 	result = newWriter.Write(context.Background(), msg)
@@ -144,7 +144,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	assert.NoError(t, err, "Failed to open log writer")
 
 	// 1. Normal write should succeed
-	msg := &log.WriterMessage{
+	msg := &log.WriteMessage{
 		Payload: []byte("test message 1"),
 	}
 	result := writer.Write(context.Background(), msg)
@@ -166,7 +166,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 2. After session expiry, write should fail
-	msg = &log.WriterMessage{
+	msg = &log.WriteMessage{
 		Payload: []byte("test message 2 - should fail"),
 	}
 	result = writer.Write(context.Background(), msg)
@@ -183,7 +183,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	defer newWriter.Close(context.Background())
 
 	// 5. Writing with the new writer should succeed
-	msg = &log.WriterMessage{
+	msg = &log.WriteMessage{
 		Payload: []byte("test message 3 - new writer"),
 	}
 	result = newWriter.Write(context.Background(), msg)

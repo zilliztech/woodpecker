@@ -43,11 +43,11 @@ const (
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	Write(ctx context.Context, msg *WriterMessage) *WriteResult
+	Write(ctx context.Context, msg *WriteMessage) *WriteResult
 
 	// WriteAsync writes a log message asynchronously and returns a channel that will receive a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult
+	WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult
 
 	// Close closes the log writer.
 	// It takes a context and returns an error if any occurs.
@@ -128,7 +128,7 @@ func (l *logWriterImpl) monitorSession() {
 	}
 }
 
-func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+func (l *logWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Write")
 	defer sp.End()
 	start := time.Now()
@@ -192,7 +192,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	return result
 }
 
-func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
 	defer sp.End()
 	start := time.Now()

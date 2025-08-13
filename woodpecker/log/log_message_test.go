@@ -36,7 +36,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("ValidPayloadOnly", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("test data"),
 			Properties: nil,
 		}
@@ -45,7 +45,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("ValidPropertiesOnly", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{"key": "value"},
 		}
@@ -54,7 +54,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("ValidPayloadAndProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("test data"),
 			Properties: map[string]string{"key": "value"},
 		}
@@ -63,7 +63,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("EmptyPayloadWithProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{"key": "value"},
 		}
@@ -72,7 +72,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("PayloadWithEmptyProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("test data"),
 			Properties: map[string]string{},
 		}
@@ -81,7 +81,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("BothNilPayloadAndProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    nil,
 			Properties: nil,
 		}
@@ -92,7 +92,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("BothEmptyPayloadAndProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{},
 		}
@@ -103,7 +103,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("NilPayloadWithEmptyProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{},
 		}
@@ -114,7 +114,7 @@ func TestValidateMsg(t *testing.T) {
 	})
 
 	t.Run("EmptyPayloadWithNilProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte{},
 			Properties: nil,
 		}
@@ -127,7 +127,7 @@ func TestValidateMsg(t *testing.T) {
 
 func TestMarshalMessage(t *testing.T) {
 	t.Run("ValidPayload", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("valid test data"),
 			Properties: map[string]string{"key": "value"},
 		}
@@ -152,7 +152,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("BothEmptyPayloadAndProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{},
 		}
@@ -164,7 +164,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("BothNilPayloadAndProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    nil,
 			Properties: nil,
 		}
@@ -176,7 +176,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("SingleBytePayload", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("a"),
 			Properties: map[string]string{"key": "value"},
 		}
@@ -199,7 +199,7 @@ func TestMarshalMessage(t *testing.T) {
 			largeData[i] = byte(i % 256)
 		}
 
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    largeData,
 			Properties: map[string]string{"size": "1MB"},
 		}
@@ -216,7 +216,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("OnlyPayload", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("test data without properties"),
 			Properties: nil,
 		}
@@ -234,7 +234,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("OnlyProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{"key": "value"},
 		}
@@ -252,7 +252,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("EmptyPayloadWithProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{"key": "value"},
 		}
@@ -275,7 +275,7 @@ func TestMarshalMessage(t *testing.T) {
 	})
 
 	t.Run("PayloadWithEmptyProperties", func(t *testing.T) {
-		msg := &WriterMessage{
+		msg := &WriteMessage{
 			Payload:    []byte("test data with empty properties"),
 			Properties: map[string]string{},
 		}
@@ -300,7 +300,7 @@ func TestMarshalMessage(t *testing.T) {
 
 func TestUnmarshalMessage(t *testing.T) {
 	t.Run("ValidData", func(t *testing.T) {
-		originalMsg := &WriterMessage{
+		originalMsg := &WriteMessage{
 			Payload:    []byte("test unmarshal data"),
 			Properties: map[string]string{"test": "unmarshal"},
 		}
@@ -345,25 +345,25 @@ func TestUnmarshalMessage(t *testing.T) {
 func BenchmarkMarshalMessage(b *testing.B) {
 	testCases := []struct {
 		name string
-		msg  *WriterMessage
+		msg  *WriteMessage
 	}{
 		{
 			"Small",
-			&WriterMessage{
+			&WriteMessage{
 				Payload:    []byte("small test data"),
 				Properties: map[string]string{"key": "value"},
 			},
 		},
 		{
 			"Medium",
-			&WriterMessage{
+			&WriteMessage{
 				Payload:    make([]byte, 1024), // 1KB
 				Properties: map[string]string{"size": "1KB"},
 			},
 		},
 		{
 			"Large",
-			&WriterMessage{
+			&WriteMessage{
 				Payload:    make([]byte, 64*1024), // 64KB
 				Properties: map[string]string{"size": "64KB"},
 			},
@@ -385,7 +385,7 @@ func BenchmarkMarshalMessage(b *testing.B) {
 
 func BenchmarkUnmarshalMessage(b *testing.B) {
 	// Prepare test data
-	msg := &WriterMessage{
+	msg := &WriteMessage{
 		Payload:    []byte("benchmark test data for unmarshaling"),
 		Properties: map[string]string{"benchmark": "unmarshal"},
 	}

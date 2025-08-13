@@ -81,7 +81,7 @@ func TestE2EWrite(t *testing.T) {
 			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 			assert.NoError(t, openWriterErr)
 			writeResultChan := logWriter.WriteAsync(context.Background(),
-				&log.WriterMessage{
+				&log.WriteMessage{
 					Payload: []byte("hello world 1"),
 				},
 			)
@@ -314,12 +314,12 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			// ### Write
 			successCount := 0
 			writingResultChan := make([]<-chan *log.WriteResult, 0) // 10M*1k=10GB
-			writingMessages := make([]*log.WriterMessage, 0)
-			failMessages := make([]*log.WriterMessage, 0)
+			writingMessages := make([]*log.WriteMessage, 0)
+			failMessages := make([]*log.WriteMessage, 0)
 			startTime := time.Now()
 			for i := 0; i < writeCount; i++ {
 				// append async
-				msg := &log.WriterMessage{
+				msg := &log.WriteMessage{
 					Payload: payloadStaticData,
 					Properties: map[string]string{
 						"key": fmt.Sprintf("value%d", i),
@@ -348,13 +348,13 @@ func TestAsyncWriteThroughput(t *testing.T) {
 					t.Logf("finish wait for %d entries. success:%d , failed: %d, i: %d \n", len(writingMessages), successCount, len(failMessages), i)
 					time.Sleep(1 * time.Second) // wait a moment to avoid too much retry
 					writingResultChan = make([]<-chan *log.WriteResult, 0)
-					writingMessages = make([]*log.WriterMessage, 0)
+					writingMessages = make([]*log.WriteMessage, 0)
 					for _, m := range failMessages {
 						retryCh := logWriter.WriteAsync(context.Background(), m)
 						writingResultChan = append(writingResultChan, retryCh)
 						writingMessages = append(writingMessages, m)
 					}
-					failMessages = make([]*log.WriterMessage, 0)
+					failMessages = make([]*log.WriteMessage, 0)
 				}
 			}
 
@@ -375,13 +375,13 @@ func TestAsyncWriteThroughput(t *testing.T) {
 						break
 					}
 					writingResultChan = make([]<-chan *log.WriteResult, 0)
-					writingMessages = make([]*log.WriterMessage, 0)
+					writingMessages = make([]*log.WriteMessage, 0)
 					for _, m := range failMessages {
 						retryCh := logWriter.WriteAsync(context.Background(), m)
 						writingResultChan = append(writingResultChan, retryCh)
 						writingMessages = append(writingMessages, m)
 					}
-					failMessages = make([]*log.WriterMessage, 0)
+					failMessages = make([]*log.WriteMessage, 0)
 					for idx, ch := range writingResultChan {
 						writeResult := <-ch
 						if writeResult.Err != nil {
@@ -508,7 +508,7 @@ func TestWriteThroughput(t *testing.T) {
 						<-semaphore
 					}()
 
-					msg := &log.WriterMessage{
+					msg := &log.WriteMessage{
 						Payload: payloadStaticData,
 						Properties: map[string]string{
 							"key": fmt.Sprintf("value%d", index),
@@ -1061,7 +1061,7 @@ func TestSequentialWriteAndReadPerformance(t *testing.T) {
 			writeStartTime := time.Now()
 
 			for i := 0; i < writeCount; i++ {
-				msg := &log.WriterMessage{
+				msg := &log.WriteMessage{
 					Payload: payloadStaticData,
 					Properties: map[string]string{
 						"sequence": fmt.Sprintf("%d", i),

@@ -69,7 +69,7 @@ func (_c *LogWriter_Close_Call) RunAndReturn(run func(context.Context) error) *L
 }
 
 // Write provides a mock function with given fields: ctx, msg
-func (_m *LogWriter) Write(ctx context.Context, msg *log.WriterMessage) *log.WriteResult {
+func (_m *LogWriter) Write(ctx context.Context, msg *log.WriteMessage) *log.WriteResult {
 	ret := _m.Called(ctx, msg)
 
 	if len(ret) == 0 {
@@ -77,7 +77,7 @@ func (_m *LogWriter) Write(ctx context.Context, msg *log.WriterMessage) *log.Wri
 	}
 
 	var r0 *log.WriteResult
-	if rf, ok := ret.Get(0).(func(context.Context, *log.WriterMessage) *log.WriteResult); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *log.WriteMessage) *log.WriteResult); ok {
 		r0 = rf(ctx, msg)
 	} else {
 		if ret.Get(0) != nil {
@@ -95,14 +95,14 @@ type LogWriter_Write_Call struct {
 
 // Write is a helper method to define mock.On call
 //   - ctx context.Context
-//   - msg *log.WriterMessage
+//   - msg *log.WriteMessage
 func (_e *LogWriter_Expecter) Write(ctx interface{}, msg interface{}) *LogWriter_Write_Call {
 	return &LogWriter_Write_Call{Call: _e.mock.On("Write", ctx, msg)}
 }
 
-func (_c *LogWriter_Write_Call) Run(run func(ctx context.Context, msg *log.WriterMessage)) *LogWriter_Write_Call {
+func (_c *LogWriter_Write_Call) Run(run func(ctx context.Context, msg *log.WriteMessage)) *LogWriter_Write_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*log.WriterMessage))
+		run(args[0].(context.Context), args[1].(*log.WriteMessage))
 	})
 	return _c
 }
@@ -112,13 +112,13 @@ func (_c *LogWriter_Write_Call) Return(_a0 *log.WriteResult) *LogWriter_Write_Ca
 	return _c
 }
 
-func (_c *LogWriter_Write_Call) RunAndReturn(run func(context.Context, *log.WriterMessage) *log.WriteResult) *LogWriter_Write_Call {
+func (_c *LogWriter_Write_Call) RunAndReturn(run func(context.Context, *log.WriteMessage) *log.WriteResult) *LogWriter_Write_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // WriteAsync provides a mock function with given fields: ctx, msg
-func (_m *LogWriter) WriteAsync(ctx context.Context, msg *log.WriterMessage) <-chan *log.WriteResult {
+func (_m *LogWriter) WriteAsync(ctx context.Context, msg *log.WriteMessage) <-chan *log.WriteResult {
 	ret := _m.Called(ctx, msg)
 
 	if len(ret) == 0 {
@@ -126,7 +126,7 @@ func (_m *LogWriter) WriteAsync(ctx context.Context, msg *log.WriterMessage) <-c
 	}
 
 	var r0 <-chan *log.WriteResult
-	if rf, ok := ret.Get(0).(func(context.Context, *log.WriterMessage) <-chan *log.WriteResult); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *log.WriteMessage) <-chan *log.WriteResult); ok {
 		r0 = rf(ctx, msg)
 	} else {
 		if ret.Get(0) != nil {
@@ -144,14 +144,14 @@ type LogWriter_WriteAsync_Call struct {
 
 // WriteAsync is a helper method to define mock.On call
 //   - ctx context.Context
-//   - msg *log.WriterMessage
+//   - msg *log.WriteMessage
 func (_e *LogWriter_Expecter) WriteAsync(ctx interface{}, msg interface{}) *LogWriter_WriteAsync_Call {
 	return &LogWriter_WriteAsync_Call{Call: _e.mock.On("WriteAsync", ctx, msg)}
 }
 
-func (_c *LogWriter_WriteAsync_Call) Run(run func(ctx context.Context, msg *log.WriterMessage)) *LogWriter_WriteAsync_Call {
+func (_c *LogWriter_WriteAsync_Call) Run(run func(ctx context.Context, msg *log.WriteMessage)) *LogWriter_WriteAsync_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*log.WriterMessage))
+		run(args[0].(context.Context), args[1].(*log.WriteMessage))
 	})
 	return _c
 }
@@ -161,7 +161,7 @@ func (_c *LogWriter_WriteAsync_Call) Return(_a0 <-chan *log.WriteResult) *LogWri
 	return _c
 }
 
-func (_c *LogWriter_WriteAsync_Call) RunAndReturn(run func(context.Context, *log.WriterMessage) <-chan *log.WriteResult) *LogWriter_WriteAsync_Call {
+func (_c *LogWriter_WriteAsync_Call) RunAndReturn(run func(context.Context, *log.WriteMessage) <-chan *log.WriteResult) *LogWriter_WriteAsync_Call {
 	_c.Call.Return(run)
 	return _c
 }

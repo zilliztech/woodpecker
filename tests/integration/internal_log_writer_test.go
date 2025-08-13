@@ -81,7 +81,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			w1, err := lh.OpenInternalLogWriter(ctx)
 			assert.NoError(t, err)
 
-			res := w1.Write(ctx, &log.WriterMessage{Payload: []byte("m1")})
+			res := w1.Write(ctx, &log.WriteMessage{Payload: []byte("m1")})
 			assert.NoError(t, res.Err)
 			first := res.LogMessageId
 			assert.NotNil(t, first)
@@ -92,7 +92,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
-			res2 := w2.Write(ctx, &log.WriterMessage{Payload: []byte("m2")})
+			res2 := w2.Write(ctx, &log.WriteMessage{Payload: []byte("m2")})
 			assert.NoError(t, res2.Err)
 			assert.NotNil(t, res2.LogMessageId)
 
@@ -161,7 +161,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 
 			w1, err := lh.OpenInternalLogWriter(ctx)
 			assert.NoError(t, err)
-			res := w1.Write(ctx, &log.WriterMessage{Payload: []byte("a1")})
+			res := w1.Write(ctx, &log.WriteMessage{Payload: []byte("a1")})
 			assert.NoError(t, res.Err)
 
 			lh2, err := client.OpenLog(ctx, logName)
@@ -171,13 +171,13 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
-			resOld1 := w1.Write(ctx, &log.WriterMessage{Payload: []byte("a2-should-fail")})
+			resOld1 := w1.Write(ctx, &log.WriteMessage{Payload: []byte("a2-should-fail")})
 			assert.Error(t, resOld1.Err)
-			resOld2 := w1.Write(ctx, &log.WriterMessage{Payload: []byte("a3-should-fail-fast")})
+			resOld2 := w1.Write(ctx, &log.WriteMessage{Payload: []byte("a3-should-fail-fast")})
 			assert.Error(t, resOld2.Err)
 			assert.True(t, werr.ErrLogWriterLockLost.Is(resOld2.Err) || werr.ErrSegmentFenced.Is(resOld2.Err) || werr.ErrStorageNotWritable.Is(resOld2.Err))
 
-			resNew := w2.Write(ctx, &log.WriterMessage{Payload: []byte("b1")})
+			resNew := w2.Write(ctx, &log.WriteMessage{Payload: []byte("b1")})
 			assert.NoError(t, resNew.Err)
 
 			assert.NoError(t, w1.Close(ctx))
@@ -250,7 +250,7 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 			defer w.Close(ctx)
 
 			for i := 0; i < 3; i++ {
-				r := w.Write(ctx, &log.WriterMessage{Payload: []byte("x")})
+				r := w.Write(ctx, &log.WriteMessage{Payload: []byte("x")})
 				assert.NoError(t, r.Err)
 			}
 
@@ -262,9 +262,9 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, last1, last2)
 
-			res := w.Write(ctx, &log.WriterMessage{Payload: []byte("after-finalize")})
+			res := w.Write(ctx, &log.WriteMessage{Payload: []byte("after-finalize")})
 			assert.Error(t, res.Err)
-			res2 := w.Write(ctx, &log.WriterMessage{Payload: []byte("after-finalize-2")})
+			res2 := w.Write(ctx, &log.WriteMessage{Payload: []byte("after-finalize-2")})
 			assert.Error(t, res2.Err)
 		})
 	}
@@ -320,7 +320,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {
-				r := w1.Write(ctx, &log.WriterMessage{Payload: []byte("p")})
+				r := w1.Write(ctx, &log.WriteMessage{Payload: []byte("p")})
 				assert.NoError(t, r.Err)
 			}
 
@@ -412,7 +412,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {
-				r := w1.Write(ctx, &log.WriterMessage{Payload: []byte("q")})
+				r := w1.Write(ctx, &log.WriteMessage{Payload: []byte("q")})
 				assert.NoError(t, r.Err)
 			}
 
@@ -494,9 +494,9 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 			w, err := lh.OpenInternalLogWriter(ctx)
 			assert.NoError(t, err)
 
-			r := w.Write(ctx, &log.WriterMessage{Payload: []byte("y1")})
+			r := w.Write(ctx, &log.WriteMessage{Payload: []byte("y1")})
 			assert.NoError(t, r.Err)
-			r2 := w.Write(ctx, &log.WriterMessage{Payload: []byte("y2")})
+			r2 := w.Write(ctx, &log.WriteMessage{Payload: []byte("y2")})
 			assert.NoError(t, r2.Err)
 
 			seg, err := lh.GetOrCreateWritableSegmentHandle(ctx, func(context.Context, string) {})
@@ -573,7 +573,7 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {
-				r := w.Write(ctx, &log.WriterMessage{Payload: []byte("z")})
+				r := w.Write(ctx, &log.WriteMessage{Payload: []byte("z")})
 				assert.NoError(t, r.Err)
 			}
 

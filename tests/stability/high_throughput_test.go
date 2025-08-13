@@ -206,7 +206,7 @@ func TestSimpleHighThroughputWriteAndRead(t *testing.T) {
 						// Write messages
 						for i := 0; i < messagesPerThread; i++ {
 							data := generateSimpleTestData(messageSize, fmt.Sprintf("W%dM%d", wID, i))
-							message := &log.WriterMessage{
+							message := &log.WriteMessage{
 								Payload: data,
 								Properties: map[string]string{
 									"thread_id": fmt.Sprintf("%d", wID),
@@ -514,7 +514,7 @@ func TestHighThroughputWriteAndReadWithTruncate(t *testing.T) {
 						// Write messages
 						for i := 0; i < messagesPerThread; i++ {
 							data := generateSimpleTestData(messageSize, fmt.Sprintf("W%dM%d", wID, i))
-							message := &log.WriterMessage{
+							message := &log.WriteMessage{
 								Payload: data,
 								Properties: map[string]string{
 									"thread_id": fmt.Sprintf("%d", wID),

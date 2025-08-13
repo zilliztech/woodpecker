@@ -945,7 +945,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 		// This test requires creating a LogWriter, which needs more setup
 		// For now, we'll test the MarshalMessage function directly
 
-		emptyMsg := &log.WriterMessage{
+		emptyMsg := &log.WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{"test": "value"},
 		}
@@ -956,7 +956,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test nil payload validation
 	t.Run("NilPayloadAtClientLevel", func(t *testing.T) {
-		nilMsg := &log.WriterMessage{
+		nilMsg := &log.WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{"test": "value"},
 		}
@@ -967,7 +967,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test both empty err
 	t.Run("BothEmptyMsg", func(t *testing.T) {
-		nilMsg := &log.WriterMessage{
+		nilMsg := &log.WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{},
 		}
@@ -981,7 +981,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test valid payload for comparison
 	t.Run("ValidPayload", func(t *testing.T) {
-		validMsg := &log.WriterMessage{
+		validMsg := &log.WriteMessage{
 			Payload:    []byte("valid data"),
 			Properties: map[string]string{"test": "value"},
 		}
