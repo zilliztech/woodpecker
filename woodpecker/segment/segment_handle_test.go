@@ -19,12 +19,12 @@ package segment
 import (
 	"container/list"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -301,6 +301,213 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	assert.Equal(t, 2, successAttempts) // 0,1
 	assert.Equal(t, 3, failedAttempts)  // 2,3,4
 	assert.Equal(t, []int64{0, 1}, syncedIds)
+}
+
+// TestAppendAsync_TimeoutBug tests the specific bug where when resultChan.ReadResult times out,
+// the callback receives nil error instead of the actual timeout error.
+// This test is based on TestMultiAppendAsync_PartialSuccess pattern:
+// - Entries 0,1 succeed normally
+// - Entry 2 times out by not sending any data to result channel
+// - The bug causes the callback to receive nil error instead of timeout error
+func TestAppendAsync_TimeoutBug(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
+
+	// Mock for successful entries (0,1) and timeout entry (2)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+
+	// Entry 0,1 will succeed with AppendEntry and get result
+	for i := 0; i < 2; i++ {
+		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
+			SegId:   1,
+			EntryId: int64(i),
+			Values:  []byte(fmt.Sprintf("test_%d", i)),
+		}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
+	}
+
+	// Entry 2 will succeed with AppendEntry but we won't send result to channel (timeout simulation)
+	// This will cause multiple retries due to timeout - expect initial attempt + 2 retries = 3 total
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
+		SegId:   1,
+		EntryId: int64(2),
+		Values:  []byte("test_2"),
+	}, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(2), nil).Times(1)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2, // Allow 2 retries before giving up
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	// Track callback results
+	callbackResults := make(map[int64]error)
+	callbackCounts := make(map[int64]int)
+	var mu sync.Mutex
+
+	// Create append operations
+	for i := 0; i < 3; i++ {
+		callback := func(segmentId int64, entryId int64, err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			callbackResults[entryId] = err
+			callbackCounts[entryId]++
+			t.Logf("Callback for entry %d called (count: %d) with error: %v", entryId, callbackCounts[entryId], err)
+		}
+		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
+	}
+
+	// Get the segment handle implementation to access operations
+	segImpl := segmentHandle.(*segmentHandleImpl)
+
+	// Process the operations
+	go func() {
+		maxAttempts := 100
+		attempts := 0
+		processedSuccessfully := make(map[int64]bool)
+
+		for attempts < maxAttempts {
+			time.Sleep(20 * time.Millisecond)
+			attempts++
+
+			segImpl.Lock()
+			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+				appendOp := e.Value.(*AppendOp)
+				entryId := appendOp.entryId
+
+				if len(appendOp.resultChannels) > 0 {
+					if entryId < 2 && !processedSuccessfully[entryId] {
+						// Send success result for entries 0,1
+						t.Logf("Sending success result for entry %d", entryId)
+						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+							SyncedId: entryId,
+							Err:      nil,
+						})
+						_ = appendOp.resultChannels[0].Close(context.Background())
+						processedSuccessfully[entryId] = true
+					}
+					// For entry 2: DO NOT send any result - this simulates timeout
+					// The receivedAckCallback will timeout when calling resultChan.ReadResult(subCtx)
+					// This will trigger the bug in append_op.go lines 172-173
+				}
+			}
+			segImpl.Unlock()
+
+			// Check if we've processed entries 0,1 and entry 2 has started timing out
+			if processedSuccessfully[0] && processedSuccessfully[1] {
+				break
+			}
+		}
+	}()
+
+	// Wait for operations to complete and timeouts to occur
+	t.Logf("=== WAITING FOR TIMEOUT BUG TO MANIFEST ===")
+	t.Logf("Entries 0,1 should succeed normally")
+	t.Logf("Entry 2 will timeout because we don't send result to its channel")
+	t.Logf("Due to bug in lines 172-173, entry 2's callback will receive nil error instead of timeout error")
+
+	// First, wait for all append operations to be initiated
+	time.Sleep(1 * time.Second)
+
+	// Check if all three operations have been initiated
+	segImpl.Lock()
+	queueSize := segImpl.appendOpsQueue.Len()
+	var entry2Op *AppendOp
+	for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		appendOp := e.Value.(*AppendOp)
+		if appendOp.entryId == 2 {
+			entry2Op = appendOp
+			break
+		}
+	}
+	segImpl.Unlock()
+
+	t.Logf("Queue size: %d, Entry 2 operation found: %v", queueSize, entry2Op != nil)
+
+	if entry2Op != nil {
+		t.Logf("Entry 2 operation exists, waiting longer for timeout...")
+		// Since the real timeout is 30 seconds, we need to wait longer or trigger it manually
+		// For now, let's wait a bit longer and then check the state
+		time.Sleep(2 * time.Second)
+
+		// Force check if entry 2 has any result channels that we can examine
+		if len(entry2Op.resultChannels) > 0 {
+			t.Logf("Entry 2 has %d result channels", len(entry2Op.resultChannels))
+		} else {
+			t.Logf("Entry 2 has no result channels yet")
+		}
+	}
+
+	// Wait long enough for the complete timeout and retry cycle:
+	// 1. Entries 0,1 to complete successfully (immediate)
+	// 2. Entry 2 first attempt: 30s timeout
+	// 3. Entry 2 retry 1: 30s timeout
+	// 4. Entry 2 retry 2: 30s timeout
+	// 5. Final FastFail callback with bug (nil error)
+	// Total: ~90 seconds for 3 attempts, we wait 2 minutes to be safe
+	t.Logf("Waiting 2 minutes for complete timeout and retry cycle...")
+	t.Logf("This will demonstrate the real-world timeout behavior")
+	time.Sleep(2 * time.Minute)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Verify results
+	t.Logf("=== RESULTS VERIFICATION ===")
+	for entryId := int64(0); entryId < 3; entryId++ {
+		err := callbackResults[entryId]
+		count := callbackCounts[entryId]
+		t.Logf("Entry %d: callback called %d times, final error: %v", entryId, count, err)
+	}
+
+	// Entries 0,1 should succeed
+	assert.NoError(t, callbackResults[0], "Entry 0 should succeed")
+	assert.NoError(t, callbackResults[1], "Entry 1 should succeed")
+
+	// Entry 2 should demonstrate the FIXED behavior (bug has been fixed)
+	if callbackResults[2] != nil {
+		t.Logf("=== FIX CONFIRMED ===")
+		t.Logf("Entry 2 callback received correct timeout error: %v", callbackResults[2])
+		t.Logf("This confirms the bug has been fixed!")
+		t.Logf("The fix in append_op.go lines 175-176 is working correctly:")
+		t.Logf("- AppendEntry succeeded (err = nil)")
+		t.Logf("- resultChan.ReadResult(subCtx) timed out (readChanErr = timeout)")
+		t.Logf("- Fixed code correctly uses 'readChanErr' instead of 'err'")
+
+		// Verify the fix works correctly
+		assert.NotNil(t, callbackResults[2], "FIX VERIFIED: Entry 2 correctly receives timeout error")
+		assert.True(t, errors.Is(callbackResults[2], context.DeadlineExceeded), "FIX VERIFIED: Error is context deadline exceeded")
+	} else {
+		t.Logf("=== UNEXPECTED: Entry 2 callback received nil error ===")
+		t.Logf("This suggests the bug still exists or test setup issue")
+		t.Fail()
+	}
+
+	t.Logf("=== TEST CONCLUSION ===")
+	t.Logf("This test demonstrates the timeout scenario and verifies the fix:")
+	t.Logf("1. AppendEntry succeeds for entry 2")
+	t.Logf("2. Result channel never receives data (simulating timeout)")
+	t.Logf("3. receivedAckCallback times out in ReadResult")
+	t.Logf("4. FIXED: Callback correctly receives timeout error instead of nil")
+	t.Logf("5. The fix in append_op.go lines 175-176 works as expected!")
 }
 
 func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {

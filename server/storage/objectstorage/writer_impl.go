@@ -1273,6 +1273,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.String("footerBlockKey", footerBlockKey),
 		zap.Int("blockIndexesCount", len(f.blockIndexes)),
+		zap.Int64("lastEntryID", f.lastEntryID.Load()),
 		zap.Int64("lastBlockID", f.lastBlockID.Load()))
 
 	footerBlockRawData, footer := serializeFooterAndIndexes(ctx, f.blockIndexes)
