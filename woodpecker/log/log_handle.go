@@ -366,7 +366,7 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 
 	// If we had errors fencing segments, return a combined error
 	if len(fenceErrors) > 0 {
-		logger.Ctx(ctx).Error("encountered errors while fencing active segments",
+		logger.Ctx(ctx).Warn("encountered errors while fencing active segments",
 			zap.String("logName", l.Name),
 			zap.Int64("logId", l.Id),
 			zap.Int("totalActiveSegments", len(activeSegmentIds)),
@@ -891,14 +891,14 @@ func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) er
 func (l *logHandleImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
 	defer sp.End()
-	l.Lock()
-	defer l.Unlock()
-
 	// Stop background cleanup first
 	l.stopBackgroundCleanup()
 
 	// Cancel the context to signal shutdown
 	l.cancel()
+
+	l.Lock()
+	defer l.Unlock()
 
 	var lastError error
 	// close all segment handles
