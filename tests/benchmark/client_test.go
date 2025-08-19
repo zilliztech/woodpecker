@@ -24,13 +24,116 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
+
+// WriterManager handles concurrent access to log writer and automatic reopening on lock lost
+type WriterManager struct {
+	logName       string
+	client        woodpecker.Client
+	logHandle     log.LogHandle
+	currentWriter log.LogWriter
+
+	mu          sync.Mutex // Mutex for writer reopening
+	reopenCount atomic.Int64
+}
+
+// NewWriterManager creates a new writer manager with initial writer
+func NewWriterManager(logName string, client woodpecker.Client, logHandle log.LogHandle, initialWriter log.LogWriter) *WriterManager {
+	return &WriterManager{
+		logName:       logName,
+		client:        client,
+		logHandle:     logHandle,
+		currentWriter: initialWriter,
+	}
+}
+
+// GetCurrentWriter returns the current writer in a thread-safe manner
+func (wm *WriterManager) GetCurrentWriter() log.LogWriter {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	return wm.currentWriter
+}
+
+// TriggerReopen triggers a writer reopen if the current writer matches the failed writer
+// This should be called when ErrLogWriterLockLost is encountered
+func (wm *WriterManager) TriggerReopen(failedWriter log.LogWriter, index int64) log.LogWriter {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	// Check if the failed writer is still the current writer
+	if failedWriter != wm.currentWriter {
+		// Another goroutine already reopened the writer
+		logger.Ctx(context.TODO()).Info("writer already reopened by another goroutine", zap.Int64("idx", index), zap.String("inst", fmt.Sprintf("%p", wm.currentWriter)))
+		return wm.currentWriter
+	}
+
+	// Close the old writer
+	if wm.currentWriter != nil {
+		logger.Ctx(context.TODO()).Info("closing current writer", zap.Int64("idx", index), zap.String("inst", fmt.Sprintf("%p", wm.currentWriter)))
+		closeErr := wm.currentWriter.Close(context.Background())
+		if closeErr != nil {
+			logger.Ctx(context.TODO()).Warn("close log writer failed", zap.Int64("idx", index), zap.String("inst", fmt.Sprintf("%p", wm.currentWriter)), zap.Error(closeErr))
+		}
+		logger.Ctx(context.TODO()).Info("closed current writer", zap.Int64("idx", index), zap.String("inst", fmt.Sprintf("%p", wm.currentWriter)))
+	}
+
+	// Infinite retry loop to reopen writer
+	for {
+		// 1. open logHandle
+		newLogHandle, err := wm.client.OpenLog(context.TODO(), wm.logName)
+		if err != nil {
+			time.Sleep(1000 * time.Millisecond)
+			logger.Ctx(context.TODO()).Info("open log fail and wait 1s", zap.Int64("idx", index), zap.Error(err))
+			continue
+		}
+
+		// 2. open new writer
+		//newWriter, err := wm.logHandle.OpenLogWriter(context.Background())
+		newWriter, err := newLogHandle.OpenInternalLogWriter(context.Background())
+		if err != nil {
+			// Log error and retry after a brief pause
+			time.Sleep(1000 * time.Millisecond)
+			logger.Ctx(context.TODO()).Info("open writer fail and wait 1s", zap.Int64("idx", index), zap.Error(err))
+			newLogHandle.Close(context.TODO())
+			continue
+		}
+
+		// Successfully opened new writer
+		wm.currentWriter = newWriter
+		wm.logHandle = newLogHandle
+		wm.reopenCount.Add(1)
+		break
+	}
+
+	logger.Ctx(context.TODO()).Info("open success, return new writer", zap.Int64("idx", index), zap.String("inst", fmt.Sprintf("%p", wm.currentWriter)))
+	return wm.currentWriter
+}
+
+// GetReopenCount returns the number of times the writer has been reopened
+func (wm *WriterManager) GetReopenCount() int64 {
+	return wm.reopenCount.Load()
+}
+
+// Close closes the current writer
+func (wm *WriterManager) Close() error {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	if wm.currentWriter != nil {
+		return wm.currentWriter.Close(context.Background())
+	}
+	return nil
+}
 
 func TestE2EWrite(t *testing.T) {
 	utils.StartGopsAgent()
@@ -471,11 +574,14 @@ func TestWriteThroughput(t *testing.T) {
 			}
 
 			//	### OpenWriter
-			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			//logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			logWriter, openWriterErr := logHandle.OpenInternalLogWriter(context.Background())
 			if openWriterErr != nil {
 				t.Logf("Open writer failed, err:%v\n", openWriterErr)
 				panic(openWriterErr)
 			}
+			// ### Create WriterManager for handling ErrLogWriterLockLost
+			writerMgr := NewWriterManager(logName, client, logHandle, logWriter)
 
 			// gen static data
 			payloadStaticData, err := utils.GenerateRandomBytes(entrySize)
@@ -517,14 +623,23 @@ func TestWriteThroughput(t *testing.T) {
 
 					// Retry loop until this message is successfully written
 					for {
+						// Always get the current writer (thread-safe)
+						currentWriter := writerMgr.GetCurrentWriter()
+
 						totalAttempts.Add(1)
 						writeStart := time.Now()
-						resultChan := logWriter.WriteAsync(context.Background(), msg)
-						writeResult := <-resultChan
+						writeResult := currentWriter.Write(context.Background(), msg)
 
 						if writeResult.Err != nil {
 							failCount.Add(1)
-							t.Logf("Write failed for index %d, retrying: %v\n", index, writeResult.Err)
+							t.Logf("Write failed for index %d, retrying: %v", index, writeResult.Err)
+
+							// If it's a lock lost error, trigger reopen
+							if werr.ErrLogWriterLockLost.Is(writeResult.Err) {
+								newWriter := writerMgr.TriggerReopen(currentWriter, int64(index))
+								t.Logf("Writer reopened for index %d, new writer: %p", index, newWriter)
+							}
+
 							time.Sleep(100 * time.Millisecond) // Brief pause before retry
 							continue
 						} else {
@@ -535,7 +650,7 @@ func TestWriteThroughput(t *testing.T) {
 
 							// Log progress every 100 successful writes
 							if currentSuccess%100 == 0 {
-								t.Logf("Completed %d/%d successful writes", currentSuccess, writeCount)
+								t.Logf("Completed %d/%d successful writes, current index: %d", currentSuccess, writeCount, index)
 							}
 							break
 						}
@@ -551,6 +666,7 @@ func TestWriteThroughput(t *testing.T) {
 			elapsed := time.Since(startTime)
 			finalSuccess := successCount.Load()
 			finalFail := failCount.Load()
+			reopenCount := writerMgr.GetReopenCount()
 			totalAttemptsMade := totalAttempts.Load()
 			throughput := float64(finalSuccess) / elapsed.Seconds()
 			totalBytes := finalSuccess * int64(entrySize)
@@ -562,13 +678,14 @@ func TestWriteThroughput(t *testing.T) {
 			t.Logf("Actual successful writes: %d\n", finalSuccess)
 			t.Logf("Total write attempts: %d\n", totalAttemptsMade)
 			t.Logf("Failed attempts: %d\n", finalFail)
+			t.Logf("Writer reopen count: %d\n", reopenCount)
 			t.Logf("Success rate: %.2f%% (successful/attempts)\n", float64(finalSuccess)/float64(totalAttemptsMade)*100)
 			t.Logf("Throughput: %.2f ops/sec\n", throughput)
 			t.Logf("Data throughput: %.2f MB/sec\n", throughputMB)
 
 			// ### close and print result
 			t.Logf("Closing log writer...\n")
-			closeErr := logWriter.Close(context.Background())
+			closeErr := writerMgr.Close()
 			if closeErr != nil {
 				t.Logf("close failed, err:%v\n", closeErr)
 				panic(closeErr)
@@ -710,8 +827,8 @@ func TestReadThroughput(t *testing.T) {
 					lastDataReadSuccessTime = time.Now()
 
 					if totalEntries.Load()%100 == 0 {
-						t.Logf("Read %d entries, %d bytes, current msg(seg:%d,entry:%d)\n",
-							totalEntries.Load(), totalBytes.Load(), msg.Id.SegmentId, msg.Id.EntryId)
+						t.Logf("Read %d entries, %d bytes, current msg(seg:%d,entry:%d, properties:%v)\n",
+							totalEntries.Load(), totalBytes.Load(), msg.Id.SegmentId, msg.Id.EntryId, msg.Properties)
 					}
 				}
 			}

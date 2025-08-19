@@ -919,7 +919,6 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	sp.AddEvent("wait syncMu lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	if !f.storageWritable.Load() {
-		logger.Ctx(ctx).Info("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
 		return f.quickSyncFailUnsafe(ctx, werr.ErrStorageNotWritable)
 	}
 
@@ -1095,6 +1094,10 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			flushErr := retry.Do(ctx,
 				func() error {
 					_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize)
+					if putErr != nil && werr.ErrObjectAlreadyExists.Is(putErr) {
+						// idempotent flush success
+						return nil
+					}
 					return putErr
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
@@ -1282,7 +1285,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.Int("footerBlockRawData", len(footerBlockRawData)))
 
 	_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, footerBlockKey, bytes.NewReader(footerBlockRawData), int64(len(footerBlockRawData)))
-	if putErr != nil {
+	if putErr != nil && !werr.ErrObjectAlreadyExists.Is(putErr) { // if ErrObjectAlreadyExists, means idempotent finalize success
 		logger.Ctx(ctx).Warn("failed to put finalization object",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("footerBlockKey", footerBlockKey),
