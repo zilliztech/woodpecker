@@ -33,7 +33,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -144,7 +143,7 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	}
 
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.logId, op.toSegmentEntry(), op.resultChannels[serverIndex])
+	entryId, err := cli.AppendEntry(ctx, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
 	sp.AddEvent("AppendEntryCall", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
@@ -170,8 +169,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
 			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
-			op.err = err
-			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
+			op.err = readChanErr
+			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, readChanErr)
 			return
 		}
 		// chan already close, just return
@@ -273,10 +272,10 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 	logger.Ctx(ctx).Debug(fmt.Sprintf("FastSuccess completed for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
 }
 
-func (op *AppendOp) toSegmentEntry() *processor.SegmentEntry {
-	return &processor.SegmentEntry{
-		SegmentId: op.segmentId,
-		EntryId:   op.entryId,
-		Data:      op.value,
+func (op *AppendOp) toLogEntry() *proto.LogEntry {
+	return &proto.LogEntry{
+		SegId:   op.segmentId,
+		EntryId: op.entryId,
+		Values:  op.value,
 	}
 }

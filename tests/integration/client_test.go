@@ -221,7 +221,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 
 				// Write 5 messages
 				for j := 0; j < 5; j++ {
-					message := &log.WriterMessage{
+					message := &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("Cycle %d, message %d", i+1, j)),
 						Properties: map[string]string{
 							"cycle": fmt.Sprintf("%d", i+1),
@@ -405,7 +405,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 
 				// Write 20 messages
 				for j := 0; j < 20; j++ {
-					message := &log.WriterMessage{
+					message := &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("Cycle %d, data message %d", cycle+1, j)),
 						Properties: map[string]string{
 							"cycle": fmt.Sprintf("%d", cycle+1),
@@ -612,7 +612,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Write some data with the first client
-				message := &log.WriterMessage{
+				message := &log.WriteMessage{
 					Payload:    []byte("First client message"),
 					Properties: map[string]string{"client": "first"},
 				}
@@ -654,7 +654,7 @@ func TestClientRecreation(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Write some data with the second client
-				message := &log.WriterMessage{
+				message := &log.WriteMessage{
 					Payload:    []byte("Second client message"),
 					Properties: map[string]string{"client": "second"},
 				}
@@ -781,7 +781,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Write some data with the first client
-				message := &log.WriterMessage{
+				message := &log.WriteMessage{
 					Payload:    []byte("First client message"),
 					Properties: map[string]string{"client": "first"},
 				}
@@ -830,7 +830,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				assert.NoError(t, err)
 
 				// Write some data with the second client
-				message := &log.WriterMessage{
+				message := &log.WriteMessage{
 					Payload:    []byte("Second client message"),
 					Properties: map[string]string{"client": "second"},
 				}
@@ -961,7 +961,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 
 				// Write 5 messages
 				for j := 0; j < 5; j++ {
-					message := &log.WriterMessage{
+					message := &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("Cycle %d, message %d", i+1, j)),
 						Properties: map[string]string{
 							"cycle":       fmt.Sprintf("%d", i+1),
@@ -1208,7 +1208,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 					// Write messages
 					for i := 0; i < messageCount; i++ {
 						msgIdx := i
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
@@ -1562,7 +1562,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 					// Write messages
 					for i := 0; i < messageCount; i++ {
 						msgIdx := i
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
@@ -1919,7 +1919,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 					for i := 0; i < messageCount; i++ {
 						msgIdx := i
 						messageContent := fmt.Sprintf("Cycle %d - Message %d", cycle+1, msgIdx)
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(messageContent),
 							Properties: map[string]string{
 								"cycle": fmt.Sprintf("%d", cycle+1),
@@ -2403,7 +2403,7 @@ func TestConcurrentReaderWriterWithHangingBehavior(t *testing.T) {
 			// Phase 5: Write 10 messages, one per second
 			t.Log("Phase 5: Writing 10 messages, one per second")
 			for i := 0; i < 10; i++ {
-				message := &log.WriterMessage{
+				message := &log.WriteMessage{
 					Payload: []byte(fmt.Sprintf("Message %d", i+1)),
 					Properties: map[string]string{
 						"index": fmt.Sprintf("%d", i+1),
@@ -2463,7 +2463,7 @@ func TestConcurrentReaderWriterWithHangingBehavior(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotNil(t, newWriter)
 
-			finalMessage := &log.WriterMessage{
+			finalMessage := &log.WriteMessage{
 				Payload: []byte("Final Message"),
 				Properties: map[string]string{
 					"index": "11",

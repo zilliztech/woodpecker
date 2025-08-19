@@ -46,18 +46,18 @@ const (
 type LogStore interface {
 	Start() error
 	Stop() error
-	SetAddress(string)
+	SetAddress(address string)
 	GetAddress() string
-	SetEtcdClient(*clientv3.Client)
-	Register(context.Context) error
-	AddEntry(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)
-	GetBatchEntriesAdv(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)
-	FenceSegment(context.Context, int64, int64) (int64, error)
-	CompleteSegment(context.Context, int64, int64) (int64, error)
-	CompactSegment(context.Context, int64, int64) (*proto.SegmentMetadata, error)
-	GetSegmentLastAddConfirmed(context.Context, int64, int64) (int64, error)
-	GetSegmentBlockCount(context.Context, int64, int64) (int64, error)
-	CleanSegment(context.Context, int64, int64, int) error
+	SetEtcdClient(etcdCli *clientv3.Client)
+	Register(ctx context.Context) error
+	AddEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
+	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	GetSegmentBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -184,24 +184,24 @@ func (l *logStore) Register(ctx context.Context) error {
 	return nil
 }
 
-func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
 
-	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegmentId)
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, entry.SegId)
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "error_get_processor").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
 		return -1, err
 	}
 	entryId, err := segmentProcessor.AddEntry(ctx, entry, syncedResultCh)
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegmentId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
+		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
 		return -1, err
 	}
 
@@ -255,7 +255,7 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 	return nil
 }
 
-func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
+func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
 	defer sp.End()
 	start := time.Now()
@@ -265,15 +265,15 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentI
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize), zap.Error(err))
+		logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		return nil, err
 	}
-	batchData, err := segmentProcessor.ReadBatchEntriesAdv(ctx, fromEntryId, maxSize, lastReadState)
+	batchData, err := segmentProcessor.ReadBatchEntriesAdv(ctx, fromEntryId, maxEntries, lastReadState)
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error").Observe(float64(time.Since(start).Milliseconds()))
 		if !werr.ErrEntryNotFound.Is(err) {
-			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxSize", maxSize), zap.Error(err))
+			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		}
 		return nil, err
 	}

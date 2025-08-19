@@ -88,7 +88,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 	return w
 }
 
-func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Write")
 	defer sp.End()
 	start := time.Now()
@@ -117,7 +117,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -152,7 +152,7 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriterMessage) *
 	return result
 }
 
-func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
 	defer sp.End()
 	start := time.Now()
@@ -199,7 +199,7 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessa
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -526,13 +526,13 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 			status = "success"
 		}
 	}
-	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
-	if releaseLockErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+	closeLogHandleErr := l.logHandle.Close(ctx)
+	if closeLogHandleErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 		status = "error"
 	}
 
 	logger.Ctx(ctx).Info("log writer closed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, closeLogHandleErr)
 }

@@ -33,7 +33,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -46,47 +45,47 @@ type SegmentHandle interface {
 	// GetLogName to which the segment belongs
 	GetLogName() string
 	// GetId of the segment
-	GetId(context.Context) int64
+	GetId(ctx context.Context) int64
 	// AppendAsync data to the segment asynchronously
-	AppendAsync(context.Context, []byte, func(int64, int64, error))
+	AppendAsync(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error))
 	// ReadBatchAdv num of entries from the segment
-	ReadBatchAdv(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)
+	ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// GetLastAddConfirmed entryId for the segment
-	GetLastAddConfirmed(context.Context) (int64, error)
+	GetLastAddConfirmed(ctx context.Context) (int64, error)
 	// GetLastAddPushed entryId for the segment
-	GetLastAddPushed(context.Context) (int64, error)
+	GetLastAddPushed(ctx context.Context) (int64, error)
 	// GetMetadata of the segment
-	GetMetadata(context.Context) *meta.SegmentMeta
+	GetMetadata(ctx context.Context) *meta.SegmentMeta
 	// RefreshAndGetMetadata of the segment
-	RefreshAndGetMetadata(context.Context) error
+	RefreshAndGetMetadata(ctx context.Context) error
 	// GetQuorumInfo of the segment if it's a active segment
-	GetQuorumInfo(context.Context) (*proto.QuorumInfo, error)
+	GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error)
 	// IsWritable check if the segment is writable
-	IsWritable(context.Context) (bool, error)
+	IsWritable(ctx context.Context) (bool, error)
 	// ForceCompleteAndClose the segment
 	ForceCompleteAndClose(ctx context.Context) error
 	// SendAppendSuccessCallbacks called when an appendOp operation is successful
-	SendAppendSuccessCallbacks(context.Context, int64)
+	SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64)
 	// SendAppendErrorCallbacks called when an appendOp operation fails
-	SendAppendErrorCallbacks(context.Context, int64, error)
+	SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error)
 	// GetSize get the size of the segment
-	GetSize(context.Context) int64
+	GetSize(ctx context.Context) int64
 	// GetBlocksCount get the number of blocks in the segment
-	GetBlocksCount(context.Context) int64
+	GetBlocksCount(ctx context.Context) int64
 	// Complete the segment writing
-	Complete(context.Context) (int64, error)
+	Complete(ctx context.Context) (int64, error)
 	// Fence the segment in all nodes
-	Fence(context.Context) (int64, error)
+	Fence(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
-	Compact(context.Context) error
+	Compact(ctx context.Context) error
 	// SetRollingReady set the segment as ready for rolling
-	SetRollingReady(context.Context)
+	SetRollingReady(ctx context.Context)
 	// IsForceRollingReady check if the segment is ready for rolling
-	IsForceRollingReady(context.Context) bool
+	IsForceRollingReady(ctx context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
 	GetLastAccessTime() int64
 	// SetWriterInvalidationNotifier set the expired trigger
-	SetWriterInvalidationNotifier(context.Context, func(ctx context.Context, reason string))
+	SetWriterInvalidationNotifier(ctx context.Context, f func(ctx context.Context, reason string))
 }
 
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
@@ -420,11 +419,11 @@ func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, trigge
 	}
 }
 
-func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
+func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "ReadBatch")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize))
+	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries))
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -441,11 +440,11 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxSiz
 		return nil, err
 	}
 
-	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxSize, lastReadState)
+	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, lastReadState)
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxSize", maxSize), zap.Int("count", len(batchResult.Entries)))
+	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries), zap.Int("count", len(batchResult.Entries)))
 	return batchResult, nil
 }
 

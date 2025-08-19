@@ -115,7 +115,7 @@ func TestWriteAndConcurrentTailRead(t *testing.T) {
 
 					// Write messages in this cycle
 					for i := 0; i < messagesPerCycle; i++ {
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Writer-Cycle-%d-Message-%d", cycle+1, i)),
 							Properties: map[string]string{
 								"cycle":       fmt.Sprintf("%d", cycle+1),
@@ -344,7 +344,7 @@ func TestWriteAndConcurrentCatchupRead(t *testing.T) {
 
 					// Write 20 messages in this cycle
 					for i := 0; i < messagesPerCycle; i++ {
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Writer-Cycle-%d-Message-%d", cycle, i)),
 							Properties: map[string]string{
 								"cycle":   fmt.Sprintf("%d", cycle),
@@ -626,7 +626,7 @@ func TestWriteAndConcurrentTailReadWithTruncate(t *testing.T) {
 
 					// Write messages in this cycle
 					for i := 0; i < messagesPerCycle; i++ {
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Writer-Cycle-%d-Message-%d", cycle+1, i)),
 							Properties: map[string]string{
 								"cycle":       fmt.Sprintf("%d", cycle+1),
@@ -965,7 +965,7 @@ func TestWriteAndConcurrentCatchupReadWithTruncate(t *testing.T) {
 
 					// Write messages in this cycle
 					for i := 0; i < messagesPerCycle; i++ {
-						message := &log.WriterMessage{
+						message := &log.WriteMessage{
 							Payload: []byte(fmt.Sprintf("Writer-Cycle-%d-Message-%d", cycle+1, i)),
 							Properties: map[string]string{
 								"cycle":       fmt.Sprintf("%d", cycle+1),

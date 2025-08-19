@@ -97,7 +97,7 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 			resultChan := make([]<-chan *log.WriteResult, 1000)
 			for i := 0; i < 1000; i++ {
 				writeResultChan := logWriter.WriteAsync(context.Background(),
-					&log.WriterMessage{
+					&log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("hello world %d", i)),
 						Properties: map[string]string{
 							"key": fmt.Sprintf("value%d", i),
@@ -293,7 +293,7 @@ func testWrite(t *testing.T, client woodpecker.Client, logName string, count int
 	resultChan := make([]<-chan *log.WriteResult, count)
 	for i := 0; i < count; i++ {
 		writeResultChan := logWriter.WriteAsync(context.Background(),
-			&log.WriterMessage{
+			&log.WriteMessage{
 				Payload: []byte(fmt.Sprintf("hello world %d", i)),
 				Properties: map[string]string{
 					"key": fmt.Sprintf("value%d", i),
@@ -441,7 +441,7 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 		wg.Add(1)
 		go func(no int) {
 			writeResult := logWriter.Write(context.Background(),
-				&log.WriterMessage{
+				&log.WriteMessage{
 					Payload:    []byte(fmt.Sprintf("hello world %d", i)),
 					Properties: map[string]string{"key": fmt.Sprintf("value%d", i)},
 				},
@@ -600,7 +600,7 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 				// Write a batch of messages
 				for i := 0; i < batchSize; i++ {
 					idx := batch*batchSize + i
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("message %d", idx)),
 						Properties: map[string]string{
 							"k1": fmt.Sprintf("%d", batch),
@@ -716,7 +716,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 				// Write a batch of messages
 				for i := 0; i < batchSize; i++ {
 					idx := batch*batchSize + i
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("message %d", idx)),
 						Properties: map[string]string{
 							"k1": fmt.Sprintf("%d", batch),
@@ -824,7 +824,7 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 					time.Sleep(time.Duration(idx*30) * time.Millisecond)
 
 					// Synchronous write
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("concurrent message %d", idx)),
 						Properties: map[string]string{
 							"index": fmt.Sprintf("%d", idx),
@@ -1034,7 +1034,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 
 					// Synchronous write
 					t.Logf("Write %d entry start", idx)
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("client close test message %d", idx)),
 						Properties: map[string]string{
 							"index": fmt.Sprintf("%d", idx),
@@ -1123,8 +1123,9 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 
 				// Try to read one more message - should time out or error
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_, err = logReader.ReadNext(ctx)
+				msgMore, err := logReader.ReadNext(ctx)
 				assert.Error(t, err, "Expected error or timeout when trying to read more than written")
+				assert.Nil(t, msgMore, fmt.Sprintf("%v", msgMore))
 				cancel()
 
 				// Verify that all successfully written messages were read back
@@ -1251,7 +1252,7 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 					time.Sleep(time.Duration(idx*30) * time.Millisecond)
 
 					// Synchronous write
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload: []byte(fmt.Sprintf("client close test message %d", idx)),
 						Properties: map[string]string{
 							"index": fmt.Sprintf("%d", idx),

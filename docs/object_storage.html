@@ -520,7 +520,7 @@ if err != nil {
 
 // Write data asynchronously
 resultChan := logWriter.WriteAsync(context.Background(),
-    &log.WriterMessage{
+    &log.WriteMessage{
         Payload: []byte("Hello, Woodpecker!"),
         Properties: map[string]string{
             "key": "value",

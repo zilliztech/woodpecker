@@ -74,13 +74,13 @@ type LogMessage struct {
 	Properties map[string]string // Properties attach application defined properties on the message
 }
 
-// WriterMessage abstraction used in LogWriter
-type WriterMessage struct {
+// WriteMessage abstraction used in LogWriter
+type WriteMessage struct {
 	Payload    []byte
 	Properties map[string]string
 }
 
-func MarshalMessage(m *WriterMessage) ([]byte, error) {
+func MarshalMessage(m *WriteMessage) ([]byte, error) {
 	if invalidErr := ValidateMsg(m); invalidErr != nil {
 		return nil, invalidErr
 	}
@@ -109,7 +109,7 @@ func UnmarshalMessage(data []byte) (*LogMessage, error) {
 	return m, nil
 }
 
-func ValidateMsg(msg *WriterMessage) error {
+func ValidateMsg(msg *WriteMessage) error {
 	if msg == nil {
 		return werr.ErrInvalidMessage.WithCauseErrMsg("message is nil")
 	}

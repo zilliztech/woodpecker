@@ -28,7 +28,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/processor"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
@@ -36,17 +35,17 @@ const (
 	ReaderScopeName            = "LogReader"
 	UpdateReaderInfoIntervalMs = 30000
 	NoDataReadWaitIntervalMs   = 200
-	DefaultBatchLimit          = 200
+	DefaultBatchEntriesLimit   = 200
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle
 type LogReader interface {
 	// ReadNext reads the next log message from the log, blocking until a message
 	// is available. It returns the log message and an error if any occurs.
-	ReadNext(context.Context) (*LogMessage, error)
+	ReadNext(ctx context.Context) (*LogMessage, error)
 	// Close closes the log reader.
 	// It returns an error if any occurs during the closing process.
-	Close(context.Context) error
+	Close(ctx context.Context) error
 	// GetName returns the name of this reader.
 	GetName() string
 }
@@ -65,7 +64,7 @@ type logBatchReaderImpl struct {
 	pendingReadSegmentId int64
 	pendingReadEntryId   int64
 	currentSegmentHandle segment.SegmentHandle
-	batch                *processor.BatchData
+	batch                *proto.BatchReadResult
 	next                 int
 	lastRead             int64
 }
@@ -115,7 +114,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// get if cache fragment exists
 		if l.batch != nil && l.next < len(l.batch.Entries) {
 			readEntryData := l.batch.Entries[l.next]
-			logMsg, err := l.unmarshalAndCreateLogMessage(ctx, readEntryData.Data, readEntryData.SegmentId, readEntryData.EntryId)
+			logMsg, err := l.unmarshalAndCreateLogMessage(ctx, readEntryData.Values, readEntryData.SegId, readEntryData.EntryId)
 			if err != nil {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 				// clear cache to avoid re-processing corrupted data
@@ -123,11 +122,11 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				l.next = 0
 				return nil, err
 			}
-			logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Int64("actualReadSegmentId", readEntryData.SegmentId), zap.Int64("actualReadEntryId", readEntryData.EntryId), zap.Int("cacheBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next))
+			logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Int64("actualReadSegmentId", readEntryData.SegId), zap.Int64("actualReadEntryId", readEntryData.EntryId), zap.Int("cacheBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next))
 			l.pendingReadEntryId += 1
 			l.next += 1
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
-			metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(readEntryData.Data)))
+			metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
 		}
@@ -157,10 +156,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// assert segHandle != nil, and read the next batch
 		// read next batch
 		var lastReadState *proto.LastReadState
-		if l.batch != nil && l.batch.ReadState != nil && l.batch.ReadState.SegmentId == segId {
-			lastReadState = l.batch.ReadState
+		if l.batch != nil && l.batch.LastReadState != nil && l.batch.LastReadState.SegmentId == segId {
+			lastReadState = l.batch.LastReadState
 		}
-		batchResult, err := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchLimit, lastReadState)
+		batchResult, err := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
 		if err != nil {
 			// Check if it's end of file error - this is the only reliable way to know segment is finished
 			if werr.ErrFileReaderEndOfFile.Is(err) {
@@ -193,7 +192,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		l.next = 0
 		// get one entry
 		oneEntry := l.batch.Entries[l.next]
-		logMsg, err := l.unmarshalAndCreateLogMessage(ctx, oneEntry.Data, segId, entryId)
+		logMsg, err := l.unmarshalAndCreateLogMessage(ctx, oneEntry.Values, segId, entryId)
 		if err != nil {
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			// clear cache to avoid re-processing corrupted data
@@ -201,16 +200,16 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.next = 0
 			return nil, err
 		}
-		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("actualReadSegmentId", segId), zap.Int64("actualReadEntryId", entryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.ReadState))
+		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("actualReadSegmentId", segId), zap.Int64("actualReadEntryId", entryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.LastReadState))
 		// move cursor
 		l.currentSegmentHandle = segHandle
-		l.pendingReadSegmentId = oneEntry.SegmentId
+		l.pendingReadSegmentId = oneEntry.SegId
 		l.pendingReadEntryId = oneEntry.EntryId + 1
 		l.next += 1
 		l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 
 		// update metrics
-		metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(oneEntry.Data)))
+		metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(oneEntry.Values)))
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
 	}

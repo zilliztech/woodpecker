@@ -9,8 +9,6 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 
-	processor "github.com/zilliztech/woodpecker/server/processor"
-
 	proto "github.com/zilliztech/woodpecker/proto"
 )
 
@@ -28,7 +26,7 @@ func (_m *LogStoreClient) EXPECT() *LogStoreClient_Expecter {
 }
 
 // AppendEntry provides a mock function with given fields: ctx, logId, entry, syncedResultCh
-func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	ret := _m.Called(ctx, logId, entry, syncedResultCh)
 
 	if len(ret) == 0 {
@@ -37,16 +35,16 @@ func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *p
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)); ok {
 		return rf(ctx, logId, entry, syncedResultCh)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) int64); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) int64); ok {
 		r0 = rf(ctx, logId, entry, syncedResultCh)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) error); ok {
 		r1 = rf(ctx, logId, entry, syncedResultCh)
 	} else {
 		r1 = ret.Error(1)
@@ -63,15 +61,15 @@ type LogStoreClient_AppendEntry_Call struct {
 // AppendEntry is a helper method to define mock.On call
 //   - ctx context.Context
 //   - logId int64
-//   - entry *processor.SegmentEntry
+//   - entry *proto.LogEntry
 //   - syncedResultCh channel.ResultChannel
 func (_e *LogStoreClient_Expecter) AppendEntry(ctx interface{}, logId interface{}, entry interface{}, syncedResultCh interface{}) *LogStoreClient_AppendEntry_Call {
 	return &LogStoreClient_AppendEntry_Call{Call: _e.mock.On("AppendEntry", ctx, logId, entry, syncedResultCh)}
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(*processor.SegmentEntry), args[3].(channel.ResultChannel))
+		run(args[0].(context.Context), args[1].(int64), args[2].(*proto.LogEntry), args[3].(channel.ResultChannel))
 	})
 	return _c
 }
@@ -81,7 +79,7 @@ func (_c *LogStoreClient_AppendEntry_Call) Return(_a0 int64, _a1 error) *LogStor
 	return _c
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, int64, *processor.SegmentEntry, channel.ResultChannel) (int64, error)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -318,29 +316,29 @@ func (_c *LogStoreClient_GetLastAddConfirmed_Call) RunAndReturn(run func(context
 	return _c
 }
 
-// ReadEntriesBatchAdv provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, maxSize, lastReadState
-func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
-	ret := _m.Called(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+// ReadEntriesBatchAdv provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState
+func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	ret := _m.Called(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadEntriesBatchAdv")
 	}
 
-	var r0 *processor.BatchData
+	var r0 *proto.BatchReadResult
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)); ok {
-		return rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)); ok {
+		return rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) *processor.BatchData); ok {
-		r0 = rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) *proto.BatchReadResult); ok {
+		r0 = rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*processor.BatchData)
+			r0 = ret.Get(0).(*proto.BatchReadResult)
 		}
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) error); ok {
-		r1 = rf(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+		r1 = rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -358,25 +356,25 @@ type LogStoreClient_ReadEntriesBatchAdv_Call struct {
 //   - logId int64
 //   - segmentId int64
 //   - fromEntryId int64
-//   - maxSize int64
+//   - maxEntries int64
 //   - lastReadState *proto.LastReadState
-func (_e *LogStoreClient_Expecter) ReadEntriesBatchAdv(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxSize interface{}, lastReadState interface{}) *LogStoreClient_ReadEntriesBatchAdv_Call {
-	return &LogStoreClient_ReadEntriesBatchAdv_Call{Call: _e.mock.On("ReadEntriesBatchAdv", ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)}
+func (_e *LogStoreClient_Expecter) ReadEntriesBatchAdv(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxEntries interface{}, lastReadState interface{}) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	return &LogStoreClient_ReadEntriesBatchAdv_Call{Call: _e.mock.On("ReadEntriesBatchAdv", ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)}
 }
 
-func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState)) *LogStoreClient_ReadEntriesBatchAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*proto.LastReadState))
 	})
 	return _c
 }
 
-func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *LogStoreClient_ReadEntriesBatchAdv_Call {
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Return(_a0 *proto.BatchReadResult, _a1 error) *LogStoreClient_ReadEntriesBatchAdv_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*processor.BatchData, error)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *LogStoreClient_ReadEntriesBatchAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }

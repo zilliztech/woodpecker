@@ -136,7 +136,7 @@ sync write
 ```
 // Sync Write
 writeResult := logWriter.Write(context.Background(),
-    &log.WriterMessage{
+    &log.WriteMessage{
         Payload: []byte("hello world"),
         Properties: map[string]string{
             "key": fmt.Sprintf("value"),
@@ -150,7 +150,7 @@ or async write
 resultChan := make([]<-chan *log.WriteResult, count)
 for i := 0; i < count; i++ {
 	writeResultChan := logWriter.WriteAsync(context.Background(),
-		&log.WriterMessage{
+		&log.WriteMessage{
 			Payload: []byte(fmt.Sprintf("hello world %d", i)),
 			Properties: map[string]string{
 				"key": fmt.Sprintf("value%d", i),

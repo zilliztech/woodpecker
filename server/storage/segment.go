@@ -23,7 +23,7 @@ import (
 
 // Segment represents a segment interface with read and write operations.
 //
-//go:generate mockery --dir=./server/storage --name=Segment --structname=Segment --output=mocks/mocks_server/mocks_storage --filename=mock_Segment.go --with-expecter=true  --outpkg=mocks_storage
+//go:generate mockery --dir=./server/storage --name=Segment --structname=Segment --output=mocks/mocks_server/mocks_storage --filename=mock_segment.go --with-expecter=true  --outpkg=mocks_storage
 type Segment interface {
 	// DeleteFileData delete the segment log file fragments.
 	DeleteFileData(ctx context.Context, flag int) (int, error)

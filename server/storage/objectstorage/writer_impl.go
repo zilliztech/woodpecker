@@ -103,7 +103,8 @@ type MinioFileWriter struct {
 	// writing state
 	fileClose     chan struct{} // Close signal
 	closed        atomic.Bool
-	recovered     atomic.Bool
+	finalizeMu    sync.Mutex // Ensures that the finalize operation is done in a single thread
+	finalized     atomic.Bool
 	fenced        atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
 	lockObjectKey string      // Segment lock object key
 }
@@ -150,7 +151,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	segmentFileWriter.storageWritable.Store(true)
 	segmentFileWriter.allUploadingTaskDone.Store(false)
 	segmentFileWriter.flushingBufferSize.Store(0)
-	segmentFileWriter.recovered.Store(false)
+	segmentFileWriter.finalized.Store(false)
 	segmentFileWriter.fenced.Store(false)
 	segmentFileWriter.headerWritten.Store(false)
 	segmentFileWriter.lastSyncTimestamp.Store(time.Now().UnixMilli())
@@ -325,7 +326,7 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 		f.lastSubmittedUploadingEntryID.Store(lastEntryID)
 	}
 
-	f.recovered.Store(true)
+	f.finalized.Store(true)
 	logger.Ctx(ctx).Info("successfully parsed footer and index records",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("indexRecordCount", len(f.blockIndexes)),
@@ -439,7 +440,6 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	if len(tempIndexRecords) == 0 {
 		logger.Ctx(ctx).Info("no existing data objects found, recover completed",
 			zap.String("segmentFileKey", f.segmentFileKey))
-		f.recovered.Store(true)
 		metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "recover_raw", "success").Inc()
 		metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil
@@ -473,7 +473,6 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		zap.Int64("lastEntryID", lastEntryID),
 		zap.Int64("lastBlockID", maxBlockID))
 
-	f.recovered.Store(true)
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "recover_raw", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
@@ -682,6 +681,12 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment writer is closed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrFileWriterAlreadyClosed
 	}
+
+	if f.finalized.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is finalized", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return entryId, werr.ErrFileWriterFinalized
+	}
+
 	if f.fenced.Load() {
 		// quick fail and return a fenced Err
 		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is fenced", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
@@ -914,7 +919,6 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	sp.AddEvent("wait syncMu lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 
 	if !f.storageWritable.Load() {
-		logger.Ctx(ctx).Info("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
 		return f.quickSyncFailUnsafe(ctx, werr.ErrStorageNotWritable)
 	}
 
@@ -1090,6 +1094,10 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			flushErr := retry.Do(ctx,
 				func() error {
 					_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize)
+					if putErr != nil && werr.ErrObjectAlreadyExists.Is(putErr) {
+						// idempotent flush success
+						return nil
+					}
 					return putErr
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
@@ -1141,6 +1149,11 @@ func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	maxWaitTime := 10 * time.Second
 	startTime := time.Now()
 
+	if f.allUploadingTaskDone.Load() {
+		// already done & closed
+		return nil
+	}
+
 	for {
 		runningTasks := f.pool.Running()
 
@@ -1177,9 +1190,6 @@ func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	// This ensures that blockIndexes are properly populated
 	logger.Ctx(ctx).Info("waiting for ack goroutine to process completed tasks", zap.String("segmentFileKey", f.segmentFileKey))
 
-	// Reset the flag before sending the termination signal
-	f.allUploadingTaskDone.Store(false)
-
 	// Send termination signal to ack goroutine
 	select {
 	case f.flushingTaskList <- &blockUploadTask{
@@ -1195,7 +1205,7 @@ func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	}
 
 	// Wait for ack goroutine to set the done flag
-	ackWaitTime := 5 * time.Second
+	ackWaitTime := 15 * time.Second
 	ackStartTime := time.Now()
 
 	for {
@@ -1235,10 +1245,16 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
-	if !f.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
-		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrFileWriterAlreadyClosed
+
+	f.finalizeMu.Lock()
+	defer f.finalizeMu.Unlock()
+
+	if f.finalized.Load() {
+		// if already finalized, return fast
+		logger.Ctx(ctx).Info("run: received finalize signal, but it already finalized,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return f.lastEntryID.Load(), nil
 	}
+
 	err := f.Sync(context.Background()) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
@@ -1260,6 +1276,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.String("footerBlockKey", footerBlockKey),
 		zap.Int("blockIndexesCount", len(f.blockIndexes)),
+		zap.Int64("lastEntryID", f.lastEntryID.Load()),
 		zap.Int64("lastBlockID", f.lastBlockID.Load()))
 
 	footerBlockRawData, footer := serializeFooterAndIndexes(ctx, f.blockIndexes)
@@ -1268,7 +1285,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.Int("footerBlockRawData", len(footerBlockRawData)))
 
 	_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, footerBlockKey, bytes.NewReader(footerBlockRawData), int64(len(footerBlockRawData)))
-	if putErr != nil {
+	if putErr != nil && !werr.ErrObjectAlreadyExists.Is(putErr) { // if ErrObjectAlreadyExists, means idempotent finalize success
 		logger.Ctx(ctx).Warn("failed to put finalization object",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.String("footerBlockKey", footerBlockKey),
@@ -1281,7 +1298,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.String("footerBlockKey", footerBlockKey))
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "finalize", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
+	f.finalized.Store(true)
 	return f.GetLastEntryId(ctx), nil
 }
 
@@ -1290,10 +1307,10 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 	defer sp.End()
 	startTime := time.Now()
 	if !f.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
-		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
-	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(context.Background()) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",

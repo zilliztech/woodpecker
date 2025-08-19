@@ -9,8 +9,6 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 
-	processor "github.com/zilliztech/woodpecker/server/processor"
-
 	proto "github.com/zilliztech/woodpecker/proto"
 )
 
@@ -27,9 +25,9 @@ func (_m *SegmentProcessor) EXPECT() *SegmentProcessor_Expecter {
 	return &SegmentProcessor_Expecter{mock: &_m.Mock}
 }
 
-// AddEntry provides a mock function with given fields: _a0, _a1, _a2
-func (_m *SegmentProcessor) AddEntry(_a0 context.Context, _a1 *processor.SegmentEntry, _a2 channel.ResultChannel) (int64, error) {
-	ret := _m.Called(_a0, _a1, _a2)
+// AddEntry provides a mock function with given fields: ctx, entry, resultCh
+func (_m *SegmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+	ret := _m.Called(ctx, entry, resultCh)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AddEntry")
@@ -37,17 +35,17 @@ func (_m *SegmentProcessor) AddEntry(_a0 context.Context, _a1 *processor.Segment
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, *processor.SegmentEntry, channel.ResultChannel) (int64, error)); ok {
-		return rf(_a0, _a1, _a2)
+	if rf, ok := ret.Get(0).(func(context.Context, *proto.LogEntry, channel.ResultChannel) (int64, error)); ok {
+		return rf(ctx, entry, resultCh)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, *processor.SegmentEntry, channel.ResultChannel) int64); ok {
-		r0 = rf(_a0, _a1, _a2)
+	if rf, ok := ret.Get(0).(func(context.Context, *proto.LogEntry, channel.ResultChannel) int64); ok {
+		r0 = rf(ctx, entry, resultCh)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, *processor.SegmentEntry, channel.ResultChannel) error); ok {
-		r1 = rf(_a0, _a1, _a2)
+	if rf, ok := ret.Get(1).(func(context.Context, *proto.LogEntry, channel.ResultChannel) error); ok {
+		r1 = rf(ctx, entry, resultCh)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -61,16 +59,16 @@ type SegmentProcessor_AddEntry_Call struct {
 }
 
 // AddEntry is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 *processor.SegmentEntry
-//   - _a2 channel.ResultChannel
-func (_e *SegmentProcessor_Expecter) AddEntry(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentProcessor_AddEntry_Call {
-	return &SegmentProcessor_AddEntry_Call{Call: _e.mock.On("AddEntry", _a0, _a1, _a2)}
+//   - ctx context.Context
+//   - entry *proto.LogEntry
+//   - resultCh channel.ResultChannel
+func (_e *SegmentProcessor_Expecter) AddEntry(ctx interface{}, entry interface{}, resultCh interface{}) *SegmentProcessor_AddEntry_Call {
+	return &SegmentProcessor_AddEntry_Call{Call: _e.mock.On("AddEntry", ctx, entry, resultCh)}
 }
 
-func (_c *SegmentProcessor_AddEntry_Call) Run(run func(_a0 context.Context, _a1 *processor.SegmentEntry, _a2 channel.ResultChannel)) *SegmentProcessor_AddEntry_Call {
+func (_c *SegmentProcessor_AddEntry_Call) Run(run func(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel)) *SegmentProcessor_AddEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*processor.SegmentEntry), args[2].(channel.ResultChannel))
+		run(args[0].(context.Context), args[1].(*proto.LogEntry), args[2].(channel.ResultChannel))
 	})
 	return _c
 }
@@ -80,7 +78,7 @@ func (_c *SegmentProcessor_AddEntry_Call) Return(_a0 int64, _a1 error) *SegmentP
 	return _c
 }
 
-func (_c *SegmentProcessor_AddEntry_Call) RunAndReturn(run func(context.Context, *processor.SegmentEntry, channel.ResultChannel) (int64, error)) *SegmentProcessor_AddEntry_Call {
+func (_c *SegmentProcessor_AddEntry_Call) RunAndReturn(run func(context.Context, *proto.LogEntry, channel.ResultChannel) (int64, error)) *SegmentProcessor_AddEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -595,29 +593,29 @@ func (_c *SegmentProcessor_GetSegmentLastAddConfirmed_Call) RunAndReturn(run fun
 	return _c
 }
 
-// ReadBatchEntriesAdv provides a mock function with given fields: _a0, _a1, _a2, _a3
-func (_m *SegmentProcessor) ReadBatchEntriesAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState) (*processor.BatchData, error) {
-	ret := _m.Called(_a0, _a1, _a2, _a3)
+// ReadBatchEntriesAdv provides a mock function with given fields: ctx, fromEntryId, maxEntries, lastReadState
+func (_m *SegmentProcessor) ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	ret := _m.Called(ctx, fromEntryId, maxEntries, lastReadState)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadBatchEntriesAdv")
 	}
 
-	var r0 *processor.BatchData
+	var r0 *proto.BatchReadResult
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)); ok {
-		return rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)); ok {
+		return rf(ctx, fromEntryId, maxEntries, lastReadState)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) *processor.BatchData); ok {
-		r0 = rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) *proto.BatchReadResult); ok {
+		r0 = rf(ctx, fromEntryId, maxEntries, lastReadState)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*processor.BatchData)
+			r0 = ret.Get(0).(*proto.BatchReadResult)
 		}
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, *proto.LastReadState) error); ok {
-		r1 = rf(_a0, _a1, _a2, _a3)
+		r1 = rf(ctx, fromEntryId, maxEntries, lastReadState)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -631,27 +629,27 @@ type SegmentProcessor_ReadBatchEntriesAdv_Call struct {
 }
 
 // ReadBatchEntriesAdv is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 int64
-//   - _a3 *proto.LastReadState
-func (_e *SegmentProcessor_Expecter) ReadBatchEntriesAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *SegmentProcessor_ReadBatchEntriesAdv_Call {
-	return &SegmentProcessor_ReadBatchEntriesAdv_Call{Call: _e.mock.On("ReadBatchEntriesAdv", _a0, _a1, _a2, _a3)}
+//   - ctx context.Context
+//   - fromEntryId int64
+//   - maxEntries int64
+//   - lastReadState *proto.LastReadState
+func (_e *SegmentProcessor_Expecter) ReadBatchEntriesAdv(ctx interface{}, fromEntryId interface{}, maxEntries interface{}, lastReadState interface{}) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+	return &SegmentProcessor_ReadBatchEntriesAdv_Call{Call: _e.mock.On("ReadBatchEntriesAdv", ctx, fromEntryId, maxEntries, lastReadState)}
 }
 
-func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Run(run func(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(*proto.LastReadState))
 	})
 	return _c
 }
 
-func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Return(_a0 *proto.BatchReadResult, _a1 error) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }

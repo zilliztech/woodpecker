@@ -892,7 +892,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	}
 
 	// Benchmark reading
-	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, 1, 1, minioHdl, nil, 16_000_000, 32)
+	reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, 1, 1, minioHdl, 16_000_000, 32)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -902,9 +902,9 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		startId := int64(i % 900) // Ensure we don't go beyond available entries
 		entries, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID: startId,
-			BatchSize:    10,
-		})
+			StartEntryID:    startId,
+			MaxBatchEntries: 10,
+		}, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -945,7 +945,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 		// This test requires creating a LogWriter, which needs more setup
 		// For now, we'll test the MarshalMessage function directly
 
-		emptyMsg := &log.WriterMessage{
+		emptyMsg := &log.WriteMessage{
 			Payload:    []byte{},
 			Properties: map[string]string{"test": "value"},
 		}
@@ -956,7 +956,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test nil payload validation
 	t.Run("NilPayloadAtClientLevel", func(t *testing.T) {
-		nilMsg := &log.WriterMessage{
+		nilMsg := &log.WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{"test": "value"},
 		}
@@ -967,7 +967,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test both empty err
 	t.Run("BothEmptyMsg", func(t *testing.T) {
-		nilMsg := &log.WriterMessage{
+		nilMsg := &log.WriteMessage{
 			Payload:    nil,
 			Properties: map[string]string{},
 		}
@@ -981,7 +981,7 @@ func TestEmptyPayloadValidation(t *testing.T) {
 
 	// Test valid payload for comparison
 	t.Run("ValidPayload", func(t *testing.T) {
-		validMsg := &log.WriterMessage{
+		validMsg := &log.WriteMessage{
 			Payload:    []byte("valid data"),
 			Properties: map[string]string{"test": "value"},
 		}

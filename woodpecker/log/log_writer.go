@@ -43,15 +43,15 @@ const (
 type LogWriter interface {
 	// Write writes a log message synchronously and returns a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	Write(context.Context, *WriterMessage) *WriteResult
+	Write(ctx context.Context, msg *WriteMessage) *WriteResult
 
 	// WriteAsync writes a log message asynchronously and returns a channel that will receive a WriteResult.
 	// It takes a context and a byte slice representing the log message.
-	WriteAsync(context.Context, *WriterMessage) <-chan *WriteResult
+	WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult
 
 	// Close closes the log writer.
 	// It takes a context and returns an error if any occurs.
-	Close(context.Context) error
+	Close(ctx context.Context) error
 }
 
 func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
@@ -90,6 +90,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 
 var _ LogWriter = (*logWriterImpl)(nil)
 
+// TODO maybe wrap internalLogWriter to reuse some logic
 type logWriterImpl struct {
 	sync.RWMutex
 	logIdStr           string // for metrics label only
@@ -127,7 +128,7 @@ func (l *logWriterImpl) monitorSession() {
 	}
 }
 
-func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteResult {
+func (l *logWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Write")
 	defer sp.End()
 	start := time.Now()
@@ -156,7 +157,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -191,7 +192,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriterMessage) *WriteRes
 	return result
 }
 
-func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-chan *WriteResult {
+func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-chan *WriteResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "WriteAsync")
 	defer sp.End()
 	start := time.Now()
@@ -238,7 +239,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriterMessage) <-ch
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err)) {
+		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -569,8 +570,14 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 		status = "error"
 	}
 
+	closeLogHandleErr := l.logHandle.Close(ctx)
+	if closeLogHandleErr != nil {
+		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+		status = "error"
+	}
+
 	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, releaseLockErr)
+	return werr.Combine(closeErr, releaseLockErr, closeLogHandleErr)
 }
 
 // GetWriterSessionForTest For Test only

@@ -86,7 +86,7 @@ func TestTruncateBasicOperation(t *testing.T) {
 			totalMsgs := 10
 			writtenIds := make([]*log.LogMessageId, totalMsgs)
 			for i := 0; i < totalMsgs; i++ {
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    []byte(fmt.Sprintf("message-%d", i)),
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -211,7 +211,7 @@ func TestWriteAndTruncateConcurrently(t *testing.T) {
 				defer close(doneWriting)
 
 				for i := 0; i < totalMessages; i++ {
-					result := logWriter.Write(context.Background(), &log.WriterMessage{
+					result := logWriter.Write(context.Background(), &log.WriteMessage{
 						Payload:    []byte(fmt.Sprintf("message-%d", i)),
 						Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 					})
@@ -425,7 +425,7 @@ func TestMultiSegmentTruncation(t *testing.T) {
 					payload[j] = byte(i % 256)
 				}
 
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    payload,
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -557,7 +557,7 @@ func TestReadBeforeTruncationPoint(t *testing.T) {
 			totalMsgs := 20 // Reduced from 100
 			writtenIds := make([]*log.LogMessageId, totalMsgs)
 			for i := 0; i < totalMsgs; i++ {
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    []byte(fmt.Sprintf("message-%d", i)),
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -734,7 +734,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 					payload[j] = byte(i % 256)
 				}
 
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    payload,
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -989,7 +989,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 					payload[j] = byte(i % 256)
 				}
 
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    payload,
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -1064,7 +1064,7 @@ func TestTruncateAndWriteWithNewSegment(t *testing.T) {
 				newPayload[j] = byte(totalMsgs % 256) // Use a different pattern
 			}
 
-			result := newLogWriter.Write(context.Background(), &log.WriterMessage{
+			result := newLogWriter.Write(context.Background(), &log.WriteMessage{
 				Payload:    newPayload,
 				Properties: map[string]string{"index": fmt.Sprintf("%d", totalMsgs)},
 			})
@@ -1184,7 +1184,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 					payload[j] = byte(i % 256)
 				}
 
-				result := logWriter.Write(context.Background(), &log.WriterMessage{
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
 					Payload:    payload,
 					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
 				})
@@ -1303,7 +1303,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 				newPayload[j] = byte(totalMsgs % 256) // Use a different pattern
 			}
 
-			result := newLogWriter.Write(context.Background(), &log.WriterMessage{
+			result := newLogWriter.Write(context.Background(), &log.WriteMessage{
 				Payload:    newPayload,
 				Properties: map[string]string{"index": fmt.Sprintf("%d", totalMsgs)},
 			})

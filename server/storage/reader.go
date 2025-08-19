@@ -21,28 +21,17 @@ import (
 	"context"
 
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 // Reader defines the interface for reading log entries from different storage backends
+//
+//go:generate mockery --dir=./server/storage --name=Reader --structname=Reader --output=mocks/mocks_server/mocks_storage --filename=mock_reader.go --with-expecter=true  --outpkg=mocks_storage
 type Reader interface {
 	// ReadNextBatchAdv returns the next batch of entries in the log according to the Reader's direction
-	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt) (*Batch, error)
-
-	// GetBlockIndexes returns all block indexes
-	GetBlockIndexes() []*codec.IndexRecord
+	ReadNextBatchAdv(ctx context.Context, opt ReaderOpt, lastReadBatchInfo *proto.LastReadState) (*proto.BatchReadResult, error)
 
 	// GetLastEntryID returns the last entry ID written
 	GetLastEntryID(ctx context.Context) (int64, error)
-
-	// GetFooter returns the footer record
-	GetFooter() *codec.FooterRecord
-
-	// GetTotalRecords returns the total number of records
-	GetTotalRecords() uint32
-
-	// GetTotalBlocks returns the total number of blocks
-	GetTotalBlocks() int32
 
 	Close(ctx context.Context) error
 }
@@ -53,23 +42,10 @@ type ReaderOpt struct {
 	StartEntryID int64
 
 	// EndEntryID is the entryID to stop reading at.
+	// Note: Reserved field, not used in batch read mode currently
 	EndEntryID int64
 
-	// BatchSize is the maxSize of entries to read in a batch.
-	BatchSize int64
-}
-
-// Batch represents a batch of entries, and its block infos using for next batch reading position hint.
-type Batch struct {
-	// last block info of this batch
-	LastBatchInfo *BatchInfo
-	// data entries
-	Entries []*proto.LogEntry
-}
-
-type BatchInfo struct {
-	// last block info of this batch
-	Version       uint16
-	Flags         uint16
-	LastBlockInfo *codec.IndexRecord // TODO only blockId, blockOffset, blockSize are need
+	// MaxBatchEntries is the maximum number of entries in a batch.
+	// Note: this is a suggestion value, not a guarantee. The actual batch size may be less or more than this value.
+	MaxBatchEntries int64
 }

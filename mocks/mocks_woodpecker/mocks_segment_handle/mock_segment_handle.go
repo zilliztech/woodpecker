@@ -8,8 +8,6 @@ import (
 	mock "github.com/stretchr/testify/mock"
 	meta "github.com/zilliztech/woodpecker/meta"
 
-	processor "github.com/zilliztech/woodpecker/server/processor"
-
 	proto "github.com/zilliztech/woodpecker/proto"
 )
 
@@ -26,9 +24,9 @@ func (_m *SegmentHandle) EXPECT() *SegmentHandle_Expecter {
 	return &SegmentHandle_Expecter{mock: &_m.Mock}
 }
 
-// AppendAsync provides a mock function with given fields: _a0, _a1, _a2
-func (_m *SegmentHandle) AppendAsync(_a0 context.Context, _a1 []byte, _a2 func(int64, int64, error)) {
-	_m.Called(_a0, _a1, _a2)
+// AppendAsync provides a mock function with given fields: ctx, bytes, callback
+func (_m *SegmentHandle) AppendAsync(ctx context.Context, bytes []byte, callback func(int64, int64, error)) {
+	_m.Called(ctx, bytes, callback)
 }
 
 // SegmentHandle_AppendAsync_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendAsync'
@@ -37,14 +35,14 @@ type SegmentHandle_AppendAsync_Call struct {
 }
 
 // AppendAsync is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 []byte
-//   - _a2 func(int64 , int64 , error)
-func (_e *SegmentHandle_Expecter) AppendAsync(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentHandle_AppendAsync_Call {
-	return &SegmentHandle_AppendAsync_Call{Call: _e.mock.On("AppendAsync", _a0, _a1, _a2)}
+//   - ctx context.Context
+//   - bytes []byte
+//   - callback func(int64 , int64 , error)
+func (_e *SegmentHandle_Expecter) AppendAsync(ctx interface{}, bytes interface{}, callback interface{}) *SegmentHandle_AppendAsync_Call {
+	return &SegmentHandle_AppendAsync_Call{Call: _e.mock.On("AppendAsync", ctx, bytes, callback)}
 }
 
-func (_c *SegmentHandle_AppendAsync_Call) Run(run func(_a0 context.Context, _a1 []byte, _a2 func(int64, int64, error))) *SegmentHandle_AppendAsync_Call {
+func (_c *SegmentHandle_AppendAsync_Call) Run(run func(ctx context.Context, bytes []byte, callback func(int64, int64, error))) *SegmentHandle_AppendAsync_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].([]byte), args[2].(func(int64, int64, error)))
 	})
@@ -61,9 +59,9 @@ func (_c *SegmentHandle_AppendAsync_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
-// Compact provides a mock function with given fields: _a0
-func (_m *SegmentHandle) Compact(_a0 context.Context) error {
-	ret := _m.Called(_a0)
+// Compact provides a mock function with given fields: ctx
+func (_m *SegmentHandle) Compact(ctx context.Context) error {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Compact")
@@ -71,7 +69,7 @@ func (_m *SegmentHandle) Compact(_a0 context.Context) error {
 
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -85,12 +83,12 @@ type SegmentHandle_Compact_Call struct {
 }
 
 // Compact is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) Compact(_a0 interface{}) *SegmentHandle_Compact_Call {
-	return &SegmentHandle_Compact_Call{Call: _e.mock.On("Compact", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) Compact(ctx interface{}) *SegmentHandle_Compact_Call {
+	return &SegmentHandle_Compact_Call{Call: _e.mock.On("Compact", ctx)}
 }
 
-func (_c *SegmentHandle_Compact_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Compact_Call {
+func (_c *SegmentHandle_Compact_Call) Run(run func(ctx context.Context)) *SegmentHandle_Compact_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -107,9 +105,9 @@ func (_c *SegmentHandle_Compact_Call) RunAndReturn(run func(context.Context) err
 	return _c
 }
 
-// Complete provides a mock function with given fields: _a0
-func (_m *SegmentHandle) Complete(_a0 context.Context) (int64, error) {
-	ret := _m.Called(_a0)
+// Complete provides a mock function with given fields: ctx
+func (_m *SegmentHandle) Complete(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Complete")
@@ -118,16 +116,16 @@ func (_m *SegmentHandle) Complete(_a0 context.Context) (int64, error) {
 	var r0 int64
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -141,12 +139,12 @@ type SegmentHandle_Complete_Call struct {
 }
 
 // Complete is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) Complete(_a0 interface{}) *SegmentHandle_Complete_Call {
-	return &SegmentHandle_Complete_Call{Call: _e.mock.On("Complete", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) Complete(ctx interface{}) *SegmentHandle_Complete_Call {
+	return &SegmentHandle_Complete_Call{Call: _e.mock.On("Complete", ctx)}
 }
 
-func (_c *SegmentHandle_Complete_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Complete_Call {
+func (_c *SegmentHandle_Complete_Call) Run(run func(ctx context.Context)) *SegmentHandle_Complete_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -163,9 +161,9 @@ func (_c *SegmentHandle_Complete_Call) RunAndReturn(run func(context.Context) (i
 	return _c
 }
 
-// Fence provides a mock function with given fields: _a0
-func (_m *SegmentHandle) Fence(_a0 context.Context) (int64, error) {
-	ret := _m.Called(_a0)
+// Fence provides a mock function with given fields: ctx
+func (_m *SegmentHandle) Fence(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Fence")
@@ -174,16 +172,16 @@ func (_m *SegmentHandle) Fence(_a0 context.Context) (int64, error) {
 	var r0 int64
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -197,12 +195,12 @@ type SegmentHandle_Fence_Call struct {
 }
 
 // Fence is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) Fence(_a0 interface{}) *SegmentHandle_Fence_Call {
-	return &SegmentHandle_Fence_Call{Call: _e.mock.On("Fence", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) Fence(ctx interface{}) *SegmentHandle_Fence_Call {
+	return &SegmentHandle_Fence_Call{Call: _e.mock.On("Fence", ctx)}
 }
 
-func (_c *SegmentHandle_Fence_Call) Run(run func(_a0 context.Context)) *SegmentHandle_Fence_Call {
+func (_c *SegmentHandle_Fence_Call) Run(run func(ctx context.Context)) *SegmentHandle_Fence_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -265,9 +263,9 @@ func (_c *SegmentHandle_ForceCompleteAndClose_Call) RunAndReturn(run func(contex
 	return _c
 }
 
-// GetBlocksCount provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetBlocksCount(_a0 context.Context) int64 {
-	ret := _m.Called(_a0)
+// GetBlocksCount provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetBlocksCount(ctx context.Context) int64 {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBlocksCount")
@@ -275,7 +273,7 @@ func (_m *SegmentHandle) GetBlocksCount(_a0 context.Context) int64 {
 
 	var r0 int64
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
@@ -289,12 +287,12 @@ type SegmentHandle_GetBlocksCount_Call struct {
 }
 
 // GetBlocksCount is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetBlocksCount(_a0 interface{}) *SegmentHandle_GetBlocksCount_Call {
-	return &SegmentHandle_GetBlocksCount_Call{Call: _e.mock.On("GetBlocksCount", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetBlocksCount(ctx interface{}) *SegmentHandle_GetBlocksCount_Call {
+	return &SegmentHandle_GetBlocksCount_Call{Call: _e.mock.On("GetBlocksCount", ctx)}
 }
 
-func (_c *SegmentHandle_GetBlocksCount_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetBlocksCount_Call {
+func (_c *SegmentHandle_GetBlocksCount_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetBlocksCount_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -311,9 +309,9 @@ func (_c *SegmentHandle_GetBlocksCount_Call) RunAndReturn(run func(context.Conte
 	return _c
 }
 
-// GetId provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetId(_a0 context.Context) int64 {
-	ret := _m.Called(_a0)
+// GetId provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetId(ctx context.Context) int64 {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetId")
@@ -321,7 +319,7 @@ func (_m *SegmentHandle) GetId(_a0 context.Context) int64 {
 
 	var r0 int64
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
@@ -335,12 +333,12 @@ type SegmentHandle_GetId_Call struct {
 }
 
 // GetId is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetId(_a0 interface{}) *SegmentHandle_GetId_Call {
-	return &SegmentHandle_GetId_Call{Call: _e.mock.On("GetId", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetId(ctx interface{}) *SegmentHandle_GetId_Call {
+	return &SegmentHandle_GetId_Call{Call: _e.mock.On("GetId", ctx)}
 }
 
-func (_c *SegmentHandle_GetId_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetId_Call {
+func (_c *SegmentHandle_GetId_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -402,9 +400,9 @@ func (_c *SegmentHandle_GetLastAccessTime_Call) RunAndReturn(run func() int64) *
 	return _c
 }
 
-// GetLastAddConfirmed provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetLastAddConfirmed(_a0 context.Context) (int64, error) {
-	ret := _m.Called(_a0)
+// GetLastAddConfirmed provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetLastAddConfirmed(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastAddConfirmed")
@@ -413,16 +411,16 @@ func (_m *SegmentHandle) GetLastAddConfirmed(_a0 context.Context) (int64, error)
 	var r0 int64
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -436,12 +434,12 @@ type SegmentHandle_GetLastAddConfirmed_Call struct {
 }
 
 // GetLastAddConfirmed is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetLastAddConfirmed(_a0 interface{}) *SegmentHandle_GetLastAddConfirmed_Call {
-	return &SegmentHandle_GetLastAddConfirmed_Call{Call: _e.mock.On("GetLastAddConfirmed", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetLastAddConfirmed(ctx interface{}) *SegmentHandle_GetLastAddConfirmed_Call {
+	return &SegmentHandle_GetLastAddConfirmed_Call{Call: _e.mock.On("GetLastAddConfirmed", ctx)}
 }
 
-func (_c *SegmentHandle_GetLastAddConfirmed_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetLastAddConfirmed_Call {
+func (_c *SegmentHandle_GetLastAddConfirmed_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetLastAddConfirmed_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -458,9 +456,9 @@ func (_c *SegmentHandle_GetLastAddConfirmed_Call) RunAndReturn(run func(context.
 	return _c
 }
 
-// GetLastAddPushed provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetLastAddPushed(_a0 context.Context) (int64, error) {
-	ret := _m.Called(_a0)
+// GetLastAddPushed provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetLastAddPushed(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastAddPushed")
@@ -469,16 +467,16 @@ func (_m *SegmentHandle) GetLastAddPushed(_a0 context.Context) (int64, error) {
 	var r0 int64
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -492,12 +490,12 @@ type SegmentHandle_GetLastAddPushed_Call struct {
 }
 
 // GetLastAddPushed is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetLastAddPushed(_a0 interface{}) *SegmentHandle_GetLastAddPushed_Call {
-	return &SegmentHandle_GetLastAddPushed_Call{Call: _e.mock.On("GetLastAddPushed", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetLastAddPushed(ctx interface{}) *SegmentHandle_GetLastAddPushed_Call {
+	return &SegmentHandle_GetLastAddPushed_Call{Call: _e.mock.On("GetLastAddPushed", ctx)}
 }
 
-func (_c *SegmentHandle_GetLastAddPushed_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetLastAddPushed_Call {
+func (_c *SegmentHandle_GetLastAddPushed_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetLastAddPushed_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -559,9 +557,9 @@ func (_c *SegmentHandle_GetLogName_Call) RunAndReturn(run func() string) *Segmen
 	return _c
 }
 
-// GetMetadata provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *meta.SegmentMeta {
-	ret := _m.Called(_a0)
+// GetMetadata provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetMetadata(ctx context.Context) *meta.SegmentMeta {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetMetadata")
@@ -569,7 +567,7 @@ func (_m *SegmentHandle) GetMetadata(_a0 context.Context) *meta.SegmentMeta {
 
 	var r0 *meta.SegmentMeta
 	if rf, ok := ret.Get(0).(func(context.Context) *meta.SegmentMeta); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.SegmentMeta)
@@ -585,12 +583,12 @@ type SegmentHandle_GetMetadata_Call struct {
 }
 
 // GetMetadata is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetMetadata(_a0 interface{}) *SegmentHandle_GetMetadata_Call {
-	return &SegmentHandle_GetMetadata_Call{Call: _e.mock.On("GetMetadata", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetMetadata(ctx interface{}) *SegmentHandle_GetMetadata_Call {
+	return &SegmentHandle_GetMetadata_Call{Call: _e.mock.On("GetMetadata", ctx)}
 }
 
-func (_c *SegmentHandle_GetMetadata_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetMetadata_Call {
+func (_c *SegmentHandle_GetMetadata_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetMetadata_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -607,9 +605,9 @@ func (_c *SegmentHandle_GetMetadata_Call) RunAndReturn(run func(context.Context)
 	return _c
 }
 
-// GetQuorumInfo provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetQuorumInfo(_a0 context.Context) (*proto.QuorumInfo, error) {
-	ret := _m.Called(_a0)
+// GetQuorumInfo provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetQuorumInfo(ctx context.Context) (*proto.QuorumInfo, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetQuorumInfo")
@@ -618,10 +616,10 @@ func (_m *SegmentHandle) GetQuorumInfo(_a0 context.Context) (*proto.QuorumInfo, 
 	var r0 *proto.QuorumInfo
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (*proto.QuorumInfo, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) *proto.QuorumInfo); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*proto.QuorumInfo)
@@ -629,7 +627,7 @@ func (_m *SegmentHandle) GetQuorumInfo(_a0 context.Context) (*proto.QuorumInfo, 
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -643,12 +641,12 @@ type SegmentHandle_GetQuorumInfo_Call struct {
 }
 
 // GetQuorumInfo is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetQuorumInfo(_a0 interface{}) *SegmentHandle_GetQuorumInfo_Call {
-	return &SegmentHandle_GetQuorumInfo_Call{Call: _e.mock.On("GetQuorumInfo", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetQuorumInfo(ctx interface{}) *SegmentHandle_GetQuorumInfo_Call {
+	return &SegmentHandle_GetQuorumInfo_Call{Call: _e.mock.On("GetQuorumInfo", ctx)}
 }
 
-func (_c *SegmentHandle_GetQuorumInfo_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetQuorumInfo_Call {
+func (_c *SegmentHandle_GetQuorumInfo_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetQuorumInfo_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -665,9 +663,9 @@ func (_c *SegmentHandle_GetQuorumInfo_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
-// GetSize provides a mock function with given fields: _a0
-func (_m *SegmentHandle) GetSize(_a0 context.Context) int64 {
-	ret := _m.Called(_a0)
+// GetSize provides a mock function with given fields: ctx
+func (_m *SegmentHandle) GetSize(ctx context.Context) int64 {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetSize")
@@ -675,7 +673,7 @@ func (_m *SegmentHandle) GetSize(_a0 context.Context) int64 {
 
 	var r0 int64
 	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
@@ -689,12 +687,12 @@ type SegmentHandle_GetSize_Call struct {
 }
 
 // GetSize is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) GetSize(_a0 interface{}) *SegmentHandle_GetSize_Call {
-	return &SegmentHandle_GetSize_Call{Call: _e.mock.On("GetSize", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) GetSize(ctx interface{}) *SegmentHandle_GetSize_Call {
+	return &SegmentHandle_GetSize_Call{Call: _e.mock.On("GetSize", ctx)}
 }
 
-func (_c *SegmentHandle_GetSize_Call) Run(run func(_a0 context.Context)) *SegmentHandle_GetSize_Call {
+func (_c *SegmentHandle_GetSize_Call) Run(run func(ctx context.Context)) *SegmentHandle_GetSize_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -711,9 +709,9 @@ func (_c *SegmentHandle_GetSize_Call) RunAndReturn(run func(context.Context) int
 	return _c
 }
 
-// IsForceRollingReady provides a mock function with given fields: _a0
-func (_m *SegmentHandle) IsForceRollingReady(_a0 context.Context) bool {
-	ret := _m.Called(_a0)
+// IsForceRollingReady provides a mock function with given fields: ctx
+func (_m *SegmentHandle) IsForceRollingReady(ctx context.Context) bool {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for IsForceRollingReady")
@@ -721,7 +719,7 @@ func (_m *SegmentHandle) IsForceRollingReady(_a0 context.Context) bool {
 
 	var r0 bool
 	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
@@ -735,12 +733,12 @@ type SegmentHandle_IsForceRollingReady_Call struct {
 }
 
 // IsForceRollingReady is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) IsForceRollingReady(_a0 interface{}) *SegmentHandle_IsForceRollingReady_Call {
-	return &SegmentHandle_IsForceRollingReady_Call{Call: _e.mock.On("IsForceRollingReady", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) IsForceRollingReady(ctx interface{}) *SegmentHandle_IsForceRollingReady_Call {
+	return &SegmentHandle_IsForceRollingReady_Call{Call: _e.mock.On("IsForceRollingReady", ctx)}
 }
 
-func (_c *SegmentHandle_IsForceRollingReady_Call) Run(run func(_a0 context.Context)) *SegmentHandle_IsForceRollingReady_Call {
+func (_c *SegmentHandle_IsForceRollingReady_Call) Run(run func(ctx context.Context)) *SegmentHandle_IsForceRollingReady_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -757,9 +755,9 @@ func (_c *SegmentHandle_IsForceRollingReady_Call) RunAndReturn(run func(context.
 	return _c
 }
 
-// IsWritable provides a mock function with given fields: _a0
-func (_m *SegmentHandle) IsWritable(_a0 context.Context) (bool, error) {
-	ret := _m.Called(_a0)
+// IsWritable provides a mock function with given fields: ctx
+func (_m *SegmentHandle) IsWritable(ctx context.Context) (bool, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for IsWritable")
@@ -768,16 +766,16 @@ func (_m *SegmentHandle) IsWritable(_a0 context.Context) (bool, error) {
 	var r0 bool
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
-		return rf(_a0)
+		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(_a0)
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -791,12 +789,12 @@ type SegmentHandle_IsWritable_Call struct {
 }
 
 // IsWritable is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) IsWritable(_a0 interface{}) *SegmentHandle_IsWritable_Call {
-	return &SegmentHandle_IsWritable_Call{Call: _e.mock.On("IsWritable", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) IsWritable(ctx interface{}) *SegmentHandle_IsWritable_Call {
+	return &SegmentHandle_IsWritable_Call{Call: _e.mock.On("IsWritable", ctx)}
 }
 
-func (_c *SegmentHandle_IsWritable_Call) Run(run func(_a0 context.Context)) *SegmentHandle_IsWritable_Call {
+func (_c *SegmentHandle_IsWritable_Call) Run(run func(ctx context.Context)) *SegmentHandle_IsWritable_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -813,29 +811,29 @@ func (_c *SegmentHandle_IsWritable_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
-// ReadBatchAdv provides a mock function with given fields: _a0, _a1, _a2, _a3
-func (_m *SegmentHandle) ReadBatchAdv(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState) (*processor.BatchData, error) {
-	ret := _m.Called(_a0, _a1, _a2, _a3)
+// ReadBatchAdv provides a mock function with given fields: ctx, from, maxEntries, lastReadState
+func (_m *SegmentHandle) ReadBatchAdv(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	ret := _m.Called(ctx, from, maxEntries, lastReadState)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadBatchAdv")
 	}
 
-	var r0 *processor.BatchData
+	var r0 *proto.BatchReadResult
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)); ok {
-		return rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)); ok {
+		return rf(ctx, from, maxEntries, lastReadState)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) *processor.BatchData); ok {
-		r0 = rf(_a0, _a1, _a2, _a3)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, *proto.LastReadState) *proto.BatchReadResult); ok {
+		r0 = rf(ctx, from, maxEntries, lastReadState)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*processor.BatchData)
+			r0 = ret.Get(0).(*proto.BatchReadResult)
 		}
 	}
 
 	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, *proto.LastReadState) error); ok {
-		r1 = rf(_a0, _a1, _a2, _a3)
+		r1 = rf(ctx, from, maxEntries, lastReadState)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -849,34 +847,34 @@ type SegmentHandle_ReadBatchAdv_Call struct {
 }
 
 // ReadBatchAdv is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 int64
-//   - _a3 *proto.LastReadState
-func (_e *SegmentHandle_Expecter) ReadBatchAdv(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *SegmentHandle_ReadBatchAdv_Call {
-	return &SegmentHandle_ReadBatchAdv_Call{Call: _e.mock.On("ReadBatchAdv", _a0, _a1, _a2, _a3)}
+//   - ctx context.Context
+//   - from int64
+//   - maxEntries int64
+//   - lastReadState *proto.LastReadState
+func (_e *SegmentHandle_Expecter) ReadBatchAdv(ctx interface{}, from interface{}, maxEntries interface{}, lastReadState interface{}) *SegmentHandle_ReadBatchAdv_Call {
+	return &SegmentHandle_ReadBatchAdv_Call{Call: _e.mock.On("ReadBatchAdv", ctx, from, maxEntries, lastReadState)}
 }
 
-func (_c *SegmentHandle_ReadBatchAdv_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 int64, _a3 *proto.LastReadState)) *SegmentHandle_ReadBatchAdv_Call {
+func (_c *SegmentHandle_ReadBatchAdv_Call) Run(run func(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState)) *SegmentHandle_ReadBatchAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(*proto.LastReadState))
 	})
 	return _c
 }
 
-func (_c *SegmentHandle_ReadBatchAdv_Call) Return(_a0 *processor.BatchData, _a1 error) *SegmentHandle_ReadBatchAdv_Call {
+func (_c *SegmentHandle_ReadBatchAdv_Call) Return(_a0 *proto.BatchReadResult, _a1 error) *SegmentHandle_ReadBatchAdv_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *SegmentHandle_ReadBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*processor.BatchData, error)) *SegmentHandle_ReadBatchAdv_Call {
+func (_c *SegmentHandle_ReadBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *SegmentHandle_ReadBatchAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// RefreshAndGetMetadata provides a mock function with given fields: _a0
-func (_m *SegmentHandle) RefreshAndGetMetadata(_a0 context.Context) error {
-	ret := _m.Called(_a0)
+// RefreshAndGetMetadata provides a mock function with given fields: ctx
+func (_m *SegmentHandle) RefreshAndGetMetadata(ctx context.Context) error {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RefreshAndGetMetadata")
@@ -884,7 +882,7 @@ func (_m *SegmentHandle) RefreshAndGetMetadata(_a0 context.Context) error {
 
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(_a0)
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -898,12 +896,12 @@ type SegmentHandle_RefreshAndGetMetadata_Call struct {
 }
 
 // RefreshAndGetMetadata is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) RefreshAndGetMetadata(_a0 interface{}) *SegmentHandle_RefreshAndGetMetadata_Call {
-	return &SegmentHandle_RefreshAndGetMetadata_Call{Call: _e.mock.On("RefreshAndGetMetadata", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) RefreshAndGetMetadata(ctx interface{}) *SegmentHandle_RefreshAndGetMetadata_Call {
+	return &SegmentHandle_RefreshAndGetMetadata_Call{Call: _e.mock.On("RefreshAndGetMetadata", ctx)}
 }
 
-func (_c *SegmentHandle_RefreshAndGetMetadata_Call) Run(run func(_a0 context.Context)) *SegmentHandle_RefreshAndGetMetadata_Call {
+func (_c *SegmentHandle_RefreshAndGetMetadata_Call) Run(run func(ctx context.Context)) *SegmentHandle_RefreshAndGetMetadata_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -920,9 +918,9 @@ func (_c *SegmentHandle_RefreshAndGetMetadata_Call) RunAndReturn(run func(contex
 	return _c
 }
 
-// SendAppendErrorCallbacks provides a mock function with given fields: _a0, _a1, _a2
-func (_m *SegmentHandle) SendAppendErrorCallbacks(_a0 context.Context, _a1 int64, _a2 error) {
-	_m.Called(_a0, _a1, _a2)
+// SendAppendErrorCallbacks provides a mock function with given fields: ctx, triggerEntryId, err
+func (_m *SegmentHandle) SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error) {
+	_m.Called(ctx, triggerEntryId, err)
 }
 
 // SegmentHandle_SendAppendErrorCallbacks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SendAppendErrorCallbacks'
@@ -931,14 +929,14 @@ type SegmentHandle_SendAppendErrorCallbacks_Call struct {
 }
 
 // SendAppendErrorCallbacks is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-//   - _a2 error
-func (_e *SegmentHandle_Expecter) SendAppendErrorCallbacks(_a0 interface{}, _a1 interface{}, _a2 interface{}) *SegmentHandle_SendAppendErrorCallbacks_Call {
-	return &SegmentHandle_SendAppendErrorCallbacks_Call{Call: _e.mock.On("SendAppendErrorCallbacks", _a0, _a1, _a2)}
+//   - ctx context.Context
+//   - triggerEntryId int64
+//   - err error
+func (_e *SegmentHandle_Expecter) SendAppendErrorCallbacks(ctx interface{}, triggerEntryId interface{}, err interface{}) *SegmentHandle_SendAppendErrorCallbacks_Call {
+	return &SegmentHandle_SendAppendErrorCallbacks_Call{Call: _e.mock.On("SendAppendErrorCallbacks", ctx, triggerEntryId, err)}
 }
 
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Run(run func(_a0 context.Context, _a1 int64, _a2 error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
+func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Run(run func(ctx context.Context, triggerEntryId int64, err error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(error))
 	})
@@ -955,9 +953,9 @@ func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) RunAndReturn(run func(con
 	return _c
 }
 
-// SendAppendSuccessCallbacks provides a mock function with given fields: _a0, _a1
-func (_m *SegmentHandle) SendAppendSuccessCallbacks(_a0 context.Context, _a1 int64) {
-	_m.Called(_a0, _a1)
+// SendAppendSuccessCallbacks provides a mock function with given fields: ctx, triggerEntryId
+func (_m *SegmentHandle) SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64) {
+	_m.Called(ctx, triggerEntryId)
 }
 
 // SegmentHandle_SendAppendSuccessCallbacks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SendAppendSuccessCallbacks'
@@ -966,13 +964,13 @@ type SegmentHandle_SendAppendSuccessCallbacks_Call struct {
 }
 
 // SendAppendSuccessCallbacks is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 int64
-func (_e *SegmentHandle_Expecter) SendAppendSuccessCallbacks(_a0 interface{}, _a1 interface{}) *SegmentHandle_SendAppendSuccessCallbacks_Call {
-	return &SegmentHandle_SendAppendSuccessCallbacks_Call{Call: _e.mock.On("SendAppendSuccessCallbacks", _a0, _a1)}
+//   - ctx context.Context
+//   - triggerEntryId int64
+func (_e *SegmentHandle_Expecter) SendAppendSuccessCallbacks(ctx interface{}, triggerEntryId interface{}) *SegmentHandle_SendAppendSuccessCallbacks_Call {
+	return &SegmentHandle_SendAppendSuccessCallbacks_Call{Call: _e.mock.On("SendAppendSuccessCallbacks", ctx, triggerEntryId)}
 }
 
-func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) Run(run func(_a0 context.Context, _a1 int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
+func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) Run(run func(ctx context.Context, triggerEntryId int64)) *SegmentHandle_SendAppendSuccessCallbacks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64))
 	})
@@ -989,9 +987,9 @@ func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) RunAndReturn(run func(c
 	return _c
 }
 
-// SetRollingReady provides a mock function with given fields: _a0
-func (_m *SegmentHandle) SetRollingReady(_a0 context.Context) {
-	_m.Called(_a0)
+// SetRollingReady provides a mock function with given fields: ctx
+func (_m *SegmentHandle) SetRollingReady(ctx context.Context) {
+	_m.Called(ctx)
 }
 
 // SegmentHandle_SetRollingReady_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetRollingReady'
@@ -1000,12 +998,12 @@ type SegmentHandle_SetRollingReady_Call struct {
 }
 
 // SetRollingReady is a helper method to define mock.On call
-//   - _a0 context.Context
-func (_e *SegmentHandle_Expecter) SetRollingReady(_a0 interface{}) *SegmentHandle_SetRollingReady_Call {
-	return &SegmentHandle_SetRollingReady_Call{Call: _e.mock.On("SetRollingReady", _a0)}
+//   - ctx context.Context
+func (_e *SegmentHandle_Expecter) SetRollingReady(ctx interface{}) *SegmentHandle_SetRollingReady_Call {
+	return &SegmentHandle_SetRollingReady_Call{Call: _e.mock.On("SetRollingReady", ctx)}
 }
 
-func (_c *SegmentHandle_SetRollingReady_Call) Run(run func(_a0 context.Context)) *SegmentHandle_SetRollingReady_Call {
+func (_c *SegmentHandle_SetRollingReady_Call) Run(run func(ctx context.Context)) *SegmentHandle_SetRollingReady_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
@@ -1022,9 +1020,9 @@ func (_c *SegmentHandle_SetRollingReady_Call) RunAndReturn(run func(context.Cont
 	return _c
 }
 
-// SetWriterInvalidationNotifier provides a mock function with given fields: _a0, _a1
-func (_m *SegmentHandle) SetWriterInvalidationNotifier(_a0 context.Context, _a1 func(context.Context, string)) {
-	_m.Called(_a0, _a1)
+// SetWriterInvalidationNotifier provides a mock function with given fields: ctx, f
+func (_m *SegmentHandle) SetWriterInvalidationNotifier(ctx context.Context, f func(context.Context, string)) {
+	_m.Called(ctx, f)
 }
 
 // SegmentHandle_SetWriterInvalidationNotifier_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetWriterInvalidationNotifier'
@@ -1033,13 +1031,13 @@ type SegmentHandle_SetWriterInvalidationNotifier_Call struct {
 }
 
 // SetWriterInvalidationNotifier is a helper method to define mock.On call
-//   - _a0 context.Context
-//   - _a1 func(context.Context , string)
-func (_e *SegmentHandle_Expecter) SetWriterInvalidationNotifier(_a0 interface{}, _a1 interface{}) *SegmentHandle_SetWriterInvalidationNotifier_Call {
-	return &SegmentHandle_SetWriterInvalidationNotifier_Call{Call: _e.mock.On("SetWriterInvalidationNotifier", _a0, _a1)}
+//   - ctx context.Context
+//   - f func(context.Context , string)
+func (_e *SegmentHandle_Expecter) SetWriterInvalidationNotifier(ctx interface{}, f interface{}) *SegmentHandle_SetWriterInvalidationNotifier_Call {
+	return &SegmentHandle_SetWriterInvalidationNotifier_Call{Call: _e.mock.On("SetWriterInvalidationNotifier", ctx, f)}
 }
 
-func (_c *SegmentHandle_SetWriterInvalidationNotifier_Call) Run(run func(_a0 context.Context, _a1 func(context.Context, string))) *SegmentHandle_SetWriterInvalidationNotifier_Call {
+func (_c *SegmentHandle_SetWriterInvalidationNotifier_Call) Run(run func(ctx context.Context, f func(context.Context, string))) *SegmentHandle_SetWriterInvalidationNotifier_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(func(context.Context, string)))
 	})

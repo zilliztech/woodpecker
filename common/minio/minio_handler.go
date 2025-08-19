@@ -180,13 +180,13 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 	opts.SetMatchETagExcept("*")
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil && IsPreconditionFailed(err) {
-		logger.Ctx(ctx).Warn("object already exists", zap.String("objectName", objectName))
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
 		if stateErr != nil {
 			// return normal err, let task retry
 			return info, stateErr
 		}
 		if IsFencedObject(objInfo) {
+			logger.Ctx(ctx).Warn("object already exists and it is a fence object", zap.String("objectName", objectName))
 			return info, werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success

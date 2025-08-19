@@ -22,15 +22,14 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
-	"github.com/zilliztech/woodpecker/server/processor"
 )
 
 //go:generate mockery --dir=./woodpecker/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_woodpecker/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
-	AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
-	ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error)
+	ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
 	CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
@@ -57,12 +56,12 @@ func (l *logStoreClientLocal) CompleteSegment(ctx context.Context, logId int64, 
 	return l.store.CompleteSegment(ctx, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
 }
 
-func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
-	return l.store.GetBatchEntriesAdv(ctx, logId, segmentId, fromEntryId, maxSize, lastReadState)
+func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	return l.store.GetBatchEntriesAdv(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 }
 
 func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
@@ -99,12 +98,12 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, logId int64,
 }
 
 // TODO use ResultChannel abstract instead of chan
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *processor.SegmentEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxSize int64, lastReadState *proto.LastReadState) (*processor.BatchData, error) {
+func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	//TODO implement me
 	panic("implement me")
 }
