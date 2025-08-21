@@ -64,7 +64,7 @@ func TestCleanupSegment_AllNodesRequiredForSuccess(t *testing.T) {
 			Return(nil)
 
 		// Test just the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager(mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
+		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
 		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
 
 		assert.NoError(t, err, "Update should succeed")
@@ -101,7 +101,7 @@ func TestCleanupSegment_AllNodesRequiredForSuccess(t *testing.T) {
 			Return(nil)
 
 		// Test the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager(mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
+		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
 		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
 
 		assert.NoError(t, err, "Update should succeed")
@@ -141,7 +141,7 @@ func TestCleanupSegment_AllNodesRequiredForSuccess(t *testing.T) {
 			Return(nil)
 
 		// Test the updateFinalCleanupStatus method
-		cleanupManager := NewSegmentCleanupManager(mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
+		cleanupManager := NewSegmentCleanupManager("a-bucket", "files", mockMetadataProvider, mockClientPool).(*segmentCleanupManagerImpl)
 		finalStatus, err := cleanupManager.updateFinalCleanupStatus(context.Background(), logId, segmentId)
 
 		assert.NoError(t, err, "Update should succeed")

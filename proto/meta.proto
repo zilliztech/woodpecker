@@ -3,7 +3,7 @@
  */
 syntax = "proto3";
 package woodpecker.proto.meta;
-option go_package = "github.com/zilliztech/Woodpecker/proto";
+option go_package = "github.com/zilliztech/woodpecker/proto";
 
 /**
  * Unbounded Log meta info.
@@ -26,6 +26,7 @@ message LogMeta{
  */
 enum SegmentState{
   Active = 0;
+  // Note: recovery=1 is reserved/skipped for historical reasons
   Completed = 2;
   Sealed = 3;
   Truncated = 4;
@@ -37,12 +38,13 @@ enum SegmentState{
 message SegmentMetadata{
   int64 segNo = 1;
   int64 createTime = 2;
-  int64 quorumId = 3;
+  int64 quorumId = 3 [deprecated = true];
   SegmentState state = 4;
   int64 completionTime = 5;
   int64 lastEntryId = 6;
   int64 size = 7;
   int64 sealedTime = 8;
+  QuorumInfo quorum = 9;
 }
 
 /**

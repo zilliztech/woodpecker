@@ -163,7 +163,6 @@ func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	reqCopy := req.Clone(req.Context())
 
 	// For MinIO "If-None-Match:*" (object must not exist), add "x-oss-forbid-overwrite: true" for Aliyun OSS.
-	// We keep both headers to ensure compatibility
 	if ifNoneMatch := reqCopy.Header.Get("If-None-Match"); ifNoneMatch == "*" {
 		reqCopy.Header.Set("x-oss-forbid-overwrite", "true")
 		reqCopy.Header.Del("If-None-Match")
