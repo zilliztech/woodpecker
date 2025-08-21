@@ -46,6 +46,7 @@ type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
+	ServiceSeedNodes     string                     `yaml:"serviceSeedNodes"`
 }
 
 type AuditorConfig struct {
@@ -287,6 +288,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			Auditor: AuditorConfig{
 				MaxInterval: 5,
 			},
+			ServiceSeedNodes: "",
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{

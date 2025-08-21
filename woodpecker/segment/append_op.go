@@ -119,7 +119,7 @@ func (op *AppendOp) Execute() {
 
 	for i := 0; i < len(quorumInfo.Nodes); i++ {
 		// get client from clientPool according node addr
-		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
+		cli, clientErr := op.clientPool.GetLogStoreClient(ctx, quorumInfo.Nodes[i])
 		if clientErr != nil {
 			op.err = clientErr
 			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, clientErr)
@@ -135,11 +135,16 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	defer sp.End()
 	startRequestTime := time.Now()
 
-	// TODO currently only support Local ResultChannel
+	isRemoteMode := len(op.resultChannels) >= 3
 	if len(op.resultChannels) > serverIndex && op.resultChannels[serverIndex] == nil {
 		// create new result channel for this server if not exists
-		resultChannel := channel.NewLocalResultChannel(op.Identifier())
-		op.resultChannels[serverIndex] = resultChannel
+		if isRemoteMode {
+			resultChannel := channel.NewRemoteResultChannel(op.Identifier())
+			op.resultChannels[serverIndex] = resultChannel
+		} else {
+			resultChannel := channel.NewLocalResultChannel(op.Identifier())
+			op.resultChannels[serverIndex] = resultChannel
+		}
 	}
 
 	// order request
@@ -190,7 +195,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	}
 	if syncedResult.SyncedId != -1 && syncedResult.SyncedId >= op.entryId {
 		op.ackSet.Set(serverIndex)
-		if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
+		if op.ackSet.Count() >= int(op.quorumInfo.Aq) {
 			// Use atomic operation to ensure SendAppendSuccessCallbacks is called only once
 			if op.completed.CompareAndSwap(false, true) {
 				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)

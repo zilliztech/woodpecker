@@ -32,6 +32,7 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+    serviceSeedNodes:  # Service seed nodes for Woodpecker Client, comma separated, e.g. 192.168.0.1:1726,192.168.0.2:1726,192.168.0.3:1726
   # Configuration of Woodpecker LogStore Server.
   logstore:
     segmentSyncPolicy:

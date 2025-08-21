@@ -102,9 +102,13 @@ type logHandleImpl struct {
 	cancel      context.CancelFunc
 	cleanupWg   sync.WaitGroup
 	cleanupDone chan struct{}
+
+	// select quorumNode
+	selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)
 }
 
-func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration) LogHandle {
+func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize, cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
@@ -129,6 +133,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		ctx:                ctx,
 		cancel:             cancel,
 		cleanupDone:        make(chan struct{}),
+		selectQuorumFunc:   selectQuorumFunc,
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
 	l.startBackgroundCleanup()
@@ -310,7 +315,7 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 			}
 
 			// Fence the segment
-			lastEntryId, err := segmentHandle.Fence(ctx)
+			lastEntryId, err := segmentHandle.FenceAndComplete(ctx)
 			if err != nil {
 				logger.Ctx(ctx).Warn("failed to fence segment",
 					zap.String("logName", l.Name),
@@ -352,7 +357,7 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	// Update metadata for successfully fenced segments
 	for segmentId, lastEntryId := range fencedSegments {
 		segMeta := segments[segmentId]
-		segMeta.Metadata.State = proto.SegmentState_Sealed
+		segMeta.Metadata.State = proto.SegmentState_Completed
 		segMeta.Metadata.LastEntryId = lastEntryId
 		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMeta)
 		if err != nil {
@@ -523,6 +528,11 @@ func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx con
 }
 
 func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.SegmentMeta, error) {
+	quorumInfo, selectQuorumErr := l.selectQuorumFunc(ctx)
+	if selectQuorumErr != nil {
+		return nil, selectQuorumErr
+	}
+
 	// construct new segment metadata
 	segmentNo, err := l.GetNextSegmentId()
 	if err != nil {
@@ -531,10 +541,10 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.Segment
 	newSegmentMetadata := &proto.SegmentMetadata{
 		SegNo:       segmentNo,
 		CreateTime:  time.Now().UnixMilli(),
-		QuorumId:    -1,
 		State:       proto.SegmentState_Active,
 		LastEntryId: -1,
 		Size:        0,
+		Quorum:      quorumInfo,
 	}
 	segMeta := &meta.SegmentMeta{
 		Metadata: newSegmentMetadata,

@@ -5,45 +5,12 @@ syntax = "proto3";
 
 
 package woodpecker.proto.logstore;
-
 option go_package = "github.com/zilliztech/woodpecker/proto";
-
+import "meta.proto";
 
 /**
- * LogStore service.
+ * Log message data structure
  */
-service LogStore {
-  /**
-   * Add a new entry to the log store
-   */
-  rpc AddEntry(AddEntryRequest) returns (AddEntryResponse);
-
-  /**
-   * Read an entry from the log store
-   */
-  rpc ReadEntry(ReadEntryRequest) returns (ReadEntryResponse);
-}
-
-message AddEntryRequest {
-  bytes value = 1;
-}
-
-message AddEntryResponse {
-  Status status = 1;
-  optional int64 segId = 2;
-  optional int64 entryId = 3;
-}
-
-message ReadEntryRequest {
-  int64 segId = 1;
-  int64 entryId = 2;
-}
-
-message ReadEntryResponse {
-  Status status = 1;
-  optional LogEntry entry = 2;
-}
-
 message LogEntry {
   int64 segId = 1;
   int64 entryId = 2;
@@ -75,22 +42,153 @@ message BatchReadResult {
 }
 
 /**
- * Represents all the possible status.
+ * LogStore service.
+ *
+ * The following RPCs wrap externally callable data-plane operations.
  */
-enum Status {
-  // Operation was successful
-  OK = 0;
-  // The entry was not found
-  ENTRY_NOT_FOUND = 1;
-  // The existing version does not match the expected version
-  UNEXPECTED_VERSION_ID = 2;
-  // The session that the put request referred to is not alive
-  SESSION_DOES_NOT_EXIST = 3;
+service LogStore {
+  // Write APIs
+  rpc AddEntry(AddEntryRequest) returns (stream AddEntryResponse);
+
+  // Read APIs
+  rpc GetBatchEntriesAdv(GetBatchEntriesAdvRequest) returns (GetBatchEntriesAdvResponse);
+
+  // Segment state transitions
+  rpc FenceSegment(FenceSegmentRequest) returns (FenceSegmentResponse);
+  rpc CompleteSegment(CompleteSegmentRequest) returns (CompleteSegmentResponse);
+  rpc CompactSegment(CompactSegmentRequest) returns (CompactSegmentResponse);
+
+  // Segment introspection
+  rpc GetSegmentLastAddConfirmed(GetSegmentLastAddConfirmedRequest) returns (GetSegmentLastAddConfirmedResponse);
+  rpc GetSegmentBlockCount(GetSegmentBlockCountRequest) returns (GetSegmentBlockCountResponse);
+
+  rpc UpdateLastAddConfirmed(UpdateLastAddConfirmedRequest) returns (UpdateLastAddConfirmedResponse);
+
+  // Maintenance
+  rpc CleanSegment(CleanSegmentRequest) returns (CleanSegmentResponse);
+}
+
+message Status {
+  string reason = 1;
+  int32 code = 2;
+  bool retriable = 3;
+  string detail = 4;
+  map<string, string> extra_info = 5;
+}
+
+message AddEntryRequest {
+  int64 log_id = 1;
+  LogEntry entry = 2;
+}
+
+message AddEntryResponse {
+  Status status = 1 ;
+  int64 entry_id = 2; // buffered entry id
+  AddEntryState state = 3;
+}
+
+enum AddEntryState {
+  Buffered = 0;
+  Synced = 1;
+  Failed = 2;
+}
+
+// Advanced batch read
+message GetBatchEntriesAdvRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int64 from_entry_id = 3;
+  int64 max_entries = 4;
+  LastReadState last_read_state = 5;
+}
+
+message GetBatchEntriesAdvResponse {
+  Status status = 1 ;
+  BatchReadResult result = 2;
 }
 
 
+// Segment state transitions
+message FenceSegmentRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+}
 
+message FenceSegmentResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
 
+message CompleteSegmentRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int64 last_add_confirmed = 3;
+}
 
+message CompleteSegmentResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
 
+message CompactSegmentRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+}
+
+message CompactSegmentResponse {
+  Status status = 1 ;
+  meta.SegmentMetadata metadata = 2;
+}
+
+// Segment introspection
+message GetSegmentLastAddConfirmedRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+}
+message GetSegmentLastAddConfirmedResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
+
+message GetSegmentBlockCountRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+}
+message GetSegmentBlockCountResponse {
+  Status status = 1 ;
+  int64 block_count = 2;
+}
+
+// Maintenance
+message CleanSegmentRequest {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int32 flag = 3;
+}
+message CleanSegmentResponse {
+  Status status = 1 ;
+}
+
+// Subscribe append results
+message AppendResultsSubscribeRequest {
+  int64 log_id = 1;
+}
+
+// One append result update event
+message AppendResultUpdate {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int64 entry_id = 3;
+  Status status = 4;
+}
+
+message UpdateLastAddConfirmedRequest{
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int64 last_add_confirmed = 3;
+}
+
+message UpdateLastAddConfirmedResponse {
+  Status status = 1;
+}
 

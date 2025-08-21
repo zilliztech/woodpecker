@@ -20,6 +20,7 @@ package codec
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/cockroachdb/errors"
@@ -57,7 +58,11 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint32(payload[24:], record.BlockCrc)
 
 	case *FooterRecord:
-		payload = make([]byte, FooterRecordSize) // TotalBlocks(4) + TotalRecords(4) + TotalSize(8) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+		// Determine payload size based on version
+		payloadSize := record.GetFooterSize()
+		payload = make([]byte, payloadSize)
+
+		// Common fields for all versions
 		binary.LittleEndian.PutUint32(payload[0:], uint32(record.TotalBlocks))
 		binary.LittleEndian.PutUint32(payload[4:], record.TotalRecords)
 		binary.LittleEndian.PutUint64(payload[8:], record.TotalSize)
@@ -66,6 +71,11 @@ func EncodeRecord(r Record) []byte {
 		binary.LittleEndian.PutUint16(payload[28:], record.Version)
 		binary.LittleEndian.PutUint16(payload[30:], record.Flags)
 		copy(payload[32:], FooterMagic[:])
+
+		// Version 6+ includes LAC field
+		if record.Version >= 6 {
+			binary.LittleEndian.PutUint64(payload[36:], uint64(record.LAC))
+		}
 	}
 
 	// Create record with header: CRC32(4) + Type(1) + Length(4) + Payload
@@ -245,7 +255,8 @@ func ParseBlockIndexList(payload []byte) ([]*IndexRecord, error) {
 }
 
 func ParseFooter(payload []byte) (*FooterRecord, error) {
-	if len(payload) != FooterRecordSize {
+	// Check for minimum V5 footer size
+	if len(payload) < FooterRecordSizeV5 {
 		return nil, errors.Errorf("invalid footer payload length: %d", len(payload))
 	}
 
@@ -259,14 +270,21 @@ func ParseFooter(payload []byte) (*FooterRecord, error) {
 		Flags:        binary.LittleEndian.Uint16(payload[30:]),
 	}
 
-	// Verify version
-	if f.Version != FormatVersion {
+	// Verify version (support both V5 and V6)
+	if f.Version != 5 && f.Version != FormatVersion {
 		return nil, errors.New("invalid format version")
 	}
 
 	// Verify magic
 	if !bytes.Equal(payload[32:36], FooterMagic[:]) {
 		return nil, errors.New("invalid footer magic")
+	}
+
+	// For V6, LAC field is always present
+	if f.Version >= 6 && len(payload) >= FooterRecordSizeV6 {
+		f.LAC = int64(binary.LittleEndian.Uint64(payload[36:]))
+	} else {
+		f.LAC = -1 // Default value for V5 or when LAC is not present
 	}
 
 	return f, nil
@@ -315,4 +333,56 @@ func IsCompacted(flags uint16) bool {
 }
 func SetCompacted(flags uint16) uint16 {
 	return flags | 1
+}
+
+// GetMaxFooterReadSize returns the maximum size needed to read any supported footer version
+func GetMaxFooterReadSize() int {
+	return RecordHeaderSize + FooterRecordSizeV6 // Always try to read enough for the largest footer once
+}
+
+// ParseFooterFromBytes tries to parse footer from the given bytes with version detection
+func ParseFooterFromBytes(data []byte) (*FooterRecord, error) {
+	// Try V6 (44 bytes) first
+	if len(data) >= RecordHeaderSize+FooterRecordSizeV6 {
+		if footer, err := tryParseFooterSize(data, FooterRecordSizeV6); err == nil {
+			return footer, nil
+		}
+	}
+
+	// Fall back to V5 (36 bytes)
+	if len(data) >= RecordHeaderSize+FooterRecordSizeV5 {
+		if footer, err := tryParseFooterSize(data, FooterRecordSizeV5); err == nil {
+			// For V5, set LAC to default value
+			footer.LAC = -1
+			return footer, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no valid footer found")
+}
+
+// tryParseFooterSize attempts to parse footer assuming the given footer size
+func tryParseFooterSize(data []byte, footerSize int) (*FooterRecord, error) {
+	totalSize := RecordHeaderSize + footerSize
+	if len(data) < totalSize {
+		return nil, fmt.Errorf("insufficient data")
+	}
+
+	// Extract footer data from the end
+	footerStart := len(data) - totalSize
+	footerData := data[footerStart:]
+
+	// Try to decode
+	record, err := DecodeRecord(footerData)
+	if err != nil {
+		return nil, err
+	}
+
+	if record.Type() != FooterRecordType {
+		return nil, fmt.Errorf("not a footer record")
+	}
+
+	footer := record.(*FooterRecord)
+
+	return footer, nil
 }
