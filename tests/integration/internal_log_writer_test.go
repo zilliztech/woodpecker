@@ -110,6 +110,10 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			m2, err := r.ReadNext(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, "m2", string(m2.Payload))
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -196,6 +200,10 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			m2, err := r.ReadNext(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, "b1", string(m2.Payload))
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -266,6 +274,10 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 			assert.Error(t, res.Err)
 			res2 := w.Write(ctx, &log.WriteMessage{Payload: []byte("after-finalize-2")})
 			assert.Error(t, res2.Err)
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -352,12 +364,14 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotNil(t, segRO2)
 
-			// Can  not finalize the file, because no writer in this process.
-			// In other process can only fence when open writer.
+			// idempotent finalize
 			last2, err := segRO2.Complete(ctx)
-			assert.Error(t, err)
-			assert.True(t, werr.ErrSegmentProcessorNoWriter.Is(err))
-			assert.Equal(t, last2, int64(-1))
+			assert.NoError(t, err)
+			assert.Equal(t, last2, int64(1))
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -443,6 +457,10 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 			last2, err := segRO2.Complete(ctx)
 			assert.NoError(t, err)
 			assert.Equal(t, last1, last2)
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -521,6 +539,10 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, lastId, int64(1))
 			}
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, err)
 		})
 	}
 }
@@ -593,6 +615,10 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 			}
 
 			err = w.Close(ctx)
+			assert.NoError(t, err)
+
+			// shutdown embed server
+			err = woodpecker.StopEmbedLogStore()
 			assert.NoError(t, err)
 		})
 	}

@@ -49,7 +49,15 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 	}
 
 	segments := map[int64]*meta.SegmentMeta{}
-	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg).(*logHandleImpl)
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
+		return &proto.QuorumInfo{
+			Id:    -1,
+			Wq:    1,
+			Aq:    1,
+			Es:    1,
+			Nodes: []string{"127.0.0.1:59456"},
+		}, nil
+	}).(*logHandleImpl)
 
 	return logHandle, mockMeta
 }
@@ -270,15 +278,15 @@ func TestFenceAllActiveSegments_SuccessfulFencing(t *testing.T) {
 	logHandle.SegmentHandles[3] = mockSegment3
 
 	// Mock successful fencing
-	mockSegment1.EXPECT().Fence(mock.Anything).Return(int64(100), nil)
-	mockSegment3.EXPECT().Fence(mock.Anything).Return(int64(200), nil)
+	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
+	mockSegment3.EXPECT().FenceAndComplete(mock.Anything).Return(int64(200), nil)
 
 	// Mock metadata updates after fencing
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
 	})).Return(nil)
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 3 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 200
+		return meta.Metadata.SegNo == 3 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 200
 	})).Return(nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)
@@ -311,12 +319,12 @@ func TestFenceAllActiveSegments_PartialFailure(t *testing.T) {
 	logHandle.SegmentHandles[2] = mockSegment2
 
 	// Mock fencing - segment 1 succeeds, segment 2 fails
-	mockSegment1.EXPECT().Fence(mock.Anything).Return(int64(100), nil)
-	mockSegment2.EXPECT().Fence(mock.Anything).Return(int64(-1), errors.New("fence error"))
+	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
+	mockSegment2.EXPECT().FenceAndComplete(mock.Anything).Return(int64(-1), errors.New("fence error"))
 
 	// Mock metadata update for successful segment
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
 	})).Return(nil)
 
 	err := logHandle.fenceAllActiveSegments(ctx)

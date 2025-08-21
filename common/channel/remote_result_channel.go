@@ -20,11 +20,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 var _ ResultChannel = (*RemoteResultChannel)(nil)
@@ -32,30 +34,25 @@ var _ ResultChannel = (*RemoteResultChannel)(nil)
 // RemoteResultChannel is the remote implementation that uses callback functions to send results.
 // This design is more flexible and can adapt to different remote communication methods (gRPC stream, HTTP, message queue, etc.).
 type RemoteResultChannel struct {
-	identifier   string
-	sendFunc     func(ctx context.Context, identifier string, result *AppendResult) error // Callback function to send results.
-	readFunc     func(ctx context.Context, identifier string) (*AppendResult, error)      // Callback function to read results.
-	closeFunc    func(ctx context.Context, identifier string) error                       // Callback function to close the channel.
-	closed       bool
-	mu           sync.RWMutex
-	lastActivity time.Time
-}
+	identifier string
+	ch         grpc.ServerStreamingClient[proto.AddEntryResponse]
+	closed     bool
+	mu         sync.RWMutex
 
-// RemoteResultChannelConfig is the configuration for a remote result channel.
-type RemoteResultChannelConfig struct {
-	Identifier string
-	SendFunc   func(ctx context.Context, identifier string, result *AppendResult) error
-	CloseFunc  func(ctx context.Context, identifier string) error
+	// synced result
+	result *AppendResult
+
+	// context for controlling the stream lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewRemoteResultChannel creates a remote result channel.
-func NewRemoteResultChannel(config RemoteResultChannelConfig) *RemoteResultChannel {
+func NewRemoteResultChannel(identifier string) *RemoteResultChannel {
 	return &RemoteResultChannel{
-		identifier:   config.Identifier,
-		sendFunc:     config.SendFunc,
-		closeFunc:    config.CloseFunc,
-		closed:       false,
-		lastActivity: time.Now(),
+		identifier: identifier,
+		ch:         nil,
+		closed:     false,
 	}
 }
 
@@ -63,51 +60,63 @@ func (r *RemoteResultChannel) GetIdentifier() string {
 	return r.identifier
 }
 
+// SendResult sends the append result directly to the channel when the gRPC stream
+// has not been initialized yet. This is typically used for synchronous operations
+// that complete before stream initialization.
 func (r *RemoteResultChannel) SendResult(ctx context.Context, result *AppendResult) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if r.closed {
 		return fmt.Errorf("remote result channel %s is closed", r.identifier)
 	}
-
-	if r.sendFunc == nil {
-		return fmt.Errorf("send function not configured for remote result channel %s", r.identifier)
-	}
-
-	// Call the send function.
-	if err := r.sendFunc(ctx, r.identifier, result); err != nil {
-		logger.Ctx(ctx).Warn("failed to send result to remote channel",
-			zap.String("identifier", r.identifier),
-			zap.Int64("syncedID", result.SyncedId),
-			zap.Error(err))
-		return err
-	}
-
-	r.lastActivity = time.Now()
-	logger.Ctx(ctx).Debug("sent result to remote channel",
+	r.result = result
+	logger.Ctx(ctx).Debug("sent result to remote channel directly",
 		zap.String("identifier", r.identifier),
 		zap.Int64("syncedID", result.SyncedId),
 		zap.Error(result.Err))
-
 	return nil
 }
 
+// ReadResult waits for and reads the append result from the remote gRPC stream.
+// It returns the result immediately if already available, otherwise blocks until
+// a response is received from the stream or an error occurs.
 func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	if r.closed {
-		return nil, fmt.Errorf("local result channel %s is closed", r.identifier)
+		return nil, fmt.Errorf("remote result channel %s is closed", r.identifier)
 	}
-	result, readErr := r.readFunc(ctx, r.identifier)
+	if r.result != nil {
+		return r.result, nil
+	}
+	if r.ch == nil {
+		return nil, fmt.Errorf("remote result channel %s is not initialized", r.identifier)
+	}
+
+	// gRPC stream.Recv() automatically respects context cancellation
+	// since the stream was created with the context in AppendEntry
+	resultResponse, readErr := r.ch.Recv()
 	if readErr != nil {
 		logger.Ctx(ctx).Warn("failed to read result from remote channel",
 			zap.String("identifier", r.identifier),
 			zap.Error(readErr))
 		return nil, readErr
 	}
-	return result, readErr
+	if resultResponse.GetState() == proto.AddEntryState_Synced {
+		return &AppendResult{
+			SyncedId: resultResponse.GetEntryId(),
+			Err:      nil,
+		}, nil
+	}
+
+	// sync failed
+	syncedErr := werr.ErrFileWriterSyncFailed.WithCauseErrMsg(fmt.Sprintf("write entry failed, err code:%d", resultResponse.Status.Code))
+	return &AppendResult{
+		SyncedId: resultResponse.GetEntryId(),
+		Err:      syncedErr,
+	}, syncedErr
 }
 
 func (r *RemoteResultChannel) Close(ctx context.Context) error {
@@ -117,17 +126,21 @@ func (r *RemoteResultChannel) Close(ctx context.Context) error {
 	if !r.closed {
 		r.closed = true
 
-		// Call the close function.
-		if r.closeFunc != nil {
-			if err := r.closeFunc(ctx, r.identifier); err != nil {
-				logger.Ctx(ctx).Warn("failed to close remote channel",
-					zap.String("identifier", r.identifier),
-					zap.Error(err))
-			}
+		// Cancel the stream context first
+		if r.cancel != nil {
+			r.cancel()
+			logger.Ctx(ctx).Debug("cancelled remote result channel context", zap.String("identifier", r.identifier))
 		}
 
-		logger.Ctx(ctx).Debug("closed remote result channel",
-			zap.String("identifier", r.identifier))
+		// Then close the stream
+		if r.ch != nil {
+			closeErr := r.ch.CloseSend()
+			if closeErr != nil {
+				logger.Ctx(ctx).Warn("closed remote result channel failed", zap.String("identifier", r.identifier), zap.Error(closeErr))
+			} else {
+				logger.Ctx(ctx).Debug("closed remote result channel", zap.String("identifier", r.identifier))
+			}
+		}
 	}
 	return nil
 }
@@ -138,9 +151,18 @@ func (r *RemoteResultChannel) IsClosed() bool {
 	return r.closed
 }
 
-// GetLastActivity retrieves the last activity time (used for cleaning up idle connections).
-func (r *RemoteResultChannel) GetLastActivity() time.Time {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.lastActivity
+// InitResponseStream initializes the remote result channel with the gRPC stream.
+func (r *RemoteResultChannel) InitResponseStream(responseCh grpc.ServerStreamingClient[proto.AddEntryResponse], ctx context.Context, cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		// Don't initialize if channel is already closed
+		if cancel != nil {
+			cancel() // Cancel the context if channel is already closed
+		}
+		return
+	}
+	r.ch = responseCh
+	r.ctx = ctx
+	r.cancel = cancel
 }

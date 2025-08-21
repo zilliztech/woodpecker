@@ -33,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -54,7 +55,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, min
 	}
 
 	var takeControlOfClients bool = false
-	embedLogStore = server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
+	embedLogStore = server.NewLogStore(context.Background(), cfg, minioCli)
 	embedLogStore.SetAddress("127.0.0.1:59456") // TODO only placeholder now
 
 	initError := embedLogStore.Start()
@@ -86,7 +87,7 @@ func StopEmbedLogStore() error {
 
 var _ Client = (*woodpeckerEmbedClient)(nil)
 
-// Implementation of the client interface for Z'eembed mode.
+// Implementation of the client interface for embed mode.
 type woodpeckerEmbedClient struct {
 	mu  sync.RWMutex
 	cfg *config.Configuration
@@ -244,11 +245,21 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
+	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg, c.SelectQuorumNodes)
 	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
+}
+
+func (c *woodpeckerEmbedClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
+	return &proto.QuorumInfo{
+		Id:    -1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"127.0.0.1:59456"},
+	}, nil
 }
 
 // DeleteLog deletes the log with the specified name.
@@ -338,7 +349,7 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 	if closeErr != nil {
 		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
-	closePoolErr := c.clientPool.Close()
+	closePoolErr := c.clientPool.Close(ctx)
 	if closePoolErr != nil {
 		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
@@ -346,8 +357,8 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 		closeEtcdCliErr := c.etcdCli.Close()
 		if closeEtcdCliErr != nil {
 			logger.Ctx(ctx).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
+			return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
 		}
-		return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
 	}
 	return werr.Combine(closeErr, closePoolErr)
 }

@@ -417,7 +417,7 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 		zap.Int64("quorumId", quorumId))
 
 	// Get node client
-	logStoreCli, err := s.clientPool.GetLogStoreClient(nodeAddress)
+	logStoreCli, err := s.clientPool.GetLogStoreClient(ctx, nodeAddress)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to get logstore client", zap.String("node", nodeAddress), zap.Error(err))
 		// Use mutex to protect status updates

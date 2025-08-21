@@ -33,6 +33,9 @@ type Reader interface {
 	// GetLastEntryID returns the last entry ID written
 	GetLastEntryID(ctx context.Context) (int64, error)
 
+	// UpdateLastAddConfirmed sets the last add confirmed entry ID
+	UpdateLastAddConfirmed(ctx context.Context, lac int64) error
+
 	Close(ctx context.Context) error
 }
 

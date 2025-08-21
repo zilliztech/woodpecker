@@ -90,9 +90,9 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	}
 
 	// Setup expectations
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
-	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
 
@@ -108,8 +108,8 @@ func TestAppendOp_Execute_GetQuorumInfoError(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
 	expectedErr := errors.New("quorum info error")
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return((*proto.QuorumInfo)(nil), expectedErr)
-	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), expectedErr).Return()
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return((*proto.QuorumInfo)(nil), expectedErr)
+	mockHandle.EXPECT().SendAppendErrorCallbacks(mock.Anything, int64(3), expectedErr).Return()
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, nil, 1)
 
@@ -131,9 +131,9 @@ func TestAppendOp_Execute_GetClientError(t *testing.T) {
 	}
 
 	expectedErr := errors.New("client error")
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
-	mockClientPool.On("GetLogStoreClient", "node1").Return(nil, expectedErr)
-	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), mock.Anything).Return()
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, expectedErr)
+	mockHandle.EXPECT().SendAppendErrorCallbacks(mock.Anything, int64(3), mock.Anything).Return()
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
 
@@ -161,7 +161,7 @@ func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
 		Err:      nil,
 	})
 
-	mockHandle.On("SendAppendSuccessCallbacks", mock.Anything, int64(3)).Return()
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Return()
 
 	// Execute callback
 	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
@@ -178,7 +178,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, nil, 1)
 
-	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), expectedErr).Return()
+	mockHandle.EXPECT().SendAppendErrorCallbacks(mock.Anything, int64(3), expectedErr).Return()
 
 	// Execute callback with error
 	op.receivedAckCallback(context.Background(), time.Now(), 3, nil, expectedErr, 0)
@@ -198,7 +198,7 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 		Err:      nil,
 	})
 
-	mockHandle.On("SendAppendErrorCallbacks", mock.Anything, int64(3), mock.Anything).Return()
+	mockHandle.EXPECT().SendAppendErrorCallbacks(mock.Anything, int64(3), mock.Anything).Return()
 
 	// Execute callback
 	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0)
@@ -456,10 +456,10 @@ func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
 	}
 
 	// Setup expectations - GetQuorumInfo will be called multiple times
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
-	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
-	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
 
@@ -519,11 +519,11 @@ func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
 	}
 
 	// Setup expectations - first call returns initial quorum, second call returns updated quorum
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(initialQuorumInfo, nil).Once()
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(updatedQuorumInfo, nil).Once()
-	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
-	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(initialQuorumInfo, nil).Once()
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(updatedQuorumInfo, nil).Once()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo, 1)
 
@@ -563,7 +563,7 @@ func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo, 1)
 
@@ -600,10 +600,10 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 		Nodes: []string{"node1", "node2"},
 	}
 
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
-	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
-	mockClientPool.On("GetLogStoreClient", "node2").Return(mockClient, nil)
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
 
@@ -639,9 +639,9 @@ func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	mockHandle.On("GetQuorumInfo", mock.Anything).Return(quorumInfo, nil)
-	mockClientPool.On("GetLogStoreClient", "node1").Return(mockClient, nil)
-	mockClient.On("AppendEntry", mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
+	mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 
 	op := NewAppendOp(1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo, 1)
 

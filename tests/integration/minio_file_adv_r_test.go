@@ -210,7 +210,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			assert.Equal(t, expectedLastEntryId, writer2.GetLastEntryId(ctx))
 
 			// Finalize the segment with footer and index
-			lastEntryId, err := writer2.Finalize(ctx)
+			lastEntryId, err := writer2.Finalize(ctx, -1)
 			require.NoError(t, err)
 			assert.Equal(t, expectedLastEntryId, lastEntryId)
 
@@ -447,7 +447,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 	}
 
 	// Finalize the segment
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(7), lastEntryId)
 
@@ -666,7 +666,7 @@ func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		lastEntryId, err := writerComplex.Finalize(ctx)
+		lastEntryId, err := writerComplex.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(14), lastEntryId)
 
@@ -773,7 +773,7 @@ func TestAdvMinioFileWriter_DataIntegrityWithDifferentSizes(t *testing.T) {
 	}
 
 	// Finalize segment
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testCases)-1), lastEntryId)
 
@@ -844,7 +844,7 @@ func TestAdvMinioFileReader_SequentialReading(t *testing.T) {
 	}
 
 	// Finalize
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -1053,7 +1053,7 @@ func TestAdvMinioFileWriter_ConcurrentReadWrite(t *testing.T) {
 	}
 
 	// Finalize and verify all data
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -1125,7 +1125,7 @@ func TestAdvMinioFileReader_ErrorHandling(t *testing.T) {
 			require.NoError(t, result.Err)
 		}
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -1215,7 +1215,7 @@ func TestAdvMinioFileWriter_LargeEntryHandling(t *testing.T) {
 	}
 
 	// Finalize
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -1331,7 +1331,7 @@ func TestAdvMinioFileWriter_VeryLargePayloadSupport(t *testing.T) {
 	assert.Equal(t, int64(len(testSizes)-1), writer.GetLastEntryId(ctx))
 
 	// Finalize and verify file integrity
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 
 	err = writer.Close(ctx)
@@ -1407,7 +1407,7 @@ func TestAdvMinioFileWriter_MetadataConsistency(t *testing.T) {
 	}
 
 	// Finalize
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(totalEntries-1), lastEntryId)
 
@@ -2372,7 +2372,7 @@ func TestAdvMinioFileWriter_SingleEntryLargerThanMaxFlushSize(t *testing.T) {
 	assert.Equal(t, int64(len(testCases)-1), writer.GetLastEntryId(ctx))
 
 	// Finalize and verify file integrity
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 
 	// Read back and verify data integrity
@@ -2474,7 +2474,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		err = writer.Sync(ctx)
 		require.NoError(t, err)
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(totalEntries-1), lastEntryId)
 
@@ -2664,7 +2664,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 
 		err = writer.Sync(ctx)
 		require.NoError(t, err)
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -2891,7 +2891,7 @@ func TestAdvMinioFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 	}
 
 	// Complete the file to create footer
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), lastEntryId)
 	writer.Close(ctx)
@@ -3035,7 +3035,7 @@ func TestAdvMinioFileReader_AdvOptContinuation(t *testing.T) {
 		assert.Equal(t, int64(i), result.SyncedId)
 	}
 
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(14), lastEntryId)
 	writer.Close(ctx)
@@ -3130,7 +3130,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), result.SyncedId)
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), lastEntryId)
 		writer.Close(ctx)
@@ -3166,7 +3166,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 			assert.Equal(t, int64(i), result.SyncedId)
 		}
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), lastEntryId)
 		writer.Close(ctx)
@@ -3218,7 +3218,7 @@ func TestAdvMinioFileReader_EdgeCases(t *testing.T) {
 			assert.Equal(t, int64(i), result.SyncedId)
 		}
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(5), lastEntryId)
 		writer.Close(ctx)

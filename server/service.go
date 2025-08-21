@@ -19,36 +19,44 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"net"
 	"sync"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/minio"
+	netutil "github.com/zilliztech/woodpecker/common/net"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
 type Server struct {
+	serverNode *membership.ServerNode
+	bindPort   int // bind port for gossip
+	seeds      []string
+
 	logStore    LogStore
+	servicePort int // service port for business
 	grpcWG      sync.WaitGroup
 	grpcErrChan chan error
 	grpcServer  *grpc.Server
 	listener    net.Listener
-	ctx         context.Context
-	cancel      context.CancelFunc
-	etcdCli     *clientv3.Client
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func NewServer(ctx context.Context, configuration *config.Configuration) *Server {
+func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	etcdCli, err := etcd.GetRemoteEtcdClient(configuration.Etcd.GetEndpoints())
-	if err != nil {
-		panic(err)
-	}
 	var minioCli minio.MinioHandler
+	var err error
 	if configuration.Woodpecker.Storage.IsStorageMinio() {
 		minioCli, err = minio.NewMinioHandler(ctx, configuration)
 		if err != nil {
@@ -59,24 +67,38 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 		ctx:         ctx,
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
+		bindPort:    bindPort,
+		seeds:       seeds,
+		servicePort: servicePort,
 	}
-	s.logStore = NewLogStore(ctx, configuration, etcdCli, minioCli)
+	s.logStore = NewLogStore(ctx, configuration, minioCli)
 	return s
 }
 
 func (s *Server) Prepare() error {
-	l, err := net.Listen("tcp", "0.0.0.0:52160") // TODO
+	// start listener for business service
+	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", s.servicePort))
 	if err != nil {
 		return err
 	}
 	s.listener = l
+	s.logStore.SetAddress(s.listener.Addr().String())
+
+	// start server node for gossip
+	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), "default", "default", s.bindPort, s.servicePort, s.seeds)
+	if err != nil {
+		return err
+	}
+	s.serverNode = node
 	return nil
 }
 
 func (s *Server) Run() error {
+	// init server
 	if err := s.init(); err != nil {
 		return err
 	}
+	// start server
 	if err := s.start(); err != nil {
 		return err
 	}
@@ -84,21 +106,7 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) init() error {
-	etcdCli, err := clientv3.New(clientv3.Config{})
-	if err != nil {
-		return err
-	}
-	s.etcdCli = etcdCli
-	s.logStore.SetEtcdClient(etcdCli)
-	s.logStore.SetAddress(s.listener.Addr().String())
-	err = s.startGrpc()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Server) startGrpc() error {
+	// start grpc server
 	s.grpcWG.Add(1)
 	go s.startGrpcLoop()
 	// wait for grpc server loop start
@@ -106,11 +114,15 @@ func (s *Server) startGrpc() error {
 	return err
 }
 
+// start grpc server loop
 func (s *Server) startGrpcLoop() {
 	defer s.grpcWG.Done()
 	_, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	grpcOpts := []grpc.ServerOption{}
+	grpcOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(otelgrpc.StreamServerInterceptor()),
+	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
 	if err := s.grpcServer.Serve(s.listener); err != nil {
@@ -118,32 +130,186 @@ func (s *Server) startGrpcLoop() {
 	}
 }
 
-func (s *Server) setEtcdClient(client *clientv3.Client) {
-	s.logStore.SetEtcdClient(client)
-}
-
 func (s *Server) start() error {
+	// start log store
 	if err := s.logStore.Start(); err != nil {
 		return err
 	}
-	err := s.logStore.Register(s.ctx)
-	if err != nil {
-		return err
-	}
+	logger.Ctx(s.ctx).Info("log store started", zap.String("node", s.serverNode.GetMemberlist().LocalNode().Name), zap.String("address", s.logStore.GetAddress()))
 	return nil
 }
 
 func (s *Server) Stop() error {
+	leaveErr := s.serverNode.Leave()
+	if leaveErr != nil {
+		logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
+	}
+	stopErr := s.logStore.Stop()
+	if stopErr != nil {
+		logger.Ctx(s.ctx).Error("log store stop failed", zap.Error(stopErr))
+	}
+	s.grpcServer.GracefulStop()
+	s.cancel()
+	logger.Ctx(s.ctx).Info("server stopped", zap.String("node", s.serverNode.GetMemberlist().LocalNode().Name), zap.String("address", s.logStore.GetAddress()))
 	return nil
 }
 
-// TODO should use unary-stream or stream-stream to impl async add request
-func (s *Server) AddEntry(ctx context.Context, request *proto.AddEntryRequest) (*proto.AddEntryResponse, error) {
-	//TODO implement me
-	panic("implement me")
+func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.ServerStreamingServer[proto.AddEntryResponse]) error {
+	// Convert proto.LogEntry -> internal proto.LogEntry (same struct in this repo)
+	entry := &proto.LogEntry{
+		SegId:   request.Entry.SegId,
+		EntryId: request.Entry.EntryId,
+		Values:  request.Entry.Values,
+	}
+
+	// Use stream context for consistency
+	streamCtx := serverStream.Context()
+	resultCh := channel.NewLocalResultChannel(fmt.Sprintf("srv/%d/%d/%d", request.LogId, request.Entry.SegId, request.Entry.EntryId))
+	bufferedId, err := s.logStore.AddEntry(streamCtx, request.LogId, entry, resultCh)
+	if err != nil {
+		// entry add to buffer failed - send error response and close stream
+		sendErr := serverStream.Send(&proto.AddEntryResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: bufferedId,
+			Status:  werr.Status(err)},
+		)
+		if sendErr != nil {
+			logger.Ctx(streamCtx).Warn("failed to send error response", zap.Error(sendErr))
+		}
+		return err
+	}
+
+	// entry buffered - send buffered response immediately
+	sendErr := serverStream.Send(&proto.AddEntryResponse{
+		State:   proto.AddEntryState_Buffered,
+		EntryId: bufferedId,
+		Status:  werr.Success()},
+	)
+	if sendErr != nil {
+		logger.Ctx(streamCtx).Warn("failed to send buffered response", zap.Error(sendErr))
+		return sendErr
+	}
+	// wait for entry to be synced
+	result, err := resultCh.ReadResult(streamCtx)
+	if err != nil {
+		id := int64(-1)
+		if result != nil {
+			id = result.SyncedId
+		}
+		sendErr = serverStream.Send(&proto.AddEntryResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: id,
+			Status:  werr.Status(err)},
+		)
+		return sendErr
+	}
+	// persist added entry success
+	sendErr = serverStream.Send(&proto.AddEntryResponse{
+		State:   proto.AddEntryState_Synced,
+		EntryId: result.SyncedId,
+		Status:  werr.Success()},
+	)
+	return sendErr // Return nil for normal closure, not the context error
 }
 
-func (s *Server) ReadEntry(ctx context.Context, request *proto.ReadEntryRequest) (*proto.ReadEntryResponse, error) {
-	//TODO implement me
-	panic("implement me")
+func (s *Server) GetBatchEntriesAdv(ctx context.Context, request *proto.GetBatchEntriesAdvRequest) (*proto.GetBatchEntriesAdvResponse, error) {
+	result, err := s.logStore.GetBatchEntriesAdv(ctx, request.LogId, request.SegmentId, request.FromEntryId, request.MaxEntries, request.LastReadState)
+	if err != nil {
+		return &proto.GetBatchEntriesAdvResponse{
+			Status: werr.Status(err),
+		}, nil
+	}
+	return &proto.GetBatchEntriesAdvResponse{Status: werr.Success(), Result: result}, nil
+}
+
+func (s *Server) FenceSegment(ctx context.Context, request *proto.FenceSegmentRequest) (*proto.FenceSegmentResponse, error) {
+	lastId, err := s.logStore.FenceSegment(ctx, request.LogId, request.SegmentId)
+	if err != nil {
+		return &proto.FenceSegmentResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.FenceSegmentResponse{Status: werr.Success(), LastEntryId: lastId}, nil
+}
+
+func (s *Server) CompleteSegment(ctx context.Context, request *proto.CompleteSegmentRequest) (*proto.CompleteSegmentResponse, error) {
+	lastId, err := s.logStore.CompleteSegment(ctx, request.LogId, request.SegmentId, request.LastAddConfirmed)
+	if err != nil {
+		return &proto.CompleteSegmentResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.CompleteSegmentResponse{Status: werr.Success(), LastEntryId: lastId}, nil
+}
+
+func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegmentRequest) (*proto.CompactSegmentResponse, error) {
+	meta, err := s.logStore.CompactSegment(ctx, request.LogId, request.SegmentId)
+	if err != nil {
+		return &proto.CompactSegmentResponse{Status: werr.Status(err)}, nil
+	}
+	// meta 已经是 *proto.SegmentMetadata
+	return &proto.CompactSegmentResponse{Status: werr.Success(), Metadata: meta}, nil
+}
+
+func (s *Server) GetSegmentLastAddConfirmed(ctx context.Context, request *proto.GetSegmentLastAddConfirmedRequest) (*proto.GetSegmentLastAddConfirmedResponse, error) {
+	lac, err := s.logStore.GetSegmentLastAddConfirmed(ctx, request.LogId, request.SegmentId)
+	if err != nil {
+		return &proto.GetSegmentLastAddConfirmedResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.GetSegmentLastAddConfirmedResponse{Status: werr.Success(), LastEntryId: lac}, nil
+}
+
+func (s *Server) GetSegmentBlockCount(ctx context.Context, request *proto.GetSegmentBlockCountRequest) (*proto.GetSegmentBlockCountResponse, error) {
+	count, err := s.logStore.GetSegmentBlockCount(ctx, request.LogId, request.SegmentId)
+	if err != nil {
+		return &proto.GetSegmentBlockCountResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.GetSegmentBlockCountResponse{Status: werr.Success(), BlockCount: count}, nil
+}
+
+func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRequest) (*proto.CleanSegmentResponse, error) {
+	if err := s.logStore.CleanSegment(ctx, request.LogId, request.SegmentId, int(request.Flag)); err != nil {
+		return &proto.CleanSegmentResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.CleanSegmentResponse{Status: werr.Success()}, nil
+}
+
+func (s *Server) GetServiceAddr(ctx context.Context) string {
+	return fmt.Sprintf("%s:%d", s.listener.Addr().String(), s.servicePort)
+}
+
+func (s *Server) GetAdvertiseAddr(ctx context.Context) string {
+	return fmt.Sprintf("%s:%d", s.serverNode.GetMemberlist().LocalNode().Addr.String(), int(s.serverNode.GetMemberlist().LocalNode().Port))
+}
+
+func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.UpdateLastAddConfirmedRequest) (*proto.UpdateLastAddConfirmedResponse, error) {
+	if err := s.logStore.UpdateLastAddConfirmed(ctx, request.LogId, request.SegmentId, request.LastAddConfirmed); err != nil {
+		return &proto.UpdateLastAddConfirmedResponse{Status: werr.Status(err)}, nil
+	}
+	return &proto.UpdateLastAddConfirmedResponse{Status: werr.Success()}, nil
+}
+
+func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPort int, servicePort int, seeds []string) (*membership.ServerNode, string, error) {
+	cfg := &membership.ServerConfig{
+		NodeID:        name,
+		ResourceGroup: rg,
+		AZ:            az,
+		BindAddr:      netutil.GetLocalIP(),
+		BindPort:      bindPort,
+		ServicePort:   servicePort,
+		Tags:          map[string]string{"role": "demo"},
+	}
+	n, err := membership.NewServerNode(cfg)
+	if err != nil {
+		logger.Ctx(ctx).Error("create server failed", zap.Error(err))
+		return nil, "", err
+	}
+
+	// Return advertise address (ip:port)
+	adv := fmt.Sprintf("%s:%d", n.GetMemberlist().LocalNode().Addr.String(), int(n.GetMemberlist().LocalNode().Port))
+	logger.Ctx(ctx).Info("NODE_READY", zap.String("name", name), zap.String("advertise", adv))
+
+	if len(seeds) > 0 {
+		if joinErr := n.Join(seeds); joinErr != nil {
+			logger.Ctx(ctx).Error("join failed", zap.String("name", name), zap.String("advertise", adv), zap.Error(joinErr))
+			return nil, "", joinErr
+		}
+	}
+	return n, adv, nil
 }

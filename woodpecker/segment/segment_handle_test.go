@@ -74,8 +74,9 @@ func TestAppendAsync_Success(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.Anything).Return(0, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -129,7 +130,8 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), &proto.LogEntry{
 			SegId:   1,
@@ -205,9 +207,11 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
 		ch := make(chan int64, 1)
 		ch <- int64(i)
@@ -314,10 +318,12 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(1), nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
 
 	// Mock for successful entries (0,1) and timeout entry (2)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 
 	// Entry 0,1 will succeed with AppendEntry and get result
 	for i := 0; i < 2; i++ {
@@ -514,7 +520,8 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 5; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
@@ -591,7 +598,8 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	for i := 0; i < 20; i++ {
 		mockClient.EXPECT().AppendEntry(mock.Anything, int64(1), mock.Anything, mock.MatchedBy(func(ch channel.ResultChannel) bool { return ch != nil })).Return(int64(i), nil)
 	}
@@ -670,9 +678,9 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(0, nil)
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(0, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(0, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -702,7 +710,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
-	lastEntryId, fenceErr := segmentHandle.Fence(context.Background())
+	lastEntryId, fenceErr := segmentHandle.FenceAndComplete(context.Background())
 	assert.NoError(t, fenceErr)
 	assert.Equal(t, int64(0), lastEntryId)
 	callbackCalled := false
@@ -723,7 +731,10 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 
 func TestSendAppendSuccessCallbacks(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -794,7 +805,9 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(4, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -845,7 +858,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		testQueue.PushBack(op)
 	}
 
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(4, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(4, nil)
 	// success 3-9, but 0-2 is not finish
 	for i := 0; i < 10; i++ {
 		if i == 5 {
@@ -872,7 +885,8 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 
 	// Mock FenceSegment to return lastEntryId = 2, meaning entries 0,1,2 are flushed
 	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
@@ -939,7 +953,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 		Revision: 2,
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
-	lastEntryId, err := segmentHandle.Fence(context.Background())
+	lastEntryId, err := segmentHandle.FenceAndComplete(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), lastEntryId)
 
@@ -969,7 +983,8 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(1), nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 
 	// Mock FenceSegment to return ErrSegmentFenced but with lastEntryId = 1
 	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(1), nil)
@@ -1034,7 +1049,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 		Revision: 2,
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
-	lastEntryId, err := segmentHandle.Fence(context.Background())
+	lastEntryId, err := segmentHandle.FenceAndComplete(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), lastEntryId)
 
@@ -1057,11 +1072,12 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 // new append operations are rejected with ErrSegmentHandleSegmentRolling
 func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(-1), nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(-1), nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
@@ -1114,8 +1130,11 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1213,8 +1232,10 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1309,8 +1330,10 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Maybe()
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1413,8 +1436,9 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1467,9 +1491,10 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1535,8 +1560,9 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
-	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything).Return(mockClient, nil).Maybe()
-	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, int64(1), int64(1)).Return(int64(0), nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Maybe()
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{

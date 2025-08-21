@@ -840,7 +840,7 @@ func (w *LocalFileWriter) writeRecord(ctx context.Context, record codec.Record) 
 }
 
 // Finalize finalizes the writer and writes the footer
-func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
+func (w *LocalFileWriter) Finalize(ctx context.Context /*not used, cause it always same as last flushed entryID */, lac int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
@@ -886,10 +886,12 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	copy(blockIndexesCopy, w.blockIndexes)
 	blockIndexesLen := len(w.blockIndexes)
 
+	lastEntryID := int64(-1)
 	for _, indexRecord := range blockIndexesCopy {
 		if err := w.writeRecord(ctx, indexRecord); err != nil {
 			return w.lastEntryID.Load(), fmt.Errorf("write index record: %w", err)
 		}
+		lastEntryID = indexRecord.LastEntryID
 	}
 	indexLength := uint32(w.writtenBytes - indexStartOffset)
 
@@ -902,6 +904,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 		IndexLength:  indexLength,              // Will be calculated by the codec
 		Version:      codec.FormatVersion,
 		Flags:        0,
+		LAC:          lastEntryID, // LAC same as lastEntryID, because wq=aq=1
 	}
 
 	if err := w.writeRecord(ctx, footer); err != nil {
@@ -1088,17 +1091,18 @@ func (w *LocalFileWriter) recoverFromExistingFileUnsafe(ctx context.Context) err
 
 	// Try to parse the file to determine its state
 	// First, check if it has a complete footer (finalized file)
-	if w.writtenBytes >= int64(codec.RecordHeaderSize+codec.FooterRecordSize) {
-		// Try to read footer from the end
-		footerData := make([]byte, codec.RecordHeaderSize+codec.FooterRecordSize)
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	if w.writtenBytes >= int64(maxFooterSize) {
+		// Try to read footer from the end using compatibility parsing
+		footerData := make([]byte, maxFooterSize)
 		_, err := file.ReadAt(footerData, w.writtenBytes-int64(len(footerData)))
 		if err == nil {
-			// Try to decode footer
-			footerRecord, err := codec.DecodeRecord(footerData)
-			if err == nil && footerRecord.Type() == codec.FooterRecordType {
+			// Try to parse footer with compatibility parsing
+			footerRecord, err := codec.ParseFooterFromBytes(footerData)
+			if err == nil {
 				// File is already finalized, can't recover for writing
 				w.finalized.Store(true)
-				return w.recoverBlocksFromFooterUnsafe(context.TODO(), file, footerRecord.(*codec.FooterRecord))
+				return w.recoverBlocksFromFooterUnsafe(context.TODO(), file, footerRecord)
 			}
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,9 +74,10 @@ type SegmentHandle interface {
 	// GetBlocksCount get the number of blocks in the segment
 	GetBlocksCount(ctx context.Context) int64
 	// Complete the segment writing
+	// Deprecated, no used in main logic
 	Complete(ctx context.Context) (int64, error)
-	// Fence the segment in all nodes
-	Fence(ctx context.Context) (int64, error)
+	// FenceAndComplete the segment in all nodes
+	FenceAndComplete(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
 	Compact(ctx context.Context) error
 	// SetRollingReady set the segment as ready for rolling
@@ -97,17 +99,9 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 		metadata:       metadata,
 		ClientPool:     clientPool,
 		appendOpsQueue: list.New(),
-		quorumInfo: &proto.QuorumInfo{ // TODO: get from metadata in cluster mode
-			Id: 1,
-			Wq: 1,
-			Aq: 1,
-			Es: 1,
-			Nodes: []string{
-				"127.0.0.1",
-			},
-		},
-		executor: NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:      cfg,
+		quorumInfo:     segmentMeta.Metadata.Quorum,
+		executor:       NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:            cfg,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
@@ -280,6 +274,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 		logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks with appendOps empty queue, skip", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId))
 		return
 	}
+	newLac := int64(-1)
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
 		op, ok := e.Value.(*AppendOp)
 		if !ok {
@@ -294,6 +289,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 			elementsToRemove = append(elementsToRemove, e)
 			// update lac
 			s.lastAddConfirmed.Store(op.entryId)
+			newLac = op.entryId
 			// update size
 			s.commitedSize.Add(int64(len(op.value)))
 			s.submittedSize.Add(-int64(len(op.value)))
@@ -310,6 +306,10 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not the next lac", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break
 		}
+	}
+	// sync lac for this round
+	if newLac >= 0 {
+		s.syncLAC(ctx, newLac)
 	}
 	for _, element := range elementsToRemove {
 		s.appendOpsQueue.Remove(element)
@@ -430,22 +430,73 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 		return nil, err
 	}
 
-	// TODO support quorum read, and read state for each
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
+	// quorum read based on lac mechanism with intelligent node selection
+	nodeCount := len(quorumInfo.Nodes)
+	var lastError error
+
+	for i := 0; i < nodeCount; i++ {
+		// Start from a different node each time to distribute load
+		nodeIndex := i % nodeCount
+		node := quorumInfo.Nodes[nodeIndex]
+
+		logger.Ctx(ctx).Debug("attempting to read from node",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId),
+			zap.String("node", node),
+			zap.Int("nodeIndex", nodeIndex),
+			zap.Int("attempt", i+1))
+
+		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to get client for node, trying next",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segmentId),
+				zap.String("node", node),
+				zap.Error(err))
+			lastError = err
+			continue
+		}
+
+		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, lastReadState)
+		if err != nil {
+			// For other errors, return immediately
+			logger.Ctx(ctx).Warn("read batch failed on node",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segmentId),
+				zap.String("node", node),
+				zap.Error(err))
+			lastError = err
+			continue
+		}
+
+		// Success! Log and return the result
+		logger.Ctx(ctx).Debug("finish read batch successfully",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId),
+			zap.Int64("from", from),
+			zap.Int64("maxEntries", maxEntries),
+			zap.String("successfulNode", node),
+			zap.Int("nodeIndex", nodeIndex),
+			zap.Int("count", len(batchResult.Entries)))
+		return batchResult, nil
 	}
 
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		return nil, err
-	}
+	// All nodes failed
+	logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segId", s.segmentId),
+		zap.Int("totalNodes", nodeCount),
+		zap.Error(lastError))
 
-	batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, lastReadState)
-	if err != nil {
-		return nil, err
+	if lastError != nil {
+		return nil, lastError
 	}
-	logger.Ctx(ctx).Debug("finish read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries), zap.Int("count", len(batchResult.Entries)))
-	return batchResult, nil
+	return nil, werr.ErrFileReaderNoBlockFound.WithCauseErrMsg("all quorum nodes failed to read batch")
 }
 
 // GetLastAddConfirmed call by reader
@@ -465,11 +516,11 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 		return -1, err
 	}
 
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
-	}
-
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	// TODO use one of strategies for read，default use quorum read
+	//if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
+	//	return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("Currently only support embed standalone mode")
+	//}
+	cli, err := s.ClientPool.GetLogStoreClient(ctx, quorumInfo.Nodes[0]) // TODO currently read first node directly, then read from other nodes?
 	if err != nil {
 		return -1, err
 	}
@@ -708,6 +759,12 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 		return 0
 	}
 
+	if len(s.quorumInfo.Nodes) > 1 {
+		// In service mode, writes go to local disk and are not limited by block count,
+		// rolling is only controlled by size and time constraints
+		return 0
+	}
+
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -729,7 +786,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 		return 0
 	}
 
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
+	cli, err := s.ClientPool.GetLogStoreClient(ctx, quorumInfo.Nodes[0])
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to get blocks count",
 			zap.String("logName", s.logName),
@@ -755,6 +812,8 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	return currentBlockCounts
 }
 
+// Complete segment
+// Deprecated
 func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Complete")
 	defer sp.End()
@@ -764,10 +823,9 @@ func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 }
 
 func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error) {
-	// fence segment, prevent new append operations
+	// Get quorum information for complete operation
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
-		// Revert fenced state on error
 		logger.Ctx(ctx).Warn("Failed to get quorum info during doComplete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -775,38 +833,420 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 			zap.Error(err))
 		return -1, err
 	}
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration during doComplete",
+
+	// TODO maybe not use fence? use mark completed? 是否有必要和fence区分，不然正常close和fence可能会出现并发行为，不知道谁的优先级更高？
+	lastAddConfirmed, fencedErr := s.fenceSegmentQuorum(ctx, quorumInfo)
+	if fencedErr != nil {
+		logger.Ctx(ctx).Error("quorum fence segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
-			zap.Int64("quorumId", quorumInfo.Id),
-			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Failed to get logstore client during doComplete",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId),
-			zap.String("node", quorumInfo.Nodes[0]),
-			zap.Error(err))
-		return -1, err
+			zap.Error(fencedErr))
+		return -1, fencedErr
 	}
 
-	logger.Ctx(ctx).Info("Sending complete segment request to logStore",
+	logger.Ctx(ctx).Info("Starting quorum complete segment operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.String("targetNode", quorumInfo.Nodes[0]))
+		zap.Int64("quorumId", quorumInfo.Id),
+		zap.Int("nodeCount", len(quorumInfo.Nodes)),
+		zap.Int32("ackQuorum", quorumInfo.Aq))
 
-	return cli.CompleteSegment(ctx, s.logId, s.segmentId)
+	// Send CompleteSegment requests to all quorum nodes in parallel
+	return lastAddConfirmed, s.completeSegmentQuorum(ctx, quorumInfo, lastAddConfirmed)
 }
 
-func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
+// completeSegmentQuorum sends CompleteSegment requests to all quorum nodes
+// and calculates the Log All Committed (LAC) based on majority consensus
+func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo, lac int64) error {
+	nodeCount := len(quorumInfo.Nodes)
+	ackQuorum := int(quorumInfo.Aq)
+
+	// Channel to collect results from all nodes
+	resultChan := make(chan nodeCompleteResult, nodeCount)
+
+	// Send requests to all nodes in parallel
+	for _, node := range quorumInfo.Nodes {
+		go s.completeSegmentOnNode(ctx, node, lac, resultChan)
+	}
+
+	// Collect results from nodes
+	var successResults []int64
+	var lastError error
+
+	for i := 0; i < nodeCount; i++ {
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				logger.Ctx(ctx).Warn("Failed to complete segment on node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Error(result.err))
+				lastError = result.err
+			} else {
+				successResults = append(successResults, result.lastEntryId)
+				logger.Ctx(ctx).Info("Successfully completed segment on node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Int64("lastEntryId", result.lastEntryId))
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// Check if we have enough successful responses for ack quorum
+	if len(successResults) < ackQuorum {
+		logger.Ctx(ctx).Error("Insufficient successful responses for quorum complete",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int("successCount", len(successResults)),
+			zap.Int("requiredAckQuorum", ackQuorum))
+		if lastError != nil {
+			return lastError
+		}
+		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful complete responses")
+	}
+
+	// Calculate LAC (Log All Committed) from successful results
+	completedLAC := s.calculateLAC(successResults, ackQuorum)
+	logger.Ctx(ctx).Info("Calculated LAC from quorum complete responses",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lac", lac),
+		zap.Int("successCount", len(successResults)),
+		zap.Int("ackQuorum", ackQuorum),
+		zap.Int64s("allResults", successResults),
+		zap.Int64("completedLAC", completedLAC))
+	s.lastAddConfirmed.Store(lac)
+	return nil
+}
+
+func (s *segmentHandleImpl) syncLAC(ctx context.Context, lac int64) {
+	// Asynchronously sync LAC updates to all quorum nodes
+	go s.syncLACToQuorumAsync(ctx, lac)
+}
+
+// syncLACToQuorumAsync asynchronously syncs LAC to all quorum nodes
+func (s *segmentHandleImpl) syncLACToQuorumAsync(ctx context.Context, lac int64) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "syncLACToQuorumAsync")
+	defer sp.End()
+
+	// Get quorum info
+	quorumInfo, err := s.GetQuorumInfo(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get quorum info for LAC sync",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int64("lac", lac),
+			zap.Error(err))
+		return
+	}
+
+	// Create result channel to collect sync results
+	resultChan := make(chan nodeLACSyncResult, len(quorumInfo.Nodes))
+
+	// Send LAC sync requests to all quorum nodes in parallel
+	for _, node := range quorumInfo.Nodes {
+		go s.syncLACToNode(ctx, node, lac, resultChan)
+	}
+
+	// Collect results (fire-and-forget style, just log results)
+	successCount := 0
+	totalNodes := len(quorumInfo.Nodes)
+
+	for i := 0; i < totalNodes; i++ {
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				logger.Ctx(ctx).Warn("Failed to sync LAC to node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Int64("lac", lac),
+					zap.Error(result.err))
+			} else {
+				successCount++
+				logger.Ctx(ctx).Debug("Successfully synced LAC to node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Int64("lac", lac))
+			}
+		case <-ctx.Done():
+			logger.Ctx(ctx).Warn("LAC sync context cancelled",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.Int64("lac", lac),
+				zap.Error(ctx.Err()))
+			return
+		}
+	}
+
+	logger.Ctx(ctx).Debug("LAC sync to quorum completed",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lac", lac),
+		zap.Int("successCount", successCount),
+		zap.Int("totalNodes", totalNodes))
+}
+
+// nodeLACSyncResult represents the result of LAC sync operation on a single node
+type nodeLACSyncResult struct {
+	node string
+	err  error
+}
+
+// syncLACToNode sends UpdateLastAddConfirmed request to a single node
+func (s *segmentHandleImpl) syncLACToNode(ctx context.Context, node string, lac int64, resultChan chan<- nodeLACSyncResult) {
+	cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+	if err != nil {
+		resultChan <- nodeLACSyncResult{
+			node: node,
+			err:  err,
+		}
+		return
+	}
+
+	err = cli.UpdateLastAddConfirmed(ctx, s.logId, s.segmentId, lac)
+	resultChan <- nodeLACSyncResult{
+		node: node,
+		err:  err,
+	}
+}
+
+// nodeCompleteResult represents the result of CompleteSegment operation on a single node
+type nodeCompleteResult struct {
+	node        string
+	lastEntryId int64
+	err         error
+}
+
+// completeSegmentOnNode sends CompleteSegment request to a single node
+func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node string, lac int64, resultChan chan<- nodeCompleteResult) {
+	cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+	if err != nil {
+		resultChan <- nodeCompleteResult{
+			node: node,
+			err:  err,
+		}
+		return
+	}
+
+	lastEntryId, err := cli.CompleteSegment(ctx, s.logId, s.segmentId, lac)
+	resultChan <- nodeCompleteResult{
+		node:        node,
+		lastEntryId: lastEntryId,
+		err:         err,
+	}
+}
+
+// calculateLAC calculates the Log All Committed (LAC) based on the quorum responses.
+// LAC is the highest entry ID that is guaranteed to be committed on a majority of nodes.
+// For example: if nodes return [4, 6, 7] and ackQuorum is 2, then LAC is 6
+// because entries 1-6 are committed on at least 2 nodes (majority).
+func (s *segmentHandleImpl) calculateLAC(results []int64, ackQuorum int) int64 {
+	if len(results) == 0 {
+		return -1
+	}
+
+	// Sort results in ascending order
+	sortedResults := make([]int64, len(results))
+	copy(sortedResults, results)
+	sort.Slice(sortedResults, func(i, j int) bool {
+		return sortedResults[i] < sortedResults[j]
+	})
+
+	// LAC is the (len(results) - ackQuorum + 1)th smallest value
+	// This ensures that at least ackQuorum nodes have committed up to this entry
+	lacIndex := len(sortedResults) - ackQuorum
+	if lacIndex < 0 {
+		lacIndex = 0
+	}
+
+	return sortedResults[lacIndex]
+}
+
+// fenceSegmentQuorum sends FenceSegment requests to all quorum nodes
+// and calculates the Log All Committed (LAC) based on majority consensus
+func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (int64, error) {
+	nodeCount := len(quorumInfo.Nodes)                         // always es=len(nodes)
+	ensembleCoverage := int(quorumInfo.Es - quorumInfo.Aq + 1) // currently always es=3=wq,aq=2, so ec=es-aq+1=2=aq
+
+	// Channel to collect results from all nodes
+	resultChan := make(chan nodeFenceResult, nodeCount)
+
+	// Send requests to all nodes in parallel
+	for _, node := range quorumInfo.Nodes {
+		go s.fenceSegmentOnNode(ctx, node, resultChan)
+	}
+
+	// Collect results from nodes
+	var successResults []int64
+	var lastError error
+
+	for i := 0; i < nodeCount; i++ {
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				logger.Ctx(ctx).Warn("Failed to fence segment on node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Error(result.err))
+				lastError = result.err
+			} else {
+				successResults = append(successResults, result.lastEntryId)
+				logger.Ctx(ctx).Info("Successfully fenced segment on node",
+					zap.String("logName", s.logName),
+					zap.Int64("logId", s.logId),
+					zap.Int64("segmentId", s.segmentId),
+					zap.String("node", result.node),
+					zap.Int64("lastEntryId", result.lastEntryId))
+			}
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+	}
+
+	// Check if we have enough successful responses for ack quorum
+	if len(successResults) < ensembleCoverage {
+		logger.Ctx(ctx).Error("Insufficient successful responses for quorum fence",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Int("successCount", len(successResults)),
+			zap.Int("requiredEC", ensembleCoverage))
+		if lastError != nil {
+			return -1, lastError
+		}
+		return -1, werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful fence responses")
+	}
+
+	// Calculate LAC (Log All Committed) from successful results
+	lac := s.calculateLAC(successResults, ensembleCoverage)
+
+	logger.Ctx(ctx).Info("Calculated LAC from quorum fence responses",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("lac", lac),
+		zap.Int("successCount", len(successResults)),
+		zap.Int("ensembleCoverage", ensembleCoverage),
+		zap.Int64s("allResults", successResults))
+
+	return lac, nil
+}
+
+// nodeFenceResult represents the result of FenceSegment operation on a single node
+type nodeFenceResult struct {
+	node        string
+	lastEntryId int64
+	err         error
+}
+
+// fenceSegmentOnNode sends FenceSegment request to a single node
+func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string, resultChan chan<- nodeFenceResult) {
+	cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+	if err != nil {
+		resultChan <- nodeFenceResult{
+			node: node,
+			err:  err,
+		}
+		return
+	}
+
+	lastEntryId, err := cli.FenceSegment(ctx, s.logId, s.segmentId)
+	resultChan <- nodeFenceResult{
+		node:        node,
+		lastEntryId: lastEntryId,
+		err:         err,
+	}
+}
+
+// compactSegmentQuorum tries SegmentCompact on each quorum node sequentially
+// until one succeeds. Returns the result from the first successful node.
+func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo *proto.QuorumInfo) (*proto.SegmentMetadata, error) {
+	var lastError error
+
+	// Try each node sequentially until one succeeds
+	for i, node := range quorumInfo.Nodes {
+		logger.Ctx(ctx).Info("Attempting compaction on node",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("node", node),
+			zap.Int("nodeIndex", i+1),
+			zap.Int("totalNodes", len(quorumInfo.Nodes)))
+
+		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
+		if err != nil {
+			logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.String("node", node),
+				zap.Error(err))
+			lastError = err
+			continue
+		}
+
+		// Try compaction on this node
+		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
+		if compactErr != nil {
+			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
+				zap.String("logName", s.logName),
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.String("node", node),
+				zap.Int("nodeIndex", i+1),
+				zap.Int("totalNodes", len(quorumInfo.Nodes)),
+				zap.Error(compactErr))
+			lastError = compactErr
+			continue
+		}
+
+		// Success! Log and return the result
+		logger.Ctx(ctx).Info("Segment compaction succeeded on node",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.String("successfulNode", node),
+			zap.Int("nodeIndex", i+1),
+			zap.Int("totalNodes", len(quorumInfo.Nodes)),
+			zap.Int64("compactedSize", compactSegMetaInfo.Size),
+			zap.Int64("lastEntryId", compactSegMetaInfo.LastEntryId))
+
+		return compactSegMetaInfo, nil
+	}
+
+	// All nodes failed
+	logger.Ctx(ctx).Error("Compaction failed on all quorum nodes",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int("totalNodes", len(quorumInfo.Nodes)))
+
+	if lastError != nil {
+		return nil, lastError
+	}
+	return nil, werr.ErrSegmentHandleCompactionFailed.WithCauseErrMsg("all quorum nodes failed compaction")
+}
+
+func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Fence")
 	defer sp.End()
 	s.updateAccessTime()
@@ -843,49 +1283,37 @@ func (s *segmentHandleImpl) Fence(ctx context.Context) (int64, error) {
 			zap.Error(err))
 		return -1, err
 	}
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration during fence, reverting fenced state",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId),
-			zap.Int64("quorumId", quorumInfo.Id),
-			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return -1, werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		// Revert fenced state on error
-		logger.Ctx(ctx).Warn("Failed to get logstore client during fence, reverting fenced state",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId),
-			zap.String("node", quorumInfo.Nodes[0]),
-			zap.Error(err))
-		return -1, err
-	}
-
-	logger.Ctx(ctx).Info("Sending fence request to logstore",
+	logger.Ctx(ctx).Info("Starting quorum fence segment operation",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
-		zap.String("targetNode", quorumInfo.Nodes[0]))
+		zap.Int64("quorumId", quorumInfo.Id),
+		zap.Int("nodeCount", len(quorumInfo.Nodes)),
+		zap.Int32("ackQuorum", quorumInfo.Aq))
 
-	// fence and get last entry
-	lastEntryId, fencedErr := cli.FenceSegment(ctx, s.logId, s.segmentId)
-
-	logger.Ctx(ctx).Info("Received fence response from logstore",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segmentId", s.segmentId),
-		zap.Int64("lastEntryId", lastEntryId),
-		zap.Error(fencedErr))
-
+	// Send FenceSegment requests to all quorum nodes in parallel
+	lastEntryId, fencedErr := s.fenceSegmentQuorum(ctx, quorumInfo)
 	if fencedErr != nil {
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Info("segment fence fail", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(fencedErr))
+		logger.Ctx(ctx).Error("quorum fence segment failed",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(fencedErr))
 		return -1, fencedErr
+	}
+
+	completeErr := s.completeSegmentQuorum(ctx, quorumInfo, lastEntryId)
+	if completeErr != nil {
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "complete", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Error("quorum complete segment failed",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segmentId", s.segmentId),
+			zap.Error(completeErr))
+		return -1, completeErr
 	}
 
 	// update segment state and meta
@@ -1018,31 +1446,18 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 			zap.Error(err))
 		return err
 	}
-	// choose on LogStore to compaction
-	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration for compaction",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId),
-			zap.Int64("quorumId", quorumInfo.Id),
-			zap.Int("nodeCount", len(quorumInfo.Nodes)))
-		return werr.ErrOperationNotSupported.WithCauseErrMsg("currently only support embed standalone mode")
-	}
-	cli, err := s.ClientPool.GetLogStoreClient(quorumInfo.Nodes[0])
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get logstore client for compaction",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segmentId", s.segmentId),
-			zap.String("targetNode", quorumInfo.Nodes[0]),
-			zap.Error(err))
-		return err
-	}
-	// wait compaction success
-	logger.Ctx(ctx).Info("request compact segment from completed to sealed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastEntryId", currentSegmentMeta.Metadata.LastEntryId))
-	compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
+	logger.Ctx(ctx).Info("Starting quorum compaction operation",
+		zap.String("logName", s.logName),
+		zap.Int64("logId", s.logId),
+		zap.Int64("segmentId", s.segmentId),
+		zap.Int64("quorumId", quorumInfo.Id),
+		zap.Int("nodeCount", len(quorumInfo.Nodes)),
+		zap.Int64("lastEntryId", currentSegmentMeta.Metadata.LastEntryId))
+
+	// Try compaction on each node sequentially until one succeeds
+	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo)
 	if compactErr != nil {
-		logger.Ctx(ctx).Warn("Segment compaction operation failed",
+		logger.Ctx(ctx).Error("All nodes failed compaction operation",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),

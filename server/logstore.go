@@ -23,11 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -48,15 +46,14 @@ type LogStore interface {
 	Stop() error
 	SetAddress(address string)
 	GetAddress() string
-	SetEtcdClient(etcdCli *clientv3.Client)
-	Register(ctx context.Context) error
 	AddEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
-	CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error)
 	CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	GetSegmentBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error
 	CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error
 }
 
@@ -66,9 +63,8 @@ type logStore struct {
 	cfg      *config.Configuration
 	ctx      context.Context
 	cancel   context.CancelFunc
-	etcdCli  *clientv3.Client
 	minioCli minioHandler.MinioHandler
-	address  string
+	address  string // use for log and metrics only
 
 	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]processor.SegmentProcessor
@@ -78,13 +74,12 @@ type logStore struct {
 	cleanupDone chan struct{}
 }
 
-func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
+func NewLogStore(ctx context.Context, cfg *config.Configuration, minioCli minioHandler.MinioHandler) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	logStore := &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		etcdCli:           etcdCli,
 		minioCli:          minioCli,
 		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
 		address:           net.GetIP(""),
@@ -100,14 +95,6 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *client
 func (l *logStore) Start() error {
 	logger.Ctx(l.ctx).Info("Starting LogStore service",
 		zap.String("address", l.address))
-
-	err := l.Register(context.Background())
-	if err != nil {
-		logger.Ctx(l.ctx).Warn("Failed to start LogStore service - registration failed",
-			zap.String("address", l.address),
-			zap.Error(err))
-		return err
-	}
 
 	// Start background cleanup goroutine
 	l.startBackgroundCleanup()
@@ -163,25 +150,6 @@ func (l *logStore) SetAddress(address string) {
 
 func (l *logStore) GetAddress() string {
 	return l.address
-}
-
-func (l *logStore) SetEtcdClient(etcdCli *clientv3.Client) {
-	l.etcdCli = etcdCli
-	logger.Ctx(l.ctx).Info("LogStore etcd client updated",
-		zap.Bool("clientSet", etcdCli != nil))
-}
-
-func (l *logStore) Register(ctx context.Context) error {
-	logger.Ctx(ctx).Info("Registering LogStore service to etcd",
-		zap.String("address", l.address))
-
-	// register this node to etcd and keep alive
-	// TODO
-
-	logger.Ctx(ctx).Info("LogStore service registration completed (TODO implementation)",
-		zap.String("address", l.address))
-
-	return nil
 }
 
 func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
@@ -282,7 +250,7 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentI
 	return batchData, nil
 }
 
-func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
 	defer sp.End()
 	start := time.Now()
@@ -294,7 +262,7 @@ func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId i
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
-	return segmentProcessor.Complete(ctx)
+	return segmentProcessor.Complete(ctx, lac)
 }
 
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
@@ -420,6 +388,31 @@ func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int6
 	} else {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "clean_segment", "success").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "clean_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
+	}
+	return err
+}
+
+func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "UpdateLastAddConfirmed")
+	defer sp.End()
+	start := time.Now()
+	logIdStr := fmt.Sprintf("%d", logId)
+
+	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, logId, segmentId)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("update segment lac failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("lac", lac), zap.Error(err))
+		return err
+	}
+	err = segmentProcessor.UpdateSegmentLastAddConfirmed(ctx, lac)
+	if err != nil {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("update segment lac failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("lac", lac), zap.Error(err))
+	} else {
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "success").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }

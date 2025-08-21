@@ -113,7 +113,7 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 
 	t.Run("Finalize", func(t *testing.T) {
 		// Test finalize
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), lastEntryId)
 	})
@@ -171,7 +171,7 @@ func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 	assert.Equal(t, int64(len(largeData)-1), writer.GetLastEntryId(ctx))
 
 	// Finalize and close
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 }
 
@@ -242,7 +242,7 @@ func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
 	assert.Equal(t, int64(totalEntries-1), writer.GetLastEntryId(ctx))
 
 	// Finalize
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 }
 
@@ -285,7 +285,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, result.Err)
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 
 		// Try to write after finalize
@@ -689,7 +689,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 		}
 	}
 
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	if err != nil {
 		b.Fatal(err)
 	}
