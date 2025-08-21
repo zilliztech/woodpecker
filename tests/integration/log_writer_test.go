@@ -104,7 +104,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
 
 	// wait for sync before read
-	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	// 6. Verify data integrity with a reader

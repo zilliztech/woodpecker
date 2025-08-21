@@ -186,6 +186,53 @@ func (_c *Reader_ReadNextBatchAdv_Call) RunAndReturn(run func(context.Context, s
 	return _c
 }
 
+// UpdateLastAddConfirmed provides a mock function with given fields: ctx, lac
+func (_m *Reader) UpdateLastAddConfirmed(ctx context.Context, lac int64) error {
+	ret := _m.Called(ctx, lac)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLastAddConfirmed")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(ctx, lac)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// Reader_UpdateLastAddConfirmed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLastAddConfirmed'
+type Reader_UpdateLastAddConfirmed_Call struct {
+	*mock.Call
+}
+
+// UpdateLastAddConfirmed is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lac int64
+func (_e *Reader_Expecter) UpdateLastAddConfirmed(ctx interface{}, lac interface{}) *Reader_UpdateLastAddConfirmed_Call {
+	return &Reader_UpdateLastAddConfirmed_Call{Call: _e.mock.On("UpdateLastAddConfirmed", ctx, lac)}
+}
+
+func (_c *Reader_UpdateLastAddConfirmed_Call) Run(run func(ctx context.Context, lac int64)) *Reader_UpdateLastAddConfirmed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *Reader_UpdateLastAddConfirmed_Call) Return(_a0 error) *Reader_UpdateLastAddConfirmed_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *Reader_UpdateLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64) error) *Reader_UpdateLastAddConfirmed_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewReader creates a new instance of Reader. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewReader(t interface {

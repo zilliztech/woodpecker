@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -48,7 +49,7 @@ var (
 	isLogStoreRunning bool
 )
 
-func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) (bool, error) {
+func startEmbedLogStore(cfg *config.Configuration, storageClient storageclient.ObjectStorage) (bool, error) {
 	embedLogStoreMu.Lock()
 	defer embedLogStoreMu.Unlock()
 
@@ -57,7 +58,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, sto
 	}
 
 	var takeControlOfClients bool = false
-	embedLogStore = server.NewLogStore(context.Background(), cfg, etcdCli, storageClient)
+	embedLogStore = server.NewLogStore(context.Background(), cfg, storageClient)
 	embedLogStore.SetAddress("127.0.0.1:18888") // TODO only placeholder now
 
 	initError := embedLogStore.Start()
@@ -89,7 +90,7 @@ func StopEmbedLogStore() error {
 
 var _ Client = (*woodpeckerEmbedClient)(nil)
 
-// Implementation of the client interface for Z'eembed mode.
+// Implementation of the client interface for embed mode.
 type woodpeckerEmbedClient struct {
 	mu  sync.RWMutex
 	cfg *config.Configuration
@@ -281,6 +282,9 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
 	}
+	if config.Woodpecker.Storage.IsStorageService() {
+		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("embed client not support service storage mode")
+	}
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
@@ -299,7 +303,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	// init logger
 	logger.InitLogger(cfg)
 	// Initialize metadata provider
-	metadataProvider := meta.NewMetadataProvider(ctx, etcdCli, cfg.Etcd.RequestTimeout)
+	metadataProvider := meta.NewMetadataProvider(ctx, etcdCli, cfg.Etcd.RequestTimeout.Milliseconds())
 	// Detect and store condition write capability if storage client is available
 	// Note: only perform condition write capability detection for embed mode with minio storage backend
 	if storageClient != nil && cfg.Woodpecker.Storage.IsStorageMinio() {
@@ -310,7 +314,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		cfg.Woodpecker.Logstore.FencePolicy.SetConditionWriteEnableOrNot(conditionWriteEnable)
 	}
 	// start embedded logStore
-	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, storageClient)
+	managedByLogStore, err := startEmbedLogStore(cfg, storageClient)
 	if err != nil {
 		return nil, err
 	}
@@ -356,77 +360,33 @@ func (c *woodpeckerEmbedClient) GetMetadataProvider() meta.MetadataProvider {
 // CreateLog creates a new log with the specified name.
 // It stores segment metadata for the new log.
 func (c *woodpeckerEmbedClient) CreateLog(ctx context.Context, logName string) error {
-	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
-	// try create new log
-	// Add retry logic for CreateLog when encountering ErrCreateLogMetadataTxn
-	const maxRetries = 5
-	var lastErr error
-
-	for i := 0; i < maxRetries; i++ {
-		// Try to create the log
-		err := c.Metadata.CreateLog(ctx, logName)
-		if err == nil {
-			// Success, return immediately
-			metrics.WpClientOperationsTotal.WithLabelValues("create_log", "success").Inc()
-			metrics.WpClientOperationLatency.WithLabelValues("create_log", "success").Observe(float64(time.Since(start).Milliseconds()))
-			return nil
-		}
-
-		// Check if the error is txn (ErrMetadataCreateLogTxn)
-		if werr.ErrMetadataCreateLogTxn.Is(err) {
-			// auto retry
-			logger.Ctx(ctx).Info("Retrying create log due to transaction conflict",
-				zap.String("logName", logName),
-				zap.Int("attempt", i+1),
-				zap.Int("maxRetries", maxRetries),
-				zap.Error(err))
-
-			// Keep the last error for potential return
-			lastErr = err
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-
-		// For non-txn errors or final attempt, return the error directly
-		metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("create log failed", zap.String("logName", logName), zap.Error(err))
-		return err
-	}
-
-	// If we exhausted all retries, return the last error
-	metrics.WpClientOperationsTotal.WithLabelValues("create_log", "error").Inc()
-	metrics.WpClientOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(start).Milliseconds()))
-	return lastErr
+	return createLogUnsafe(ctx, c.Metadata, logName)
 }
 
 // OpenLog opens an existing log with the specified name and returns a log handle.
 // It retrieves the log metadata and segments metadata, then creates a new log handle.
 func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
-	start := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	// Open log and retrieve metadata with detailed comments
-	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
-	if err != nil {
-		metrics.WpClientOperationsTotal.WithLabelValues("open_log", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("open_log", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
-		return nil, err
-	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
-	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
-	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
-	return newLogHandle, nil
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+}
+
+func (c *woodpeckerEmbedClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
+	return &proto.QuorumInfo{
+		Id:    -1,
+		Wq:    1,
+		Aq:    1,
+		Es:    1,
+		Nodes: []string{"127.0.0.1:59456"},
+	}, nil
 }
 
 // DeleteLog deletes the log with the specified name.
@@ -439,27 +399,12 @@ func (c *woodpeckerEmbedClient) DeleteLog(ctx context.Context, logName string) e
 // LogExists checks if a log with the specified name exists.
 // It returns true if the log exists, otherwise false.
 func (c *woodpeckerEmbedClient) LogExists(ctx context.Context, logName string) (bool, error) {
-	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return false, werr.ErrWoodpeckerClientClosed
 	}
-	// Check if log exists in meta
-	exists, err := c.Metadata.CheckExists(ctx, logName)
-	if err != nil {
-		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("log_exists", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("check log exists failed", zap.String("logName", logName), zap.Error(err))
-	} else {
-		status := "found"
-		if !exists {
-			status = "not_found"
-		}
-		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", status).Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("log_exists", status).Observe(float64(time.Since(start).Milliseconds()))
-	}
-	return exists, err
+	return logExistsUnsafe(ctx, c.Metadata, logName)
 }
 
 // GetAllLogs retrieves all log names.
@@ -468,18 +413,7 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	start := time.Now()
-	// Retrieve all logs with detailed comments
-	logs, err := c.Metadata.ListLogs(ctx)
-	if err != nil {
-		metrics.WpClientOperationsTotal.WithLabelValues("get_all_logs", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("get_all_logs", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("get all logs failed", zap.Error(err))
-	} else {
-		metrics.WpClientOperationsTotal.WithLabelValues("get_all_logs", "success").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("get_all_logs", "success").Observe(float64(time.Since(start).Milliseconds()))
-	}
-	return logs, err
+	return getAllLogsUnsafe(ctx, c.Metadata)
 }
 
 // GetLogsWithPrefix retrieves log names that start with the specified prefix.
@@ -488,18 +422,7 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	start := time.Now()
-	// Retrieve logs with the given prefix with detailed comments
-	logs, err := c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
-	if err != nil {
-		metrics.WpClientOperationsTotal.WithLabelValues("get_logs_with_prefix", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("get_logs_with_prefix", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("get all logs with prefix failed", zap.Error(err))
-	} else {
-		metrics.WpClientOperationsTotal.WithLabelValues("get_logs_with_prefix", "success").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("get_logs_with_prefix", "success").Observe(float64(time.Since(start).Milliseconds()))
-	}
-	return logs, err
+	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
 }
 
 func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
@@ -516,7 +439,7 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 	if closeErr != nil {
 		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
-	closePoolErr := c.clientPool.Close()
+	closePoolErr := c.clientPool.Close(ctx)
 	if closePoolErr != nil {
 		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
@@ -524,8 +447,8 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 		closeEtcdCliErr := c.etcdCli.Close()
 		if closeEtcdCliErr != nil {
 			logger.Ctx(ctx).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
+			return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
 		}
-		return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
 	}
 	return werr.Combine(closeErr, closePoolErr)
 }

@@ -39,11 +39,11 @@ func TestNewSegmentImpl(t *testing.T) {
 				SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 					MaxEntries:      1000,
 					MaxBytes:        1024 * 1024,
-					MaxInterval:     1000,
+					MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 					MaxFlushThreads: 5,
 					MaxFlushSize:    1024 * 1024,
 					MaxFlushRetries: 3,
-					RetryInterval:   100,
+					RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 				},
 			},
 		},
@@ -67,11 +67,11 @@ func TestDeleteFileData(t *testing.T) {
 					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 						MaxFlushThreads: 5,
 						MaxFlushSize:    1024 * 1024,
 						MaxFlushRetries: 3,
-						RetryInterval:   100,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 					},
 				},
 			},
@@ -107,11 +107,11 @@ func TestDeleteFileData(t *testing.T) {
 					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 						MaxFlushThreads: 5,
 						MaxFlushSize:    1024 * 1024,
 						MaxFlushRetries: 3,
-						RetryInterval:   100,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 					},
 					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
@@ -141,11 +141,11 @@ func TestDeleteFileData(t *testing.T) {
 					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 						MaxFlushThreads: 5,
 						MaxFlushSize:    1024 * 1024,
 						MaxFlushRetries: 3,
-						RetryInterval:   100,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 					},
 					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
@@ -184,11 +184,11 @@ func TestDeleteFileData(t *testing.T) {
 					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 						MaxFlushThreads: 5,
 						MaxFlushSize:    1024 * 1024,
 						MaxFlushRetries: 3,
-						RetryInterval:   100,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 					},
 					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,
@@ -219,11 +219,11 @@ func TestDeleteFileData(t *testing.T) {
 					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
 						MaxEntries:      10,
 						MaxBytes:        1024 * 1024,
-						MaxInterval:     1000,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
 						MaxFlushThreads: 5,
 						MaxFlushSize:    1024 * 1024,
 						MaxFlushRetries: 3,
-						RetryInterval:   100,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
 					},
 					SegmentCompactionPolicy: config.SegmentCompactionPolicy{
 						MaxBytes: 4 * 1024 * 1024,

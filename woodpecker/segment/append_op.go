@@ -51,42 +51,46 @@ var _ Operation = (*AppendOp)(nil)
 // If it is, it sends an acknowledgment back to the application.
 // If a LogStore fails, it retries multiple times.
 type AppendOp struct {
-	mu        sync.Mutex
-	logId     int64
-	segmentId int64
-	entryId   int64
-	value     []byte
-	callback  func(segmentId int64, entryId int64, err error)
+	mu         sync.Mutex
+	bucketName string
+	rootPath   string
+	logId      int64
+	segmentId  int64
+	entryId    int64
+	value      []byte
+	callback   func(segmentId int64, entryId int64, err error)
 
-	clientPool     client.LogStoreClientPool
-	handle         SegmentHandle
-	ackSet         *bitset.BitSet
-	quorumInfo     *proto.QuorumInfo
-	resultChannels []channel.ResultChannel
+	clientPool      client.LogStoreClientPool
+	handle          SegmentHandle
+	ackSet          *bitset.BitSet
+	quorumInfo      *proto.QuorumInfo
+	resultChannels  []channel.ResultChannel
+	channelAttempts []int
+	finalFailureSet *bitset.BitSet
 
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
 	err        error
-
-	attempt int // attemptId
 }
 
-func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
-	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo, attempt int) *AppendOp {
+func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
 	op := &AppendOp{
-		logId:     logId,
-		segmentId: segmentId,
-		entryId:   entryId,
-		value:     value,
-		callback:  callback,
+		bucketName: bucketName,
+		rootPath:   rootPath,
+		logId:      logId,
+		segmentId:  segmentId,
+		entryId:    entryId,
+		value:      value,
+		callback:   callback,
 
-		clientPool:     clientPool,
-		handle:         handle,
-		ackSet:         &bitset.BitSet{},
-		quorumInfo:     quorumInfo,
-		resultChannels: make([]channel.ResultChannel, 0),
-
-		attempt: attempt,
+		clientPool:      clientPool,
+		handle:          handle,
+		ackSet:          &bitset.BitSet{},
+		quorumInfo:      quorumInfo,
+		resultChannels:  make([]channel.ResultChannel, 0),
+		channelAttempts: make([]int, len(quorumInfo.Nodes)),
+		finalFailureSet: &bitset.BitSet{},
 	}
 	op.completed.Store(false)
 	return op
@@ -101,110 +105,113 @@ func (op *AppendOp) Execute() {
 	defer sp.End()
 	op.mu.Lock()
 	defer op.mu.Unlock()
-	// get ES/WQ/AQ
-	quorumInfo, err := op.handle.GetQuorumInfo(ctx)
-	if err != nil {
-		op.err = err
-		go op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
-		return
-	}
-
-	// Update quorumInfo to ensure consistency
-	op.quorumInfo = quorumInfo
 
 	// Initialize result channels for each node if not already done
 	if len(op.resultChannels) == 0 {
-		op.resultChannels = make([]channel.ResultChannel, len(quorumInfo.Nodes))
+		op.resultChannels = make([]channel.ResultChannel, len(op.quorumInfo.Nodes))
 	}
 
-	for i := 0; i < len(quorumInfo.Nodes); i++ {
-		// get client from clientPool according node addr
-		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
-		if clientErr != nil {
-			logger.Ctx(ctx).Warn("get client failed for node", zap.String("nodeAddr", quorumInfo.Nodes[i]), zap.Int64("logId", op.logId), zap.Int64("segmentId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(clientErr))
-			op.err = clientErr
-			go op.handle.SendAppendErrorCallbacks(ctx, op.entryId, clientErr)
-			return
-		}
+	for i := 0; i < len(op.quorumInfo.Nodes); i++ {
 		// send request to the node
-		op.sendWriteRequest(ctx, cli, i)
+		op.sendWriteRequestRetry(ctx, i)
 	}
 }
 
-func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int) {
+// sendWriteRequestRetry used for retry single request
+func (op *AppendOp) sendWriteRequestRetry(ctx context.Context, serverIndex int) {
+	serverAddr := op.quorumInfo.Nodes[serverIndex]
+	// get client from clientPool according node addr
+	cli, clientErr := op.clientPool.GetLogStoreClient(ctx, serverAddr)
+	if clientErr != nil {
+		op.err = clientErr
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, clientErr, serverIndex, serverAddr)
+		return
+	}
+	// send request to the node
+	op.sendWriteRequest(ctx, cli, serverIndex, serverAddr)
+}
+
+func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int, serverAddr string) {
 	ctx, sp := logger.NewIntentCtx("AppendOp", "sendWriteRequest")
 	defer sp.End()
 	startRequestTime := time.Now()
 
-	// TODO currently only support Local ResultChannel
+	isRemoteMode := len(op.resultChannels) >= 3
 	if len(op.resultChannels) > serverIndex && op.resultChannels[serverIndex] == nil {
 		// create new result channel for this server if not exists
-		resultChannel := channel.NewLocalResultChannel(op.Identifier())
-		op.resultChannels[serverIndex] = resultChannel
+		if isRemoteMode {
+			resultChannel := channel.NewRemoteResultChannel(op.Identifier())
+			op.resultChannels[serverIndex] = resultChannel
+		} else {
+			resultChannel := channel.NewLocalResultChannel(op.Identifier())
+			op.resultChannels[serverIndex] = resultChannel
+		}
 	}
 
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
+	entryId, err := cli.AppendEntry(ctx, op.bucketName, op.rootPath, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
 	sp.AddEvent("AppendEntryCall", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency
 	// async received ack without order
-	go op.receivedAckCallback(ctx, startRequestTime, entryId, op.resultChannels[serverIndex], err, serverIndex)
+	go op.receivedAckCallback(ctx, startRequestTime, entryId, op.resultChannels[serverIndex], err, serverIndex, serverAddr)
 }
 
-func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int) {
+func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int, serverAddr string) {
 	ctx, sp := logger.NewIntentCtx("AppendOp", "receivedAckCallback")
 	defer sp.End()
 	// sync call error, return directly
 	if err != nil {
 		op.err = err
-		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, serverIndex, serverAddr)
 		return
 	}
 	// async call error, wait until syncedCh closed
 	subCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // TODO configurable
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
-	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
+	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex), attribute.String("serverAddr", serverAddr)))
 	if readChanErr != nil {
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
-			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
 			op.err = readChanErr
-			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, readChanErr)
+			op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
 			return
 		}
 		// chan already close, just return
-		logger.Ctx(ctx).Warn(fmt.Sprintf("chan already close for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId))
+		logger.Ctx(ctx).Warn(fmt.Sprintf("chan already close for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
 		return
 	}
 
 	if op.fastCalled.Load() {
-		logger.Ctx(ctx).Debug(fmt.Sprintf("received ack:%d for log:%d seg:%d entry:%d, but already fast completed", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
+		logger.Ctx(ctx).Debug(fmt.Sprintf("received ack:%d for log:%d seg:%d entry:%d from %s, but already fast completed", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId, serverAddr))
 		return
 	}
 
 	if syncedResult.SyncedId == -1 || syncedResult.Err != nil {
 		op.err = syncedResult.Err
-		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, syncedResult.Err)
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, syncedResult.Err, serverIndex, serverAddr)
 		return
 	}
+
+	// set and count if ack >= aq
 	if syncedResult.SyncedId != -1 && syncedResult.SyncedId >= op.entryId {
-		op.ackSet.Set(serverIndex)
-		if op.ackSet.Count() >= int(op.quorumInfo.Wq) {
+		ackCount := op.ackSet.SetAndCount(serverIndex)
+		if ackCount >= int(op.quorumInfo.Aq) {
 			// Use atomic operation to ensure SendAppendSuccessCallbacks is called only once
 			if op.completed.CompareAndSwap(false, true) {
 				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
-				cost := time.Now().Sub(startRequestTime)
+				cost := time.Since(startRequestTime)
 				metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
 				metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
 			}
 		}
-		logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d ", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
+		logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d from %s ", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId, serverAddr))
 		return
 	}
 
-	logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d, keep async waiting", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId))
+	logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d from %s, keep async waiting", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId, serverAddr))
 }
 
 func (op *AppendOp) FastFail(ctx context.Context, err error) {

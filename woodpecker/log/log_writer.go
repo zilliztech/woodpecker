@@ -60,10 +60,10 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	w := &logWriterImpl{
 		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:          logHandle,
-		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
+		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
-		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		sessionLock:        sessionLock,
 	}
 	// Set trigger expired
@@ -192,7 +192,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResu
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -278,7 +278,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-cha
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}

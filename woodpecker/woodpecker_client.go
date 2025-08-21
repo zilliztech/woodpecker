@@ -18,21 +18,26 @@ package woodpecker
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	netutil "github.com/zilliztech/woodpecker/common/net"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
+	"github.com/zilliztech/woodpecker/woodpecker/quorum"
 )
 
 type Client interface {
@@ -56,31 +61,64 @@ type Client interface {
 
 var _ Client = (*woodpeckerClient)(nil)
 
-// Implementation of the client interface for Distributed mode.
+// Implementation of the client interface for distributed service mode.
 type woodpeckerClient struct {
 	mu         sync.RWMutex
 	cfg        *config.Configuration
 	Metadata   meta.MetadataProvider
 	clientPool client.LogStoreClientPool
 
+	// managed cli
+	managedCli bool
+	etcdCli    *clientv3.Client
+
+	// quorum discovery implementation
+	quorumDiscovery quorum.QuorumDiscovery
+
 	// close state
 	closeState atomic.Bool
 }
 
-func NewClient(ctx context.Context, etcdClient *clientv3.Client, cfg *config.Configuration) (Client, error) {
+func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clientv3.Client, managed bool) (Client, error) {
+	logger.InitLogger(cfg)
+	initTraceErr := tracer.InitTracer(cfg, "woodpecker", 1001)
+	if initTraceErr != nil {
+		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
+	}
 	clientPool := client.NewLogStoreClientPool()
 	c := &woodpeckerClient{
 		cfg:        cfg,
-		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout),
+		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout.Milliseconds()),
 		clientPool: clientPool,
+		managedCli: managed,
+		etcdCli:    etcdClient,
 	}
+	c.closeState.Store(false)
+
+	// Initialize discovery implementation based on configuration
+	discoveryErr := c.initQuorumDiscovery(ctx)
+	if discoveryErr != nil {
+		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(discoveryErr)
+	}
+	// init if necessary
 	err := c.initClient(ctx)
 	if err != nil {
 		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(err)
 	}
 	// Increment active connections metric
-	metrics.WpClientActiveConnections.WithLabelValues("default").Inc() // TODO use local addr as label
+	metrics.WpClientActiveConnections.WithLabelValues(fmt.Sprintf("%s", netutil.GetLocalIP())).Inc()
 	return c, nil
+}
+
+func (c *woodpeckerClient) initQuorumDiscovery(ctx context.Context) error {
+	quorumConfig := &c.cfg.Woodpecker.Client.Quorum
+	logger.Ctx(ctx).Info("Initializing quorum discovery mode")
+	quorumDiscovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, c.clientPool)
+	if err != nil {
+		return err
+	}
+	c.quorumDiscovery = quorumDiscovery
+	return nil
 }
 
 func (c *woodpeckerClient) initClient(ctx context.Context) error {
@@ -102,12 +140,16 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 
 // CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
+	return createLogUnsafe(ctx, c.Metadata, logName)
+}
+
+func createLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string) error {
 	start := time.Now()
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	// try create new log
 	// Add retry logic for CreateLog when encountering ErrCreateLogMetadataTxn
 	const maxRetries = 5
@@ -115,7 +157,7 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 
 	for i := 0; i < maxRetries; i++ {
 		// Try to create the log
-		err := c.Metadata.CreateLog(ctx, logName)
+		err := metadata.CreateLog(ctx, logName)
 		if err == nil {
 			// Success, return immediately
 			metrics.WpClientOperationsTotal.WithLabelValues("create_log", "success").Inc()
@@ -153,24 +195,39 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+}
+
+func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) (log.LogHandle, error) {
 	start := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	// Open log and retrieve metadata with detailed comments
-	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
+	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("open_log", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("open_log", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg)
+	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc)
 	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
+}
+
+func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
+	if c.closeState.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
+	}
+
+	// Delegate to the configured discovery implementation
+	return c.quorumDiscovery.SelectQuorum(ctx)
 }
 
 // DeleteLog deletes the log with the specified name.
@@ -182,14 +239,18 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 
 // LogExists checks if a log with the specified name exists.
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return false, werr.ErrWoodpeckerClientClosed
 	}
+	return logExistsUnsafe(ctx, c.Metadata, logName)
+}
+
+func logExistsUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string) (bool, error) {
 	start := time.Now()
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	// Check if log exists in meta
-	exists, err := c.Metadata.CheckExists(ctx, logName)
+	exists, err := metadata.CheckExists(ctx, logName)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("log_exists", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -210,9 +271,13 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return getAllLogsUnsafe(ctx, c.Metadata)
+}
+
+func getAllLogsUnsafe(ctx context.Context, metadata meta.MetadataProvider) ([]string, error) {
 	start := time.Now()
 	// Retrieve all logs with detailed comments
-	logs, err := c.Metadata.ListLogs(ctx)
+	logs, err := metadata.ListLogs(ctx)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("get_all_logs", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("get_all_logs", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -229,9 +294,13 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
+}
+
+func getLogsWithPrefix(ctx context.Context, metadata meta.MetadataProvider, logNamePrefix string) ([]string, error) {
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
-	logs, err := c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
+	logs, err := metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("get_logs_with_prefix", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("get_logs_with_prefix", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -257,9 +326,45 @@ func (c *woodpeckerClient) Close(ctx context.Context) error {
 	if closeErr != nil {
 		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))
 	}
-	closePoolErr := c.clientPool.Close()
+	closePoolErr := c.clientPool.Close(ctx)
 	if closePoolErr != nil {
 		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
-	return werr.Combine(closeErr, closePoolErr)
+
+	// Close quorum discovery (which will handle client nodes for passive mode)
+	var discoveryCloseErr error
+	if c.quorumDiscovery != nil {
+		discoveryCloseErr = c.quorumDiscovery.Close(ctx)
+		if discoveryCloseErr != nil {
+			logger.Ctx(ctx).Info("close quorum discovery failed", zap.Error(discoveryCloseErr))
+		}
+	}
+	if c.managedCli {
+		closeEtcdCliErr := c.etcdCli.Close()
+		if closeEtcdCliErr != nil {
+			logger.Ctx(ctx).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
+			return werr.Combine(closeErr, closePoolErr, discoveryCloseErr, closeEtcdCliErr)
+		}
+	}
+	return werr.Combine(closeErr, closePoolErr, discoveryCloseErr)
+}
+
+// randomSelectNodes randomly selects n nodes from the available servers
+func (c *woodpeckerClient) randomSelectNodes(servers []*proto.NodeMeta, n int) []*proto.NodeMeta {
+	if len(servers) <= n {
+		return servers
+	}
+
+	// Create a copy to avoid modifying the original slice
+	serversCopy := make([]*proto.NodeMeta, len(servers))
+	copy(serversCopy, servers)
+
+	// Fisher-Yates shuffle algorithm to randomly select n nodes
+	for i := len(serversCopy) - 1; i > len(serversCopy)-n-1; i-- {
+		j := rand.Intn(i + 1)
+		serversCopy[i], serversCopy[j] = serversCopy[j], serversCopy[i]
+	}
+
+	// Return the last n elements (which are randomly selected)
+	return serversCopy[len(serversCopy)-n:]
 }

@@ -87,7 +87,7 @@ type MinioFileWriter struct {
 	blockIndexes     []*codec.IndexRecord
 	footerRecord     *codec.FooterRecord // exists if the segment is finalized
 	headerWritten    atomic.Bool         // Ensure a header record is written before writing data
-	lastModifiedTime int64               // lastModifiedTime
+	lastModifiedTime atomic.Int64        // lastModifiedTime
 
 	// async upload blocks task pool
 	syncMu                        sync.Mutex
@@ -130,15 +130,15 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
 
-		maxBufferSize:       syncPolicyConfig.MaxBytes,
+		maxBufferSize:       syncPolicyConfig.MaxBytes.Int64(),
 		maxBufferEntries:    maxBufferEntries,
-		maxIntervalMs:       syncPolicyConfig.MaxInterval,
+		maxIntervalMs:       syncPolicyConfig.MaxInterval.Milliseconds(),
 		syncPolicyConfig:    syncPolicyConfig,
 		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
 		fencePolicyConfig:   &cfg.Woodpecker.Logstore.FencePolicy,
 		fileClose:           make(chan struct{}, 1),
 
-		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
+		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize.Int64(), // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
@@ -156,6 +156,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	segmentFileWriter.fenced.Store(false)
 	segmentFileWriter.headerWritten.Store(false)
 	segmentFileWriter.lastSyncTimestamp.Store(time.Now().UnixMilli())
+	segmentFileWriter.lastModifiedTime.Store(time.Now().UnixMilli())
 
 	if recoveryMode {
 		// Try to recover existing state from MinIO before creating lock
@@ -218,7 +219,7 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 		return err
 	}
 	defer footerObj.Close()
-	f.lastModifiedTime = time.Now().UnixMilli() // Use current time since we don't have LastModified info
+	f.lastModifiedTime.Store(time.Now().UnixMilli()) // Use current time since we don't have LastModified info
 
 	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, footerBlockSize)
 	if err != nil {
@@ -230,29 +231,30 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 		zap.Int64("footerBlkSize", footerBlockSize),
 		zap.Int("footerBlkDataLength", len(footerBlkData)))
 
-	// Parse footer record from the end of the file
-	if len(footerBlkData) < codec.RecordHeaderSize+codec.FooterRecordSize {
-		return fmt.Errorf("footer.blk too small: %d bytes", len(footerBlkData))
+	// Parse footer record from the end of the file using compatibility parsing
+	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
+	if len(footerBlkData) < minFooterSize {
+		return fmt.Errorf("footer.blk too small: %d bytes, need at least %d bytes", len(footerBlkData), minFooterSize)
 	}
 
-	footerRecordStart := len(footerBlkData) - codec.RecordHeaderSize - codec.FooterRecordSize
-	footerRecordData := footerBlkData[footerRecordStart:]
+	// Use the last maxFooterSize bytes for compatibility parsing
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	footerData := footerBlkData[len(footerBlkData)-maxFooterSize:]
 
-	footerRecord, err := codec.DecodeRecord(footerRecordData)
+	footerRecord, err := codec.ParseFooterFromBytes(footerData)
 	if err != nil {
-		return fmt.Errorf("failed to decode footer record: %w", err)
+		return fmt.Errorf("failed to parse footer record with compatibility: %w", err)
 	}
 
-	if footerRecord.Type() != codec.FooterRecordType {
-		return fmt.Errorf("expected footer record, got type %d", footerRecord.Type())
-	}
-
-	f.footerRecord = footerRecord.(*codec.FooterRecord)
+	f.footerRecord = footerRecord
 
 	// If footer exists, the segment is finalized and should not be writable
 	f.storageWritable.Store(false)
 
 	// Parse index records sequentially from the beginning of the file
+	// Calculate the actual footer size from the parsed footer
+	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(footerRecord.Version)
+	footerRecordStart := len(footerBlkData) - actualFooterSize
 	indexData := footerBlkData[:footerRecordStart]
 
 	logger.Ctx(ctx).Debug("parsing index records sequentially",
@@ -431,7 +433,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		blockID++
 	}
 
-	f.lastModifiedTime = lastModifiedTime
+	f.lastModifiedTime.Store(lastModifiedTime)
 	if fenceBlockId > -1 {
 		logger.Ctx(ctx).Info("fence block found, fence state recovered",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -635,7 +637,7 @@ func (f *MinioFileWriter) ack() {
 					zap.Int64("blockSize", task.flushFuture.Value().block.Size))
 				// flush success ack
 				f.fastFlushSuccessUnsafe(context.TODO(), task.flushFuture.Value().block, task.flushData)
-				f.lastModifiedTime = time.Now().UnixMilli()
+				f.lastModifiedTime.Store(time.Now().UnixMilli())
 			}
 		} else {
 			// flush fail, trigger mark storage not writable
@@ -859,7 +861,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	}
 
 	// Get target block size for compaction (use maxFlushSize as target)
-	targetBlockSize := f.compactPolicyConfig.MaxBytes
+	targetBlockSize := f.compactPolicyConfig.MaxBytes.Int64()
 	if targetBlockSize <= 0 {
 		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
@@ -888,6 +890,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		IndexLength:  uint32(len(newBlockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)), // IndexRecord size
 		Version:      codec.FormatVersion,
 		Flags:        codec.SetCompacted(f.footerRecord.Flags), // Set compacted flag=1 (bit 0)
+		LAC:          -1,                                       // Preserve LAC from original footer
 	}
 
 	// Serialize new footer and indexes
@@ -1142,7 +1145,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
 				retry.Sleep(100*time.Millisecond),
-				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
+				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval.Milliseconds())*time.Millisecond),
 				retry.RetryErr(func(err error) bool {
 					// if it is not fenced error, retry
 					return !werr.ErrSegmentFenced.Is(err)
@@ -1281,7 +1284,7 @@ func (f *MinioFileWriter) quickSyncFailUnsafe(ctx context.Context, resultErr err
 	return resultErr
 }
 
-func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
+func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, cause it always same as last flushed entryID */) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
@@ -1521,7 +1524,7 @@ func (f *MinioFileWriter) prepareMultiBlockDataIfNecessary(toFlushData []*cache.
 		return nil, nil, nil
 	}
 
-	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
+	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize.Int64()
 
 	// First pass: calculate partition boundaries without copying data
 	type partitionRange struct {
@@ -2414,10 +2417,12 @@ func serializeFooterAndIndexes(ctx context.Context, blocks []*codec.IndexRecord)
 	serializedData := make([]byte, 0)
 	totalSize := int64(0)
 	// Serialize all block index records
+	lastEntryID := int64(-1)
 	for _, record := range blocks {
 		encodedRecord := codec.EncodeRecord(record)
 		serializedData = append(serializedData, encodedRecord...)
 		totalSize += int64(record.BlockSize)
+		lastEntryID = record.LastEntryID
 	}
 	indexLength := len(serializedData)
 
@@ -2438,6 +2443,7 @@ func serializeFooterAndIndexes(ctx context.Context, blocks []*codec.IndexRecord)
 		IndexLength:  uint32(indexLength),
 		Version:      codec.FormatVersion,
 		Flags:        0,
+		LAC:          lastEntryID, // LAC same as lastEntryID, because wq=aq=1
 	}
 
 	encodedFooterRecord := codec.EncodeRecord(footer)

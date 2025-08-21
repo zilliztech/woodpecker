@@ -19,7 +19,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/tests/utils"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -67,7 +67,7 @@ func TestWriteAndConcurrentTailRead(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
@@ -295,7 +295,7 @@ func TestWriteAndConcurrentCatchupRead(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
@@ -573,7 +573,7 @@ func TestWriteAndConcurrentTailReadWithTruncate(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
@@ -911,7 +911,7 @@ func TestWriteAndConcurrentCatchupReadWithTruncate(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Create a new embed client
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)

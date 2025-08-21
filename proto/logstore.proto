@@ -5,45 +5,12 @@ syntax = "proto3";
 
 
 package woodpecker.proto.logstore;
-
 option go_package = "github.com/zilliztech/woodpecker/proto";
-
+import "meta.proto";
 
 /**
- * LogStore service.
+ * Log message data structure
  */
-service LogStore {
-  /**
-   * Add a new entry to the log store
-   */
-  rpc AddEntry(AddEntryRequest) returns (AddEntryResponse);
-
-  /**
-   * Read an entry from the log store
-   */
-  rpc ReadEntry(ReadEntryRequest) returns (ReadEntryResponse);
-}
-
-message AddEntryRequest {
-  bytes value = 1;
-}
-
-message AddEntryResponse {
-  Status status = 1;
-  optional int64 segId = 2;
-  optional int64 entryId = 3;
-}
-
-message ReadEntryRequest {
-  int64 segId = 1;
-  int64 entryId = 2;
-}
-
-message ReadEntryResponse {
-  Status status = 1;
-  optional LogEntry entry = 2;
-}
-
 message LogEntry {
   int64 segId = 1;
   int64 entryId = 2;
@@ -67,6 +34,7 @@ message LastReadState {
   int32 last_block_id = 4;
   int64 block_offset = 5;
   uint32 block_size = 6;
+  string node = 7;
 }
 
 message BatchReadResult {
@@ -75,22 +43,226 @@ message BatchReadResult {
 }
 
 /**
- * Represents all the possible status.
+ * LogStore service.
+ *
+ * The following RPCs wrap externally callable data-plane operations.
  */
-enum Status {
-  // Operation was successful
-  OK = 0;
-  // The entry was not found
-  ENTRY_NOT_FOUND = 1;
-  // The existing version does not match the expected version
-  UNEXPECTED_VERSION_ID = 2;
-  // The session that the put request referred to is not alive
-  SESSION_DOES_NOT_EXIST = 3;
+service LogStore {
+  // Write APIs
+  rpc AddEntry(AddEntryRequest) returns (stream AddEntryResponse);
+
+  // Read APIs
+  rpc GetBatchEntriesAdv(GetBatchEntriesAdvRequest) returns (GetBatchEntriesAdvResponse);
+
+  // Segment state transitions
+  rpc FenceSegment(FenceSegmentRequest) returns (FenceSegmentResponse);
+  rpc CompleteSegment(CompleteSegmentRequest) returns (CompleteSegmentResponse);
+  rpc CompactSegment(CompactSegmentRequest) returns (CompactSegmentResponse);
+
+  // Segment introspection
+  rpc GetSegmentLastAddConfirmed(GetSegmentLastAddConfirmedRequest) returns (GetSegmentLastAddConfirmedResponse);
+  rpc GetSegmentBlockCount(GetSegmentBlockCountRequest) returns (GetSegmentBlockCountResponse);
+
+  rpc UpdateLastAddConfirmed(UpdateLastAddConfirmedRequest) returns (UpdateLastAddConfirmedResponse);
+
+  // Maintenance
+  rpc CleanSegment(CleanSegmentRequest) returns (CleanSegmentResponse);
+
+  // Node management
+  rpc SelectNodes(SelectNodesRequest) returns (SelectNodesResponse);
+}
+
+message Status {
+  string reason = 1;
+  int32 code = 2;
+  bool retriable = 3;
+  string detail = 4;
+  map<string, string> extra_info = 5;
+}
+
+message AddEntryRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  LogEntry entry = 4;
+}
+
+message AddEntryResponse {
+  Status status = 1 ;
+  int64 entry_id = 2; // buffered entry id
+  AddEntryState state = 3;
+}
+
+enum AddEntryState {
+  Buffered = 0;
+  Synced = 1;
+  Failed = 2;
+}
+
+// Advanced batch read
+message GetBatchEntriesAdvRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 from_entry_id = 5;
+  int64 max_entries = 6;
+  LastReadState last_read_state = 7;
+}
+
+message GetBatchEntriesAdvResponse {
+  Status status = 1 ;
+  BatchReadResult result = 2;
 }
 
 
+// Segment state transitions
+message FenceSegmentRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+}
 
+message FenceSegmentResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
 
+message CompleteSegmentRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 last_add_confirmed = 5;
+}
 
+message CompleteSegmentResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
 
+message CompactSegmentRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+}
+
+message CompactSegmentResponse {
+  Status status = 1 ;
+  meta.SegmentMetadata metadata = 2;
+}
+
+// Segment introspection
+message GetSegmentLastAddConfirmedRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+}
+message GetSegmentLastAddConfirmedResponse {
+  Status status = 1 ;
+  int64 last_entry_id = 2;
+}
+
+message GetSegmentBlockCountRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+}
+message GetSegmentBlockCountResponse {
+  Status status = 1 ;
+  int64 block_count = 2;
+}
+
+// Maintenance
+message CleanSegmentRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int32 flag = 5;
+}
+message CleanSegmentResponse {
+  Status status = 1 ;
+}
+
+// Subscribe append results
+message AppendResultsSubscribeRequest {
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+}
+
+// One append result update event
+message AppendResultUpdate {
+  int64 log_id = 1;
+  int64 segment_id = 2;
+  int64 entry_id = 3;
+  Status status = 4;
+}
+
+message UpdateLastAddConfirmedRequest{
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 last_add_confirmed = 5;
+}
+
+message UpdateLastAddConfirmedResponse {
+  Status status = 1;
+}
+
+// Node meta information
+message NodeMeta {
+  string node_id = 1;
+  string resource_group = 2;
+  string az = 3;
+  string endpoint = 4;
+  map<string, string> tags = 5;
+  int64 version = 6;
+  int64 last_update = 7; // Unix timestamp in milliseconds
+}
+
+// Node selection strategy types
+enum StrategyType {
+  RANDOM = 0;
+  SINGLE_AZ_SINGLE_RG = 1;
+  SINGLE_AZ_MULTI_RG = 2;
+  MULTI_AZ_SINGLE_RG = 3;
+  MULTI_AZ_MULTI_RG = 4;
+  CROSS_REGION = 5;
+  CUSTOM = 6;
+}
+
+// Affinity mode for node selection
+enum AffinityMode {
+  SOFT = 0;  // Best effort, allow fallback
+  HARD = 1;  // Strict requirements, fail if not met
+}
+
+// Node filter criteria for selecting servers
+message NodeFilter {
+  string az = 1;                    // Filter by availability zone (supports regex)
+  string resource_group = 2;        // Filter by resource group (supports regex)
+  map<string, string> tags = 3;     // Filter by tags (exact match)
+  int32 limit = 4;                  // Limit the number of returned servers (0 = no limit)
+}
+
+// Select nodes request
+message SelectNodesRequest {
+  StrategyType strategy = 1;        // Node selection strategy
+  AffinityMode affinity_mode = 2;   // Affinity mode (soft/hard)
+  repeated NodeFilter filters = 3;  // Node filter criteria
+}
+
+// Select nodes response
+message SelectNodesResponse {
+  Status status = 1;
+  repeated NodeMeta nodes = 2;
+  int32 total_count = 3;    // Total number of nodes matching the filter (before limit)
+}
 
