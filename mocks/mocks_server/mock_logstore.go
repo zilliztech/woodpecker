@@ -3,10 +3,9 @@
 package mocks_server
 
 import (
-	channel "github.com/zilliztech/woodpecker/common/channel"
-	clientv3 "go.etcd.io/etcd/client/v3"
-
 	context "context"
+
+	channel "github.com/zilliztech/woodpecker/common/channel"
 
 	mock "github.com/stretchr/testify/mock"
 
@@ -194,9 +193,9 @@ func (_c *LogStore_CompactSegment_Call) RunAndReturn(run func(context.Context, i
 	return _c
 }
 
-// CompleteSegment provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// CompleteSegment provides a mock function with given fields: ctx, logId, segmentId, lac
+func (_m *LogStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error) {
+	ret := _m.Called(ctx, logId, segmentId, lac)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CompleteSegment")
@@ -204,17 +203,17 @@ func (_m *LogStore) CompleteSegment(ctx context.Context, logId int64, segmentId 
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) (int64, error)); ok {
+		return rf(ctx, logId, segmentId, lac)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) int64); ok {
+		r0 = rf(ctx, logId, segmentId, lac)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64) error); ok {
+		r1 = rf(ctx, logId, segmentId, lac)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -231,13 +230,14 @@ type LogStore_CompleteSegment_Call struct {
 //   - ctx context.Context
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStore_Expecter) CompleteSegment(ctx interface{}, logId interface{}, segmentId interface{}) *LogStore_CompleteSegment_Call {
-	return &LogStore_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, logId, segmentId)}
+//   - lac int64
+func (_e *LogStore_Expecter) CompleteSegment(ctx interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStore_CompleteSegment_Call {
+	return &LogStore_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, logId, segmentId, lac)}
 }
 
-func (_c *LogStore_CompleteSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStore_CompleteSegment_Call {
+func (_c *LogStore_CompleteSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, lac int64)) *LogStore_CompleteSegment_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64))
 	})
 	return _c
 }
@@ -247,7 +247,7 @@ func (_c *LogStore_CompleteSegment_Call) Return(_a0 int64, _a1 error) *LogStore_
 	return _c
 }
 
-func (_c *LogStore_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStore_CompleteSegment_Call {
+func (_c *LogStore_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64, int64) (int64, error)) *LogStore_CompleteSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -534,52 +534,6 @@ func (_c *LogStore_GetSegmentLastAddConfirmed_Call) RunAndReturn(run func(contex
 	return _c
 }
 
-// Register provides a mock function with given fields: ctx
-func (_m *LogStore) Register(ctx context.Context) error {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Register")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
-		r0 = rf(ctx)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// LogStore_Register_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Register'
-type LogStore_Register_Call struct {
-	*mock.Call
-}
-
-// Register is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *LogStore_Expecter) Register(ctx interface{}) *LogStore_Register_Call {
-	return &LogStore_Register_Call{Call: _e.mock.On("Register", ctx)}
-}
-
-func (_c *LogStore_Register_Call) Run(run func(ctx context.Context)) *LogStore_Register_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *LogStore_Register_Call) Return(_a0 error) *LogStore_Register_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *LogStore_Register_Call) RunAndReturn(run func(context.Context) error) *LogStore_Register_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // SetAddress provides a mock function with given fields: address
 func (_m *LogStore) SetAddress(address string) {
 	_m.Called(address)
@@ -609,39 +563,6 @@ func (_c *LogStore_SetAddress_Call) Return() *LogStore_SetAddress_Call {
 }
 
 func (_c *LogStore_SetAddress_Call) RunAndReturn(run func(string)) *LogStore_SetAddress_Call {
-	_c.Run(run)
-	return _c
-}
-
-// SetEtcdClient provides a mock function with given fields: etcdCli
-func (_m *LogStore) SetEtcdClient(etcdCli *clientv3.Client) {
-	_m.Called(etcdCli)
-}
-
-// LogStore_SetEtcdClient_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetEtcdClient'
-type LogStore_SetEtcdClient_Call struct {
-	*mock.Call
-}
-
-// SetEtcdClient is a helper method to define mock.On call
-//   - etcdCli *clientv3.Client
-func (_e *LogStore_Expecter) SetEtcdClient(etcdCli interface{}) *LogStore_SetEtcdClient_Call {
-	return &LogStore_SetEtcdClient_Call{Call: _e.mock.On("SetEtcdClient", etcdCli)}
-}
-
-func (_c *LogStore_SetEtcdClient_Call) Run(run func(etcdCli *clientv3.Client)) *LogStore_SetEtcdClient_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(*clientv3.Client))
-	})
-	return _c
-}
-
-func (_c *LogStore_SetEtcdClient_Call) Return() *LogStore_SetEtcdClient_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *LogStore_SetEtcdClient_Call) RunAndReturn(run func(*clientv3.Client)) *LogStore_SetEtcdClient_Call {
 	_c.Run(run)
 	return _c
 }
@@ -732,6 +653,55 @@ func (_c *LogStore_Stop_Call) Return(_a0 error) *LogStore_Stop_Call {
 }
 
 func (_c *LogStore_Stop_Call) RunAndReturn(run func() error) *LogStore_Stop_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateLastAddConfirmed provides a mock function with given fields: ctx, logId, segmentId, lac
+func (_m *LogStore) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
+	ret := _m.Called(ctx, logId, segmentId, lac)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLastAddConfirmed")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) error); ok {
+		r0 = rf(ctx, logId, segmentId, lac)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStore_UpdateLastAddConfirmed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLastAddConfirmed'
+type LogStore_UpdateLastAddConfirmed_Call struct {
+	*mock.Call
+}
+
+// UpdateLastAddConfirmed is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+//   - lac int64
+func (_e *LogStore_Expecter) UpdateLastAddConfirmed(ctx interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStore_UpdateLastAddConfirmed_Call {
+	return &LogStore_UpdateLastAddConfirmed_Call{Call: _e.mock.On("UpdateLastAddConfirmed", ctx, logId, segmentId, lac)}
+}
+
+func (_c *LogStore_UpdateLastAddConfirmed_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, lac int64)) *LogStore_UpdateLastAddConfirmed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStore_UpdateLastAddConfirmed_Call) Return(_a0 error) *LogStore_UpdateLastAddConfirmed_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStore_UpdateLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64, int64, int64) error) *LogStore_UpdateLastAddConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }

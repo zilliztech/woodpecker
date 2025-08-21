@@ -159,21 +159,19 @@ func (f *MinioFileReaderAdv) readFooterAndIndexUnsafe(ctx context.Context) (*Foo
 		return nil, fmt.Errorf("footer.blk too small: %d bytes", len(footerBlkData))
 	}
 
-	footerRecordStart := len(footerBlkData) - codec.RecordHeaderSize - codec.FooterRecordSize
-	footerRecordData := footerBlkData[footerRecordStart:]
+	// Use the last maxFooterSize bytes for compatibility parsing
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	footerData := footerBlkData[len(footerBlkData)-maxFooterSize:]
 
-	footerRecord, err := codec.DecodeRecord(footerRecordData)
+	fr, err := codec.ParseFooterFromBytes(footerData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode footer record: %w", err)
 	}
 
-	if footerRecord.Type() != codec.FooterRecordType {
-		return nil, fmt.Errorf("expected footer record, got type %d", footerRecord.Type())
-	}
-
-	fr := footerRecord.(*codec.FooterRecord)
-
 	// Parse index records sequentially from the beginning of the file
+	// Calculate the actual footer size from the parsed footer
+	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(fr.Version)
+	footerRecordStart := len(footerBlkData) - actualFooterSize
 	indexData := footerBlkData[:footerRecordStart]
 	refreshBlocks := make([]*codec.IndexRecord, 0, fr.TotalBlocks)
 
@@ -1103,4 +1101,9 @@ func (f *MinioFileReaderAdv) asyncUpdateReaderState(ctx context.Context, footerA
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Bool("isCompacted", f.isCompacted.Load()),
 		zap.Int("totalBlocks", len(f.blocks)))
+}
+
+func (f *MinioFileReaderAdv) UpdateLastAddConfirmed(ctx context.Context, lac int64) error {
+	// NO-OP
+	return nil
 }
