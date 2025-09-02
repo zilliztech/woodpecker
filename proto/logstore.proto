@@ -34,6 +34,7 @@ message LastReadState {
   int32 last_block_id = 4;
   int64 block_offset = 5;
   uint32 block_size = 6;
+  string node = 7;
 }
 
 message BatchReadResult {

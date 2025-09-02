@@ -32,7 +32,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
-	netutil "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -321,7 +320,7 @@ func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPor
 		NodeID:              name,
 		ResourceGroup:       rg,
 		AZ:                  az,
-		BindAddr:            netutil.GetLocalIP(),
+		BindAddr:            "0.0.0.0",
 		BindPort:            bindPort,
 		ServicePort:         servicePort,
 		AdvertiseAddr:       advertiseAddr,
