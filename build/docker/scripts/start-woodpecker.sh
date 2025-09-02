@@ -1,0 +1,173 @@
+#!/bin/bash
+# Licensed to the LF AI & Data foundation under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+set -e
+# Default values
+GRPC_PORT=${GRPC_PORT:-18080}
+GOSSIP_PORT=${GOSSIP_PORT:-17946}
+NODE_NAME=${NODE_NAME:-$(hostname)}
+DATA_DIR=${DATA_DIR:-/woodpecker/data}
+CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
+CLUSTER=${CLUSTER:-woodpecker-cluster}
+STORAGE_TYPE=${STORAGE_TYPE:-service}
+LOG_LEVEL=${LOG_LEVEL:-info}
+
+# Advertise address configuration for Docker bridge networking
+ADVERTISE_ADDR=${ADVERTISE_ADDR:-""}
+ADVERTISE_GRPC_PORT=${ADVERTISE_GRPC_PORT:-$GRPC_PORT}
+ADVERTISE_GOSSIP_PORT=${ADVERTISE_GOSSIP_PORT:-$GOSSIP_PORT}
+
+# Auto-detect host IP if advertise address is set to "auto"
+if [ "$ADVERTISE_ADDR" = "auto" ]; then
+    # Try to get Docker host gateway IP address
+    HOST_IP=$(ip route show default | awk '/default/ {print $3}' | head -1)
+    if [ -z "$HOST_IP" ]; then
+        # Fallback to common Docker gateway IP
+        HOST_IP="172.17.0.1"
+    fi
+    ADVERTISE_ADDR="$HOST_IP"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Auto-detected host IP for advertise address: $ADVERTISE_ADDR"
+fi
+
+# MinIO configuration
+MINIO_ADDRESS=${MINIO_ADDRESS:-minio}
+MINIO_PORT=${MINIO_PORT:-9000}
+MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+MINIO_BUCKET=${MINIO_BUCKET:-${CLUSTER}-data}
+
+# Dependency check configuration
+WAIT_FOR_DEPS=${WAIT_FOR_DEPS:-true}
+
+# Seeds configuration
+SEEDS=${SEEDS:-""}
+
+# Log function
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# Validate configuration
+if [ -z "$NODE_NAME" ]; then
+    log "❌ NODE_NAME cannot be empty"
+    exit 1
+fi
+
+if [ "$GRPC_PORT" -eq "$GOSSIP_PORT" ]; then
+    log "❌ gRPC port and Gossip port cannot be the same: $GRPC_PORT"
+    exit 1
+fi
+
+# Wait for dependencies
+if [ "$WAIT_FOR_DEPS" = "true" ]; then
+    log "Waiting for dependencies..."
+    
+    # Wait for MinIO
+    log "Waiting for MinIO at $MINIO_ADDRESS:$MINIO_PORT (timeout: 120s)..."
+    timeout=120
+    while [ $timeout -gt 0 ]; do
+        if nc -z $MINIO_ADDRESS $MINIO_PORT 2>/dev/null; then
+            log "✓ MinIO is available at $MINIO_ADDRESS:$MINIO_PORT"
+            break
+        fi
+        sleep 1
+        timeout=$((timeout-1))
+    done
+
+    if [ $timeout -eq 0 ]; then
+        log "❌ MinIO is not available at $MINIO_ADDRESS:$MINIO_PORT after 120s"
+        exit 1
+    fi
+else
+    log "ℹ️ Skipping dependency checks (WAIT_FOR_DEPS=false)"
+fi
+
+# Create configuration if it doesn't exist
+if [ ! -f "$CONFIG_FILE" ]; then
+    log "Creating configuration file: $CONFIG_FILE"
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    cat > "$CONFIG_FILE" << EOC
+woodpecker:
+  storage:
+    type: $STORAGE_TYPE
+    rootPath: $DATA_DIR
+  client:
+    serviceSeedNodes: $SEEDS
+log:
+  level: $LOG_LEVEL
+  stdout: true
+etcd:
+  endpoints: [$ETCD_ENDPOINTS]
+  rootPath: woodpecker
+minio:
+  address: $MINIO_ADDRESS
+  port: $MINIO_PORT
+  accessKeyID: $MINIO_ACCESS_KEY
+  secretAccessKey: $MINIO_SECRET_KEY
+  bucketName: $MINIO_BUCKET
+  createBucket: true
+EOC
+else
+    log "Using existing configuration: $CONFIG_FILE"
+fi
+
+log "Starting Woodpecker Server:"
+log "  Node Name: $NODE_NAME"
+log "  gRPC Port: $GRPC_PORT"
+log "  Gossip Port: $GOSSIP_PORT"
+if [ -n "$ADVERTISE_ADDR" ]; then
+    log "  Advertise Address: $ADVERTISE_ADDR"
+    log "  Advertise gRPC Port: $ADVERTISE_GRPC_PORT"
+    log "  Advertise Gossip Port: $ADVERTISE_GOSSIP_PORT"
+fi
+log "  Seeds: $SEEDS"
+log "  Storage Type: $STORAGE_TYPE"
+log "  Cluster: $CLUSTER"
+log "  etcd: $ETCD_ENDPOINTS"
+log "  MinIO: $MINIO_ADDRESS:$MINIO_PORT"
+
+# Ensure data directory exists
+mkdir -p "$DATA_DIR"
+
+# Build command array
+CMD_ARGS=(
+    "/woodpecker/bin/woodpecker"
+    "server"
+    "--grpc-port" "$GRPC_PORT"
+    "--gossip-port" "$GOSSIP_PORT"
+    "--node-name" "$NODE_NAME"
+    "--data-dir" "$DATA_DIR"
+    "--config" "$CONFIG_FILE"
+)
+
+# Add advertise address configuration if provided
+if [ -n "$ADVERTISE_ADDR" ]; then
+    CMD_ARGS+=("--advertise-addr" "$ADVERTISE_ADDR")
+    CMD_ARGS+=("--advertise-grpc-port" "$ADVERTISE_GRPC_PORT")
+    CMD_ARGS+=("--advertise-gossip-port" "$ADVERTISE_GOSSIP_PORT")
+fi
+
+# Add seeds if provided and not empty
+if [ -n "$SEEDS" ] && [ "$SEEDS" != "" ]; then
+    CMD_ARGS+=("--seeds" "$SEEDS")
+fi
+
+log "Starting: ${CMD_ARGS[*]}"
+
+# Execute the command
+exec "${CMD_ARGS[@]}"

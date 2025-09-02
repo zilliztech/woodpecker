@@ -18,7 +18,6 @@ package config
 
 import (
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -154,7 +153,7 @@ type EtcdLogConfig struct {
 
 // EtcdConfig stores the ETCD configuration.
 type EtcdConfig struct {
-	Endpoints      string         `yaml:"endpoints"`
+	Endpoints      []string       `yaml:"endpoints"`
 	RootPath       string         `yaml:"rootPath"`
 	MetaSubPath    string         `yaml:"metaSubPath"`
 	KvSubPath      string         `yaml:"kvSubPath"`
@@ -167,10 +166,7 @@ type EtcdConfig struct {
 }
 
 func (etcdCfg *EtcdConfig) GetEndpoints() []string {
-	if len(etcdCfg.Endpoints) == 0 {
-		return []string{}
-	}
-	return strings.Split(etcdCfg.Endpoints, ",")
+	return etcdCfg.Endpoints
 }
 
 // MinioSslConfig stores the MinIO SSL configuration.
@@ -356,7 +352,7 @@ func getDefaultTraceConfig() TraceConfig {
 
 func getDefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		Endpoints:      "localhost:2379",
+		Endpoints:      []string{"localhost:2379"},
 		RootPath:       "woodpecker",
 		MetaSubPath:    "meta",
 		KvSubPath:      "kv",

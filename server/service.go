@@ -20,9 +20,10 @@ package server
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"net"
 	"sync"
+
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -42,6 +43,11 @@ type Server struct {
 	bindPort   int // bind port for gossip
 	seeds      []string
 
+	// Advertise configuration for Docker bridge networking
+	advertiseAddr       string
+	advertiseGrpcPort   int
+	advertiseGossipPort int
+
 	logStore    LogStore
 	servicePort int // service port for business
 	grpcWG      sync.WaitGroup
@@ -53,7 +59,25 @@ type Server struct {
 	cancel context.CancelFunc
 }
 
+// Config holds server configuration including advertise options
+type Config struct {
+	BindPort            int
+	ServicePort         int
+	AdvertiseAddr       string
+	AdvertiseGrpcPort   int
+	AdvertiseGossipPort int
+	SeedNodes           []string
+}
+
 func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
+	return NewServerWithConfig(ctx, configuration, &Config{
+		BindPort:    bindPort,
+		ServicePort: servicePort,
+		SeedNodes:   seeds,
+	})
+}
+
+func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	var minioCli minio.MinioHandler
 	var err error
@@ -67,10 +91,14 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 		ctx:         ctx,
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
-		bindPort:    bindPort,
-		seeds:       seeds,
-		servicePort: servicePort,
+		bindPort:    serverConfig.BindPort,
+		seeds:       serverConfig.SeedNodes,
+		servicePort: serverConfig.ServicePort,
 	}
+	// Store advertise configuration in server
+	s.advertiseAddr = serverConfig.AdvertiseAddr
+	s.advertiseGrpcPort = serverConfig.AdvertiseGrpcPort
+	s.advertiseGossipPort = serverConfig.AdvertiseGossipPort
 	s.logStore = NewLogStore(ctx, configuration, minioCli)
 	return s
 }
@@ -85,7 +113,7 @@ func (s *Server) Prepare() error {
 	s.logStore.SetAddress(s.listener.Addr().String())
 
 	// start server node for gossip
-	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), "default", "default", s.bindPort, s.servicePort, s.seeds)
+	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), "default", "default", s.bindPort, s.servicePort, s.seeds, s.advertiseAddr, s.advertiseGossipPort, s.advertiseGrpcPort)
 	if err != nil {
 		return err
 	}
@@ -285,15 +313,18 @@ func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.Upda
 	return &proto.UpdateLastAddConfirmedResponse{Status: werr.Success()}, nil
 }
 
-func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPort int, servicePort int, seeds []string) (*membership.ServerNode, string, error) {
+func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPort int, servicePort int, seeds []string, advertiseAddr string, advertiseGossipPort, advertiseGrpcPort int) (*membership.ServerNode, string, error) {
 	cfg := &membership.ServerConfig{
-		NodeID:        name,
-		ResourceGroup: rg,
-		AZ:            az,
-		BindAddr:      netutil.GetLocalIP(),
-		BindPort:      bindPort,
-		ServicePort:   servicePort,
-		Tags:          map[string]string{"role": "demo"},
+		NodeID:              name,
+		ResourceGroup:       rg,
+		AZ:                  az,
+		BindAddr:            netutil.GetLocalIP(),
+		BindPort:            bindPort,
+		ServicePort:         servicePort,
+		AdvertiseAddr:       advertiseAddr,
+		AdvertiseGossipPort: advertiseGossipPort,
+		AdvertiseGrpcPort:   advertiseGrpcPort,
+		Tags:                map[string]string{"role": "demo"},
 	}
 	n, err := membership.NewServerNode(cfg)
 	if err != nil {

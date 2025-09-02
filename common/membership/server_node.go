@@ -24,21 +24,35 @@ type ServerNode struct {
 
 // ServerConfig Server configuration
 type ServerConfig struct {
-	NodeID        string
-	ResourceGroup string
-	AZ            string
-	BindAddr      string
-	BindPort      int
-	ServicePort   int
-	Tags          map[string]string
+	NodeID              string
+	ResourceGroup       string
+	AZ                  string
+	BindAddr            string
+	BindPort            int
+	ServicePort         int
+	AdvertiseAddr       string
+	AdvertiseGossipPort int
+	AdvertiseGrpcPort   int
+	Tags                map[string]string
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
+	// Use advertise address for endpoint if configured, otherwise use bind address
+	endpointAddr := config.BindAddr
+	endpointPort := config.ServicePort
+
+	if config.AdvertiseAddr != "" {
+		endpointAddr = config.AdvertiseAddr
+		if config.AdvertiseGrpcPort > 0 {
+			endpointPort = config.AdvertiseGrpcPort
+		}
+	}
+
 	meta := &ServerMeta{
 		NodeID:        config.NodeID,
 		ResourceGroup: config.ResourceGroup,
 		AZ:            config.AZ,
-		Endpoint:      fmt.Sprintf("%s:%d", config.BindAddr, config.ServicePort),
+		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
 		Tags:          config.Tags,
 		LastUpdate:    time.Now(),
 	}
@@ -50,6 +64,15 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	mlConfig.Name = config.NodeID       // unique identifier name for a node
 	mlConfig.BindAddr = config.BindAddr // address for running gossip protocol
 	mlConfig.BindPort = config.BindPort
+
+	// Configure advertise addresses for Docker bridge networking
+	if config.AdvertiseAddr != "" {
+		mlConfig.AdvertiseAddr = config.AdvertiseAddr
+		if config.AdvertiseGossipPort > 0 {
+			mlConfig.AdvertisePort = config.AdvertiseGossipPort
+		}
+	}
+
 	mlConfig.Delegate = delegate                     // behavior delegate for node, different for each instance
 	mlConfig.Events = eventDel                       // event listener for node join/leave
 	mlConfig.LogOutput = log.Writer()                // set log output, TODO can refer to this, we should also provide custom logger setting for wp later, one global logger is enough

@@ -95,7 +95,8 @@ trace:
 # Related configuration of etcd, used to store Woodpecker metadata & service discovery.
 etcd:
   # Endpoints used to access etcd service. You can change this parameter as the endpoints of your own etcd cluster.
-  endpoints: localhost:2379
+  endpoints: 
+    - localhost:2379
   # Root prefix of the key to where Woodpecker stores data in etcd.
   # It is recommended to change this parameter before starting Woodpecker for the first time.
   # To share an etcd instance among multiple Woodpecker instances, consider changing this to a different value for each Woodpecker instance before you start them.
