@@ -1,0 +1,228 @@
+# Environment variables for customization
+# You can override these in a .env file or by setting environment variables
+# WOODPECKER_IMAGE=woodpecker:latest
+# WOODPECKER_IMAGE=woodpecker:ubuntu22.04
+# WOODPECKER_IMAGE=woodpecker:amazonlinux2023
+# WOODPECKER_IMAGE=woodpecker:rockylinux8
+
+volumes:
+  etcd_data:
+  minio_data:
+  woodpecker-node1_data:
+  woodpecker-node1_logs:
+  woodpecker-node2_data:
+  woodpecker-node2_logs:
+  woodpecker-node3_data:
+  woodpecker-node3_logs:
+
+services:
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    container_name: jaeger
+    command:
+      - --set=receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317
+      - --set=receivers.otlp.protocols.http.endpoint=0.0.0.0:4318
+    ports:
+      - "16686:16686"
+      - "4317:4317" 
+      - "4318:4318"
+    environment:
+      - LOG_LEVEL=info
+    networks:
+      - woodpecker
+    restart: unless-stopped
+
+  # Single etcd instance for simplicity
+  etcd:
+    image: bitnami/etcd:3.5.16
+    container_name: etcd
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+      - ETCD_EXPERIMENTAL_ENABLE_DISTRIBUTED_TRACING=true
+      - ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_SAMPLING_RATE=1000000
+      - ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_ADDRESS=jaeger:4317
+      - ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_SERVICE_NAME=etcd
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd_data:/etcd
+    command: etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+    networks:
+      - woodpecker
+    restart: unless-stopped
+    depends_on:
+      - jaeger
+
+  # MinIO object storage
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_TRACING_ENABLED=1
+      - MINIO_TRACING_ENDPOINT=http://jaeger:4318
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - minio_data:/data
+    command: minio server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+    networks:
+      - woodpecker
+    restart: unless-stopped
+    depends_on:
+      - jaeger
+
+  # First Woodpecker node (bootstrap node)
+  woodpecker-node1:
+    image: ${WOODPECKER_IMAGE:-woodpecker:latest}
+    container_name: woodpecker-node1
+    environment:
+      - NODE_NAME=woodpecker-node1
+      - GRPC_PORT=18080
+      - GOSSIP_PORT=17946
+      # Bridge network mode with port mapping
+      # - SEEDS=""  # Bootstrap node doesn't need seeds
+      - CLUSTER_NAME=woodpecker-cluster
+      - RESOURCE_GROUP=rg-primary
+      - AVAILABILITY_ZONE=az-1
+      - MINIO_ADDRESS=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=woodpecker-cluster-data
+      - STORAGE_TYPE=service
+      - LOG_LEVEL=info
+      - WAIT_FOR_DEPS=true
+      - DEP_TIMEOUT=120
+    ports:
+      - "18080:18080"
+      - "17946:17946"
+      - "17946:17946/udp"
+    volumes:
+      - woodpecker-node1_data:/woodpecker/data
+      - woodpecker-node1_logs:/woodpecker/logs
+    networks:
+      - woodpecker
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Second Woodpecker node
+  woodpecker-node2:
+    image: ${WOODPECKER_IMAGE:-woodpecker:latest}
+    container_name: woodpecker-node2
+    environment:
+      - NODE_NAME=woodpecker-node2
+      - GRPC_PORT=18081
+      - GOSSIP_PORT=17947
+      # Bridge network mode with port mapping
+      - SEEDS=woodpecker-node1:17946  # Join the first node via container name
+      - CLUSTER_NAME=woodpecker-cluster
+      - RESOURCE_GROUP=rg-primary
+      - AVAILABILITY_ZONE=az-2
+      - MINIO_ADDRESS=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=woodpecker-cluster-data
+      - STORAGE_TYPE=service
+      - LOG_LEVEL=info
+      - WAIT_FOR_DEPS=true
+      - DEP_TIMEOUT=120
+    ports:
+      - "18081:18081"
+      - "17947:17947"
+      - "17947:17947/udp"
+    volumes:
+      - woodpecker-node2_data:/woodpecker/data
+      - woodpecker-node2_logs:/woodpecker/logs
+    networks:
+      - woodpecker
+    depends_on:
+      - woodpecker-node1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Third Woodpecker node
+  woodpecker-node3:
+    image: ${WOODPECKER_IMAGE:-woodpecker:latest}
+    container_name: woodpecker-node3
+    environment:
+      - NODE_NAME=woodpecker-node3
+      - GRPC_PORT=18082
+      - GOSSIP_PORT=17948
+      # Bridge network mode with port mapping
+      - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947
+      - CLUSTER_NAME=woodpecker-cluster
+      - RESOURCE_GROUP=rg-secondary
+      - AVAILABILITY_ZONE=az-3
+      - MINIO_ADDRESS=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=woodpecker-cluster-data
+      - STORAGE_TYPE=service
+      - LOG_LEVEL=info
+      - WAIT_FOR_DEPS=true
+      - DEP_TIMEOUT=120
+    ports:
+      - "18082:18082"
+      - "17948:17948"
+      - "17948:17948/udp"
+    volumes:
+      - woodpecker-node3_data:/woodpecker/data
+      - woodpecker-node3_logs:/woodpecker/logs
+    networks:
+      - woodpecker
+    depends_on:
+      - woodpecker-node1
+      - woodpecker-node2
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+networks:
+  woodpecker:
+    driver: bridge
+
