@@ -430,22 +430,40 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 		return nil, err
 	}
 
-	// quorum read based on lac mechanism with intelligent node selection
+	// quorum read with intelligent node selection
+	// Try to continue from the last successful node first, then try others
 	nodeCount := len(quorumInfo.Nodes)
 	var lastError error
 
-	for i := 0; i < nodeCount; i++ {
-		// Start from a different node each time to distribute load
-		nodeIndex := i % nodeCount
-		node := quorumInfo.Nodes[nodeIndex]
+	// Find the starting node index from lastReadState
+	var startNodeIndex int = 0
+	if lastReadState != nil && lastReadState.Node != "" {
+		for i, node := range quorumInfo.Nodes {
+			if node == lastReadState.Node {
+				startNodeIndex = i
+				break
+			}
+		}
+		logger.Ctx(ctx).Debug("prioritizing last read node",
+			zap.String("logName", s.logName),
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId),
+			zap.String("lastReadNode", lastReadState.Node),
+			zap.Int("startNodeIndex", startNodeIndex))
+	}
 
+	// Cycle through nodes starting from the preferred index
+	for i := 0; i < nodeCount; i++ {
+		nodeIndex := (startNodeIndex + i) % nodeCount
+		node := quorumInfo.Nodes[nodeIndex]
 		logger.Ctx(ctx).Debug("attempting to read from node",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.String("node", node),
 			zap.Int("nodeIndex", nodeIndex),
-			zap.Int("attempt", i+1))
+			zap.Int("attempt", i+1),
+			zap.Bool("isLastReadNode", i == 0 && lastReadState != nil && lastReadState.Node == node))
 
 		cli, err := s.ClientPool.GetLogStoreClient(ctx, node)
 		if err != nil {
@@ -459,7 +477,13 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 			continue
 		}
 
-		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, lastReadState)
+		// Only pass lastReadState if it's from the same node
+		var nodeLastReadState *proto.LastReadState
+		if lastReadState != nil && lastReadState.Node == node {
+			nodeLastReadState = lastReadState
+		}
+
+		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		if err != nil {
 			// For other errors, return immediately
 			logger.Ctx(ctx).Warn("read batch failed on node",
@@ -469,10 +493,18 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 				zap.String("node", node),
 				zap.Error(err))
 			lastError = err
+			if werr.ErrFileReaderEndOfFile.Is(err) {
+				// encounter EOF, stop reading immediately
+				break
+			}
 			continue
 		}
 
-		// Success! Log and return the result
+		// Success! Update the LastReadState with current node and return the result
+		if batchResult.LastReadState != nil {
+			batchResult.LastReadState.Node = node
+		}
+
 		logger.Ctx(ctx).Debug("finish read batch successfully",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
@@ -480,7 +512,7 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 			zap.Int64("from", from),
 			zap.Int64("maxEntries", maxEntries),
 			zap.String("successfulNode", node),
-			zap.Int("nodeIndex", nodeIndex),
+			zap.Int("attempt", i+1),
 			zap.Int("count", len(batchResult.Entries)))
 		return batchResult, nil
 	}
