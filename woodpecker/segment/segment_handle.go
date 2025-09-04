@@ -68,7 +68,10 @@ type SegmentHandle interface {
 	// SendAppendSuccessCallbacks called when an appendOp operation is successful
 	SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64)
 	// SendAppendErrorCallbacks called when an appendOp operation fails
+	// Deprecated, use detail failure handle methods
 	SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error)
+	// HandleAppendRequestFailure called when an appendOp operation fails
+	HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string)
 	// GetSize get the size of the segment
 	GetSize(ctx context.Context) int64
 	// GetBlocksCount get the number of blocks in the segment
@@ -329,7 +332,102 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	}
 }
 
+func (s *segmentHandleImpl) findAppendOpById(ctx context.Context, triggerEntryId int64) *list.Element {
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() { // TODO should be faster by introducing a map
+		element := e
+		op := element.Value.(*AppendOp)
+		if op.entryId == triggerEntryId {
+			return element
+		}
+	}
+	return nil
+}
+
+func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string) {
+	s.Lock()
+	defer s.Unlock()
+	s.updateAccessTime()
+	logger.Ctx(ctx).Info("HandleAppendRequestFailure", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
+
+	// all after triggerEntryId will be removed
+	elementsToRetry := make([]*list.Element, 0)      // retry if OP request not reach maxAttempts
+	finalFailureElements := make([]*list.Element, 0) // final failure if OP request reach maxAttempts
+	elementsToRemove := make([]*list.Element, 0)     // remove if OP's requests fail count reach quorum size
+	minRemoveId := int64(math.MaxInt64)
+
+	// found the triggerEntryId
+	element := s.findAppendOpById(ctx, triggerEntryId)
+	if element == nil {
+		logger.Ctx(ctx).Info("appendOp not found in queue", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerEntryId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
+		return
+	}
+	op := element.Value.(*AppendOp)
+	if op.channelAttempts[serverIndex]+1 < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
+		(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
+		(err == nil || !werr.IsSegmentWritable(err)) {
+		logger.Ctx(ctx).Debug("appendOp should retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
+		op.channelAttempts[serverIndex]++
+		elementsToRetry = append(elementsToRetry, element)
+	} else {
+		// retry max times, or encounter non-retryable error
+		finalFailureElements = append(finalFailureElements, element)
+		logger.Ctx(ctx).Debug("appendOp fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
+		failCount := op.finalFailureSet.SetAndCount(serverIndex)
+		if int32(failCount) >= (s.quorumInfo.Wq - s.quorumInfo.Aq + 1) {
+			logger.Ctx(ctx).Debug("appendOp should remove", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
+			elementsToRemove = append(elementsToRemove, element)
+			if minRemoveId == math.MaxInt64 || op.entryId < minRemoveId {
+				minRemoveId = op.entryId
+			}
+		}
+	}
+
+	// do not remove, just resubmit to retry again
+	for _, element := range elementsToRetry {
+		op := element.Value.(*AppendOp)
+		s.executor.Submit(ctx, NewAppendRequestRetryOp(ctx, serverIndex, op))
+		logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
+	}
+
+	// fast fail other queue appends which Id greater then minRemoveId.
+	// because without the hole entry, their will never success
+	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
+		element := e
+		op := element.Value.(*AppendOp)
+		if op.entryId > minRemoveId {
+			logger.Ctx(ctx).Debug(fmt.Sprintf("append entry:%d fast fail, cause entry:%d already failed", op.entryId, minRemoveId), zap.Int64("triggerId", triggerEntryId))
+			elementsToRemove = append(elementsToRemove, element)
+		}
+	}
+
+	// send error callback to all elementsToRemove
+	for _, element := range elementsToRemove {
+		s.appendOpsQueue.Remove(element)
+		op := element.Value.(*AppendOp)
+		op.FastFail(ctx, err)
+		logger.Ctx(ctx).Debug("append fail after retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
+		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId)).Dec()
+	}
+
+	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
+	if len(finalFailureElements) > 0 {
+		// trigger rolling segment, mark rolling
+		s.rollingState.Store(true)
+	}
+
+	// when seg rolling state mark, if no pending appendOps, close segment safely
+	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
+		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
+		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
+			logger.Ctx(ctx).Warn("completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
+		} else {
+			logger.Ctx(ctx).Debug("completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+		}
+	}
+}
+
 // SendAppendErrorCallbacks will do error callback and remove from pendingAppendOps sequentially
+// Deprecated, use detail failure handle methods
 func (s *segmentHandleImpl) SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error) {
 	s.Lock()
 	defer s.Unlock()

@@ -93,6 +93,13 @@ func TestAppendAsync_Success(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Aq:    1,
+				Es:    1,
+				Id:    1,
+				Nodes: []string{"127.0.0.1"},
+				Wq:    1,
+			},
 		},
 		Revision: 1,
 	}
@@ -155,6 +162,13 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Aq:    1,
+				Es:    1,
+				Id:    1,
+				Nodes: []string{"127.0.0.1"},
+				Wq:    1,
+			},
 		},
 		Revision: 1,
 	}
@@ -248,6 +262,13 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Aq:    1,
+				Es:    1,
+				Id:    1,
+				Nodes: []string{"127.0.0.1"},
+				Wq:    1,
+			},
 		},
 		Revision: 1,
 	}
@@ -358,6 +379,13 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Aq:    1,
+				Es:    1,
+				Id:    1,
+				Nodes: []string{"127.0.0.1"},
+				Wq:    1,
+			},
 		},
 		Revision: 1,
 	}
@@ -489,31 +517,12 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 	assert.NoError(t, callbackResults[1], "Entry 1 should succeed")
 
 	// Entry 2 should demonstrate the FIXED behavior (bug has been fixed)
-	if callbackResults[2] != nil {
-		t.Logf("=== FIX CONFIRMED ===")
-		t.Logf("Entry 2 callback received correct timeout error: %v", callbackResults[2])
-		t.Logf("This confirms the bug has been fixed!")
-		t.Logf("The fix in append_op.go lines 175-176 is working correctly:")
-		t.Logf("- AppendEntry succeeded (err = nil)")
-		t.Logf("- resultChan.ReadResult(subCtx) timed out (readChanErr = timeout)")
-		t.Logf("- Fixed code correctly uses 'readChanErr' instead of 'err'")
-
-		// Verify the fix works correctly
-		assert.NotNil(t, callbackResults[2], "FIX VERIFIED: Entry 2 correctly receives timeout error")
-		assert.True(t, errors.Is(callbackResults[2], context.DeadlineExceeded), "FIX VERIFIED: Error is context deadline exceeded")
-	} else {
-		t.Logf("=== UNEXPECTED: Entry 2 callback received nil error ===")
-		t.Logf("This suggests the bug still exists or test setup issue")
-		t.Fail()
-	}
-
-	t.Logf("=== TEST CONCLUSION ===")
-	t.Logf("This test demonstrates the timeout scenario and verifies the fix:")
-	t.Logf("1. AppendEntry succeeds for entry 2")
-	t.Logf("2. Result channel never receives data (simulating timeout)")
-	t.Logf("3. receivedAckCallback times out in ReadResult")
-	t.Logf("4. FIXED: Callback correctly receives timeout error instead of nil")
-	t.Logf("5. The fix in append_op.go lines 175-176 works as expected!")
+	t.Logf("- AppendEntry succeeded (err = nil)")
+	t.Logf("- resultChan.ReadResult(subCtx) timed out (readChanErr = timeout)")
+	t.Logf("- Fixed code correctly uses 'readChanErr' instead of 'err'")
+	// Verify the fix works correctly
+	assert.NotNil(t, callbackResults[2], "FIX VERIFIED: Entry 2 correctly receives timeout error")
+	assert.True(t, errors.Is(callbackResults[2], context.DeadlineExceeded), "FIX VERIFIED: Error is context deadline exceeded")
 }
 
 func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
@@ -541,6 +550,13 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Aq:    1,
+				Es:    1,
+				Id:    1,
+				Nodes: []string{"127.0.0.1"},
+				Wq:    1,
+			},
 		},
 		Revision: 1,
 	}
@@ -615,6 +631,13 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -646,7 +669,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 				appendOp := e.Value.(*AppendOp)
 				// when chan ready
 				if len(appendOp.resultChannels) > 0 {
-					if appendOp.entryId%2 == 0 && appendOp.attempt <= 1 {
+					if appendOp.entryId%2 == 0 && appendOp.channelAttempts[0]+1 <= 1 {
 						// if attempt=1 and entryId is even, mock fail in this attempt
 						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
 						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
@@ -697,6 +720,13 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -705,6 +735,13 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Completed,
 			LastEntryId: 1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 2,
 	}
@@ -750,6 +787,13 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -823,6 +867,13 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -907,6 +958,13 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1005,6 +1063,13 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1094,6 +1159,13 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1152,6 +1224,13 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1253,6 +1332,13 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1351,6 +1437,13 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1456,6 +1549,13 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1512,6 +1612,13 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}
@@ -1580,6 +1687,13 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 			SegNo:       1,
 			State:       proto.SegmentState_Active,
 			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
 		},
 		Revision: 1,
 	}

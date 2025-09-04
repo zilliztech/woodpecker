@@ -709,6 +709,43 @@ func (_c *SegmentHandle_GetSize_Call) RunAndReturn(run func(context.Context) int
 	return _c
 }
 
+// HandleAppendRequestFailure provides a mock function with given fields: ctx, triggerEntryId, err, serverIndex, serverAddr
+func (_m *SegmentHandle) HandleAppendRequestFailure(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string) {
+	_m.Called(ctx, triggerEntryId, err, serverIndex, serverAddr)
+}
+
+// SegmentHandle_HandleAppendRequestFailure_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HandleAppendRequestFailure'
+type SegmentHandle_HandleAppendRequestFailure_Call struct {
+	*mock.Call
+}
+
+// HandleAppendRequestFailure is a helper method to define mock.On call
+//   - ctx context.Context
+//   - triggerEntryId int64
+//   - err error
+//   - serverIndex int
+//   - serverAddr string
+func (_e *SegmentHandle_Expecter) HandleAppendRequestFailure(ctx interface{}, triggerEntryId interface{}, err interface{}, serverIndex interface{}, serverAddr interface{}) *SegmentHandle_HandleAppendRequestFailure_Call {
+	return &SegmentHandle_HandleAppendRequestFailure_Call{Call: _e.mock.On("HandleAppendRequestFailure", ctx, triggerEntryId, err, serverIndex, serverAddr)}
+}
+
+func (_c *SegmentHandle_HandleAppendRequestFailure_Call) Run(run func(ctx context.Context, triggerEntryId int64, err error, serverIndex int, serverAddr string)) *SegmentHandle_HandleAppendRequestFailure_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(error), args[3].(int), args[4].(string))
+	})
+	return _c
+}
+
+func (_c *SegmentHandle_HandleAppendRequestFailure_Call) Return() *SegmentHandle_HandleAppendRequestFailure_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *SegmentHandle_HandleAppendRequestFailure_Call) RunAndReturn(run func(context.Context, int64, error, int, string)) *SegmentHandle_HandleAppendRequestFailure_Call {
+	_c.Run(run)
+	return _c
+}
+
 // IsForceRollingReady provides a mock function with given fields: ctx
 func (_m *SegmentHandle) IsForceRollingReady(ctx context.Context) bool {
 	ret := _m.Called(ctx)
