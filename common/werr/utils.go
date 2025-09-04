@@ -25,6 +25,10 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// ---------------------------------------------
+// gRPC Status related error
+// ---------------------------------------------
+
 func Success(reason ...string) *proto.Status {
 	status := &proto.Status{
 		Code: 0,
@@ -92,4 +96,15 @@ func Error(status *proto.Status) error {
 	}
 
 	return newWoodpeckerError(status.GetReason(), code, status.GetRetriable())
+}
+
+// ---------------------------------------------
+// Segment Writable related error
+// ---------------------------------------------
+
+func IsSegmentWritable(err error) bool {
+	if err == nil {
+		return true
+	}
+	return !ErrSegmentHandleSegmentClosed.Is(err) && !ErrSegmentFenced.Is(err) && !ErrStorageNotWritable.Is(err) && !ErrFileWriterFinalized.Is(err)
 }
