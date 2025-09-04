@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -32,10 +33,11 @@ import (
 
 // MiniCluster represents a cluster of woodpecker servers
 type MiniCluster struct {
-	Servers   []*server.Server
-	Config    *config.Configuration
-	BaseDir   string
-	UsedPorts []int // Track used ports for consistent restart
+	Servers      map[int]*server.Server // Map of nodeIndex -> server
+	Config       *config.Configuration
+	BaseDir      string
+	UsedPorts    map[int]int // Map of nodeIndex -> port for consistent restart
+	MaxNodeIndex int         // Track the highest nodeIndex used
 }
 
 func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *config.Configuration) (*MiniCluster, *config.Configuration, []string) {
@@ -46,27 +48,30 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 	cfg.Log.Level = "debug"
 
 	cluster := &MiniCluster{
-		Servers:   make([]*server.Server, nodeCount),
-		Config:    cfg,
-		BaseDir:   baseDir,
-		UsedPorts: make([]int, nodeCount),
+		Servers:      make(map[int]*server.Server),
+		Config:       cfg,
+		BaseDir:      baseDir,
+		UsedPorts:    make(map[int]int),
+		MaxNodeIndex: -1,
 	}
 
 	ctx := context.Background()
 
-	// Start each node
+	// Start each node with consecutive nodeIndex starting from 0
 	seeds := make([]string, 0)
 	for i := 0; i < nodeCount; i++ {
+		nodeIndex := i
+
 		// Create server configuration for this node
 		nodeCfg := *cfg // Copy the base config
-		nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(baseDir, fmt.Sprintf("node%d", i))
+		nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(baseDir, fmt.Sprintf("node%d", nodeIndex))
 
 		// Find a free port for this node
 		listener, err := net.Listen("tcp", "localhost:0")
 		assert.NoError(t, err)
 		port := listener.Addr().(*net.TCPAddr).Port
-		cluster.UsedPorts[i] = port // Track the port for this node
-		listener.Close()            // Close it so server can use it
+		cluster.UsedPorts[nodeIndex] = port // Track the port for this node
+		listener.Close()                    // Close it so server can use it
 
 		// Create and start server
 		nodeServer := server.NewServer(ctx, &nodeCfg, 0, port, []string{})
@@ -85,10 +90,11 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 			if err != nil {
 				t.Logf("Node %d server run error: %v", nodeID, err)
 			}
-		}(nodeServer, i)
+		}(nodeServer, nodeIndex)
 
-		cluster.Servers[i] = nodeServer
-		t.Logf("Started node %d on port %d", i, port)
+		cluster.Servers[nodeIndex] = nodeServer
+		cluster.MaxNodeIndex = nodeIndex
+		t.Logf("Started node %d on port %d", nodeIndex, port)
 	}
 
 	// Wait for all nodes to start
@@ -108,20 +114,35 @@ func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster
 // StopMultiNodeCluster stops all nodes in the cluster
 func (cluster *MiniCluster) StopMultiNodeCluster(t *testing.T) {
 	// Stop all server nodes
-	for i, srv := range cluster.Servers {
+	for nodeIndex, srv := range cluster.Servers {
 		if srv != nil {
 			err := srv.Stop()
 			if err != nil {
-				t.Logf("Error stopping node %d: %v", i, err)
+				t.Logf("Error stopping node %d: %v", nodeIndex, err)
 			}
-			t.Logf("Stopped node %d", i)
+			t.Logf("Stopped node %d", nodeIndex)
 		}
 	}
 }
 
-// JoinNewNode adds a new node to the cluster
-func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (string, error) {
-	nodeIndex := len(cluster.Servers)
+// JoinNewNode adds a new node to the cluster with the next available nodeIndex
+func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (int, string, error) {
+	// Get next available nodeIndex
+	nodeIndex := cluster.MaxNodeIndex + 1
+	return cluster.JoinNodeWithIndex(t, nodeIndex, seeds)
+}
+
+// JoinNodeWithIndex adds a new node to the cluster with specified nodeIndex
+func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, seeds []string) (int, string, error) {
+	// Validate nodeIndex is non-negative
+	if nodeIndex < 0 {
+		return -1, "", fmt.Errorf("node index cannot be negative: %d", nodeIndex)
+	}
+
+	// Check if nodeIndex is already in use
+	if _, exists := cluster.Servers[nodeIndex]; exists {
+		return -1, "", fmt.Errorf("node %d already exists", nodeIndex)
+	}
 
 	// Create server configuration for the new node
 	nodeCfg := *cluster.Config // Copy the base config
@@ -130,7 +151,7 @@ func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (string, e
 	// Find a free port for this node
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		return "", fmt.Errorf("failed to find free port: %w", err)
+		return -1, "", fmt.Errorf("failed to find free port: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
@@ -143,7 +164,7 @@ func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (string, e
 	// Prepare server (sets up listener and gossip)
 	err = nodeServer.Prepare()
 	if err != nil {
-		return "", fmt.Errorf("failed to prepare node: %w", err)
+		return -1, "", fmt.Errorf("failed to prepare node: %w", err)
 	}
 
 	// Run server (starts grpc server and log store)
@@ -155,8 +176,13 @@ func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (string, e
 	}(nodeServer, nodeIndex)
 
 	// Add to cluster
-	cluster.Servers = append(cluster.Servers, nodeServer)
-	cluster.UsedPorts = append(cluster.UsedPorts, port)
+	cluster.Servers[nodeIndex] = nodeServer
+	cluster.UsedPorts[nodeIndex] = port
+
+	// Update MaxNodeIndex if necessary
+	if nodeIndex > cluster.MaxNodeIndex {
+		cluster.MaxNodeIndex = nodeIndex
+	}
 
 	// Get advertise address
 	advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
@@ -166,27 +192,45 @@ func (cluster *MiniCluster) JoinNewNode(t *testing.T, seeds []string) (string, e
 	// Wait a bit for the node to fully start
 	time.Sleep(1 * time.Second)
 
-	return advertiseAddr, nil
+	return nodeIndex, advertiseAddr, nil
 }
 
-// LeaveNode stops and removes a random node from the cluster
-func (cluster *MiniCluster) LeaveNode(t *testing.T) (int, error) {
+// LeaveRandomNode stops and removes a random active node from the cluster
+func (cluster *MiniCluster) LeaveRandomNode(t *testing.T) (int, error) {
 	if len(cluster.Servers) == 0 {
 		return -1, fmt.Errorf("no nodes to leave")
 	}
 
-	// Find the last active node (simple strategy)
-	nodeIndex := len(cluster.Servers) - 1
-	for nodeIndex >= 0 && cluster.Servers[nodeIndex] == nil {
-		nodeIndex--
+	// Find all active nodes
+	activeNodes := make([]int, 0)
+	for nodeIndex, srv := range cluster.Servers {
+		if srv != nil {
+			activeNodes = append(activeNodes, nodeIndex)
+		}
 	}
 
-	if nodeIndex < 0 {
+	if len(activeNodes) == 0 {
 		return -1, fmt.Errorf("no active nodes to leave")
 	}
 
+	// Choose the last active node for simplicity (could be randomized)
+	nodeIndex := activeNodes[len(activeNodes)-1]
+	return cluster.LeaveNodeWithIndex(t, nodeIndex)
+}
+
+// LeaveNode is an alias for LeaveRandomNode for backward compatibility
+func (cluster *MiniCluster) LeaveNode(t *testing.T) (int, error) {
+	return cluster.LeaveRandomNode(t)
+}
+
+// LeaveNodeWithIndex stops and removes a specific node from the cluster
+func (cluster *MiniCluster) LeaveNodeWithIndex(t *testing.T, nodeIndex int) (int, error) {
+	srv, exists := cluster.Servers[nodeIndex]
+	if !exists || srv == nil {
+		return -1, fmt.Errorf("node %d is not active or does not exist", nodeIndex)
+	}
+
 	// Stop the node
-	srv := cluster.Servers[nodeIndex]
 	err := srv.Stop()
 	if err != nil {
 		t.Logf("Error stopping node %d: %v", nodeIndex, err)
@@ -201,20 +245,20 @@ func (cluster *MiniCluster) LeaveNode(t *testing.T) (int, error) {
 
 // RestartNode restarts a stopped node with the same port
 func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, seeds []string) (string, error) {
-	if nodeIndex >= len(cluster.Servers) {
-		return "", fmt.Errorf("invalid node index: %d", nodeIndex)
+	// Check if the nodeIndex has a recorded port (was previously started)
+	port, portExists := cluster.UsedPorts[nodeIndex]
+	if !portExists {
+		return "", fmt.Errorf("node %d was never started before", nodeIndex)
 	}
 
-	if cluster.Servers[nodeIndex] != nil {
+	// Check if node is currently running
+	if srv, exists := cluster.Servers[nodeIndex]; exists && srv != nil {
 		return "", fmt.Errorf("node %d is still running", nodeIndex)
 	}
 
 	// Create server configuration for this node
 	nodeCfg := *cluster.Config // Copy the base config
 	nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeIndex))
-
-	// Use the same port as before
-	port := cluster.UsedPorts[nodeIndex]
 
 	ctx := context.Background()
 
@@ -258,6 +302,19 @@ func (cluster *MiniCluster) GetActiveNodes() int {
 		}
 	}
 	return count
+}
+
+// GetActiveNodeIndexes returns a slice of active node indexes (sorted)
+func (cluster *MiniCluster) GetActiveNodeIndexes() []int {
+	activeNodes := make([]int, 0)
+	for nodeIndex, srv := range cluster.Servers {
+		if srv != nil {
+			activeNodes = append(activeNodes, nodeIndex)
+		}
+	}
+	// Sort the slice to ensure consistent ordering
+	sort.Ints(activeNodes)
+	return activeNodes
 }
 
 // GetSeedList returns current active seed addresses
