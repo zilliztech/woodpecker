@@ -43,3 +43,13 @@ func (bs *BitSet) Set(idx int) {
 	}
 	bs.bits |= 1 << idx
 }
+
+func (bs *BitSet) SetAndCount(idx int) int {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if idx < 0 || idx >= MaxBitSetSize {
+		panic(fmt.Sprintf("invalid index: %d", idx))
+	}
+	bs.bits |= 1 << idx
+	return bits.OnesCount16(bs.bits)
+}

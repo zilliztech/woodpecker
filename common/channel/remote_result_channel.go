@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -81,23 +82,54 @@ func (r *RemoteResultChannel) SendResult(ctx context.Context, result *AppendResu
 // ReadResult waits for and reads the append result from the remote gRPC stream.
 // It returns the result immediately if already available, otherwise blocks until
 // a response is received from the stream or an error occurs.
+// In test scenarios, it can wait for results set via SendResult.
 func (r *RemoteResultChannel) ReadResult(ctx context.Context) (*AppendResult, error) {
+	// First check if we have a result that was set directly via SendResult
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	if r.closed {
+		r.mu.RUnlock()
 		return nil, fmt.Errorf("remote result channel %s is closed", r.identifier)
 	}
 	if r.result != nil {
-		return r.result, nil
+		result := r.result
+		r.mu.RUnlock()
+		return result, nil
 	}
+	r.mu.RUnlock()
+
+	// If no gRPC stream is initialized, we wait for a direct result via SendResult
+	// This is particularly useful in test scenarios
 	if r.ch == nil {
-		return nil, fmt.Errorf("remote result channel %s is not initialized", r.identifier)
+		// Poll for direct result with backoff, respecting context cancellation
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ticker.C:
+				r.mu.RLock()
+				if r.closed {
+					r.mu.RUnlock()
+					return nil, fmt.Errorf("remote result channel %s is closed", r.identifier)
+				}
+				if r.result != nil {
+					result := r.result
+					r.mu.RUnlock()
+					return result, nil
+				}
+				r.mu.RUnlock()
+			}
+		}
 	}
 
-	// gRPC stream.Recv() automatically respects context cancellation
-	// since the stream was created with the context in AppendEntry
-	resultResponse, readErr := r.ch.Recv()
+	// If gRPC stream is available, read from it
+	r.mu.RLock()
+	ch := r.ch
+	r.mu.RUnlock()
+
+	resultResponse, readErr := ch.Recv()
 	if readErr != nil {
 		logger.Ctx(ctx).Warn("failed to read result from remote channel",
 			zap.String("identifier", r.identifier),
