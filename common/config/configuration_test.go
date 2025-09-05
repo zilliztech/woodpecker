@@ -43,9 +43,19 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, "", config.Woodpecker.Client.ServiceSeedNodes)
-	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.EnsembleSize)
-	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.WriteQuorumSize)
-	assert.Equal(t, 2, config.Woodpecker.Client.Quorum.AckQuorumSize)
+	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools))
+	assert.Equal(t, "default-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
+	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
+	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
+	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
+	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	// Test the getter methods for backward compatibility
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetEnsembleSize())
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
+	assert.Equal(t, 2, config.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 200, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
 	assert.Equal(t, 10000, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
@@ -117,9 +127,19 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, "", defaultConfig.Woodpecker.Client.ServiceSeedNodes)
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.EnsembleSize)
-	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.WriteQuorumSize)
-	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.AckQuorumSize)
+	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools))
+	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Name)
+	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
+	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
+	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
+	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	// Test the getter methods for backward compatibility
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetEnsembleSize())
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetWriteQuorumSize())
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
@@ -200,9 +220,19 @@ func TestConfigurationOverwrite(t *testing.T) {
       maxInterval: 10
     serviceSeedNodes: localhost:1726,localhost:2726,localhost:3726
     quorum:
-      ensembleSize: 5
-      writeQuorumSize: 5
-      ackQuorumSize: 3
+      quorumBufferPools:
+        - name: test-pool-1
+          seeds: ["test-node1", "test-node2"]
+        - name: test-pool-2
+          seeds: ["test-node3", "test-node4", "test-node5"]
+      quorumSelectStrategy:
+        affinityMode: hard
+        replicas: 5
+        strategy: multi-az-multi-rg
+        customExpression:
+          region: "test-region-a|test-region-b"
+          az: "test-az-1|test-az-2"
+          resourceGroup: "test-rg.*"
   logstore:
     segmentReadPolicy:
       maxBatchSize: 32000000
@@ -224,9 +254,137 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, "localhost:1726,localhost:2726,localhost:3726", config.Woodpecker.Client.ServiceSeedNodes)
-	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.EnsembleSize)
-	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.WriteQuorumSize)
-	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.AckQuorumSize)
+	assert.Equal(t, 2, len(config.Woodpecker.Client.Quorum.BufferPools))
+	assert.Equal(t, "test-pool-1", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
+	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
+	assert.Equal(t, "test-pool-2", config.Woodpecker.Client.Quorum.BufferPools[1].Name)
+	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools[1].Seeds)
+	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
+	assert.Equal(t, "multi-az-multi-rg", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, "test-region-a|test-region-b", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
+	assert.Equal(t, "test-az-1|test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
+	assert.Equal(t, "test-rg.*", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	// Test the getter methods for backward compatibility with overridden values
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetEnsembleSize())
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetAckQuorumSize())
 	assert.Equal(t, int64(32000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
 	assert.Equal(t, 64, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
+}
+
+// TestQuorumConfigValidation tests the validation logic for quorum configuration
+func TestQuorumConfigValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      QuorumConfig
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "Valid configuration with strategy",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     3,
+					Strategy:     "single-az-single-rg",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "Valid configuration with replicas=5",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     5,
+					Strategy:     "random",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "Invalid affinity mode",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "invalid",
+					Replicas:     3,
+					Strategy:     "single-az-single-rg",
+				},
+			},
+			expectError: true,
+			errorMsg:    "invalid affinity mode 'invalid'",
+		},
+		{
+			name: "Invalid strategy",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     3,
+					Strategy:     "invalid-strategy",
+				},
+			},
+			expectError: true,
+			errorMsg:    "invalid strategy 'invalid-strategy'",
+		},
+		{
+			name: "Invalid replicas value (not 3 or 5)",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     4, // Invalid value, only 3 or 5 allowed
+					Strategy:     "random",
+				},
+			},
+			expectError: false, // This should still pass validation, but getters will default to 3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestQuorumConfigReplicasHandling tests the replica-based configuration
+func TestQuorumConfigReplicasHandling(t *testing.T) {
+	// Test with replicas = 3
+	config3 := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{
+			Replicas: 3,
+		},
+	}
+
+	assert.Equal(t, 3, config3.GetEnsembleSize())
+	assert.Equal(t, 3, config3.GetWriteQuorumSize())
+	assert.Equal(t, 2, config3.GetAckQuorumSize()) // (3/2)+1 = 2
+
+	// Test with replicas = 5
+	config5 := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{
+			Replicas: 5,
+		},
+	}
+
+	assert.Equal(t, 5, config5.GetEnsembleSize())
+	assert.Equal(t, 5, config5.GetWriteQuorumSize())
+	assert.Equal(t, 3, config5.GetAckQuorumSize()) // (5/2)+1 = 3
+
+	// Test with invalid replicas (should default to 3)
+	configInvalid := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{
+			Replicas: 4, // Invalid value
+		},
+	}
+
+	assert.Equal(t, 3, configInvalid.GetEnsembleSize()) // Should default to 3
+	assert.Equal(t, 3, configInvalid.GetWriteQuorumSize())
+	assert.Equal(t, 2, configInvalid.GetAckQuorumSize()) // (3/2)+1 = 2
 }
