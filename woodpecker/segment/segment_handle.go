@@ -412,6 +412,7 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 	// mark rolling to prevent later append, and trigger rolling segment before all appendOps in queue
 	if len(finalFailureElements) > 0 {
 		// trigger rolling segment, mark rolling
+		logger.Ctx(ctx).Info("rolling segment", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
 		s.rollingState.Store(true)
 	}
 
@@ -419,9 +420,9 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
 		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
 		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
-			logger.Ctx(ctx).Warn("completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
+			logger.Ctx(ctx).Warn("rolling completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
 		} else {
-			logger.Ctx(ctx).Debug("completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
+			logger.Ctx(ctx).Debug("rolling completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
 		}
 	}
 }

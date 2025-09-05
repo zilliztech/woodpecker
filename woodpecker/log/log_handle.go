@@ -72,6 +72,9 @@ type LogHandle interface {
 	CompleteAllActiveSegmentIfExists(ctx context.Context) error
 	// Close closes the log handle.
 	Close(ctx context.Context) error
+	// GetCurrentWritableSegmentHandle returns the current writable segment handle for the log.
+	// TODO Test only
+	GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle
 }
 
 const (
@@ -1077,4 +1080,9 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 			zap.Int64("logId", l.Id),
 			zap.Int("totalHandles", len(l.SegmentHandles)))
 	}
+}
+
+// TODO for Test only
+func (l *logHandleImpl) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
+	return l.SegmentHandles[l.WritableSegmentId]
 }

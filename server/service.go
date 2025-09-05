@@ -83,7 +83,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		panic(err)
 	}
 	var storageClient storageclient.ObjectStorage
-	if configuration.Woodpecker.Storage.IsStorageMinio() {
+	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		storageClient, err = storageclient.NewObjectStorage(ctx, configuration)
 		if err != nil {
 			panic(err)
