@@ -60,8 +60,9 @@ type QuorumBufferPool struct {
 	Seeds []string `yaml:"seeds"`
 }
 
-// CustomExpression stores the custom node selection expressions.
-type CustomExpression struct {
+// CustomPlacement stores the custom node placement for a specific replica.
+type CustomPlacement struct {
+	Name          string `yaml:"name"`
 	Region        string `yaml:"region"`
 	Az            string `yaml:"az"`
 	ResourceGroup string `yaml:"resourceGroup"`
@@ -69,10 +70,10 @@ type CustomExpression struct {
 
 // QuorumSelectStrategy stores the quorum selection strategy configuration.
 type QuorumSelectStrategy struct {
-	AffinityMode     string           `yaml:"affinityMode"`
-	Replicas         int              `yaml:"replicas"`
-	Strategy         string           `yaml:"strategy"`
-	CustomExpression CustomExpression `yaml:"customExpression"`
+	AffinityMode    string            `yaml:"affinityMode"`
+	Replicas        int               `yaml:"replicas"`
+	Strategy        string            `yaml:"strategy"`
+	CustomPlacement []CustomPlacement `yaml:"customPlacement"`
 }
 
 // QuorumConfig stores the advanced quorum configuration.
@@ -395,14 +396,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 					},
 				},
 				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "random",
-					CustomExpression: CustomExpression{
-						Region:        "",
-						Az:            "",
-						ResourceGroup: "",
-					},
+					AffinityMode:    "soft",
+					Replicas:        3,
+					Strategy:        "random",
+					CustomPlacement: []CustomPlacement{},
 				},
 			},
 		},

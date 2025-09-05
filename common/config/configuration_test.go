@@ -49,9 +49,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
 	assert.Equal(t, "random", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
-	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
-	assert.Equal(t, "", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -133,9 +131,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "soft", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
 	assert.Equal(t, "random", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
-	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
-	assert.Equal(t, "", defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -228,11 +224,20 @@ func TestConfigurationOverwrite(t *testing.T) {
       quorumSelectStrategy:
         affinityMode: hard
         replicas: 5
-        strategy: multi-az-multi-rg
-        customExpression:
-          region: "test-region-a|test-region-b"
-          az: "test-az-1|test-az-2"
-          resourceGroup: "test-rg.*"
+        strategy: custom
+        customPlacement:
+          - name: replica-1
+            region: "test-region-a"
+            az: "test-az-1"
+            resourceGroup: "test-rg-1"
+          - name: replica-2
+            region: "test-region-a"
+            az: "test-az-2"
+            resourceGroup: "test-rg-2"
+          - name: replica-3
+            region: "test-region-b"
+            az: "test-az-1"
+            resourceGroup: "test-rg-3"
   logstore:
     segmentReadPolicy:
       maxBatchSize: 32000000
@@ -261,10 +266,20 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools[1].Seeds)
 	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
-	assert.Equal(t, "multi-az-multi-rg", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, "test-region-a|test-region-b", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Region)
-	assert.Equal(t, "test-az-1|test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.Az)
-	assert.Equal(t, "test-rg.*", config.Woodpecker.Client.Quorum.SelectStrategy.CustomExpression.ResourceGroup)
+	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
+	assert.Equal(t, 3, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
+	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Name)
+	assert.Equal(t, "test-region-a", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
+	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Az)
+	assert.Equal(t, "test-rg-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].ResourceGroup)
+	assert.Equal(t, "replica-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Name)
+	assert.Equal(t, "test-region-a", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Region)
+	assert.Equal(t, "test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Az)
+	assert.Equal(t, "test-rg-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].ResourceGroup)
+	assert.Equal(t, "replica-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Name)
+	assert.Equal(t, "test-region-b", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Region)
+	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Az)
+	assert.Equal(t, "test-rg-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].ResourceGroup)
 	// Test the getter methods for backward compatibility with overridden values
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -338,6 +353,37 @@ func TestQuorumConfigValidation(t *testing.T) {
 			},
 			expectError: false, // This should still pass validation, but getters will default to 3
 		},
+		{
+			name: "Valid custom placement configuration",
+			config: QuorumConfig{
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "hard",
+					Replicas:     3,
+					Strategy:     "custom",
+					CustomPlacement: []CustomPlacement{
+						{
+							Name:          "replica-1",
+							Region:        "us-east-1",
+							Az:            "us-east-1a",
+							ResourceGroup: "rg-1",
+						},
+						{
+							Name:          "replica-2",
+							Region:        "us-east-1",
+							Az:            "us-east-1b",
+							ResourceGroup: "rg-2",
+						},
+						{
+							Name:          "replica-3",
+							Region:        "us-west-2",
+							Az:            "us-west-2a",
+							ResourceGroup: "rg-3",
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -387,4 +433,71 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 	assert.Equal(t, 3, configInvalid.GetEnsembleSize()) // Should default to 3
 	assert.Equal(t, 3, configInvalid.GetWriteQuorumSize())
 	assert.Equal(t, 2, configInvalid.GetAckQuorumSize()) // (3/2)+1 = 2
+}
+
+// TestCustomPlacementConfiguration tests the custom placement functionality
+func TestCustomPlacementConfiguration(t *testing.T) {
+	config := QuorumConfig{
+		SelectStrategy: QuorumSelectStrategy{
+			AffinityMode: "hard",
+			Replicas:     5,
+			Strategy:     "custom",
+			CustomPlacement: []CustomPlacement{
+				{
+					Name:          "replica-1",
+					Region:        "region-a",
+					Az:            "az-1",
+					ResourceGroup: "rg-primary",
+				},
+				{
+					Name:          "replica-2",
+					Region:        "region-a",
+					Az:            "az-2",
+					ResourceGroup: "rg-secondary",
+				},
+				{
+					Name:          "replica-3",
+					Region:        "region-b",
+					Az:            "az-1",
+					ResourceGroup: "rg-tertiary",
+				},
+				{
+					Name:          "replica-4",
+					Region:        "region-b",
+					Az:            "az-2",
+					ResourceGroup: "rg-backup",
+				},
+				{
+					Name:          "replica-5",
+					Region:        "region-c",
+					Az:            "az-1",
+					ResourceGroup: "rg-archive",
+				},
+			},
+		},
+	}
+
+	// Test configuration validation
+	err := config.Validate()
+	assert.NoError(t, err)
+
+	// Test quorum calculations
+	assert.Equal(t, 5, config.GetEnsembleSize())
+	assert.Equal(t, 5, config.GetWriteQuorumSize())
+	assert.Equal(t, 3, config.GetAckQuorumSize())
+
+	// Test custom placement structure
+	assert.Equal(t, 5, len(config.SelectStrategy.CustomPlacement))
+
+	// Test specific placement entries
+	placement := config.SelectStrategy.CustomPlacement
+	assert.Equal(t, "replica-1", placement[0].Name)
+	assert.Equal(t, "region-a", placement[0].Region)
+	assert.Equal(t, "az-1", placement[0].Az)
+	assert.Equal(t, "rg-primary", placement[0].ResourceGroup)
+
+	assert.Equal(t, "replica-5", placement[4].Name)
+	assert.Equal(t, "region-c", placement[4].Region)
+	assert.Equal(t, "az-1", placement[4].Az)
+	assert.Equal(t, "rg-archive", placement[4].ResourceGroup)
 }
