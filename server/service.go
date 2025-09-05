@@ -80,7 +80,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	ctx, cancel := context.WithCancel(context.Background())
 	var minioCli minio.MinioHandler
 	var err error
-	if configuration.Woodpecker.Storage.IsStorageMinio() {
+	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		minioCli, err = minio.NewMinioHandler(ctx, configuration)
 		if err != nil {
 			panic(err)

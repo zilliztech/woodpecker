@@ -109,6 +109,9 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
 	}
+	if config.Woodpecker.Storage.IsStorageService() {
+		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("embed client not support service storage mode")
+	}
 	etcdCli, err := etcd.GetRemoteEtcdClient(config.Etcd.GetEndpoints())
 	if err != nil {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)

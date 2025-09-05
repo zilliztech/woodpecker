@@ -33,11 +33,12 @@ import (
 
 // MiniCluster represents a cluster of woodpecker servers
 type MiniCluster struct {
-	Servers      map[int]*server.Server // Map of nodeIndex -> server
-	Config       *config.Configuration
-	BaseDir      string
-	UsedPorts    map[int]int // Map of nodeIndex -> port for consistent restart
-	MaxNodeIndex int         // Track the highest nodeIndex used
+	Servers       map[int]*server.Server // Map of nodeIndex -> server
+	Config        *config.Configuration
+	BaseDir       string
+	UsedPorts     map[int]int    // Map of nodeIndex -> port for consistent restart
+	UsedAddresses map[int]string // Map of nodeIndex -> last known address
+	MaxNodeIndex  int            // Track the highest nodeIndex used
 }
 
 func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *config.Configuration) (*MiniCluster, *config.Configuration, []string) {
@@ -48,11 +49,12 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 	cfg.Log.Level = "debug"
 
 	cluster := &MiniCluster{
-		Servers:      make(map[int]*server.Server),
-		Config:       cfg,
-		BaseDir:      baseDir,
-		UsedPorts:    make(map[int]int),
-		MaxNodeIndex: -1,
+		Servers:       make(map[int]*server.Server),
+		Config:        cfg,
+		BaseDir:       baseDir,
+		UsedPorts:     make(map[int]int),
+		UsedAddresses: make(map[int]string),
+		MaxNodeIndex:  -1,
 	}
 
 	ctx := context.Background()
@@ -94,6 +96,7 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 
 		cluster.Servers[nodeIndex] = nodeServer
 		cluster.MaxNodeIndex = nodeIndex
+		cluster.UsedAddresses[nodeIndex] = advertiseAddr // Record the address
 		t.Logf("Started node %d on port %d", nodeIndex, port)
 	}
 
@@ -186,6 +189,7 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, seeds
 
 	// Get advertise address
 	advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
+	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Record the address
 
 	t.Logf("Joined new node %d on port %d with address %s", nodeIndex, port, advertiseAddr)
 
@@ -243,6 +247,23 @@ func (cluster *MiniCluster) LeaveNodeWithIndex(t *testing.T, nodeIndex int) (int
 	return nodeIndex, nil
 }
 
+// LeaveNodeByAddress stops and removes a node by its advertise address
+func (cluster *MiniCluster) LeaveNodeByAddress(t *testing.T, address string) (int, error) {
+	ctx := context.Background()
+
+	// Find the node with the matching address
+	for nodeIndex, srv := range cluster.Servers {
+		if srv != nil {
+			advertiseAddr := srv.GetAdvertiseAddr(ctx)
+			if advertiseAddr == address {
+				return cluster.LeaveNodeWithIndex(t, nodeIndex)
+			}
+		}
+	}
+
+	return -1, fmt.Errorf("no active node found with address: %s", address)
+}
+
 // RestartNode restarts a stopped node with the same port
 func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, seeds []string) (string, error) {
 	// Check if the nodeIndex has a recorded port (was previously started)
@@ -284,6 +305,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, seeds []str
 
 	// Get advertise address
 	advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
+	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Update the address record
 
 	t.Logf("Restarted node %d on port %d with address %s", nodeIndex, port, advertiseAddr)
 
@@ -291,6 +313,42 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, seeds []str
 	time.Sleep(1 * time.Second)
 
 	return advertiseAddr, nil
+}
+
+// RestartNodeByAddress restarts a stopped node by finding it through the address it previously used
+func (cluster *MiniCluster) RestartNodeByAddress(t *testing.T, address string, seeds []string) (int, string, error) {
+	// Look through the stored addresses to find the matching nodeIndex
+	for nodeIndex, storedAddr := range cluster.UsedAddresses {
+		if storedAddr == address {
+			// Check if this node is currently stopped
+			if srv, exists := cluster.Servers[nodeIndex]; !exists || srv == nil {
+				// Found the stopped node, restart it
+				restartedAddr, err := cluster.RestartNode(t, nodeIndex, seeds)
+				return nodeIndex, restartedAddr, err
+			} else {
+				// Node is still running
+				return -1, "", fmt.Errorf("node with address %s (nodeIndex %d) is still running", address, nodeIndex)
+			}
+		}
+	}
+
+	return -1, "", fmt.Errorf("no node found that previously used address: %s", address)
+}
+
+// GetNodeIndexByAddress returns the nodeIndex for a given address (for active nodes only)
+func (cluster *MiniCluster) GetNodeIndexByAddress(address string) (int, error) {
+	ctx := context.Background()
+
+	for nodeIndex, srv := range cluster.Servers {
+		if srv != nil {
+			advertiseAddr := srv.GetAdvertiseAddr(ctx)
+			if advertiseAddr == address {
+				return nodeIndex, nil
+			}
+		}
+	}
+
+	return -1, fmt.Errorf("no active node found with address: %s", address)
 }
 
 // GetActiveNodes returns the count of active nodes

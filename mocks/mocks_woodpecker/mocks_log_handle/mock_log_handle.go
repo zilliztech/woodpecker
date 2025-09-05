@@ -164,6 +164,54 @@ func (_c *LogHandle_CompleteAllActiveSegmentIfExists_Call) RunAndReturn(run func
 	return _c
 }
 
+// GetCurrentWritableSegmentHandle provides a mock function with given fields: ctx
+func (_m *LogHandle) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCurrentWritableSegmentHandle")
+	}
+
+	var r0 segment.SegmentHandle
+	if rf, ok := ret.Get(0).(func(context.Context) segment.SegmentHandle); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(segment.SegmentHandle)
+		}
+	}
+
+	return r0
+}
+
+// LogHandle_GetCurrentWritableSegmentHandle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCurrentWritableSegmentHandle'
+type LogHandle_GetCurrentWritableSegmentHandle_Call struct {
+	*mock.Call
+}
+
+// GetCurrentWritableSegmentHandle is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *LogHandle_Expecter) GetCurrentWritableSegmentHandle(ctx interface{}) *LogHandle_GetCurrentWritableSegmentHandle_Call {
+	return &LogHandle_GetCurrentWritableSegmentHandle_Call{Call: _e.mock.On("GetCurrentWritableSegmentHandle", ctx)}
+}
+
+func (_c *LogHandle_GetCurrentWritableSegmentHandle_Call) Run(run func(ctx context.Context)) *LogHandle_GetCurrentWritableSegmentHandle_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *LogHandle_GetCurrentWritableSegmentHandle_Call) Return(_a0 segment.SegmentHandle) *LogHandle_GetCurrentWritableSegmentHandle_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogHandle_GetCurrentWritableSegmentHandle_Call) RunAndReturn(run func(context.Context) segment.SegmentHandle) *LogHandle_GetCurrentWritableSegmentHandle_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetExistsReadonlySegmentHandle provides a mock function with given fields: ctx, segmentId
 func (_m *LogHandle) GetExistsReadonlySegmentHandle(ctx context.Context, segmentId int64) (segment.SegmentHandle, error) {
 	ret := _m.Called(ctx, segmentId)

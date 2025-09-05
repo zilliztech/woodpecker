@@ -732,3 +732,91 @@ func TestMiniCluster_LargeIndexNumbers(t *testing.T) {
 
 	t.Logf("TestMiniCluster_LargeIndexNumbers completed successfully")
 }
+
+// TestMiniCluster_AddressBasedOperations tests leave and restart operations by address
+func TestMiniCluster_AddressBasedOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_AddressBasedOperations")
+
+	// Start a 3-node cluster
+	const initialNodeCount = 3
+	cluster, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
+	time.Sleep(2 * time.Second)
+
+	// Get initial addresses
+	seedList := cluster.GetSeedList()
+	assert.Equal(t, 3, len(seedList), "Should have 3 seed addresses")
+	t.Logf("Initial seed list: %v", seedList)
+
+	// Pick one address to leave
+	targetAddress := seedList[1] // Choose the second node
+	t.Logf("Target address to leave: %s", targetAddress)
+
+	// Get nodeIndex for this address (for verification)
+	nodeIndex, err := cluster.GetNodeIndexByAddress(targetAddress)
+	assert.NoError(t, err)
+	t.Logf("Target address corresponds to nodeIndex: %d", nodeIndex)
+
+	// Leave node by address
+	t.Logf("Leaving node by address...")
+	leftNodeIndex, err := cluster.LeaveNodeByAddress(t, targetAddress)
+	assert.NoError(t, err)
+	assert.Equal(t, nodeIndex, leftNodeIndex, "Left node index should match")
+	time.Sleep(2 * time.Second)
+
+	// Verify node is gone
+	newSeedList := cluster.GetSeedList()
+	assert.Equal(t, 2, len(newSeedList), "Should have 2 seed addresses after leave")
+	t.Logf("Seed list after leave: %v", newSeedList)
+
+	// Verify the specific address is no longer in the list
+	for _, addr := range newSeedList {
+		assert.NotEqual(t, targetAddress, addr, "Target address should not be in active seed list")
+	}
+
+	// Try to leave the same address again (should fail)
+	t.Logf("Trying to leave the same address again (should fail)...")
+	_, err = cluster.LeaveNodeByAddress(t, targetAddress)
+	assert.Error(t, err, "Should fail to leave an inactive node")
+	t.Logf("✓ Correctly failed to leave inactive node: %v", err)
+
+	// Restart node by address
+	t.Logf("Restarting node by address...")
+	restartedNodeIndex, restartedAddress, err := cluster.RestartNodeByAddress(t, targetAddress, cluster.GetSeedList())
+	assert.NoError(t, err)
+	assert.Equal(t, nodeIndex, restartedNodeIndex, "Restarted node index should match original")
+	assert.NotEmpty(t, restartedAddress, "Restarted address should not be empty")
+	time.Sleep(2 * time.Second)
+
+	// Verify node is back
+	finalSeedList := cluster.GetSeedList()
+	assert.Equal(t, 3, len(finalSeedList), "Should have 3 seed addresses after restart")
+	t.Logf("Final seed list: %v", finalSeedList)
+
+	// The restarted address might be different due to dynamic port allocation
+	// But we should be able to find the nodeIndex again
+	finalNodeIndex, err := cluster.GetNodeIndexByAddress(restartedAddress)
+	assert.NoError(t, err)
+	assert.Equal(t, nodeIndex, finalNodeIndex, "Final node index should match original")
+
+	// Try to restart the same address again (should fail since it's running)
+	t.Logf("Trying to restart running node (should fail)...")
+	_, _, err = cluster.RestartNodeByAddress(t, restartedAddress, cluster.GetSeedList())
+	assert.Error(t, err, "Should fail to restart a running node")
+	t.Logf("✓ Correctly failed to restart running node: %v", err)
+
+	// Test with non-existent address
+	t.Logf("Testing with non-existent address...")
+	_, err = cluster.LeaveNodeByAddress(t, "192.168.1.1:9999")
+	assert.Error(t, err, "Should fail to leave non-existent address")
+	t.Logf("✓ Correctly failed to leave non-existent address: %v", err)
+
+	_, _, err = cluster.RestartNodeByAddress(t, "192.168.1.1:9999", cluster.GetSeedList())
+	assert.Error(t, err, "Should fail to restart non-existent address")
+	t.Logf("✓ Correctly failed to restart non-existent address: %v", err)
+
+	t.Logf("TestMiniCluster_AddressBasedOperations completed successfully")
+}
