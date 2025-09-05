@@ -97,6 +97,8 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	}
 	c.closeState.Store(false)
 	// join to discover nodes
+	// TODO: Support multiple client nodes per pool
+	// TODO: Support HTTP/gRPC pull mode without gossip participation
 	clientConfig := &membership.ClientConfig{
 		NodeID:   fmt.Sprintf("C%d", time.Now().Nanosecond()),
 		BindAddr: netutil.GetLocalIP(),
@@ -218,9 +220,9 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
 	// Read quorum configuration from client config
 	quorumConfig := c.cfg.Woodpecker.Client.Quorum
-	requiredNodes := quorumConfig.EnsembleSize
-	writeQuorumSize := quorumConfig.WriteQuorumSize
-	ackNodes := quorumConfig.AckQuorumSize
+	requiredNodes := quorumConfig.GetEnsembleSize()
+	writeQuorumSize := quorumConfig.GetWriteQuorumSize()
+	ackNodes := quorumConfig.GetAckQuorumSize()
 
 	logger.Ctx(ctx).Info("Starting quorum node selection",
 		zap.Int("ensembleSize", requiredNodes),
@@ -229,6 +231,7 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 
 	var result *proto.QuorumInfo
 
+	// TODO abstract strategy selector according to quorum strategy config
 	err := retry.Do(ctx, func() error {
 		// Get all available servers from service discovery
 		discovery := c.clientNode.GetDiscovery()

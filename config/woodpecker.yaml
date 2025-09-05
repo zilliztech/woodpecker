@@ -32,11 +32,36 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
-    serviceSeedNodes:  # Service seed nodes for Woodpecker Client, comma separated, e.g. 192.168.0.1:1726,192.168.0.2:1726,192.168.0.3:1726
+    # Advanced Quorum Configuration for Service storage backend mode
+    # This configuration supports complex node selection strategies and buffer pools
     quorum:
-      ensembleSize: 3
-      writeQuorumSize: 3
-      ackQuorumSize: 2
+      # Quorum Buffer Pools: Define groups of nodes for different purposes
+      quorumBufferPools:
+        - name: default-pool # Name of the default pool
+          seeds: [ ] # List of node addresses that can be used for quorum operations
+      # Quorum Selection Strategy: How to select nodes for quorum operations
+      quorumSelectStrategy:
+        # Affinity Mode: How strictly to apply node selection rules
+        # - soft: Prefer rules but allow fallback if requirements can't be met
+        # - hard: Strictly enforce rules, fail if requirements can't be met
+        affinityMode: soft
+        # Number of replicas in the quorum ensemble
+        # This determines the total number of nodes in a write operation
+        # Valid values: [3,5]
+        replicas: 3
+        # Node selection strategy
+        # - random: nodes are selected randomly
+        # - single-az-single-rg: All nodes in same availability zone and resource group
+        # - single-az-multi-rg: Same availability zone, multiple resource groups
+        # - multi-az-multi-rg: Multiple availability zones and resource groups
+        # - cross-region: Nodes across different regions for maximum durability
+        # - custom: Use custom expressions defined below
+        strategy: random
+        # Custom expressions for node selection (only used when strategy is 'custom')
+        customExpression:
+          region:  # Regular expressions for selecting nodes by region, such as "region-a|region-b"
+          az:  # Regular expressions for selecting nodes by availability zone, such as "az-1|az-2"
+          resourceGroup: # Regular expressions for selecting nodes by resource group, such as "rg.*"
   # Configuration of Woodpecker LogStore Server.
   logstore:
     segmentSyncPolicy:
@@ -99,7 +124,7 @@ trace:
 # Related configuration of etcd, used to store Woodpecker metadata & service discovery.
 etcd:
   # Endpoints used to access etcd service. You can change this parameter as the endpoints of your own etcd cluster.
-  endpoints: 
+  endpoints:
     - localhost:2379
   # Root prefix of the key to where Woodpecker stores data in etcd.
   # It is recommended to change this parameter before starting Woodpecker for the first time.

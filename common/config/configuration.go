@@ -17,6 +17,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -53,11 +54,98 @@ type AuditorConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
 }
 
-// QuorumConfig stores the quorum configuration.
+// QuorumBufferPool stores the quorum buffer pool configuration.
+type QuorumBufferPool struct {
+	Name  string   `yaml:"name"`
+	Seeds []string `yaml:"seeds"`
+}
+
+// CustomExpression stores the custom node selection expressions.
+type CustomExpression struct {
+	Region        string `yaml:"region"`
+	Az            string `yaml:"az"`
+	ResourceGroup string `yaml:"resourceGroup"`
+}
+
+// QuorumSelectStrategy stores the quorum selection strategy configuration.
+type QuorumSelectStrategy struct {
+	AffinityMode     string           `yaml:"affinityMode"`
+	Replicas         int              `yaml:"replicas"`
+	Strategy         string           `yaml:"strategy"`
+	CustomExpression CustomExpression `yaml:"customExpression"`
+}
+
+// QuorumConfig stores the advanced quorum configuration.
 type QuorumConfig struct {
-	EnsembleSize    int `yaml:"ensembleSize"`
-	WriteQuorumSize int `yaml:"writeQuorumSize"`
-	AckQuorumSize   int `yaml:"ackQuorumSize"`
+	BufferPools    []QuorumBufferPool   `yaml:"quorumBufferPools"`
+	SelectStrategy QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
+}
+
+// GetEnsembleSize returns the ensemble size.
+func (q *QuorumConfig) GetEnsembleSize() int {
+	if q.SelectStrategy.Replicas == 3 {
+		return 3
+	}
+	if q.SelectStrategy.Replicas == 5 {
+		return 5
+	}
+	return 3
+}
+
+// GetWriteQuorumSize returns the write quorum size.
+func (q *QuorumConfig) GetWriteQuorumSize() int {
+	return q.GetEnsembleSize()
+}
+
+// GetAckQuorumSize returns the ack quorum size.
+func (q *QuorumConfig) GetAckQuorumSize() int {
+	return (q.GetWriteQuorumSize() / 2) + 1
+}
+
+// Validate validates the quorum configuration for consistency and correctness.
+func (q *QuorumConfig) Validate() error {
+	ensembleSize := q.GetEnsembleSize()
+	writeQuorumSize := q.GetWriteQuorumSize()
+	ackQuorumSize := q.GetAckQuorumSize()
+
+	// Basic validation
+	if ensembleSize <= 0 {
+		return fmt.Errorf("ensemble size must be positive, got %d", ensembleSize)
+	}
+	if writeQuorumSize <= 0 {
+		return fmt.Errorf("write quorum size must be positive, got %d", writeQuorumSize)
+	}
+	if ackQuorumSize <= 0 {
+		return fmt.Errorf("ack quorum size must be positive, got %d", ackQuorumSize)
+	}
+
+	// Logical validation
+	if writeQuorumSize > ensembleSize {
+		return fmt.Errorf("write quorum size (%d) cannot be larger than ensemble size (%d)", writeQuorumSize, ensembleSize)
+	}
+	if ackQuorumSize > writeQuorumSize {
+		return fmt.Errorf("ack quorum size (%d) cannot be larger than write quorum size (%d)", ackQuorumSize, writeQuorumSize)
+	}
+
+	// Validate strategy values
+	validAffinityModes := map[string]bool{"soft": true, "hard": true}
+	if !validAffinityModes[q.SelectStrategy.AffinityMode] {
+		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode)
+	}
+
+	validStrategies := map[string]bool{
+		"single-az-single-rg": true,
+		"single-az-multi-rg":  true,
+		"multi-az-multi-rg":   true,
+		"cross-region":        true,
+		"custom":              true,
+		"random":              true,
+	}
+	if !validStrategies[q.SelectStrategy.Strategy] {
+		return fmt.Errorf("invalid strategy '%s'", q.SelectStrategy.Strategy)
+	}
+
+	return nil
 }
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
@@ -300,9 +388,22 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 			ServiceSeedNodes: "",
 			Quorum: QuorumConfig{
-				EnsembleSize:    3,
-				WriteQuorumSize: 3,
-				AckQuorumSize:   2,
+				BufferPools: []QuorumBufferPool{
+					{
+						Name:  "default-pool",
+						Seeds: []string{},
+					},
+				},
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     3,
+					Strategy:     "random",
+					CustomExpression: CustomExpression{
+						Region:        "",
+						Az:            "",
+						ResourceGroup: "",
+					},
+				},
 			},
 		},
 		Logstore: LogstoreConfig{
