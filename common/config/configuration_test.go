@@ -43,6 +43,9 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, "", config.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.EnsembleSize)
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.WriteQuorumSize)
+	assert.Equal(t, 2, config.Woodpecker.Client.Quorum.AckQuorumSize)
 	assert.Equal(t, 200, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
 	assert.Equal(t, 10000, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
@@ -113,7 +116,10 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "", config.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, "", defaultConfig.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.EnsembleSize)
+	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.WriteQuorumSize)
+	assert.Equal(t, 2, defaultConfig.Woodpecker.Client.Quorum.AckQuorumSize)
 	assert.Equal(t, 1000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries)
@@ -193,6 +199,10 @@ func TestConfigurationOverwrite(t *testing.T) {
     auditor:
       maxInterval: 10
     serviceSeedNodes: localhost:1726,localhost:2726,localhost:3726
+    quorum:
+      ensembleSize: 5
+      writeQuorumSize: 5
+      ackQuorumSize: 3
   logstore:
     segmentReadPolicy:
       maxBatchSize: 32000000
@@ -214,6 +224,9 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
 	assert.Equal(t, "localhost:1726,localhost:2726,localhost:3726", config.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.EnsembleSize)
+	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.WriteQuorumSize)
+	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.AckQuorumSize)
 	assert.Equal(t, int64(32000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
 	assert.Equal(t, 64, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 }

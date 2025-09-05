@@ -36,8 +36,8 @@ type MiniCluster struct {
 	Servers       map[int]*server.Server // Map of nodeIndex -> server
 	Config        *config.Configuration
 	BaseDir       string
-	UsedPorts     map[int]int    // Map of nodeIndex -> port for consistent restart
-	UsedAddresses map[int]string // Map of nodeIndex -> last known address
+	UsedPorts     map[int]int    // Map of nodeIndex -> port for consistent restart, gRPC ports
+	UsedAddresses map[int]string // Map of nodeIndex -> last known address, gossip advertiseAddr
 	MaxNodeIndex  int            // Track the highest nodeIndex used
 }
 

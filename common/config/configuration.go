@@ -46,10 +46,18 @@ type ClientConfig struct {
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
 	ServiceSeedNodes     string                     `yaml:"serviceSeedNodes"`
+	Quorum               QuorumConfig               `yaml:"quorum"`
 }
 
 type AuditorConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
+}
+
+// QuorumConfig stores the quorum configuration.
+type QuorumConfig struct {
+	EnsembleSize    int `yaml:"ensembleSize"`
+	WriteQuorumSize int `yaml:"writeQuorumSize"`
+	AckQuorumSize   int `yaml:"ackQuorumSize"`
 }
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
@@ -291,6 +299,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxInterval: 5,
 			},
 			ServiceSeedNodes: "",
+			Quorum: QuorumConfig{
+				EnsembleSize:    3,
+				WriteQuorumSize: 3,
+				AckQuorumSize:   2,
+			},
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
