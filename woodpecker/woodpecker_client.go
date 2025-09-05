@@ -216,11 +216,16 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 }
 
 func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
-	// TODO currently we only support 3 nodes quorum, we will support more nodes quorum in the future, which will be configurable
-	const requiredNodes = 3
-	const ackNodes = 2
+	// Read quorum configuration from client config
+	quorumConfig := c.cfg.Woodpecker.Client.Quorum
+	requiredNodes := quorumConfig.EnsembleSize
+	writeQuorumSize := quorumConfig.WriteQuorumSize
+	ackNodes := quorumConfig.AckQuorumSize
 
-	logger.Ctx(ctx).Info("Starting quorum node selection", zap.Int("requiredNodes", requiredNodes))
+	logger.Ctx(ctx).Info("Starting quorum node selection",
+		zap.Int("ensembleSize", requiredNodes),
+		zap.Int("writeQuorumSize", writeQuorumSize),
+		zap.Int("ackQuorumSize", ackNodes))
 
 	var result *proto.QuorumInfo
 
@@ -236,7 +241,7 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 		}
 
 		if len(allServers) >= requiredNodes {
-			// Randomly select 3 nodes
+			// Randomly select nodes based on ensemble size
 			selectedNodes := c.randomSelectNodes(allServers, requiredNodes)
 
 			// Convert to endpoint addresses
@@ -249,8 +254,8 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 			result = &proto.QuorumInfo{
 				Id:    1,
 				Nodes: nodeEndpoints,
-				Aq:    ackNodes,
-				Wq:    int32(requiredNodes),
+				Aq:    int32(ackNodes),
+				Wq:    int32(writeQuorumSize),
 				Es:    int32(requiredNodes),
 			}
 			return nil
@@ -259,7 +264,10 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 		// Not enough nodes, return error to trigger retry
 		logger.Ctx(ctx).Info("Insufficient nodes for quorum, waiting for more nodes",
 			zap.Int("available", len(allServers)),
-			zap.Int("required", requiredNodes))
+			zap.Int("required", requiredNodes),
+			zap.Int("ensembleSize", requiredNodes),
+			zap.Int("writeQuorumSize", writeQuorumSize),
+			zap.Int("ackQuorumSize", ackNodes))
 
 		return werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("insufficient nodes for quorum selection")
 	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
