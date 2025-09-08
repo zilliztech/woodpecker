@@ -955,41 +955,6 @@ func (_c *SegmentHandle_RefreshAndGetMetadata_Call) RunAndReturn(run func(contex
 	return _c
 }
 
-// SendAppendErrorCallbacks provides a mock function with given fields: ctx, triggerEntryId, err
-func (_m *SegmentHandle) SendAppendErrorCallbacks(ctx context.Context, triggerEntryId int64, err error) {
-	_m.Called(ctx, triggerEntryId, err)
-}
-
-// SegmentHandle_SendAppendErrorCallbacks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SendAppendErrorCallbacks'
-type SegmentHandle_SendAppendErrorCallbacks_Call struct {
-	*mock.Call
-}
-
-// SendAppendErrorCallbacks is a helper method to define mock.On call
-//   - ctx context.Context
-//   - triggerEntryId int64
-//   - err error
-func (_e *SegmentHandle_Expecter) SendAppendErrorCallbacks(ctx interface{}, triggerEntryId interface{}, err interface{}) *SegmentHandle_SendAppendErrorCallbacks_Call {
-	return &SegmentHandle_SendAppendErrorCallbacks_Call{Call: _e.mock.On("SendAppendErrorCallbacks", ctx, triggerEntryId, err)}
-}
-
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Run(run func(ctx context.Context, triggerEntryId int64, err error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(error))
-	})
-	return _c
-}
-
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) Return() *SegmentHandle_SendAppendErrorCallbacks_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *SegmentHandle_SendAppendErrorCallbacks_Call) RunAndReturn(run func(context.Context, int64, error)) *SegmentHandle_SendAppendErrorCallbacks_Call {
-	_c.Run(run)
-	return _c
-}
-
 // SendAppendSuccessCallbacks provides a mock function with given fields: ctx, triggerEntryId
 func (_m *SegmentHandle) SendAppendSuccessCallbacks(ctx context.Context, triggerEntryId int64) {
 	_m.Called(ctx, triggerEntryId)
