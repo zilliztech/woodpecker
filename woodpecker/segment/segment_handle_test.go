@@ -671,20 +671,20 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 				if len(appendOp.resultChannels) > 0 {
 					if appendOp.entryId%2 == 0 && appendOp.channelAttempts[0]+1 <= 1 {
 						// if attempt=1 and entryId is even, mock fail in this attempt
-						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
 						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
 							SyncedId: -1,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
 					} else {
 						// otherwise, mock success
-						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
 						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
 							SyncedId: appendOp.entryId,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.attempt)
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
 						processedCount++
 					}
 				}
@@ -821,8 +821,7 @@ func TestSendAppendSuccessCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -903,8 +902,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		ops = append(ops, op)
 		testQueue.PushBack(op)
 	}
@@ -914,8 +912,8 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		if i == 5 {
 			// fail
-			ops[i].attempt = 3
-			segmentHandle.SendAppendErrorCallbacks(context.TODO(), int64(i), werr.ErrSegmentHandleWriteFailed)
+			ops[i].channelAttempts[0] = 3
+			segmentHandle.HandleAppendRequestFailure(context.TODO(), int64(i), werr.ErrSegmentHandleWriteFailed, 0, "127.0.0.1")
 		} else {
 			// success
 			ops[i].ackSet.Set(0)
@@ -995,8 +993,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		ops[i] = op
 		testQueue.PushBack(op)
 	}
@@ -1099,8 +1096,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		testQueue.PushBack(op)
 	}
 
@@ -1254,8 +1250,7 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		testQueue.PushBack(op)
 	}
 
@@ -1362,8 +1357,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			1)
+			segmentMeta.Metadata.Quorum)
 		testQueue.PushBack(op)
 	}
 
@@ -1462,11 +1456,6 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 		// Set attempt for entry 1 to ensure it fails
 		// attempt represents current retry count: 1=first try, 2=first retry, etc.
 		// MaxRetries=2 means: attempt < 2 can retry, attempt >= 2 will be removed
-		attempt := 1
-		if i == 1 {
-			attempt = 2 // This will be >= MaxRetries (2), so it will be removed
-		}
-
 		op := NewAppendOp(
 			1,
 			1,
@@ -1475,8 +1464,12 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 			callback,
 			mockClientPool,
 			segmentHandle,
-			nil,
-			attempt)
+			segmentMeta.Metadata.Quorum)
+		attempt := 1
+		if i == 1 {
+			attempt = 2 // This will be >= MaxRetries (2), so it will be removed
+		}
+		op.channelAttempts[0] = attempt
 		testQueue.PushBack(op)
 	}
 
@@ -1485,7 +1478,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	assert.Equal(t, 3, testQueue.Len())
 
 	// Trigger error for entry 1 - this should trigger rolling and remove entry 1,2 but keep entry 0
-	segmentHandle.SendAppendErrorCallbacks(context.Background(), int64(1), werr.ErrSegmentHandleWriteFailed)
+	segmentHandle.HandleAppendRequestFailure(context.Background(), int64(1), werr.ErrSegmentHandleWriteFailed, 0, "127.0.0.1")
 
 	// Give some time for processing
 	time.Sleep(100 * time.Millisecond)

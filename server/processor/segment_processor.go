@@ -73,7 +73,6 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId i
 		createTime:  ctime,
 	}
 	s.lastAccessTime.Store(ctime)
-	//s.fenced.Store(false) // TODO not use this state
 	return s
 }
 
@@ -93,7 +92,6 @@ type segmentProcessor struct {
 	currentSegmentImpl   storage.Segment
 	currentSegmentWriter storage.Writer
 	currentSegmentReader storage.Reader
-	//fenced atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -133,20 +131,6 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 		return -1, fenceErr
 	}
 
-	// TODO remove, no use now, server side fence does only do fence op, client side will do finalize subsequently
-	//// finalize
-	//lastEntryID, finalizeErr := writer.Finalize(ctx)
-	//if finalizeErr != nil {
-	//	logger.Ctx(ctx).Warn("Failed to finalize segment when fencing",
-	//		zap.Int64("logId", s.logId),
-	//		zap.Int64("segId", s.segId),
-	//		zap.Error(finalizeErr))
-	//	return -1, finalizeErr
-	//}
-
-	// TODO remove, no use now
-	//s.fenced.CompareAndSwap(false, true)
-
 	logger.Ctx(ctx).Info("Segment processor fence operation completed successfully",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
@@ -161,12 +145,6 @@ func (s *segmentProcessor) Complete(ctx context.Context, lac int64) (int64, erro
 	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("segment processor call complete", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("lac", lac), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
 
-	// TODO fence状态保留在writer，这里不需要了
-	//if s.fenced.Load() {
-	//	// fast return if fenced
-	//	return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", s.logId, s.segId))
-	//}
-
 	writer, err := s.getSegmentWriter(ctx)
 	if err != nil {
 		return -1, err
@@ -179,12 +157,6 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, 
 	defer sp.End()
 	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entry.EntryId), zap.String("ch", fmt.Sprintf("%p", resultCh)), zap.String("inst", fmt.Sprintf("%p", s)))
-
-	// TODO fence状态保留在writer，这里不需要了
-	//if s.fenced.Load() {
-	//	// fast return if fenced
-	//	return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
-	//}
 
 	writer, err := s.getOrCreateSegmentWriter(ctx, false)
 	if err != nil {
