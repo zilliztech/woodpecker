@@ -69,12 +69,10 @@ type AppendOp struct {
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
 	err        error
-
-	attempt int // attemptId TODO deprecated
 }
 
 func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
-	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo, attempt int) *AppendOp {
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
 	op := &AppendOp{
 		logId:     logId,
 		segmentId: segmentId,
@@ -87,10 +85,8 @@ func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, call
 		ackSet:          &bitset.BitSet{},
 		quorumInfo:      quorumInfo,
 		resultChannels:  make([]channel.ResultChannel, 0),
-		channelAttempts: make([]int, 0),
+		channelAttempts: make([]int, len(quorumInfo.Nodes)),
 		finalFailureSet: &bitset.BitSet{},
-
-		attempt: attempt,
 	}
 	op.completed.Store(false)
 	return op
@@ -109,7 +105,6 @@ func (op *AppendOp) Execute() {
 	// Initialize result channels for each node if not already done
 	if len(op.resultChannels) == 0 {
 		op.resultChannels = make([]channel.ResultChannel, len(op.quorumInfo.Nodes))
-		op.channelAttempts = make([]int, len(op.quorumInfo.Nodes))
 	}
 
 	for i := 0; i < len(op.quorumInfo.Nodes); i++ {
