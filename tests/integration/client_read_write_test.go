@@ -793,7 +793,10 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			if newErr != nil && !errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded) {
+				t.Logf("ReadNext returned error: %v", newErr)
+			}
+			assert.Truef(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded), newErr.Error())
 			assert.Nil(t, newMessage)
 
 			// Verify the messages we read match what we wrote

@@ -67,6 +67,7 @@ type Config struct {
 	SeedNodes           []string
 }
 
+// NewServer creates a new server instance with same bind/advertise ip/port
 func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
 	return NewServerWithConfig(ctx, configuration, &Config{
 		BindPort:    bindPort,
@@ -75,6 +76,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 	})
 }
 
+// NewServerWithConfig creates a new server instance with custom configuration
 func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *Config) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	var minioCli minio.MinioHandler
@@ -92,11 +94,12 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		bindPort:    serverConfig.BindPort,
 		seeds:       serverConfig.SeedNodes,
 		servicePort: serverConfig.ServicePort,
+
+		// advertise addr
+		advertiseAddr:       serverConfig.AdvertiseAddr,
+		advertiseGrpcPort:   serverConfig.AdvertiseGrpcPort,
+		advertiseGossipPort: serverConfig.AdvertiseGossipPort,
 	}
-	// Store advertise configuration in server
-	s.advertiseAddr = serverConfig.AdvertiseAddr
-	s.advertiseGrpcPort = serverConfig.AdvertiseGrpcPort
-	s.advertiseGossipPort = serverConfig.AdvertiseGossipPort
 	s.logStore = NewLogStore(ctx, configuration, minioCli)
 	return s
 }
@@ -309,6 +312,60 @@ func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.Upda
 		return &proto.UpdateLastAddConfirmedResponse{Status: werr.Status(err)}, nil
 	}
 	return &proto.UpdateLastAddConfirmedResponse{Status: werr.Success()}, nil
+}
+
+func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequest) (*proto.SelectNodesResponse, error) {
+	discovery := s.serverNode.GetDiscovery()
+
+	// Use the new protobuf-based approach
+	var allServers []*proto.NodeMeta
+
+	// If no filters provided, create a default filter
+	filters := request.Filters
+	if len(filters) == 0 {
+		return &proto.SelectNodesResponse{Status: werr.Status(werr.ErrServiceNoFilterFound.WithCauseErrMsg("no filters provided"))}, nil
+	}
+
+	// Process each filter and collect results
+	for _, filter := range filters {
+		var servers []*proto.NodeMeta
+		var err error
+
+		// Select nodes using the specified strategy
+		switch request.Strategy {
+		case proto.StrategyType_RANDOM:
+			servers, err = discovery.SelectRandom(filter, request.AffinityMode)
+		case proto.StrategyType_SINGLE_AZ_SINGLE_RG:
+			servers, err = discovery.SelectSingleAzSingleRg(filter, request.AffinityMode)
+		case proto.StrategyType_SINGLE_AZ_MULTI_RG:
+			servers, err = discovery.SelectSingleAzMultiRg(filter, request.AffinityMode)
+		case proto.StrategyType_MULTI_AZ_SINGLE_RG:
+			servers, err = discovery.SelectMultiAzSingleRg(filter, request.AffinityMode)
+		case proto.StrategyType_MULTI_AZ_MULTI_RG:
+			servers, err = discovery.SelectMultiAzMultiRg(filter, request.AffinityMode)
+		case proto.StrategyType_CUSTOM:
+			servers, err = discovery.SelectCustom(filter, request.AffinityMode)
+		default:
+			// Default to random
+			servers, err = discovery.SelectRandom(filter, request.AffinityMode)
+		}
+
+		if err != nil {
+			if request.AffinityMode == proto.AffinityMode_HARD {
+				return &proto.SelectNodesResponse{Status: werr.Status(err)}, nil
+			}
+			// In soft mode, continue with other filters
+			continue
+		}
+
+		allServers = append(allServers, servers...)
+	}
+
+	return &proto.SelectNodesResponse{
+		Status:     werr.Success(),
+		Nodes:      allServers,
+		TotalCount: int32(len(allServers)),
+	}, nil
 }
 
 func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPort int, servicePort int, seeds []string, advertiseAddr string, advertiseGossipPort, advertiseGrpcPort int) (*membership.ServerNode, string, error) {

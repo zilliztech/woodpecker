@@ -1,3 +1,14 @@
+// Copyright (C) 2019-2020 Zilliz. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License
+// is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License for the specific language governing permissions and limitations under the License.
+
 package membership
 
 import (
@@ -6,9 +17,13 @@ import (
 	"time"
 
 	ml "github.com/hashicorp/memberlist"
+
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // ClientNode represents a client node (observer only)
+// This approach is not suitable for cloud network complexity and multi-tenant scenarios,
+// but applicable for small IDC clusters
 type ClientNode struct {
 	memberlist *ml.Memberlist    // gossip member manager
 	eventDel   *EventDelegate    // gossip event delegate
@@ -59,14 +74,14 @@ func (n *ClientNode) Join(existing []string) error {
 
 func (n *ClientNode) GetDiscovery() *ServiceDiscovery { return n.discovery }
 
-func (n *ClientNode) SelectReplicas(resourceGroup string) ([]*ServerMeta, error) {
+func (n *ClientNode) SelectReplicas(resourceGroup string) ([]*proto.NodeMeta, error) {
 	servers, azs, err := n.discovery.SelectServersAcrossAZ(resourceGroup, 3)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("[CLIENT] Selected replicas for write:")
 	for i, server := range servers {
-		log.Printf("  • %s (AZ: %s, Endpoint: %s)", server.NodeID, azs[i], server.Endpoint)
+		log.Printf("  • %s (AZ: %s, Endpoint: %s)", server.NodeId, azs[i], server.Endpoint)
 	}
 	return servers, nil
 }
@@ -95,7 +110,7 @@ func (n *ClientNode) PrintStatus() {
 		}
 		fmt.Println("  Available Servers:")
 		for _, server := range rgServers {
-			fmt.Printf("    • %s -> %s (AZ: %s)\n", server.NodeID, server.Endpoint, server.AZ)
+			fmt.Printf("    • %s -> %s (AZ: %s)\n", server.NodeId, server.Endpoint, server.Az)
 		}
 	}
 }

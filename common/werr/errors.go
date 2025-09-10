@@ -159,6 +159,13 @@ var (
 	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
 
 	// ---------------------------------------------
+	// Service Layer Errors
+	// ---------------------------------------------
+
+	// Service operations (4000-4099)
+	ErrServiceNoFilterFound = newWoodpeckerError("no filter provided", 4000, false)
+
+	// ---------------------------------------------
 	// Common/Utility Errors
 	// ---------------------------------------------
 

@@ -238,7 +238,7 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 		allServersMap := discovery.GetAllServers()
 
 		// Convert map to slice
-		allServers := make([]*membership.ServerMeta, 0, len(allServersMap))
+		allServers := make([]*proto.NodeMeta, 0, len(allServersMap))
 		for _, server := range allServersMap {
 			allServers = append(allServers, server)
 		}
@@ -381,13 +381,13 @@ func (c *woodpeckerClient) Close(ctx context.Context) error {
 }
 
 // randomSelectNodes randomly selects n nodes from the available servers
-func (c *woodpeckerClient) randomSelectNodes(servers []*membership.ServerMeta, n int) []*membership.ServerMeta {
+func (c *woodpeckerClient) randomSelectNodes(servers []*proto.NodeMeta, n int) []*proto.NodeMeta {
 	if len(servers) <= n {
 		return servers
 	}
 
 	// Create a copy to avoid modifying the original slice
-	serversCopy := make([]*membership.ServerMeta, len(servers))
+	serversCopy := make([]*proto.NodeMeta, len(servers))
 	copy(serversCopy, servers)
 
 	// Fisher-Yates shuffle algorithm to randomly select n nodes

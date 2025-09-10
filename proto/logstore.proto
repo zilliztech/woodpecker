@@ -67,6 +67,9 @@ service LogStore {
 
   // Maintenance
   rpc CleanSegment(CleanSegmentRequest) returns (CleanSegmentResponse);
+
+  // Node management
+  rpc SelectNodes(SelectNodesRequest) returns (SelectNodesResponse);
 }
 
 message Status {
@@ -191,5 +194,55 @@ message UpdateLastAddConfirmedRequest{
 
 message UpdateLastAddConfirmedResponse {
   Status status = 1;
+}
+
+// Node meta information
+message NodeMeta {
+  string node_id = 1;
+  string resource_group = 2;
+  string az = 3;
+  string endpoint = 4;
+  map<string, string> tags = 5;
+  int64 version = 6;
+  int64 last_update = 7; // Unix timestamp in milliseconds
+}
+
+// Node selection strategy types
+enum StrategyType {
+  RANDOM = 0;
+  SINGLE_AZ_SINGLE_RG = 1;
+  SINGLE_AZ_MULTI_RG = 2;
+  MULTI_AZ_SINGLE_RG = 3;
+  MULTI_AZ_MULTI_RG = 4;
+  CROSS_REGION = 5;
+  CUSTOM = 6;
+}
+
+// Affinity mode for node selection
+enum AffinityMode {
+  SOFT = 0;  // Best effort, allow fallback
+  HARD = 1;  // Strict requirements, fail if not met
+}
+
+// Node filter criteria for selecting servers
+message NodeFilter {
+  string az = 1;                    // Filter by availability zone (supports regex)
+  string resource_group = 2;        // Filter by resource group (supports regex)
+  map<string, string> tags = 3;     // Filter by tags (exact match)
+  int32 limit = 4;                  // Limit the number of returned servers (0 = no limit)
+}
+
+// Select nodes request
+message SelectNodesRequest {
+  StrategyType strategy = 1;        // Node selection strategy
+  AffinityMode affinity_mode = 2;   // Affinity mode (soft/hard)
+  repeated NodeFilter filters = 3;  // Node filter criteria
+}
+
+// Select nodes response
+message SelectNodesResponse {
+  Status status = 1;
+  repeated NodeMeta nodes = 2;
+  int32 total_count = 3;    // Total number of nodes matching the filter (before limit)
 }
 

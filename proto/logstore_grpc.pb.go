@@ -31,6 +31,7 @@ const (
 	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
 	LogStore_UpdateLastAddConfirmed_FullMethodName     = "/woodpecker.proto.logstore.LogStore/UpdateLastAddConfirmed"
 	LogStore_CleanSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/CleanSegment"
+	LogStore_SelectNodes_FullMethodName                = "/woodpecker.proto.logstore.LogStore/SelectNodes"
 )
 
 // LogStoreClient is the client API for LogStore service.
@@ -56,6 +57,8 @@ type LogStoreClient interface {
 	UpdateLastAddConfirmed(ctx context.Context, in *UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(ctx context.Context, in *CleanSegmentRequest, opts ...grpc.CallOption) (*CleanSegmentResponse, error)
+	// Node management
+	SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error)
 }
 
 type logStoreClient struct {
@@ -165,6 +168,16 @@ func (c *logStoreClient) CleanSegment(ctx context.Context, in *CleanSegmentReque
 	return out, nil
 }
 
+func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SelectNodesResponse)
+	err := c.cc.Invoke(ctx, LogStore_SelectNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LogStoreServer is the server API for LogStore service.
 // All implementations should embed UnimplementedLogStoreServer
 // for forward compatibility.
@@ -188,6 +201,8 @@ type LogStoreServer interface {
 	UpdateLastAddConfirmed(context.Context, *UpdateLastAddConfirmedRequest) (*UpdateLastAddConfirmedResponse, error)
 	// Maintenance
 	CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error)
+	// Node management
+	SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error)
 }
 
 // UnimplementedLogStoreServer should be embedded to have
@@ -223,6 +238,9 @@ func (UnimplementedLogStoreServer) UpdateLastAddConfirmed(context.Context, *Upda
 }
 func (UnimplementedLogStoreServer) CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CleanSegment not implemented")
+}
+func (UnimplementedLogStoreServer) SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SelectNodes not implemented")
 }
 func (UnimplementedLogStoreServer) testEmbeddedByValue() {}
 
@@ -399,6 +417,24 @@ func _LogStore_CleanSegment_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _LogStore_SelectNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SelectNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).SelectNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_SelectNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).SelectNodes(ctx, req.(*SelectNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // LogStore_ServiceDesc is the grpc.ServiceDesc for LogStore service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -437,6 +473,10 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CleanSegment",
 			Handler:    _LogStore_CleanSegment_Handler,
+		},
+		{
+			MethodName: "SelectNodes",
+			Handler:    _LogStore_SelectNodes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
