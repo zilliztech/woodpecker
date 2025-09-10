@@ -1,3 +1,14 @@
+// Copyright (C) 2019-2020 Zilliz. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License
+// is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License for the specific language governing permissions and limitations under the License.
+
 package membership
 
 import (
@@ -6,6 +17,8 @@ import (
 	"time"
 
 	ml "github.com/hashicorp/memberlist"
+
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // ServerNode Server node
@@ -19,7 +32,7 @@ type ServerNode struct {
 	// service discovery for node list
 	discovery *ServiceDiscovery
 	// node metadata
-	meta *ServerMeta
+	meta *proto.NodeMeta
 }
 
 // ServerConfig Server configuration
@@ -48,13 +61,13 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		}
 	}
 
-	meta := &ServerMeta{
-		NodeID:        config.NodeID,
+	meta := &proto.NodeMeta{
+		NodeId:        config.NodeID,
 		ResourceGroup: config.ResourceGroup,
-		AZ:            config.AZ,
+		Az:            config.AZ,
 		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
 		Tags:          config.Tags,
-		LastUpdate:    time.Now(),
+		LastUpdate:    time.Now().UnixMilli(), // Convert to Unix timestamp in milliseconds
 	}
 	discovery := NewServiceDiscovery()
 	delegate := NewServerDelegate(meta)
@@ -132,7 +145,7 @@ func (n *ServerNode) PrintStatus() {
 		if err == nil {
 			fmt.Printf("  ✅ 3-Replica Available: ")
 			for i, replica := range replicas {
-				fmt.Printf("%s(%s) ", replica.NodeID, azs[i])
+				fmt.Printf("%s(%s) ", replica.NodeId, azs[i])
 			}
 			fmt.Println()
 		} else {

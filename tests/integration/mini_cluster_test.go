@@ -68,7 +68,7 @@ func TestMiniCluster_Basic(t *testing.T) {
 
 	t.Logf("Discovered %d servers", len(allServers))
 	for _, server := range allServers {
-		t.Logf("  Server: %s -> %s (AZ: %s)", server.NodeID, server.Endpoint, server.AZ)
+		t.Logf("  Server: %s -> %s (AZ: %s)", server.NodeId, server.Endpoint, server.Az)
 	}
 
 	// Should discover all 3 nodes
@@ -132,7 +132,7 @@ func TestMiniCluster_LastScale(t *testing.T) {
 
 	t.Logf("Discovered %d servers", len(allServers))
 	for _, server := range allServers {
-		t.Logf("  Server: %s -> %s (AZ: %s)", server.NodeID, server.Endpoint, server.AZ)
+		t.Logf("  Server: %s -> %s (AZ: %s)", server.NodeId, server.Endpoint, server.Az)
 	}
 
 	// Should discover all 3 nodes

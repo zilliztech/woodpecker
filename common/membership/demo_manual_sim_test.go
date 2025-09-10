@@ -1,11 +1,29 @@
+// Copyright (C) 2019-2020 Zilliz. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License
+// is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License for the specific language governing permissions and limitations under the License.
+
+//go:build manualtest
+// +build manualtest
+
 package membership
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/encoding/prototext"
+	pb "google.golang.org/protobuf/proto"
+
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // Description: Similar to manual_sim_test.go in the repository root, but demonstrates carrying ServerMeta.
@@ -107,10 +125,10 @@ func TestDemoListMembers(t *testing.T) {
 	for _, m := range c.memberlist.Members() {
 		fmt.Printf("%s %s:%d\n", m.Name, m.Addr.String(), m.Port)
 		if len(m.Meta) > 0 {
-			var meta ServerMeta
-			if err := json.Unmarshal(m.Meta, &meta); err == nil {
-				b, _ := json.MarshalIndent(meta, "  ", "  ")
-				fmt.Printf("  META: %s\n", string(b))
+			var meta proto.NodeMeta
+			if err := pb.Unmarshal(m.Meta, &meta); err == nil {
+				b := prototext.Format(&meta)
+				fmt.Printf("  META: %s\n", b)
 			}
 		}
 	}

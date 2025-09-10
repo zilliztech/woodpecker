@@ -37,7 +37,7 @@ woodpecker:
     quorum:
       # Quorum Buffer Pools: Define groups of nodes for different purposes
       quorumBufferPools:
-        - name: default-pool # Name of the default pool
+        - name: default-region-pool # Name of the default region pool
           seeds: [ ] # List of node addresses that can be used for quorum operations
       # Quorum Selection Strategy: How to select nodes for quorum operations
       quorumSelectStrategy:
@@ -53,24 +53,25 @@ woodpecker:
         # - random: nodes are selected randomly
         # - single-az-single-rg: All nodes in same availability zone and resource group
         # - single-az-multi-rg: Same availability zone, multiple resource groups
+        # - multi-az-single-rg: Multiple availability zones, single resource group
         # - multi-az-multi-rg: Multiple availability zones and resource groups
         # - cross-region: Nodes across different regions for maximum durability
         # - custom: Use custom expressions defined below
         strategy: random
         # Custom expressions for node selection (only used when strategy is 'custom')
         customPlacement:
-#          - name: replcia-1
-#            region: "region-a"
-#            az: "az-1"
-#            resourceGroup: "rg.*"
-#          - name: replcia-2
-#            region: "region-a"
-#            az: "az-2"
-#            resourceGroup: "rg.*"
-#          - name: replcia-3
-#            region: "region-b"
-#            az: "az.*"
-#            resourceGroup: "rg.*"
+        #  - name: replcia-1
+        #    region: "default-region-pool"
+        #    az: "az-1"
+        #    resourceGroup: "rg.*"
+        #  - name: replcia-2
+        #    region: "default-region-pool"
+        #    az: "az-2"
+        #    resourceGroup: "rg.*"
+        #  - name: replcia-3
+        #    region: "default-region-pool"
+        #    az: "az.*"
+        #    resourceGroup: "rg.*"
   # Configuration of Woodpecker LogStore Server.
   logstore:
     segmentSyncPolicy:
