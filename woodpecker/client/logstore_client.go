@@ -43,6 +43,8 @@ type LogStoreClient interface {
 	GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
 	// UpdateLastAddConfirmed updates the lastAddConfirmed entryID of the specified log segment.
 	UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error
+	// SelectNodes selects nodes based on the specified filter and returns a list of node IDs.
+	SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error)
 	// Close closes the log store client and returns an error if any.
 	Close(ctx context.Context) error
 }

@@ -45,8 +45,7 @@ func TestStagedStorageService_Normal_BasicRW(t *testing.T) {
 	// Start a 3-node cluster for quorum testing
 	const nodeCount = 3
 	cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	seedList := strings.Join(seeds, ",")
-	cfg.Woodpecker.Client.ServiceSeedNodes = seedList // set service seed nodes
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 	defer cluster.StopMultiNodeCluster(t)
 
 	ctx := context.Background()
@@ -163,8 +162,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	// Start minimal 3-node cluster for basic quorum testing
 	const nodeCount = 3
 	cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	seedList := strings.Join(seeds, ",")
-	cfg.Woodpecker.Client.ServiceSeedNodes = seedList
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 
 	// Ensure proper cleanup
 	defer func() {
@@ -326,8 +324,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 	// Start a 5-node cluster for quorum testing
 	const nodeCount = 5
 	cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
-	seedList := strings.Join(seeds, ",")
-	cfg.Woodpecker.Client.ServiceSeedNodes = seedList // set service seed nodes
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 
 	// Ensure proper cleanup
 	defer func() {
@@ -757,8 +754,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case2")
 	cluster, cfg, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
-	seedList := strings.Join(seeds, ",")
-	cfg.Woodpecker.Client.ServiceSeedNodes = seedList // set service seed nodes
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 
 	// Save original quorum configuration and restore after test
 	originalReplica := cfg.Woodpecker.Client.Quorum.SelectStrategy.Replicas

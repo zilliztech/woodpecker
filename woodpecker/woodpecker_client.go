@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,16 +29,15 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	netutil "github.com/zilliztech/woodpecker/common/net"
-	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
+	"github.com/zilliztech/woodpecker/woodpecker/quorum"
 )
 
 type Client interface {
@@ -74,8 +72,8 @@ type woodpeckerClient struct {
 	managedCli bool
 	etcdCli    *clientv3.Client
 
-	// node for service discovery
-	clientNode *membership.ClientNode
+	// quorum discovery implementation
+	quorumDiscovery quorum.QuorumDiscovery
 
 	// close state
 	closeState atomic.Bool
@@ -96,25 +94,11 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		etcdCli:    etcdClient,
 	}
 	c.closeState.Store(false)
-	// join to discover nodes
-	// TODO: Support multiple client nodes per pool
-	// TODO: Support HTTP/gRPC pull mode without gossip participation
-	clientConfig := &membership.ClientConfig{
-		NodeID:   fmt.Sprintf("C%d", time.Now().Nanosecond()),
-		BindAddr: netutil.GetLocalIP(),
-		BindPort: 0,
-	}
-	clientNode, newNodeErr := membership.NewClientNode(clientConfig)
-	if newNodeErr != nil {
-		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(newNodeErr)
-	}
-	c.clientNode = clientNode
-	seeds := cfg.Woodpecker.Client.ServiceSeedNodes
-	seedList := strings.Split(seeds, ",")
-	joinErr := clientNode.Join(seedList)
-	time.Sleep(2 * time.Second)
-	if joinErr != nil {
-		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(joinErr)
+
+	// Initialize discovery implementation based on configuration
+	discoveryErr := c.initQuorumDiscovery(ctx)
+	if discoveryErr != nil {
+		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(discoveryErr)
 	}
 	// init if necessary
 	err := c.initClient(ctx)
@@ -124,6 +108,33 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	// Increment active connections metric
 	metrics.WpClientActiveConnections.WithLabelValues(fmt.Sprintf("%s", netutil.GetLocalIP())).Inc()
 	return c, nil
+}
+
+func (c *woodpeckerClient) initQuorumDiscovery(ctx context.Context) error {
+	quorumConfig := &c.cfg.Woodpecker.Client.Quorum
+
+	switch quorumConfig.NodeDiscoveryMode {
+	case "active":
+		logger.Ctx(ctx).Info("Initializing active quorum discovery mode")
+		c.quorumDiscovery = quorum.NewActiveQuorumDiscovery(ctx, quorumConfig, c.clientPool)
+		return nil
+
+	case "passive":
+		logger.Ctx(ctx).Info("Initializing passive quorum discovery mode")
+		passiveDiscovery, err := quorum.NewPassiveQuorumDiscovery(ctx, quorumConfig)
+		if err != nil {
+			return werr.ErrWoodpeckerClientInitFailed.WithCauseErr(err)
+		}
+
+		c.quorumDiscovery = passiveDiscovery
+
+		// Wait for discovery to stabilize
+		time.Sleep(2 * time.Second)
+		return nil
+
+	default:
+		return werr.ErrWoodpeckerClientInitFailed.WithCauseErrMsg(fmt.Sprintf("unsupported node discovery mode: %s", quorumConfig.NodeDiscoveryMode))
+	}
 }
 
 func (c *woodpeckerClient) initClient(ctx context.Context) error {
@@ -218,68 +229,12 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 }
 
 func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {
-	// Read quorum configuration from client config
-	quorumConfig := c.cfg.Woodpecker.Client.Quorum
-	requiredNodes := quorumConfig.GetEnsembleSize()
-	writeQuorumSize := quorumConfig.GetWriteQuorumSize()
-	ackNodes := quorumConfig.GetAckQuorumSize()
-
-	logger.Ctx(ctx).Info("Starting quorum node selection",
-		zap.Int("ensembleSize", requiredNodes),
-		zap.Int("writeQuorumSize", writeQuorumSize),
-		zap.Int("ackQuorumSize", ackNodes))
-
-	var result *proto.QuorumInfo
-
-	// TODO abstract strategy selector according to quorum strategy config
-	err := retry.Do(ctx, func() error {
-		// Get all available servers from service discovery
-		discovery := c.clientNode.GetDiscovery()
-		allServersMap := discovery.GetAllServers()
-
-		// Convert map to slice
-		allServers := make([]*proto.NodeMeta, 0, len(allServersMap))
-		for _, server := range allServersMap {
-			allServers = append(allServers, server)
-		}
-
-		if len(allServers) >= requiredNodes {
-			// Randomly select nodes based on ensemble size
-			selectedNodes := c.randomSelectNodes(allServers, requiredNodes)
-
-			// Convert to endpoint addresses
-			nodeEndpoints := make([]string, len(selectedNodes))
-			for i, server := range selectedNodes {
-				nodeEndpoints[i] = server.Endpoint
-			}
-
-			// Atomically create quorum info with the selected nodes
-			result = &proto.QuorumInfo{
-				Id:    1,
-				Nodes: nodeEndpoints,
-				Aq:    int32(ackNodes),
-				Wq:    int32(writeQuorumSize),
-				Es:    int32(requiredNodes),
-			}
-			return nil
-		}
-
-		// Not enough nodes, return error to trigger retry
-		logger.Ctx(ctx).Info("Insufficient nodes for quorum, waiting for more nodes",
-			zap.Int("available", len(allServers)),
-			zap.Int("required", requiredNodes),
-			zap.Int("ensembleSize", requiredNodes),
-			zap.Int("writeQuorumSize", writeQuorumSize),
-			zap.Int("ackQuorumSize", ackNodes))
-
-		return werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg("insufficient nodes for quorum selection")
-	}, retry.AttemptAlways(), retry.Sleep(200*time.Millisecond), retry.MaxSleepTime(2*time.Second))
-
-	if err != nil {
-		return nil, werr.ErrWoodpeckerClientClosed.WithCauseErr(err)
+	if c.closeState.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
 	}
 
-	return result, nil
+	// Delegate to the configured discovery implementation
+	return c.quorumDiscovery.SelectQuorumNodes(ctx)
 }
 
 // DeleteLog deletes the log with the specified name.
@@ -370,14 +325,23 @@ func (c *woodpeckerClient) Close(ctx context.Context) error {
 	if closePoolErr != nil {
 		logger.Ctx(ctx).Info("close client pool failed", zap.Error(closePoolErr))
 	}
+
+	// Close quorum discovery (which will handle client nodes for passive mode)
+	var discoveryCloseErr error
+	if c.quorumDiscovery != nil {
+		discoveryCloseErr = c.quorumDiscovery.Close(ctx)
+		if discoveryCloseErr != nil {
+			logger.Ctx(ctx).Info("close quorum discovery failed", zap.Error(discoveryCloseErr))
+		}
+	}
 	if c.managedCli {
 		closeEtcdCliErr := c.etcdCli.Close()
 		if closeEtcdCliErr != nil {
 			logger.Ctx(ctx).Info("close client etcd client failed", zap.Error(closeEtcdCliErr))
-			return werr.Combine(closeErr, closePoolErr, closeEtcdCliErr)
+			return werr.Combine(closeErr, closePoolErr, discoveryCloseErr, closeEtcdCliErr)
 		}
 	}
-	return werr.Combine(closeErr, closePoolErr)
+	return werr.Combine(closeErr, closePoolErr, discoveryCloseErr)
 }
 
 // randomSelectNodes randomly selects n nodes from the available servers
