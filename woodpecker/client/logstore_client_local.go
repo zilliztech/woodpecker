@@ -69,6 +69,11 @@ func (l *logStoreClientLocal) UpdateLastAddConfirmed(ctx context.Context, logId 
 	return nil
 }
 
+func (l *logStoreClientLocal) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+	// NO-Op
+	return nil, nil
+}
+
 func (l *logStoreClientLocal) Close(ctx context.Context) error {
 	return nil
 }
