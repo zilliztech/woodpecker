@@ -35,6 +35,11 @@ woodpecker:
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools
     quorum:
+      # Quorum Node Discovery Mode: How to discover quorum nodes
+      # Valid values: [active, passive]
+      # - active: Actively request and retrieve nodes when selection is needed
+      # - passive: Passively monitor cluster node status and maintain local node list
+      quorumNodeDiscoveryMode: active
       # Quorum Buffer Pools: Define groups of nodes for different purposes
       quorumBufferPools:
         - name: default-region-pool # Name of the default region pool
@@ -60,15 +65,15 @@ woodpecker:
         strategy: random
         # Custom expressions for node selection (only used when strategy is 'custom')
         customPlacement:
-        #  - name: replcia-1
+        #  - name: replica-1
         #    region: "default-region-pool"
         #    az: "az-1"
         #    resourceGroup: "rg.*"
-        #  - name: replcia-2
+        #  - name: replica-2
         #    region: "default-region-pool"
         #    az: "az-2"
         #    resourceGroup: "rg.*"
-        #  - name: replcia-3
+        #  - name: replica-3
         #    region: "default-region-pool"
         #    az: "az.*"
         #    resourceGroup: "rg.*"

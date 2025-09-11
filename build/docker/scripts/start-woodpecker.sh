@@ -107,7 +107,10 @@ woodpecker:
     type: $STORAGE_TYPE
     rootPath: $DATA_DIR
   client:
-    serviceSeedNodes: $SEEDS
+    quorum:
+      quorumBufferPools:
+        - name: default-region-pool
+          seeds: [$SEEDS]
 log:
   level: $LOG_LEVEL
   stdout: true

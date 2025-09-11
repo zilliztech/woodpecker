@@ -535,6 +535,67 @@ func (_c *LogStoreClient_SegmentCompact_Call) RunAndReturn(run func(context.Cont
 	return _c
 }
 
+// SelectNodes provides a mock function with given fields: ctx, strategyType, affinityMode, filters
+func (_m *LogStoreClient) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+	ret := _m.Called(ctx, strategyType, affinityMode, filters)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SelectNodes")
+	}
+
+	var r0 []*proto.NodeMeta
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)); ok {
+		return rf(ctx, strategyType, affinityMode, filters)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) []*proto.NodeMeta); ok {
+		r0 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*proto.NodeMeta)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) error); ok {
+		r1 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_SelectNodes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SelectNodes'
+type LogStoreClient_SelectNodes_Call struct {
+	*mock.Call
+}
+
+// SelectNodes is a helper method to define mock.On call
+//   - ctx context.Context
+//   - strategyType proto.StrategyType
+//   - affinityMode proto.AffinityMode
+//   - filters []*proto.NodeFilter
+func (_e *LogStoreClient_Expecter) SelectNodes(ctx interface{}, strategyType interface{}, affinityMode interface{}, filters interface{}) *LogStoreClient_SelectNodes_Call {
+	return &LogStoreClient_SelectNodes_Call{Call: _e.mock.On("SelectNodes", ctx, strategyType, affinityMode, filters)}
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Run(run func(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(proto.StrategyType), args[2].(proto.AffinityMode), args[3].([]*proto.NodeFilter))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Return(_a0 []*proto.NodeMeta, _a1 error) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) RunAndReturn(run func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateLastAddConfirmed provides a mock function with given fields: ctx, logId, segmentId, lac
 func (_m *LogStoreClient) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
 	ret := _m.Called(ctx, logId, segmentId, lac)

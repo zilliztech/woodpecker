@@ -46,7 +46,6 @@ type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
-	ServiceSeedNodes     string                     `yaml:"serviceSeedNodes"`
 	Quorum               QuorumConfig               `yaml:"quorum"`
 }
 
@@ -78,8 +77,9 @@ type QuorumSelectStrategy struct {
 
 // QuorumConfig stores the advanced quorum configuration.
 type QuorumConfig struct {
-	BufferPools    []QuorumBufferPool   `yaml:"quorumBufferPools"`
-	SelectStrategy QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
+	NodeDiscoveryMode string               `yaml:"quorumNodeDiscoveryMode"`
+	BufferPools       []QuorumBufferPool   `yaml:"quorumBufferPools"`
+	SelectStrategy    QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
 }
 
 // GetEnsembleSize returns the ensemble size.
@@ -144,6 +144,12 @@ func (q *QuorumConfig) Validate() error {
 	}
 	if !validStrategies[q.SelectStrategy.Strategy] {
 		return fmt.Errorf("invalid strategy '%s'", q.SelectStrategy.Strategy)
+	}
+
+	// Validate node discovery mode
+	validNodeDiscoveryModes := map[string]bool{"active": true, "passive": true}
+	if !validNodeDiscoveryModes[q.NodeDiscoveryMode] {
+		return fmt.Errorf("invalid node discovery mode '%s', must be 'active' or 'passive'", q.NodeDiscoveryMode)
 	}
 
 	return nil
@@ -387,8 +393,8 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			Auditor: AuditorConfig{
 				MaxInterval: 5,
 			},
-			ServiceSeedNodes: "",
 			Quorum: QuorumConfig{
+				NodeDiscoveryMode: "active",
 				BufferPools: []QuorumBufferPool{
 					{
 						Name:  "default-pool",

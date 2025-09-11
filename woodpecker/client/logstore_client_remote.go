@@ -196,6 +196,22 @@ func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, logId
 	return nil
 }
 
+func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+	resp, err := l.innerClient.SelectNodes(ctx, &proto.SelectNodesRequest{
+		Strategy:     strategyType,
+		AffinityMode: affinityMode,
+		Filters:      filters,
+	})
+	if err != nil {
+		return nil, err
+	}
+	selectNodesErr := werr.Error(resp.GetStatus())
+	if selectNodesErr != nil {
+		return nil, selectNodesErr
+	}
+	return resp.Nodes, nil
+}
+
 // Close implements io.Closer
 func (l *logStoreClientRemote) Close(ctx context.Context) error {
 	l.mu.Lock()

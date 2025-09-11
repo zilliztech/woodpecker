@@ -42,9 +42,9 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "", config.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, "active", config.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools))
-	assert.Equal(t, "default-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
+	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
 	assert.Equal(t, "soft", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
@@ -124,7 +124,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "", defaultConfig.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, "active", defaultConfig.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
@@ -214,12 +214,12 @@ func TestConfigurationOverwrite(t *testing.T) {
       maxBlocks: 2000
     auditor:
       maxInterval: 10
-    serviceSeedNodes: localhost:1726,localhost:2726,localhost:3726
     quorum:
+      quorumNodeDiscoveryMode: passive
       quorumBufferPools:
-        - name: test-pool-1
+        - name: region-a-pool
           seeds: ["test-node1", "test-node2"]
-        - name: test-pool-2
+        - name: region-b-pool
           seeds: ["test-node3", "test-node4", "test-node5"]
       quorumSelectStrategy:
         affinityMode: hard
@@ -227,15 +227,15 @@ func TestConfigurationOverwrite(t *testing.T) {
         strategy: custom
         customPlacement:
           - name: replica-1
-            region: "test-region-a"
+            region: "region-a-pool"
             az: "test-az-1"
             resourceGroup: "test-rg-1"
           - name: replica-2
-            region: "test-region-a"
+            region: "region-a-pool"
             az: "test-az-2"
             resourceGroup: "test-rg-2"
           - name: replica-3
-            region: "test-region-b"
+            region: "region-b-pool"
             az: "test-az-1"
             resourceGroup: "test-rg-3"
   logstore:
@@ -243,8 +243,8 @@ func TestConfigurationOverwrite(t *testing.T) {
       maxBatchSize: 32000000
       maxFetchThreads: 64`
 	extraCfgFile, err := os.CreateTemp("/tmp", "custom_*.yaml")
-	defer extraCfgFile.Close()
 	assert.NoError(t, err)
+	defer extraCfgFile.Close()
 	_, err = extraCfgFile.WriteString(extraCfgContent)
 	assert.NoError(t, err)
 	config, err := NewConfiguration(cfgFile.Name(), extraCfgFile.Name())
@@ -258,26 +258,26 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 2200, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "localhost:1726,localhost:2726,localhost:3726", config.Woodpecker.Client.ServiceSeedNodes)
+	assert.Equal(t, "passive", config.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 2, len(config.Woodpecker.Client.Quorum.BufferPools))
-	assert.Equal(t, "test-pool-1", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
-	assert.Equal(t, "test-pool-2", config.Woodpecker.Client.Quorum.BufferPools[1].Name)
+	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.BufferPools[1].Name)
 	assert.Equal(t, []string{"test-node3", "test-node4", "test-node5"}, config.Woodpecker.Client.Quorum.BufferPools[1].Seeds)
 	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
 	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
 	assert.Equal(t, 3, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Name)
-	assert.Equal(t, "test-region-a", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
 	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Az)
 	assert.Equal(t, "test-rg-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].ResourceGroup)
 	assert.Equal(t, "replica-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Name)
-	assert.Equal(t, "test-region-a", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Region)
+	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Region)
 	assert.Equal(t, "test-az-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].Az)
 	assert.Equal(t, "test-rg-2", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[1].ResourceGroup)
 	assert.Equal(t, "replica-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Name)
-	assert.Equal(t, "test-region-b", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Region)
+	assert.Equal(t, "region-b-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Region)
 	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].Az)
 	assert.Equal(t, "test-rg-3", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[2].ResourceGroup)
 	// Test the getter methods for backward compatibility with overridden values
@@ -299,6 +299,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid configuration with strategy",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     3,
@@ -310,6 +311,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid configuration with replicas=5",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "passive",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     5,
@@ -321,6 +323,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Invalid affinity mode",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "invalid",
 					Replicas:     3,
@@ -333,6 +336,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Invalid strategy",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     3,
@@ -343,8 +347,22 @@ func TestQuorumConfigValidation(t *testing.T) {
 			errorMsg:    "invalid strategy 'invalid-strategy'",
 		},
 		{
+			name: "Invalid node discovery mode",
+			config: QuorumConfig{
+				NodeDiscoveryMode: "invalid-mode",
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode: "soft",
+					Replicas:     3,
+					Strategy:     "random",
+				},
+			},
+			expectError: true,
+			errorMsg:    "invalid node discovery mode 'invalid-mode'",
+		},
+		{
 			name: "Invalid replicas value (not 3 or 5)",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "passive",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     4, // Invalid value, only 3 or 5 allowed
@@ -356,6 +374,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid custom placement configuration",
 			config: QuorumConfig{
+				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "hard",
 					Replicas:     3,
@@ -403,6 +422,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 3
 	config3 := QuorumConfig{
+		NodeDiscoveryMode: "active",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 3,
 		},
@@ -414,6 +434,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 
 	// Test with replicas = 5
 	config5 := QuorumConfig{
+		NodeDiscoveryMode: "passive",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 5,
 		},
@@ -425,6 +446,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 
 	// Test with invalid replicas (should default to 3)
 	configInvalid := QuorumConfig{
+		NodeDiscoveryMode: "active",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 4, // Invalid value
 		},
@@ -438,6 +460,7 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 // TestCustomPlacementConfiguration tests the custom placement functionality
 func TestCustomPlacementConfiguration(t *testing.T) {
 	config := QuorumConfig{
+		NodeDiscoveryMode: "passive",
 		SelectStrategy: QuorumSelectStrategy{
 			AffinityMode: "hard",
 			Replicas:     5,
