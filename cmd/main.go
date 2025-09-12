@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -29,6 +30,42 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/server"
 )
+
+// resolveAdvertiseAddr resolves hostname to IP address if needed
+func resolveAdvertiseAddr(addr string) string {
+	if addr == "" {
+		return ""
+	}
+
+	// Check if it's already an IP address
+	if ip := net.ParseIP(addr); ip != nil {
+		return addr
+	}
+
+	// Try to resolve hostname to IP
+	ips, err := net.LookupIP(addr)
+	if err != nil {
+		log.Printf("Warning: Failed to resolve hostname '%s' to IP: %v. Using as-is.", addr, err)
+		return addr
+	}
+
+	// Prefer IPv4 address
+	for _, ip := range ips {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			log.Printf("Resolved hostname '%s' to IPv4: %s", addr, ipv4.String())
+			return ipv4.String()
+		}
+	}
+
+	// Fallback to first IP (could be IPv6)
+	if len(ips) > 0 {
+		log.Printf("Resolved hostname '%s' to IP: %s", addr, ips[0].String())
+		return ips[0].String()
+	}
+
+	log.Printf("Warning: No IP found for hostname '%s'. Using as-is.", addr)
+	return addr
+}
 
 func main() {
 	var (
@@ -41,6 +78,8 @@ func main() {
 		advertiseAddr       = flag.String("advertise-addr", "", "Advertise address for gossip (for Docker bridge networking)")
 		advertiseGrpcPort   = flag.Int("advertise-grpc-port", 0, "Advertise gRPC port (defaults to grpc-port)")
 		advertiseGossipPort = flag.Int("advertise-gossip-port", 0, "Advertise gossip port (defaults to gossip-port)")
+		resourceGroup       = flag.String("resource-group", "default", "Resource group for node placement")
+		availabilityZone    = flag.String("availability-zone", "default", "Availability zone for node placement")
 	)
 
 	// First argument should be command
@@ -90,14 +129,19 @@ func main() {
 		*advertiseGossipPort = *gossipPort
 	}
 
-	// Create server config with advertise options
+	// Resolve advertise address to IP if it's a hostname
+	resolvedAdvertiseAddr := resolveAdvertiseAddr(*advertiseAddr)
+
+	// Create server config with advertise options and node metadata
 	serverConfig := &server.Config{
 		BindPort:            *gossipPort,
 		ServicePort:         *grpcPort,
-		AdvertiseAddr:       *advertiseAddr,
+		AdvertiseAddr:       resolvedAdvertiseAddr,
 		AdvertiseGrpcPort:   *advertiseGrpcPort,
 		AdvertiseGossipPort: *advertiseGossipPort,
 		SeedNodes:           seedNodes,
+		ResourceGroup:       *resourceGroup,
+		AZ:                  *availabilityZone,
 	}
 
 	// Create server
@@ -113,8 +157,14 @@ func main() {
 	log.Printf("  Node Name: %s", *nodeName)
 	log.Printf("  gRPC Port: %d", *grpcPort)
 	log.Printf("  Gossip Port: %d", *gossipPort)
+	log.Printf("  Resource Group: %s", *resourceGroup)
+	log.Printf("  Availability Zone: %s", *availabilityZone)
 	if *advertiseAddr != "" {
-		log.Printf("  Advertise Address: %s", *advertiseAddr)
+		if resolvedAdvertiseAddr != *advertiseAddr {
+			log.Printf("  Advertise Address: %s (resolved from %s)", resolvedAdvertiseAddr, *advertiseAddr)
+		} else {
+			log.Printf("  Advertise Address: %s", *advertiseAddr)
+		}
 		log.Printf("  Advertise gRPC Port: %d", *advertiseGrpcPort)
 		log.Printf("  Advertise Gossip Port: %d", *advertiseGossipPort)
 	}
