@@ -70,9 +70,11 @@ type Config struct {
 // NewServer creates a new server instance with same bind/advertise ip/port
 func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
 	return NewServerWithConfig(ctx, configuration, &Config{
-		BindPort:    bindPort,
-		ServicePort: servicePort,
-		SeedNodes:   seeds,
+		BindPort:            bindPort,
+		ServicePort:         servicePort,
+		SeedNodes:           seeds,
+		AdvertiseGrpcPort:   servicePort,
+		AdvertiseGossipPort: bindPort,
 	})
 }
 
@@ -299,11 +301,13 @@ func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRe
 	return &proto.CleanSegmentResponse{Status: werr.Success()}, nil
 }
 
-func (s *Server) GetServiceAddr(ctx context.Context) string {
-	return fmt.Sprintf("%s:%d", s.listener.Addr().String(), s.servicePort)
+// GetServiceAddrPort use for test only
+func (s *Server) GetServiceAddrPort(ctx context.Context) string {
+	return fmt.Sprintf("%s:%d", s.serverNode.GetMemberlist().LocalNode().Addr.String(), s.servicePort)
 }
 
-func (s *Server) GetAdvertiseAddr(ctx context.Context) string {
+// GetAdvertiseAddrPort Use for test only
+func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
 	return fmt.Sprintf("%s:%d", s.serverNode.GetMemberlist().LocalNode().Addr.String(), int(s.serverNode.GetMemberlist().LocalNode().Port))
 }
 
@@ -383,7 +387,7 @@ func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPor
 	}
 	n, err := membership.NewServerNode(cfg)
 	if err != nil {
-		logger.Ctx(ctx).Error("create server failed", zap.Error(err))
+		logger.Ctx(ctx).Warn("create server failed", zap.Error(err))
 		return nil, "", err
 	}
 
@@ -393,7 +397,7 @@ func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPor
 
 	if len(seeds) > 0 {
 		if joinErr := n.Join(seeds); joinErr != nil {
-			logger.Ctx(ctx).Error("join failed", zap.String("name", name), zap.String("advertise", adv), zap.Error(joinErr))
+			logger.Ctx(ctx).Warn("join failed", zap.String("name", name), zap.String("advertise", adv), zap.Error(joinErr))
 			return nil, "", joinErr
 		}
 	}

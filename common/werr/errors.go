@@ -163,7 +163,9 @@ var (
 	// ---------------------------------------------
 
 	// Service operations (4000-4099)
-	ErrServiceNoFilterFound = newWoodpeckerError("no filter provided", 4000, false)
+	ErrServiceNoFilterFound      = newWoodpeckerError("no filter provided", 4000, false)
+	ErrServiceSelectQuorumFailed = newWoodpeckerError("failed to select quorum nodes", 4001, true)
+	ErrServiceInsufficientQuorum = newWoodpeckerError("insufficient quorum nodes", 4002, true)
 
 	// ---------------------------------------------
 	// Common/Utility Errors

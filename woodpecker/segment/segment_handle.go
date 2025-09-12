@@ -813,7 +813,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration during get blocks count, return 0",
+		logger.Ctx(ctx).Debug("Unsupported quorum configuration during get blocks count, return 0",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -870,10 +870,10 @@ func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error)
 		return -1, err
 	}
 
-	// TODO maybe not use fence? use mark completed? 是否有必要和fence区分，不然正常close和fence可能会出现并发行为，不知道谁的优先级更高？
+	// fence before complete
 	lastAddConfirmed, fencedErr := s.fenceSegmentQuorum(ctx, quorumInfo)
 	if fencedErr != nil {
-		logger.Ctx(ctx).Error("quorum fence segment failed",
+		logger.Ctx(ctx).Warn("quorum fence segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -938,7 +938,7 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 
 	// Check if we have enough successful responses for ack quorum
 	if len(successResults) < ackQuorum {
-		logger.Ctx(ctx).Error("Insufficient successful responses for quorum complete",
+		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum complete",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1160,7 +1160,7 @@ func (s *segmentHandleImpl) fenceSegmentQuorum(ctx context.Context, quorumInfo *
 
 	// Check if we have enough successful responses for ack quorum
 	if len(successResults) < ensembleCoverage {
-		logger.Ctx(ctx).Error("Insufficient successful responses for quorum fence",
+		logger.Ctx(ctx).Warn("Insufficient successful responses for quorum fence",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1270,7 +1270,7 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 	}
 
 	// All nodes failed
-	logger.Ctx(ctx).Error("Compaction failed on all quorum nodes",
+	logger.Ctx(ctx).Warn("Compaction failed on all quorum nodes",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
@@ -1332,7 +1332,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 	if fencedErr != nil {
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "fence", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "fence", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Error("quorum fence segment failed",
+		logger.Ctx(ctx).Warn("quorum fence segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1344,7 +1344,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 	if completeErr != nil {
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "complete", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "complete", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Error("quorum complete segment failed",
+		logger.Ctx(ctx).Warn("quorum complete segment failed",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1493,7 +1493,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	// Try compaction on each node sequentially until one succeeds
 	compactSegMetaInfo, compactErr := s.compactSegmentQuorum(ctx, quorumInfo)
 	if compactErr != nil {
-		logger.Ctx(ctx).Error("All nodes failed compaction operation",
+		logger.Ctx(ctx).Warn("All nodes failed compaction operation",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
