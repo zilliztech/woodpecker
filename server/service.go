@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
@@ -46,6 +47,10 @@ type Server struct {
 	advertiseGrpcPort   int
 	advertiseGossipPort int
 
+	// Node metadata
+	resourceGroup string
+	az            string
+
 	logStore    LogStore
 	servicePort int // service port for business
 	grpcWG      sync.WaitGroup
@@ -65,6 +70,9 @@ type Config struct {
 	AdvertiseGrpcPort   int
 	AdvertiseGossipPort int
 	SeedNodes           []string
+	// Node metadata
+	ResourceGroup string
+	AZ            string
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
@@ -75,6 +83,8 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 		SeedNodes:           seeds,
 		AdvertiseGrpcPort:   servicePort,
 		AdvertiseGossipPort: bindPort,
+		ResourceGroup:       "default", // Default resource group
+		AZ:                  "default", // Default availability zone
 	})
 }
 
@@ -101,6 +111,10 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		advertiseAddr:       serverConfig.AdvertiseAddr,
 		advertiseGrpcPort:   serverConfig.AdvertiseGrpcPort,
 		advertiseGossipPort: serverConfig.AdvertiseGossipPort,
+
+		// Store node metadata for membership
+		resourceGroup: serverConfig.ResourceGroup,
+		az:            serverConfig.AZ,
 	}
 	s.logStore = NewLogStore(ctx, configuration, minioCli)
 	return s
@@ -116,7 +130,7 @@ func (s *Server) Prepare() error {
 	s.logStore.SetAddress(s.listener.Addr().String())
 
 	// start server node for gossip
-	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), "default", "default", s.bindPort, s.servicePort, s.seeds, s.advertiseAddr, s.advertiseGossipPort, s.advertiseGrpcPort)
+	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), s.resourceGroup, s.az, s.bindPort, s.servicePort, s.seeds, s.advertiseAddr, s.advertiseGossipPort, s.advertiseGrpcPort)
 	if err != nil {
 		return err
 	}
@@ -395,11 +409,72 @@ func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPor
 	adv := fmt.Sprintf("%s:%d", n.GetMemberlist().LocalNode().Addr.String(), int(n.GetMemberlist().LocalNode().Port))
 	logger.Ctx(ctx).Info("NODE_READY", zap.String("name", name), zap.String("advertise", adv))
 
+	// Start async join in background if seeds are provided [[memory:3527742]]
 	if len(seeds) > 0 {
-		if joinErr := n.Join(seeds); joinErr != nil {
-			logger.Ctx(ctx).Warn("join failed", zap.String("name", name), zap.String("advertise", adv), zap.Error(joinErr))
-			return nil, "", joinErr
-		}
+		go asyncJoinSeeds(ctx, n, seeds, name, adv)
 	}
 	return n, adv, nil
+}
+
+// asyncJoinSeeds attempts to join seed nodes with retry mechanism in its own method [[memory:3527742]]
+func asyncJoinSeeds(ctx context.Context, node *membership.ServerNode, seeds []string, name, adv string) {
+	// TODO panic or always retry if join failed?
+	maxRetries := 30                     // Maximum number of retry attempts
+	retryInterval := 2 * time.Second     // Initial retry interval
+	maxRetryInterval := 30 * time.Second // Maximum retry interval
+
+	logger.Ctx(ctx).Info("Starting async seed joining",
+		zap.String("node", name),
+		zap.String("advertise", adv),
+		zap.Strings("seeds", seeds))
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Async seed joining cancelled due to context cancellation",
+				zap.String("node", name))
+			return
+		default:
+		}
+
+		err := node.Join(seeds)
+		if err == nil {
+			logger.Ctx(ctx).Info("Successfully joined cluster",
+				zap.String("node", name),
+				zap.String("advertise", adv),
+				zap.Strings("seeds", seeds),
+				zap.Int("attempt", attempt))
+			return
+		}
+
+		logger.Ctx(ctx).Warn("Failed to join cluster, will retry",
+			zap.Error(err),
+			zap.String("node", name),
+			zap.String("advertise", adv),
+			zap.Strings("seeds", seeds),
+			zap.Int("attempt", attempt),
+			zap.Int("maxRetries", maxRetries),
+			zap.Duration("nextRetry", retryInterval))
+
+		// Wait before next retry with exponential backoff
+		select {
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Async seed joining cancelled during retry wait",
+				zap.String("node", name))
+			return
+		case <-time.After(retryInterval):
+		}
+
+		// Exponential backoff, capped at maxRetryInterval
+		retryInterval = retryInterval * 2
+		if retryInterval > maxRetryInterval {
+			retryInterval = maxRetryInterval
+		}
+	}
+
+	logger.Ctx(ctx).Error("Failed to join cluster after maximum retries",
+		zap.String("node", name),
+		zap.String("advertise", adv),
+		zap.Strings("seeds", seeds),
+		zap.Int("maxRetries", maxRetries))
 }

@@ -27,6 +27,10 @@ CLUSTER=${CLUSTER:-woodpecker-cluster}
 STORAGE_TYPE=${STORAGE_TYPE:-service}
 LOG_LEVEL=${LOG_LEVEL:-info}
 
+# Node metadata configuration
+RESOURCE_GROUP=${RESOURCE_GROUP:-default}
+AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-default}
+
 # Advertise address configuration for Docker bridge networking
 ADVERTISE_ADDR=${ADVERTISE_ADDR:-""}
 ADVERTISE_GRPC_PORT=${ADVERTISE_GRPC_PORT:-$GRPC_PORT}
@@ -133,6 +137,8 @@ log "Starting Woodpecker Server:"
 log "  Node Name: $NODE_NAME"
 log "  gRPC Port: $GRPC_PORT"
 log "  Gossip Port: $GOSSIP_PORT"
+log "  Resource Group: $RESOURCE_GROUP"
+log "  Availability Zone: $AVAILABILITY_ZONE"
 if [ -n "$ADVERTISE_ADDR" ]; then
     log "  Advertise Address: $ADVERTISE_ADDR"
     log "  Advertise gRPC Port: $ADVERTISE_GRPC_PORT"
@@ -156,6 +162,8 @@ CMD_ARGS=(
     "--node-name" "$NODE_NAME"
     "--data-dir" "$DATA_DIR"
     "--config" "$CONFIG_FILE"
+    "--resource-group" "$RESOURCE_GROUP"
+    "--availability-zone" "$AVAILABILITY_ZONE"
 )
 
 # Add advertise address configuration if provided
