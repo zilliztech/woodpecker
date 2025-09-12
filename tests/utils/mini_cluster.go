@@ -109,12 +109,112 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 	return cluster, cfg, gossipSeeds, serviceSeeds
 }
 
+// NodeConfig represents configuration for a single node in the cluster
+type NodeConfig struct {
+	Index         int
+	ResourceGroup string
+	AZ            string
+}
+
 // StartMiniCluster starts a test mini cluster of woodpecker servers
 func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 	return StartMiniClusterWithCfg(t, nodeCount, baseDir, cfg)
+}
+
+// StartMiniClusterWithCustomNodes starts a test mini cluster with custom node configurations
+func StartMiniClusterWithCustomNodes(t *testing.T, nodeConfigs []NodeConfig, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
+	// Load base configuration
+	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+	assert.NoError(t, err)
+	return StartMiniClusterWithCustomNodesAndCfg(t, nodeConfigs, baseDir, cfg)
+}
+
+// StartMiniClusterWithCustomNodesAndCfg starts a test mini cluster with custom node configurations and config
+func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfig, baseDir string, cfg *config.Configuration) (*MiniCluster, *config.Configuration, []string, []string) {
+	// Set up staged storage type for quorum testing
+	cfg.Woodpecker.Storage.Type = "service"
+	cfg.Woodpecker.Storage.RootPath = baseDir
+	cfg.Minio.RootPath = baseDir
+	cfg.Log.Level = "debug"
+
+	cluster := &MiniCluster{
+		Servers:       make(map[int]*server.Server),
+		Config:        cfg,
+		BaseDir:       baseDir,
+		UsedPorts:     make(map[int]int),
+		UsedAddresses: make(map[int]string),
+		MaxNodeIndex:  -1,
+	}
+
+	ctx := context.Background()
+
+	// Start each node with specified configurations
+	gossipSeeds := make([]string, 0)
+	serviceSeeds := make([]string, 0)
+	for _, nodeConfig := range nodeConfigs {
+		nodeIndex := nodeConfig.Index
+
+		// Create server configuration for this node
+		nodeCfg := *cfg // Copy the base config
+		nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(baseDir, fmt.Sprintf("node%d", nodeIndex))
+
+		// Find a free port for this node
+		listener, err := net.Listen("tcp", "localhost:0")
+		assert.NoError(t, err)
+		port := listener.Addr().(*net.TCPAddr).Port
+		cluster.UsedPorts[nodeIndex] = port // Track the port for this node
+		listener.Close()                    // Close it so server can use it
+
+		// Find a free port for gossip
+		gossipListener, err := net.Listen("tcp", "localhost:0")
+		assert.NoError(t, err)
+		gossipPort := gossipListener.Addr().(*net.TCPAddr).Port
+		gossipListener.Close()
+
+		// Create and start server with custom AZ/RG
+		nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &server.Config{
+			BindPort:            gossipPort,
+			ServicePort:         port,
+			SeedNodes:           gossipSeeds,
+			AdvertiseGrpcPort:   port,
+			AdvertiseGossipPort: gossipPort,
+			ResourceGroup:       nodeConfig.ResourceGroup,
+			AZ:                  nodeConfig.AZ,
+		})
+
+		// Prepare server (sets up listener and gossip)
+		err = nodeServer.Prepare()
+		assert.NoError(t, err)
+
+		// add node to seed list
+		advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
+		gossipSeeds = append(gossipSeeds, advertiseAddr)
+		serviceAddr := nodeServer.GetServiceAddrPort(ctx)
+		serviceSeeds = append(serviceSeeds, serviceAddr)
+
+		// Run server (starts grpc server and log store)
+		go func(srv *server.Server, nodeID int) {
+			err := srv.Run()
+			if err != nil {
+				t.Logf("Node %d server run error: %v", nodeID, err)
+			}
+		}(nodeServer, nodeIndex)
+
+		cluster.Servers[nodeIndex] = nodeServer
+		if nodeIndex > cluster.MaxNodeIndex {
+			cluster.MaxNodeIndex = nodeIndex
+		}
+		cluster.UsedAddresses[nodeIndex] = advertiseAddr
+		t.Logf("Started node %d on port %d with AZ=%s, RG=%s", nodeIndex, port, nodeConfig.AZ, nodeConfig.ResourceGroup)
+	}
+
+	// Wait for all nodes to start
+	time.Sleep(2 * time.Second)
+
+	return cluster, cfg, gossipSeeds, serviceSeeds
 }
 
 // StopMultiNodeCluster stops all nodes in the cluster
