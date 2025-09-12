@@ -112,29 +112,13 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 
 func (c *woodpeckerClient) initQuorumDiscovery(ctx context.Context) error {
 	quorumConfig := &c.cfg.Woodpecker.Client.Quorum
-
-	switch quorumConfig.NodeDiscoveryMode {
-	case "active":
-		logger.Ctx(ctx).Info("Initializing active quorum discovery mode")
-		c.quorumDiscovery = quorum.NewActiveQuorumDiscovery(ctx, quorumConfig, c.clientPool)
-		return nil
-
-	case "passive":
-		logger.Ctx(ctx).Info("Initializing passive quorum discovery mode")
-		passiveDiscovery, err := quorum.NewPassiveQuorumDiscovery(ctx, quorumConfig)
-		if err != nil {
-			return werr.ErrWoodpeckerClientInitFailed.WithCauseErr(err)
-		}
-
-		c.quorumDiscovery = passiveDiscovery
-
-		// Wait for discovery to stabilize
-		time.Sleep(2 * time.Second)
-		return nil
-
-	default:
-		return werr.ErrWoodpeckerClientInitFailed.WithCauseErrMsg(fmt.Sprintf("unsupported node discovery mode: %s", quorumConfig.NodeDiscoveryMode))
+	logger.Ctx(ctx).Info("Initializing quorum discovery mode")
+	quorumDiscovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, c.clientPool)
+	if err != nil {
+		return err
 	}
+	c.quorumDiscovery = quorumDiscovery
+	return nil
 }
 
 func (c *woodpeckerClient) initClient(ctx context.Context) error {
@@ -234,7 +218,7 @@ func (c *woodpeckerClient) SelectQuorumNodes(ctx context.Context) (*proto.Quorum
 	}
 
 	// Delegate to the configured discovery implementation
-	return c.quorumDiscovery.SelectQuorumNodes(ctx)
+	return c.quorumDiscovery.SelectQuorum(ctx)
 }
 
 // DeleteLog deletes the log with the specified name.

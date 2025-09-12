@@ -159,10 +159,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		if l.batch != nil && l.batch.LastReadState != nil && l.batch.LastReadState.SegmentId == segId {
 			lastReadState = l.batch.LastReadState
 		}
-		batchResult, err := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
-		if err != nil {
+		batchResult, readBatchErr := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
+		if readBatchErr != nil {
 			// Check if it's end of file error - this is the only reliable way to know segment is finished
-			if werr.ErrFileReaderEndOfFile.Is(err) {
+			if werr.ErrFileReaderEndOfFile.Is(readBatchErr) {
 				logger.Ctx(ctx).Debug("segment reached end of file, move to next segment", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId))
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
@@ -170,12 +170,12 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			}
 
 			// If entry not found, wait and retry until EOF
-			if werr.ErrEntryNotFound.Is(err) {
+			if werr.ErrEntryNotFound.Is(readBatchErr) {
 				// just wait and retry
 				logger.Ctx(ctx).Debug("segment has no entry to read, wait and retry", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId))
-				if err := l.waitWithContext(ctx); err != nil {
+				if waitErr := l.waitWithContext(ctx); waitErr != nil {
 					metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
-					return nil, err
+					return nil, waitErr
 				}
 				continue
 			}
@@ -183,7 +183,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			// For other errors, return them directly
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
 			logger.Ctx(ctx).Warn("read entries error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(err))
-			return nil, werr.ErrLogReaderReadFailed.WithCauseErr(err)
+			return nil, readBatchErr
 		}
 
 		// assert batchResult.Entries is not empty, and extract one entry from batchResult.Entries

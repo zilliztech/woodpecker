@@ -33,7 +33,7 @@ func TestMiniCluster_Basic(t *testing.T) {
 
 	// Start a 3-node cluster
 	const nodeCount = 3
-	cluster, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
 
 	t.Logf("Started cluster with %d nodes", len(cluster.Servers))
 	t.Logf("Seeds: %v", seeds)
@@ -97,7 +97,7 @@ func TestMiniCluster_LastScale(t *testing.T) {
 
 	// Start a 50-node cluster
 	const nodeCount = 50
-	cluster, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
 
 	t.Logf("Started cluster with %d nodes", len(cluster.Servers))
 	t.Logf("Seeds: %v", seeds)
@@ -161,7 +161,7 @@ func TestMiniCluster_Join(t *testing.T) {
 
 	// Start a 2-node cluster initially
 	const initialNodeCount = 2
-	cluster, _, seeds := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
@@ -227,7 +227,7 @@ func TestMiniCluster_Leave(t *testing.T) {
 
 	// Start a 3-node cluster
 	const nodeCount = 3
-	cluster, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started cluster with %d nodes", len(cluster.Servers))
@@ -293,7 +293,7 @@ func TestMiniCluster_Restart(t *testing.T) {
 
 	// Start a 3-node cluster
 	const nodeCount = 3
-	cluster, _, seeds := utils.StartMiniCluster(t, nodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started cluster with %d nodes", len(cluster.Servers))
@@ -374,7 +374,7 @@ func TestMiniCluster_NodeIndexManagement(t *testing.T) {
 
 	// Start a 3-node cluster (should have nodeIndex 0, 1, 2)
 	const initialNodeCount = 3
-	cluster, _, seeds := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
@@ -479,7 +479,7 @@ func TestMiniCluster_EdgeCases(t *testing.T) {
 
 	// Start a 2-node cluster
 	const initialNodeCount = 2
-	cluster, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
@@ -538,7 +538,7 @@ func TestMiniCluster_MultipleOperations(t *testing.T) {
 
 	// Start a 5-node cluster
 	const initialNodeCount = 5
-	cluster, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
@@ -633,7 +633,7 @@ func TestMiniCluster_RapidOperations(t *testing.T) {
 
 	// Start a 3-node cluster
 	const initialNodeCount = 3
-	cluster, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
@@ -692,7 +692,7 @@ func TestMiniCluster_LargeIndexNumbers(t *testing.T) {
 	rootPath := filepath.Join(tmpDir, "TestMiniCluster_LargeIndexNumbers")
 
 	// Start a minimal 1-node cluster
-	cluster, _, seeds := utils.StartMiniCluster(t, 1, rootPath)
+	cluster, _, seeds, _ := utils.StartMiniCluster(t, 1, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started minimal cluster")
@@ -740,7 +740,7 @@ func TestMiniCluster_AddressBasedOperations(t *testing.T) {
 
 	// Start a 3-node cluster
 	const initialNodeCount = 3
-	cluster, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
+	cluster, _, _, _ := utils.StartMiniCluster(t, initialNodeCount, rootPath)
 	defer cluster.StopMultiNodeCluster(t)
 
 	t.Logf("Started initial cluster with %d nodes", len(cluster.Servers))
