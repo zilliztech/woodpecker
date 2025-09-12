@@ -81,7 +81,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -176,7 +176,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -291,7 +291,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -513,7 +513,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -764,7 +764,7 @@ func TestClientRecreation(t *testing.T) {
 				const nodeCount = 3
 				var seeds []string
 				var cluster *utils.MiniCluster
-				cluster, cfg, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					if cluster != nil {
@@ -975,7 +975,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				const nodeCount = 3
 				var seeds []string
 				var cluster *utils.MiniCluster
-				cluster, cfg, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					if cluster != nil {
@@ -1198,7 +1198,7 @@ func TestMultiClientOpenCloseWriteRead(t *testing.T) {
 				// Start cluster for service mode
 				const nodeCount = 3
 				var seeds []string
-				cluster, cfg, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds = utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					if cluster != nil {
@@ -1472,7 +1472,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -1868,7 +1868,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -2264,7 +2264,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)
@@ -2739,7 +2739,7 @@ func TestConcurrentReaderWriterWithHangingBehavior(t *testing.T) {
 			if tc.needCluster {
 				// Start cluster for service mode
 				const nodeCount = 3
-				cluster, cfg, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cluster, cfg, _, seeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
 				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 				defer func() {
 					cluster.StopMultiNodeCluster(t)

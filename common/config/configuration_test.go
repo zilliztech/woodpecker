@@ -42,7 +42,6 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 600, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(1000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "active", config.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 1, len(config.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "default-region-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
@@ -124,7 +123,6 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 800, defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(1000), defaultConfig.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "active", defaultConfig.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 1, len(defaultConfig.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "default-pool", defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{}, defaultConfig.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
@@ -215,7 +213,6 @@ func TestConfigurationOverwrite(t *testing.T) {
     auditor:
       maxInterval: 10
     quorum:
-      quorumNodeDiscoveryMode: passive
       quorumBufferPools:
         - name: region-a-pool
           seeds: ["test-node1", "test-node2"]
@@ -238,6 +235,14 @@ func TestConfigurationOverwrite(t *testing.T) {
             region: "region-b-pool"
             az: "test-az-1"
             resourceGroup: "test-rg-3"
+          - name: replica-4
+            region: "region-b-pool"
+            az: "test-az-2"
+            resourceGroup: "test-rg-4"
+          - name: replica-5
+            region: "region-a-pool"
+            az: "test-az-3"
+            resourceGroup: "test-rg-5"
   logstore:
     segmentReadPolicy:
       maxBatchSize: 32000000
@@ -248,6 +253,8 @@ func TestConfigurationOverwrite(t *testing.T) {
 	_, err = extraCfgFile.WriteString(extraCfgContent)
 	assert.NoError(t, err)
 	config, err := NewConfiguration(cfgFile.Name(), extraCfgFile.Name())
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
 
 	// check configuration
 	assert.Equal(t, "etcd", config.Woodpecker.Meta.Type)
@@ -258,7 +265,6 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, 2200, config.Woodpecker.Client.SegmentRollingPolicy.MaxInterval)
 	assert.Equal(t, int64(2000), config.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
 	assert.Equal(t, 10, config.Woodpecker.Client.Auditor.MaxInterval)
-	assert.Equal(t, "passive", config.Woodpecker.Client.Quorum.NodeDiscoveryMode)
 	assert.Equal(t, 2, len(config.Woodpecker.Client.Quorum.BufferPools))
 	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.BufferPools[0].Name)
 	assert.Equal(t, []string{"test-node1", "test-node2"}, config.Woodpecker.Client.Quorum.BufferPools[0].Seeds)
@@ -267,7 +273,7 @@ func TestConfigurationOverwrite(t *testing.T) {
 	assert.Equal(t, "hard", config.Woodpecker.Client.Quorum.SelectStrategy.AffinityMode)
 	assert.Equal(t, 5, config.Woodpecker.Client.Quorum.SelectStrategy.Replicas)
 	assert.Equal(t, "custom", config.Woodpecker.Client.Quorum.SelectStrategy.Strategy)
-	assert.Equal(t, 3, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
+	assert.Equal(t, 5, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, "replica-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Name)
 	assert.Equal(t, "region-a-pool", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Region)
 	assert.Equal(t, "test-az-1", config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement[0].Az)
@@ -299,7 +305,6 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid configuration with strategy",
 			config: QuorumConfig{
-				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     3,
@@ -311,7 +316,6 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Valid configuration with replicas=5",
 			config: QuorumConfig{
-				NodeDiscoveryMode: "passive",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     5,
@@ -323,7 +327,6 @@ func TestQuorumConfigValidation(t *testing.T) {
 		{
 			name: "Invalid affinity mode",
 			config: QuorumConfig{
-				NodeDiscoveryMode: "active",
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "invalid",
 					Replicas:     3,
@@ -334,22 +337,9 @@ func TestQuorumConfigValidation(t *testing.T) {
 			errorMsg:    "invalid affinity mode 'invalid'",
 		},
 		{
-			name: "Invalid strategy",
+			name: "Empty buffer pools",
 			config: QuorumConfig{
-				NodeDiscoveryMode: "active",
-				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     3,
-					Strategy:     "invalid-strategy",
-				},
-			},
-			expectError: true,
-			errorMsg:    "invalid strategy 'invalid-strategy'",
-		},
-		{
-			name: "Invalid node discovery mode",
-			config: QuorumConfig{
-				NodeDiscoveryMode: "invalid-mode",
+				BufferPools: []QuorumBufferPool{}, // Empty buffer pools should cause error
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "soft",
 					Replicas:     3,
@@ -357,24 +347,15 @@ func TestQuorumConfigValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "invalid node discovery mode 'invalid-mode'",
-		},
-		{
-			name: "Invalid replicas value (not 3 or 5)",
-			config: QuorumConfig{
-				NodeDiscoveryMode: "passive",
-				SelectStrategy: QuorumSelectStrategy{
-					AffinityMode: "soft",
-					Replicas:     4, // Invalid value, only 3 or 5 allowed
-					Strategy:     "random",
-				},
-			},
-			expectError: false, // This should still pass validation, but getters will default to 3
+			errorMsg:    "at least one buffer pool must be configured",
 		},
 		{
 			name: "Valid custom placement configuration",
 			config: QuorumConfig{
-				NodeDiscoveryMode: "active",
+				BufferPools: []QuorumBufferPool{
+					{Name: "us-east-1", Seeds: []string{"seed1:8080"}},
+					{Name: "us-west-2", Seeds: []string{"seed2:8080"}},
+				},
 				SelectStrategy: QuorumSelectStrategy{
 					AffinityMode: "hard",
 					Replicas:     3,
@@ -407,7 +388,71 @@ func TestQuorumConfigValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
+			// Create a Configuration with the test QuorumConfig
+			config := &Configuration{
+				Woodpecker: WoodpeckerConfig{
+					Meta: MetaConfig{
+						Type:   "etcd",
+						Prefix: "test",
+					},
+					Client: ClientConfig{
+						SegmentAppend: SegmentAppendConfig{
+							QueueSize:  100,
+							MaxRetries: 2,
+						},
+						SegmentRollingPolicy: SegmentRollingPolicyConfig{
+							MaxSize:     100000000,
+							MaxInterval: 800,
+							MaxBlocks:   1000,
+						},
+						Auditor: AuditorConfig{
+							MaxInterval: 5,
+						},
+						Quorum: tt.config,
+					},
+					Logstore: LogstoreConfig{
+						SegmentSyncPolicy: SegmentSyncPolicyConfig{
+							MaxInterval:                1000,
+							MaxIntervalForLocalStorage: 5,
+							MaxEntries:                 2000,
+							MaxBytes:                   100000000,
+							MaxFlushRetries:            3,
+							RetryInterval:              2000,
+							MaxFlushSize:               16000000,
+							MaxFlushThreads:            8,
+						},
+						SegmentCompactionPolicy: SegmentCompactionPolicy{
+							MaxBytes:           32000000,
+							MaxParallelUploads: 4,
+							MaxParallelReads:   8,
+						},
+						SegmentReadPolicy: SegmentReadPolicyConfig{
+							MaxBatchSize:    16000000,
+							MaxFetchThreads: 32,
+						},
+					},
+					Storage: StorageConfig{
+						Type:     "default",
+						RootPath: "/tmp/test",
+					},
+				},
+			}
+
+			// Set storage type to "service" to enable quorum validation
+			config.Woodpecker.Storage.Type = "service"
+
+			// Add required BufferPools for quorum config validation to pass
+			// But skip for the "Empty buffer pools" test case
+			if len(config.Woodpecker.Client.Quorum.BufferPools) == 0 && tt.name != "Empty buffer pools" {
+				config.Woodpecker.Client.Quorum.BufferPools = []QuorumBufferPool{
+					{
+						Name:  "test-pool",
+						Seeds: []string{"test-seed:8080"},
+					},
+				}
+			}
+
+			err := config.Validate()
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorMsg)
@@ -422,7 +467,6 @@ func TestQuorumConfigValidation(t *testing.T) {
 func TestQuorumConfigReplicasHandling(t *testing.T) {
 	// Test with replicas = 3
 	config3 := QuorumConfig{
-		NodeDiscoveryMode: "active",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 3,
 		},
@@ -434,7 +478,6 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 
 	// Test with replicas = 5
 	config5 := QuorumConfig{
-		NodeDiscoveryMode: "passive",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 5,
 		},
@@ -446,7 +489,6 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 
 	// Test with invalid replicas (should default to 3)
 	configInvalid := QuorumConfig{
-		NodeDiscoveryMode: "active",
 		SelectStrategy: QuorumSelectStrategy{
 			Replicas: 4, // Invalid value
 		},
@@ -460,7 +502,6 @@ func TestQuorumConfigReplicasHandling(t *testing.T) {
 // TestCustomPlacementConfiguration tests the custom placement functionality
 func TestCustomPlacementConfiguration(t *testing.T) {
 	config := QuorumConfig{
-		NodeDiscoveryMode: "passive",
 		SelectStrategy: QuorumSelectStrategy{
 			AffinityMode: "hard",
 			Replicas:     5,
@@ -500,8 +541,67 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 		},
 	}
 
-	// Test configuration validation
-	err := config.Validate()
+	// Test configuration validation via full Configuration
+	fullConfig := &Configuration{
+		Woodpecker: WoodpeckerConfig{
+			Meta: MetaConfig{
+				Type:   "etcd",
+				Prefix: "test",
+			},
+			Client: ClientConfig{
+				SegmentAppend: SegmentAppendConfig{
+					QueueSize:  100,
+					MaxRetries: 2,
+				},
+				SegmentRollingPolicy: SegmentRollingPolicyConfig{
+					MaxSize:     100000000,
+					MaxInterval: 800,
+					MaxBlocks:   1000,
+				},
+				Auditor: AuditorConfig{
+					MaxInterval: 5,
+				},
+				Quorum: config,
+			},
+			Logstore: LogstoreConfig{
+				SegmentSyncPolicy: SegmentSyncPolicyConfig{
+					MaxInterval:                1000,
+					MaxIntervalForLocalStorage: 5,
+					MaxEntries:                 2000,
+					MaxBytes:                   100000000,
+					MaxFlushRetries:            3,
+					RetryInterval:              2000,
+					MaxFlushSize:               16000000,
+					MaxFlushThreads:            8,
+				},
+				SegmentCompactionPolicy: SegmentCompactionPolicy{
+					MaxBytes:           32000000,
+					MaxParallelUploads: 4,
+					MaxParallelReads:   8,
+				},
+				SegmentReadPolicy: SegmentReadPolicyConfig{
+					MaxBatchSize:    16000000,
+					MaxFetchThreads: 32,
+				},
+			},
+			Storage: StorageConfig{
+				Type:     "default",
+				RootPath: "/tmp/test",
+			},
+		},
+	}
+
+	// Set storage type to "service" to enable quorum validation
+	fullConfig.Woodpecker.Storage.Type = "service"
+
+	// Add buffer pools for the custom placement regions
+	fullConfig.Woodpecker.Client.Quorum.BufferPools = []QuorumBufferPool{
+		{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+		{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		{Name: "region-c", Seeds: []string{"seed-c:8080"}},
+	}
+
+	err := fullConfig.Validate()
 	assert.NoError(t, err)
 
 	// Test quorum calculations

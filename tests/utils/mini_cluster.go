@@ -41,7 +41,7 @@ type MiniCluster struct {
 	MaxNodeIndex  int            // Track the highest nodeIndex used
 }
 
-func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *config.Configuration) (*MiniCluster, *config.Configuration, []string) {
+func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *config.Configuration) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Set up staged storage type for quorum testing
 	cfg.Woodpecker.Storage.Type = "service"
 	cfg.Woodpecker.Storage.RootPath = baseDir
@@ -60,7 +60,8 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 	ctx := context.Background()
 
 	// Start each node with consecutive nodeIndex starting from 0
-	seeds := make([]string, 0)
+	gossipSeeds := make([]string, 0)
+	serviceSeeds := make([]string, 0)
 	for i := 0; i < nodeCount; i++ {
 		nodeIndex := i
 
@@ -76,15 +77,17 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 		listener.Close()                    // Close it so server can use it
 
 		// Create and start server
-		nodeServer := server.NewServer(ctx, &nodeCfg, 0, port, []string{})
+		nodeServer := server.NewServer(ctx, &nodeCfg, 0, port, gossipSeeds)
 
 		// Prepare server (sets up listener and gossip)
 		err = nodeServer.Prepare()
 		assert.NoError(t, err)
 
 		// add node to seed list
-		advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
-		seeds = append(seeds, advertiseAddr)
+		advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
+		gossipSeeds = append(gossipSeeds, advertiseAddr)
+		serviceAddr := nodeServer.GetServiceAddrPort(ctx)
+		serviceSeeds = append(serviceSeeds, serviceAddr)
 
 		// Run server (starts grpc server and log store)
 		go func(srv *server.Server, nodeID int) {
@@ -103,11 +106,11 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 	// Wait for all nodes to start
 	time.Sleep(2 * time.Second)
 
-	return cluster, cfg, seeds
+	return cluster, cfg, gossipSeeds, serviceSeeds
 }
 
 // StartMiniCluster starts a test mini cluster of woodpecker servers
-func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string) {
+func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
@@ -188,7 +191,7 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, seeds
 	}
 
 	// Get advertise address
-	advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
+	advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
 	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Record the address
 
 	t.Logf("Joined new node %d on port %d with address %s", nodeIndex, port, advertiseAddr)
@@ -254,7 +257,7 @@ func (cluster *MiniCluster) LeaveNodeByAddress(t *testing.T, address string) (in
 	// Find the node with the matching address
 	for nodeIndex, srv := range cluster.Servers {
 		if srv != nil {
-			advertiseAddr := srv.GetAdvertiseAddr(ctx)
+			advertiseAddr := srv.GetAdvertiseAddrPort(ctx)
 			if advertiseAddr == address {
 				return cluster.LeaveNodeWithIndex(t, nodeIndex)
 			}
@@ -304,7 +307,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, seeds []str
 	cluster.Servers[nodeIndex] = nodeServer
 
 	// Get advertise address
-	advertiseAddr := nodeServer.GetAdvertiseAddr(ctx)
+	advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
 	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Update the address record
 
 	t.Logf("Restarted node %d on port %d with address %s", nodeIndex, port, advertiseAddr)
@@ -341,7 +344,7 @@ func (cluster *MiniCluster) GetNodeIndexByAddress(address string) (int, error) {
 
 	for nodeIndex, srv := range cluster.Servers {
 		if srv != nil {
-			advertiseAddr := srv.GetAdvertiseAddr(ctx)
+			advertiseAddr := srv.GetAdvertiseAddrPort(ctx)
 			if advertiseAddr == address {
 				return nodeIndex, nil
 			}
@@ -381,7 +384,7 @@ func (cluster *MiniCluster) GetSeedList() []string {
 	seeds := make([]string, 0)
 	for _, srv := range cluster.Servers {
 		if srv != nil {
-			addr := srv.GetAdvertiseAddr(ctx)
+			addr := srv.GetAdvertiseAddrPort(ctx)
 			if addr != "" {
 				seeds = append(seeds, addr)
 			}
