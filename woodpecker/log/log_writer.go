@@ -157,7 +157,7 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResu
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}
@@ -239,7 +239,7 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-cha
 		}
 		close(ch)
 		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && (werr.ErrSegmentFenced.Is(err) || werr.ErrStorageNotWritable.Is(err) || werr.ErrFileWriterFinalized.Is(err) || werr.ErrFileWriterAlreadyClosed.Is(err)) {
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
 			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
 		}
 	}

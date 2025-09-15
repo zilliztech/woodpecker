@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/errors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -102,9 +104,38 @@ func Error(status *proto.Status) error {
 // Segment Writable related error
 // ---------------------------------------------
 
-func IsSegmentWritable(err error) bool {
+func IsSegmentNotWritableErr(err error) bool {
 	if err == nil {
+		return false
+	}
+	return ErrSegmentHandleSegmentClosed.Is(err) || ErrSegmentFenced.Is(err) || ErrStorageNotWritable.Is(err) || ErrFileWriterFinalized.Is(err)
+}
+
+// ---------------------------------------------
+// Timeout related error
+// ---------------------------------------------
+
+// IsTimeoutError Helper function to check if an error is a timeout error (context deadline exceeded or gRPC deadline exceeded)
+func IsTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for standard context errors first
+	if errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
 		return true
 	}
-	return !ErrSegmentHandleSegmentClosed.Is(err) && !ErrSegmentFenced.Is(err) && !ErrStorageNotWritable.Is(err) && !ErrFileWriterFinalized.Is(err)
+
+	// Check for gRPC deadline exceeded
+	if st, ok := status.FromError(err); ok {
+		if st.Code() == codes.DeadlineExceeded || st.Code() == codes.Canceled {
+			return true
+		}
+	}
+
+	// Fallback to string matching for wrapped errors
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "context deadline exceeded") ||
+		strings.Contains(errMsg, "DeadlineExceeded") ||
+		strings.Contains(errMsg, "context canceled")
 }
