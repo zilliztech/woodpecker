@@ -603,6 +603,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 	logger.Ctx(ctx).Debug("block processing completed successfully",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segId", w.segmentId),
+		zap.String("filePath", w.segmentFilePath),
 		zap.Int32("blockNumber", task.blockNumber),
 		zap.Int64("firstEntryId", task.firstEntryId),
 		zap.Int64("lastEntryId", task.lastEntryId),
