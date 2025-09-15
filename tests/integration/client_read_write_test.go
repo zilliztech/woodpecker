@@ -21,16 +21,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
-
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -789,10 +787,10 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			if newErr != nil && !errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded) {
-				t.Logf("ReadNext returned error: %v", newErr)
+			if newErr != nil && !werr.IsTimeoutError(newErr) {
+				t.Logf("ReadNext returned unexpected error: %v", newErr)
 			}
-			assert.Truef(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded), newErr.Error())
+			assert.Truef(t, werr.IsTimeoutError(newErr), "Expected timeout error, got: %v", newErr.Error())
 			assert.Nil(t, newMessage)
 
 			// Verify the messages we read match what we wrote
@@ -937,7 +935,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, strings.Contains(newErr.Error(), context.DeadlineExceeded.Error()))
+			assert.True(t, werr.IsTimeoutError(newErr), "Expected timeout error, got: %v", newErr.Error())
 			assert.Nil(t, newMessage)
 
 			// Clean up
