@@ -895,7 +895,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
-		currentLAC = r.lastAddConfirmed.Load() // read each round
+		currentLAC = r.lastAddConfirmed.Load() // Obtain the lac before each block starts reading, more aggressive realtime read
 		currentBlockID := i
 
 		headersLen := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
@@ -978,10 +978,15 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 
 		currentEntryID := blockHeaderRecord.FirstEntryID
 		hasDataCollectedFromThisBlock := false
+		reachLac := false
 		// Parse all data records in the block even if it exceeds the maxSize or maxBytes, because one block should be read once
 		for j := 0; j < len(records); j++ {
 			if records[j].Type() != codec.DataRecordType {
 				continue
+			}
+			if currentEntryID > currentLAC {
+				reachLac = true
+				break
 			}
 			// Only include entries from the start sequence number onwards
 			if opt.StartEntryID <= currentEntryID && currentEntryID <= currentLAC {
@@ -1006,10 +1011,11 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Int64("blockFirstEntryID", blockHeaderRecord.FirstEntryID),
 			zap.Int64("blockLastEntryID", blockHeaderRecord.LastEntryID),
-			zap.Int64("lastCollectedEntryID", currentEntryID),
+			zap.Int64("currentEntryID", currentEntryID),
 			zap.Int64("totalCollectedEntries", entriesCollected),
 			zap.Int64("totalCollectedBytes", readBytes),
 			zap.Bool("hasDataCollectedFromThisBlock", hasDataCollectedFromThisBlock),
+			zap.Bool("reachLac", reachLac),
 			zap.Int64("lac", currentLAC))
 
 		if hasDataCollectedFromThisBlock {
@@ -1021,6 +1027,11 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 				FirstEntryID: blockHeaderRecord.FirstEntryID,
 				LastEntryID:  blockHeaderRecord.LastEntryID,
 			}
+		}
+
+		if reachLac {
+			// reach the LAC, stop this batch scan
+			break
 		}
 
 		// Move to the next block
