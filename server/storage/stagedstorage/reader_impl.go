@@ -564,8 +564,9 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 		// was completely read in the last operation. If fully read, we can proceed directly
 		// to the next block; otherwise, we need to start scanning from this block again.
 		//startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
+		//startBlockOffset = lastReadBatchInfo.BlockOffset + int64(lastReadBatchInfo.BlockSize)
 		startBlockID = int64(lastReadBatchInfo.LastBlockId)
-		startBlockOffset = lastReadBatchInfo.BlockOffset + int64(lastReadBatchInfo.BlockSize)
+		startBlockOffset = lastReadBatchInfo.BlockOffset
 		logger.Ctx(ctx).Debug("using advOpt mode",
 			zap.Int64("lastBlockNumber", int64(lastReadBatchInfo.LastBlockId)),
 			zap.Int64("startBlockID", startBlockID),
@@ -1006,7 +1007,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 		}
 
 		logger.Ctx(ctx).Debug("Extracted data from block",
-			zap.String("filePath", r.filePath),
+			zap.String("segmentPath", r.filePath),
 			zap.Int64("blockNumber", currentBlockID),
 			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Int64("blockFirstEntryID", blockHeaderRecord.FirstEntryID),

@@ -200,7 +200,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.next = 0
 			return nil, err
 		}
-		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("actualReadSegmentId", segId), zap.Int64("actualReadEntryId", entryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.LastReadState))
+		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("readSegmentId", segId), zap.Int64("readEntryId", entryId), zap.Int64("actualReadSegmentId", oneEntry.SegId), zap.Int64("actualReadEntryId", oneEntry.EntryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.LastReadState))
 		// move cursor
 		l.currentSegmentHandle = segHandle
 		l.pendingReadSegmentId = oneEntry.SegId
