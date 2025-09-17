@@ -60,8 +60,8 @@ WORKDIR /woodpecker
 USER woodpecker
 
 # Environment variables with defaults (removed sensitive defaults)
-ENV GRPC_PORT=18080 \
-    GOSSIP_PORT=17946 \
+ENV PORT=17946 \
+    SERVICE_PORT=18080 \
     NODE_NAME="" \
     DATA_DIR="/woodpecker/data" \
     CONFIG_FILE="/woodpecker/configs/woodpecker.yaml" \

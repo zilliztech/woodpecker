@@ -99,8 +99,8 @@ services:
     container_name: woodpecker-node1
     environment:
       - NODE_NAME=woodpecker-node1
-      - GRPC_PORT=18080
-      - GOSSIP_PORT=17946
+      - PORT=17946                               # Gossip port
+      - SERVICE_PORT=18080                       # Service port
       - ADVERTISE_ADDR=woodpecker-node1          # Gossip advertise address
       - ADVERTISE_PORT=17946                     # Gossip advertise port
       - ADVERTISE_SERVICE_ADDR=woodpecker-node1  # Service advertise address
@@ -146,8 +146,8 @@ services:
     container_name: woodpecker-node2
     environment:
       - NODE_NAME=woodpecker-node2
-      - GRPC_PORT=18081
-      - GOSSIP_PORT=17947
+      - PORT=17947                               # Gossip port
+      - SERVICE_PORT=18081                       # Service port
       - ADVERTISE_ADDR=woodpecker-node2          # Gossip advertise address
       - ADVERTISE_PORT=17947                     # Gossip advertise port
       - ADVERTISE_SERVICE_ADDR=woodpecker-node2  # Service advertise address
@@ -192,8 +192,8 @@ services:
     container_name: woodpecker-node3
     environment:
       - NODE_NAME=woodpecker-node3
-      - GRPC_PORT=18082
-      - GOSSIP_PORT=17948
+      - PORT=17948                               # Gossip port
+      - SERVICE_PORT=18082                       # Service port
       - ADVERTISE_ADDR=woodpecker-node3          # Gossip advertise address
       - ADVERTISE_PORT=17948                     # Gossip advertise port
       - ADVERTISE_SERVICE_ADDR=woodpecker-node3  # Service advertise address
@@ -233,14 +233,14 @@ services:
           memory: 512M
           cpus: '0.5'
 
- # Fourth Woodpecker node
+  # Fourth Woodpecker node
   woodpecker-node4:
     image: ${WOODPECKER_IMAGE:-woodpecker:latest}
     container_name: woodpecker-node4
     environment:
       - NODE_NAME=woodpecker-node4
-      - GRPC_PORT=18083
-      - GOSSIP_PORT=17949
+      - PORT=17949                               # Gossip port
+      - SERVICE_PORT=18083                       # Service port
       - ADVERTISE_ADDR=woodpecker-node4          # Gossip advertise address
       - ADVERTISE_PORT=17949                     # Gossip advertise port
       - ADVERTISE_SERVICE_ADDR=woodpecker-node4  # Service advertise address
