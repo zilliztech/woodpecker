@@ -18,7 +18,12 @@ import (
 
 	ml "github.com/hashicorp/memberlist"
 
+	"github.com/zilliztech/woodpecker/common/net"
 	"github.com/zilliztech/woodpecker/proto"
+)
+
+const (
+	NodeMetaVersion = 1
 )
 
 // ServerNode Server node
@@ -33,32 +38,43 @@ type ServerNode struct {
 	discovery *ServiceDiscovery
 	// node metadata
 	meta *proto.NodeMeta
+	// server cfg
+	serverConfig *ServerConfig
 }
 
 // ServerConfig Server configuration
 type ServerConfig struct {
-	NodeID              string
-	ResourceGroup       string
-	AZ                  string
-	BindAddr            string
-	BindPort            int
-	ServicePort         int
-	AdvertiseAddr       string
-	AdvertiseGossipPort int
-	AdvertiseGrpcPort   int
-	Tags                map[string]string
+	// node info
+	NodeID        string
+	ResourceGroup string
+	AZ            string
+	Tags          map[string]string
+
+	// gossip related - for internal cluster communication
+	BindPort      int
+	AdvertiseAddr string
+	AdvertisePort int
+
+	// service related - for client-server communication
+	ServicePort          int
+	AdvertiseServiceAddr string
+	AdvertiseServicePort int
 }
 
 func NewServerNode(config *ServerConfig) (*ServerNode, error) {
-	// Use advertise address for endpoint if configured, otherwise use bind address
-	endpointAddr := config.BindAddr
-	endpointPort := config.ServicePort
+	// Auto-detect local IP for advertise addresses if not specified
+	localIP := net.GetLocalIP()
 
-	if config.AdvertiseAddr != "" {
-		endpointAddr = config.AdvertiseAddr
-		if config.AdvertiseGrpcPort > 0 {
-			endpointPort = config.AdvertiseGrpcPort
-		}
+	// Build service endpoint for client connections
+	// Use service advertise address if configured, otherwise use detected local IP
+	endpointAddr := localIP
+	if config.AdvertiseServiceAddr != "" {
+		endpointAddr = config.AdvertiseServiceAddr
+	}
+
+	endpointPort := config.ServicePort
+	if config.AdvertiseServicePort > 0 {
+		endpointPort = config.AdvertiseServicePort
 	}
 
 	meta := &proto.NodeMeta{
@@ -68,22 +84,26 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
 		Tags:          config.Tags,
 		LastUpdate:    time.Now().UnixMilli(), // Convert to Unix timestamp in milliseconds
+		Version:       NodeMetaVersion,
 	}
 	discovery := NewServiceDiscovery()
 	delegate := NewServerDelegate(meta)
 	eventDel := NewEventDelegate(discovery, RoleServer)
 
 	mlConfig := ml.DefaultLocalConfig()
-	mlConfig.Name = config.NodeID       // unique identifier name for a node
-	mlConfig.BindAddr = config.BindAddr // address for running gossip protocol
+	mlConfig.Name = config.NodeID // unique identifier name for a node
+	mlConfig.BindAddr = "0.0.0.0" // always bind to 0.0.0.0 for all interfaces
 	mlConfig.BindPort = config.BindPort
 
-	// Configure advertise addresses for Docker bridge networking
+	// Configure advertise addresses for gossip communication (Docker bridge networking)
+	gossipAdvertiseAddr := localIP
 	if config.AdvertiseAddr != "" {
-		mlConfig.AdvertiseAddr = config.AdvertiseAddr
-		if config.AdvertiseGossipPort > 0 {
-			mlConfig.AdvertisePort = config.AdvertiseGossipPort
-		}
+		gossipAdvertiseAddr = config.AdvertiseAddr
+	}
+	mlConfig.AdvertiseAddr = gossipAdvertiseAddr
+
+	if config.AdvertisePort > 0 {
+		mlConfig.AdvertisePort = config.AdvertisePort
 	}
 
 	mlConfig.Delegate = delegate                     // behavior delegate for node, different for each instance
@@ -99,11 +119,12 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	discovery.UpdateServer(config.NodeID, meta) // cache for known node meta information list
 
 	return &ServerNode{
-		memberlist: list,
-		delegate:   delegate,
-		eventDel:   eventDel,
-		discovery:  discovery,
-		meta:       meta,
+		memberlist:   list,
+		delegate:     delegate,
+		eventDel:     eventDel,
+		discovery:    discovery,
+		meta:         meta,
+		serverConfig: config,
 	}, nil
 }
 
@@ -159,4 +180,12 @@ func (n *ServerNode) Shutdown() error { return n.memberlist.Shutdown() }
 
 func (n *ServerNode) GetMemberlist() *ml.Memberlist {
 	return n.memberlist
+}
+
+func (n *ServerNode) GetServerCfg() *ServerConfig {
+	return n.serverConfig
+}
+
+func (n *ServerNode) GetMeta() *proto.NodeMeta {
+	return n.meta
 }

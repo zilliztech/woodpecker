@@ -32,20 +32,39 @@ RESOURCE_GROUP=${RESOURCE_GROUP:-default}
 AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-default}
 
 # Advertise address configuration for Docker bridge networking
+# Gossip advertise configuration (for internal cluster communication)
 ADVERTISE_ADDR=${ADVERTISE_ADDR:-""}
-ADVERTISE_GRPC_PORT=${ADVERTISE_GRPC_PORT:-$GRPC_PORT}
-ADVERTISE_GOSSIP_PORT=${ADVERTISE_GOSSIP_PORT:-$GOSSIP_PORT}
+ADVERTISE_PORT=${ADVERTISE_PORT:-$GOSSIP_PORT}
 
-# Auto-detect host IP if advertise address is set to "auto"
+# Service advertise configuration (for client connections)
+ADVERTISE_SERVICE_ADDR=${ADVERTISE_SERVICE_ADDR:-""}
+ADVERTISE_SERVICE_PORT=${ADVERTISE_SERVICE_PORT:-$GRPC_PORT}
+
+# Note: IP auto-detection is now primarily handled by the Go application
+# using the common/net package, but we keep this for backward compatibility
+# and explicit configuration in Docker environments
+
+# Auto-detect advertise addresses if set to "auto"
 if [ "$ADVERTISE_ADDR" = "auto" ]; then
     # Try to get Docker host gateway IP address
-    HOST_IP=$(ip route show default | awk '/default/ {print $3}' | head -1)
+    HOST_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -1)
     if [ -z "$HOST_IP" ]; then
         # Fallback to common Docker gateway IP
         HOST_IP="172.17.0.1"
     fi
     ADVERTISE_ADDR="$HOST_IP"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Auto-detected host IP for advertise address: $ADVERTISE_ADDR"
+    log "Auto-detected gossip advertise address: $ADVERTISE_ADDR"
+fi
+
+if [ "$ADVERTISE_SERVICE_ADDR" = "auto" ]; then
+    # Use the same logic as gossip address for Docker environments
+    if [ -n "$HOST_IP" ]; then
+        ADVERTISE_SERVICE_ADDR="$HOST_IP"
+    else
+        HOST_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -1)
+        ADVERTISE_SERVICE_ADDR="${HOST_IP:-172.17.0.1}"
+    fi
+    log "Auto-detected service advertise address: $ADVERTISE_SERVICE_ADDR"
 fi
 
 # MinIO configuration
@@ -139,10 +158,17 @@ log "  gRPC Port: $GRPC_PORT"
 log "  Gossip Port: $GOSSIP_PORT"
 log "  Resource Group: $RESOURCE_GROUP"
 log "  Availability Zone: $AVAILABILITY_ZONE"
+
+# Log gossip advertise configuration
 if [ -n "$ADVERTISE_ADDR" ]; then
-    log "  Advertise Address: $ADVERTISE_ADDR"
-    log "  Advertise gRPC Port: $ADVERTISE_GRPC_PORT"
-    log "  Advertise Gossip Port: $ADVERTISE_GOSSIP_PORT"
+    log "  Gossip Advertise Address: $ADVERTISE_ADDR"
+    log "  Gossip Advertise Port: $ADVERTISE_PORT"
+fi
+
+# Log service advertise configuration
+if [ -n "$ADVERTISE_SERVICE_ADDR" ]; then
+    log "  Service Advertise Address: $ADVERTISE_SERVICE_ADDR"
+    log "  Service Advertise Port: $ADVERTISE_SERVICE_PORT"
 fi
 log "  Seeds: $SEEDS"
 log "  Storage Type: $STORAGE_TYPE"
@@ -166,11 +192,16 @@ CMD_ARGS=(
     "--availability-zone" "$AVAILABILITY_ZONE"
 )
 
-# Add advertise address configuration if provided
+# Add gossip advertise configuration if provided
 if [ -n "$ADVERTISE_ADDR" ]; then
     CMD_ARGS+=("--advertise-addr" "$ADVERTISE_ADDR")
-    CMD_ARGS+=("--advertise-grpc-port" "$ADVERTISE_GRPC_PORT")
-    CMD_ARGS+=("--advertise-gossip-port" "$ADVERTISE_GOSSIP_PORT")
+    CMD_ARGS+=("--advertise-port" "$ADVERTISE_PORT")
+fi
+
+# Add service advertise configuration if provided
+if [ -n "$ADVERTISE_SERVICE_ADDR" ]; then
+    CMD_ARGS+=("--advertise-service-addr" "$ADVERTISE_SERVICE_ADDR")
+    CMD_ARGS+=("--advertise-service-port" "$ADVERTISE_SERVICE_PORT")
 fi
 
 # Add seeds if provided and not empty

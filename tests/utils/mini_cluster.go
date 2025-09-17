@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/server"
 )
 
@@ -86,7 +87,7 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 		// add node to seed list
 		advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
 		gossipSeeds = append(gossipSeeds, advertiseAddr)
-		serviceAddr := nodeServer.GetServiceAddrPort(ctx)
+		serviceAddr := nodeServer.GetServiceAdvertiseAddrPort(ctx)
 		serviceSeeds = append(serviceSeeds, serviceAddr)
 
 		// Run server (starts grpc server and log store)
@@ -175,15 +176,16 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		gossipListener.Close()
 
 		// Create and start server with custom AZ/RG
-		nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &server.Config{
-			BindPort:            gossipPort,
-			ServicePort:         port,
-			SeedNodes:           gossipSeeds,
-			AdvertiseGrpcPort:   port,
-			AdvertiseGossipPort: gossipPort,
-			ResourceGroup:       nodeConfig.ResourceGroup,
-			AZ:                  nodeConfig.AZ,
-		})
+		nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
+			NodeID:               fmt.Sprintf("node%d", nodeIndex),
+			BindPort:             gossipPort,
+			AdvertisePort:        gossipPort, // Gossip advertise port
+			ServicePort:          port,
+			AdvertiseServicePort: port, // Service advertise port
+			ResourceGroup:        nodeConfig.ResourceGroup,
+			AZ:                   nodeConfig.AZ,
+			Tags:                 map[string]string{"role": "test"},
+		}, gossipSeeds)
 
 		// Prepare server (sets up listener and gossip)
 		err = nodeServer.Prepare()
@@ -192,7 +194,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		// add node to seed list
 		advertiseAddr := nodeServer.GetAdvertiseAddrPort(ctx)
 		gossipSeeds = append(gossipSeeds, advertiseAddr)
-		serviceAddr := nodeServer.GetServiceAddrPort(ctx)
+		serviceAddr := nodeServer.GetServiceAdvertiseAddrPort(ctx)
 		serviceSeeds = append(serviceSeeds, serviceAddr)
 
 		// Run server (starts grpc server and log store)

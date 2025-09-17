@@ -28,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/server"
 )
 
@@ -69,17 +70,18 @@ func resolveAdvertiseAddr(addr string) string {
 
 func main() {
 	var (
-		grpcPort            = flag.Int("grpc-port", 18080, "gRPC service port")
-		gossipPort          = flag.Int("gossip-port", 17946, "Gossip communication port")
-		nodeName            = flag.String("node-name", "", "Node name (defaults to hostname)")
-		dataDir             = flag.String("data-dir", "/woodpecker/data", "Data directory")
-		configFile          = flag.String("config", "/woodpecker/configs/woodpecker.yaml", "Configuration file path")
-		seeds               = flag.String("seeds", "", "Comma-separated list of seed nodes for gossip (host:port)")
-		advertiseAddr       = flag.String("advertise-addr", "", "Advertise address for gossip (for Docker bridge networking)")
-		advertiseGrpcPort   = flag.Int("advertise-grpc-port", 0, "Advertise gRPC port (defaults to grpc-port)")
-		advertiseGossipPort = flag.Int("advertise-gossip-port", 0, "Advertise gossip port (defaults to gossip-port)")
-		resourceGroup       = flag.String("resource-group", "default", "Resource group for node placement")
-		availabilityZone    = flag.String("availability-zone", "default", "Availability zone for node placement")
+		grpcPort             = flag.Int("grpc-port", 18080, "gRPC service port")
+		gossipPort           = flag.Int("gossip-port", 17946, "Gossip communication port")
+		nodeName             = flag.String("node-name", "", "Node name (defaults to hostname)")
+		dataDir              = flag.String("data-dir", "/woodpecker/data", "Data directory")
+		configFile           = flag.String("config", "/woodpecker/configs/woodpecker.yaml", "Configuration file path")
+		seeds                = flag.String("seeds", "", "Comma-separated list of seed nodes for gossip (host:port)")
+		advertiseAddr        = flag.String("advertise-addr", "", "Advertise address for gossip (for Docker bridge networking)")
+		advertisePort        = flag.Int("advertise-port", 0, "Advertise gossip port (defaults to gossip-port)")
+		advertiseServiceAddr = flag.String("advertise-service-addr", "", "Advertise address for service (for client connections)")
+		advertiseServicePort = flag.Int("advertise-service-port", 0, "Advertise service port (defaults to grpc-port)")
+		resourceGroup        = flag.String("resource-group", "default", "Resource group for node placement")
+		availabilityZone     = flag.String("availability-zone", "default", "Availability zone for node placement")
 	)
 
 	// First argument should be command
@@ -122,31 +124,34 @@ func main() {
 	}
 
 	// Set default advertise ports if not specified
-	if *advertiseGrpcPort == 0 {
-		*advertiseGrpcPort = *grpcPort
+	if *advertisePort == 0 {
+		*advertisePort = *gossipPort
 	}
-	if *advertiseGossipPort == 0 {
-		*advertiseGossipPort = *gossipPort
+	if *advertiseServicePort == 0 {
+		*advertiseServicePort = *grpcPort
 	}
 
-	// Resolve advertise address to IP if it's a hostname
+	// Resolve advertise addresses to IP if they're hostnames
 	resolvedAdvertiseAddr := resolveAdvertiseAddr(*advertiseAddr)
+	resolvedAdvertiseServiceAddr := resolveAdvertiseAddr(*advertiseServiceAddr)
 
 	// Create server config with advertise options and node metadata
-	serverConfig := &server.Config{
-		BindPort:            *gossipPort,
-		ServicePort:         *grpcPort,
-		AdvertiseAddr:       resolvedAdvertiseAddr,
-		AdvertiseGrpcPort:   *advertiseGrpcPort,
-		AdvertiseGossipPort: *advertiseGossipPort,
-		SeedNodes:           seedNodes,
-		ResourceGroup:       *resourceGroup,
-		AZ:                  *availabilityZone,
+	serverConfig := &membership.ServerConfig{
+		NodeID:               *nodeName,
+		BindPort:             *gossipPort,
+		ServicePort:          *grpcPort,
+		AdvertiseAddr:        resolvedAdvertiseAddr,        // Gossip advertise address
+		AdvertisePort:        *advertisePort,               // Gossip advertise port
+		AdvertiseServiceAddr: resolvedAdvertiseServiceAddr, // Service advertise address
+		AdvertiseServicePort: *advertiseServicePort,        // Service advertise port
+		ResourceGroup:        *resourceGroup,
+		AZ:                   *availabilityZone,
+		Tags:                 map[string]string{"role": "logstore"},
 	}
 
 	// Create server
 	ctx := context.Background()
-	srv := server.NewServerWithConfig(ctx, cfg, serverConfig)
+	srv := server.NewServerWithConfig(ctx, cfg, serverConfig, seedNodes)
 
 	// Prepare server (sets up listener and gossip)
 	if err := srv.Prepare(); err != nil {
@@ -159,14 +164,25 @@ func main() {
 	log.Printf("  Gossip Port: %d", *gossipPort)
 	log.Printf("  Resource Group: %s", *resourceGroup)
 	log.Printf("  Availability Zone: %s", *availabilityZone)
+
+	// Log gossip advertise configuration
 	if *advertiseAddr != "" {
 		if resolvedAdvertiseAddr != *advertiseAddr {
-			log.Printf("  Advertise Address: %s (resolved from %s)", resolvedAdvertiseAddr, *advertiseAddr)
+			log.Printf("  Gossip Advertise Address: %s (resolved from %s)", resolvedAdvertiseAddr, *advertiseAddr)
 		} else {
-			log.Printf("  Advertise Address: %s", *advertiseAddr)
+			log.Printf("  Gossip Advertise Address: %s", *advertiseAddr)
 		}
-		log.Printf("  Advertise gRPC Port: %d", *advertiseGrpcPort)
-		log.Printf("  Advertise Gossip Port: %d", *advertiseGossipPort)
+		log.Printf("  Gossip Advertise Port: %d", *advertisePort)
+	}
+
+	// Log service advertise configuration
+	if *advertiseServiceAddr != "" {
+		if resolvedAdvertiseServiceAddr != *advertiseServiceAddr {
+			log.Printf("  Service Advertise Address: %s (resolved from %s)", resolvedAdvertiseServiceAddr, *advertiseServiceAddr)
+		} else {
+			log.Printf("  Service Advertise Address: %s", *advertiseServiceAddr)
+		}
+		log.Printf("  Service Advertise Port: %d", *advertiseServicePort)
 	}
 	log.Printf("  Seeds: %v", seedNodes)
 	log.Printf("  Data Directory: %s", cfg.Woodpecker.Storage.RootPath)
