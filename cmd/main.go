@@ -70,7 +70,7 @@ func resolveAdvertiseAddr(addr string) string {
 
 func main() {
 	var (
-		grpcPort             = flag.Int("grpc-port", 18080, "gRPC service port")
+		servicePort          = flag.Int("service-port", 18080, "service port")
 		gossipPort           = flag.Int("gossip-port", 17946, "Gossip communication port")
 		nodeName             = flag.String("node-name", "", "Node name (defaults to hostname)")
 		dataDir              = flag.String("data-dir", "/woodpecker/data", "Data directory")
@@ -79,7 +79,7 @@ func main() {
 		advertiseAddr        = flag.String("advertise-addr", "", "Advertise address for gossip (for Docker bridge networking)")
 		advertisePort        = flag.Int("advertise-port", 0, "Advertise gossip port (defaults to gossip-port)")
 		advertiseServiceAddr = flag.String("advertise-service-addr", "", "Advertise address for service (for client connections)")
-		advertiseServicePort = flag.Int("advertise-service-port", 0, "Advertise service port (defaults to grpc-port)")
+		advertiseServicePort = flag.Int("advertise-service-port", 0, "Advertise service port (defaults to service-port)")
 		resourceGroup        = flag.String("resource-group", "default", "Resource group for node placement")
 		availabilityZone     = flag.String("availability-zone", "default", "Availability zone for node placement")
 	)
@@ -128,7 +128,7 @@ func main() {
 		*advertisePort = *gossipPort
 	}
 	if *advertiseServicePort == 0 {
-		*advertiseServicePort = *grpcPort
+		*advertiseServicePort = *servicePort
 	}
 
 	// Resolve advertise addresses to IP if they're hostnames
@@ -139,7 +139,7 @@ func main() {
 	serverConfig := &membership.ServerConfig{
 		NodeID:               *nodeName,
 		BindPort:             *gossipPort,
-		ServicePort:          *grpcPort,
+		ServicePort:          *servicePort,
 		AdvertiseAddr:        resolvedAdvertiseAddr,        // Gossip advertise address
 		AdvertisePort:        *advertisePort,               // Gossip advertise port
 		AdvertiseServiceAddr: resolvedAdvertiseServiceAddr, // Service advertise address
@@ -160,7 +160,7 @@ func main() {
 
 	log.Printf("Starting Woodpecker Server:")
 	log.Printf("  Node Name: %s", *nodeName)
-	log.Printf("  gRPC Port: %d", *grpcPort)
+	log.Printf("  Service Port: %d", *servicePort)
 	log.Printf("  Gossip Port: %d", *gossipPort)
 	log.Printf("  Resource Group: %s", *resourceGroup)
 	log.Printf("  Availability Zone: %s", *availabilityZone)

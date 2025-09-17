@@ -18,8 +18,9 @@
 
 set -e
 # Default values
-GRPC_PORT=${GRPC_PORT:-18080}
-GOSSIP_PORT=${GOSSIP_PORT:-17946}
+# Support both old and new naming conventions
+SERVICE_PORT=${SERVICE_PORT:-${SERVICE_PORT:-18080}}   # Service port (for client connections)
+GOSSIP_PORT=${GOSSIP_PORT:-${PORT:-17946}}       # Gossip port (for cluster communication)
 NODE_NAME=${NODE_NAME:-$(hostname)}
 DATA_DIR=${DATA_DIR:-/woodpecker/data}
 CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
@@ -38,7 +39,7 @@ ADVERTISE_PORT=${ADVERTISE_PORT:-$GOSSIP_PORT}
 
 # Service advertise configuration (for client connections)
 ADVERTISE_SERVICE_ADDR=${ADVERTISE_SERVICE_ADDR:-""}
-ADVERTISE_SERVICE_PORT=${ADVERTISE_SERVICE_PORT:-$GRPC_PORT}
+ADVERTISE_SERVICE_PORT=${ADVERTISE_SERVICE_PORT:-$SERVICE_PORT}
 
 # Note: IP auto-detection is now primarily handled by the Go application
 # using the common/net package, but we keep this for backward compatibility
@@ -91,8 +92,8 @@ if [ -z "$NODE_NAME" ]; then
     exit 1
 fi
 
-if [ "$GRPC_PORT" -eq "$GOSSIP_PORT" ]; then
-    log "❌ gRPC port and Gossip port cannot be the same: $GRPC_PORT"
+if [ "$SERVICE_PORT" -eq "$GOSSIP_PORT" ]; then
+    log "❌ service port and Gossip port cannot be the same: $SERVICE_PORT"
     exit 1
 fi
 
@@ -154,7 +155,7 @@ fi
 
 log "Starting Woodpecker Server:"
 log "  Node Name: $NODE_NAME"
-log "  gRPC Port: $GRPC_PORT"
+log "  Service Port: $SERVICE_PORT"
 log "  Gossip Port: $GOSSIP_PORT"
 log "  Resource Group: $RESOURCE_GROUP"
 log "  Availability Zone: $AVAILABILITY_ZONE"
@@ -183,7 +184,7 @@ mkdir -p "$DATA_DIR"
 CMD_ARGS=(
     "/woodpecker/bin/woodpecker"
     "server"
-    "--grpc-port" "$GRPC_PORT"
+    "--service-port" "$SERVICE_PORT"
     "--gossip-port" "$GOSSIP_PORT"
     "--node-name" "$NODE_NAME"
     "--data-dir" "$DATA_DIR"
