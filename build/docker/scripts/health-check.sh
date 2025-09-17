@@ -17,8 +17,9 @@
 
 
 # Default values
-GRPC_PORT=${GRPC_PORT:-18080}
-GOSSIP_PORT=${GOSSIP_PORT:-17946}
+# Support both old and new naming conventions
+SERVICE_PORT=${SERVICE_PORT:-${SERVICE_PORT:-18080}}   # Service port (for client connections)
+GOSSIP_PORT=${GOSSIP_PORT:-${PORT:-17946}}       # Gossip port (for cluster communication)
 
 # Check if Woodpecker process is running
 if ! pgrep -f "woodpecker" > /dev/null; then
@@ -26,9 +27,9 @@ if ! pgrep -f "woodpecker" > /dev/null; then
     exit 1
 fi
 
-# Check gRPC port (service port)
-if ! ss -tuln | grep -q ":$GRPC_PORT "; then
-    echo "❌ gRPC port $GRPC_PORT not available"
+# Check service port (gRPC port)
+if ! ss -tuln | grep -q ":$SERVICE_PORT "; then
+    echo "❌ service port $SERVICE_PORT not available"
     exit 1
 fi
 
