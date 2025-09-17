@@ -645,16 +645,23 @@ func (f *MinioFileWriter) ack() {
 				// after many retry flush fail, mark storage not writable
 				firstUploadErrTask = task
 				f.storageWritable.Store(false)
+				logger.Ctx(context.TODO()).Info("flush error encountered due to write block to storage failed after retries, trigger fast flush fail",
+					zap.String("block", task.flushFuture.Value().block.BlockKey),
+					zap.Int64("firstEntryID", task.flushFuture.Value().block.FirstEntryID),
+					zap.Int64("lastEntryID", task.flushFuture.Value().block.LastEntryID),
+					zap.String("firstFlushErrBlock", firstUploadErrTask.flushFuture.Value().block.BlockKey),
+					zap.Error(task.flushFuture.Err()))
 			}
 			if werr.ErrSegmentFenced.Is(task.flushFuture.Err()) {
 				// when put object fail cause by fence object exists, mark storage not writable
 				f.fenced.Store(true)
+				logger.Ctx(context.TODO()).Info("flush error encountered due to fenced block found, trigger fast flush fail",
+					zap.String("block", task.flushFuture.Value().block.BlockKey),
+					zap.Int64("firstEntryID", task.flushFuture.Value().block.FirstEntryID),
+					zap.Int64("lastEntryID", task.flushFuture.Value().block.LastEntryID),
+					zap.String("firstFlushErrBlock", firstUploadErrTask.flushFuture.Value().block.BlockKey),
+					zap.Error(task.flushFuture.Err()))
 			}
-			logger.Ctx(context.TODO()).Info("flush error encountered, trigger fast flush fail",
-				zap.String("block", task.flushFuture.Value().block.BlockKey),
-				zap.Int64("firstEntryID", task.flushFuture.Value().block.FirstEntryID),
-				zap.Int64("lastEntryID", task.flushFuture.Value().block.LastEntryID),
-				zap.String("firstFlushErrBlock", firstUploadErrTask.flushFuture.Value().block.BlockKey))
 			f.fastFlushFailUnsafe(context.TODO(), task.flushData, task.flushFuture.Value().err)
 		}
 		f.flushingBufferSize.Add(-task.flushFuture.Value().block.Size)
@@ -694,7 +701,7 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	}
 	if !f.storageWritable.Load() {
 		// quick fail and return a Storage Err, which indicate that it is also not retriable
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable due to flush errors, search keyword 'flush error encountered' for detail", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return -1, werr.ErrStorageNotWritable
 	}
 
@@ -930,11 +937,11 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 	sp.AddEvent("wait rollBuff", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	f.mu.Unlock()
 	if err != nil {
-		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Warn("Sync failed: unable to read entries range data", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return err
 	}
 	if len(toFlushData) == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Debug("Sync skipped: no data to flush", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return nil
 	}
 
@@ -982,19 +989,19 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	// check if there are any entries to be written
 	entryCount := len(currentBuffer.Entries)
 	if entryCount == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Debug("Sync skipped: buffer is empty", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
 	}
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	// get flush point to flush
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		logger.Ctx(ctx).Debug("Call Sync, but empty, skip ... ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Debug("Sync skipped: buffer is empty", zap.String("segmentFileKey", f.segmentFileKey), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return currentBuffer, make([]*cache.BufferEntry, 0), -1, nil
 	}
 	// get flush data
 	toFlushData, err := currentBuffer.ReadEntriesRange(currentBuffer.FirstEntryId, expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesRangeData failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
+		logger.Ctx(ctx).Warn("Buffer rollback failed: unable to read entries range data", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		return currentBuffer, nil, -1, err
 	}
 	toFlushDataFirstEntryId := currentBuffer.FirstEntryId
@@ -1002,7 +1009,7 @@ func (f *MinioFileWriter) rollBufferUnsafe(ctx context.Context) (*cache.Sequenti
 	// roll new buffer with rest data
 	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Call Sync, but ReadEntriesToLastData failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err))
+		logger.Ctx(ctx).Warn("Buffer rollback failed: unable to read remaining entries", zap.String("segmentFileKey", f.segmentFileKey), zap.Error(err))
 		return currentBuffer, nil, -1, err
 	}
 	restDataFirstEntryId := expectedNextEntryId
@@ -1097,6 +1104,9 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 					if putErr != nil && werr.ErrObjectAlreadyExists.Is(putErr) {
 						// idempotent flush success
 						return nil
+					}
+					if putErr != nil {
+						logger.Ctx(ctx).Warn("flush one block failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Error(putErr))
 					}
 					return putErr
 				},
@@ -1234,11 +1244,11 @@ func (f *MinioFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 }
 
 func (f *MinioFileWriter) quickSyncFailUnsafe(ctx context.Context, resultErr error) error {
-	logger.Ctx(ctx).Warn("Call Sync, but storage is not writable, quick fail all append requests", zap.String("segmentFileKey", f.segmentFileKey))
+	logger.Ctx(ctx).Warn("Sync failed: segment storage not writable, failing all pending requests", zap.String("segmentFileKey", f.segmentFileKey))
 	currentBuffer := f.buffer.Load()
 	currentBuffer.NotifyAllPendingEntries(ctx, -1, resultErr)
 	currentBuffer.Reset(ctx)
-	return errors.New("storage is not writable")
+	return resultErr
 }
 
 func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {

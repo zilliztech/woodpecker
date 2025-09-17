@@ -359,12 +359,6 @@ func (w *LocalFileWriter) Sync(ctx context.Context) error {
 	// Sync if there's any data to sync
 	needSync := bufferSize > 0 || hasEntries
 
-	logger.Ctx(ctx).Debug("Sync evaluation",
-		zap.Bool("needSync", needSync),
-		zap.Bool("hasEntries", hasEntries),
-		zap.Int64("bufferSize", bufferSize),
-		zap.Int64("entryCount", entryCount))
-
 	if needSync {
 		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
 		// Add global writer lock to prevent race conditions with WriteDataAsync

@@ -143,7 +143,11 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 	// Update metrics based on result
 	if result.Err != nil {
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("write log entry failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(result.Err))
+		if werr.ErrSegmentHandleSegmentRolling.Is(result.Err) {
+			logger.Ctx(ctx).Info("write to rolling segment rejected, retry later", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.String("detail", result.Err.Error()))
+		} else {
+			logger.Ctx(ctx).Warn("write log entry failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(result.Err))
+		}
 	} else {
 		metrics.WpLogWriterBytesWritten.WithLabelValues(l.logIdStr).Add(float64(len(bytes)))
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "success").Observe(float64(time.Since(start).Milliseconds()))

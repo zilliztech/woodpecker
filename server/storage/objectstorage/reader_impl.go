@@ -447,7 +447,7 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 			logger.Ctx(ctx).Debug("no more entries to read",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("startEntryId", opt.StartEntryID))
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			return nil, werr.ErrFileReaderEndOfFile
 		}
 	}
 
@@ -632,10 +632,10 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		if !hasDataReadError {
 			// only if no data read error, determine if it is EOF
 			if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
-				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+				return nil, werr.ErrFileReaderEndOfFile
 			}
 			if f.footer != nil || f.isFooterExists(ctx) {
-				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+				return nil, werr.ErrFileReaderEndOfFile
 			}
 		}
 		// otherwise return EntryNotFound to let reader caller retry later
