@@ -56,7 +56,6 @@ func main() {
 			NodeID:        *nodeID,
 			ResourceGroup: *resourceGroup,
 			AZ:            *az,
-			BindAddr:      *bindAddr,
 			BindPort:      *bindPort,
 			ServicePort:   *servicePort,
 			Tags:          map[string]string{"env": "production"},

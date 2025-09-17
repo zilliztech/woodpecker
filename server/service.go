@@ -38,58 +38,35 @@ import (
 )
 
 type Server struct {
-	serverNode *membership.ServerNode
-	bindPort   int // bind port for gossip
-	seeds      []string
-
-	// Advertise configuration for Docker bridge networking
-	advertiseAddr       string
-	advertiseGrpcPort   int
-	advertiseGossipPort int
-
-	// Node metadata
-	resourceGroup string
-	az            string
-
-	logStore    LogStore
-	servicePort int // service port for business
-	grpcWG      sync.WaitGroup
-	grpcErrChan chan error
-	grpcServer  *grpc.Server
-	listener    net.Listener
+	serverNode   *membership.ServerNode
+	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
+	seeds        []string                 // Seeds for cluster joining
+	logStore     LogStore
+	grpcWG       sync.WaitGroup
+	grpcErrChan  chan error
+	grpcServer   *grpc.Server
+	listener     net.Listener
 
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// Config holds server configuration including advertise options
-type Config struct {
-	BindPort            int
-	ServicePort         int
-	AdvertiseAddr       string
-	AdvertiseGrpcPort   int
-	AdvertiseGossipPort int
-	SeedNodes           []string
-	// Node metadata
-	ResourceGroup string
-	AZ            string
-}
-
 // NewServer creates a new server instance with same bind/advertise ip/port
 func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
-	return NewServerWithConfig(ctx, configuration, &Config{
-		BindPort:            bindPort,
-		ServicePort:         servicePort,
-		SeedNodes:           seeds,
-		AdvertiseGrpcPort:   servicePort,
-		AdvertiseGossipPort: bindPort,
-		ResourceGroup:       "default", // Default resource group
-		AZ:                  "default", // Default availability zone
-	})
+	return NewServerWithConfig(ctx, configuration, &membership.ServerConfig{
+		NodeID:               "", // Will be set in Prepare()
+		BindPort:             bindPort,
+		ServicePort:          servicePort,
+		AdvertisePort:        bindPort,    // Use same port for gossip advertise
+		AdvertiseServicePort: servicePort, // Use same port for service advertise
+		ResourceGroup:        "default",   // Default resource group
+		AZ:                   "default",   // Default availability zone
+		Tags:                 map[string]string{"role": "logstore"},
+	}, seeds)
 }
 
 // NewServerWithConfig creates a new server instance with custom configuration
-func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *Config) *Server {
+func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, seeds []string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	var minioCli minio.MinioHandler
 	var err error
@@ -103,38 +80,41 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		ctx:         ctx,
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
-		bindPort:    serverConfig.BindPort,
-		seeds:       serverConfig.SeedNodes,
-		servicePort: serverConfig.ServicePort,
-
-		// advertise addr
-		advertiseAddr:       serverConfig.AdvertiseAddr,
-		advertiseGrpcPort:   serverConfig.AdvertiseGrpcPort,
-		advertiseGossipPort: serverConfig.AdvertiseGossipPort,
-
-		// Store node metadata for membership
-		resourceGroup: serverConfig.ResourceGroup,
-		az:            serverConfig.AZ,
 	}
 	s.logStore = NewLogStore(ctx, configuration, minioCli)
+
+	// Store the server config and seeds for later use in Prepare()
+	s.serverConfig = serverConfig
+	s.seeds = seeds
 	return s
 }
 
 func (s *Server) Prepare() error {
 	// start listener for business service
-	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", s.servicePort))
+	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", s.serverConfig.ServicePort))
 	if err != nil {
 		return err
 	}
 	s.listener = l
 	s.logStore.SetAddress(s.listener.Addr().String())
 
-	// start server node for gossip
-	node, _, err := startMembershipServerNode(context.TODO(), l.Addr().String(), s.resourceGroup, s.az, s.bindPort, s.servicePort, s.seeds, s.advertiseAddr, s.advertiseGossipPort, s.advertiseGrpcPort)
+	// Set the NodeID from the listener address if not already set
+	if s.serverConfig.NodeID == "" {
+		s.serverConfig.NodeID = l.Addr().String()
+	}
+
+	// Create server node directly using the stored config
+	node, err := membership.NewServerNode(s.serverConfig)
 	if err != nil {
 		return err
 	}
 	s.serverNode = node
+
+	// Start async join if seeds are provided
+	if len(s.seeds) > 0 {
+		go asyncJoinSeeds(context.TODO(), node, s.seeds, s.serverConfig.NodeID, s.serverNode.GetMeta().Endpoint)
+	}
+
 	return nil
 }
 
@@ -315,16 +295,6 @@ func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRe
 	return &proto.CleanSegmentResponse{Status: werr.Success()}, nil
 }
 
-// GetServiceAddrPort use for test only
-func (s *Server) GetServiceAddrPort(ctx context.Context) string {
-	return fmt.Sprintf("%s:%d", s.serverNode.GetMemberlist().LocalNode().Addr.String(), s.servicePort)
-}
-
-// GetAdvertiseAddrPort Use for test only
-func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
-	return fmt.Sprintf("%s:%d", s.serverNode.GetMemberlist().LocalNode().Addr.String(), int(s.serverNode.GetMemberlist().LocalNode().Port))
-}
-
 func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.UpdateLastAddConfirmedRequest) (*proto.UpdateLastAddConfirmedResponse, error) {
 	if err := s.logStore.UpdateLastAddConfirmed(ctx, request.LogId, request.SegmentId, request.LastAddConfirmed); err != nil {
 		return &proto.UpdateLastAddConfirmedResponse{Status: werr.Status(err)}, nil
@@ -386,34 +356,21 @@ func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequ
 	}, nil
 }
 
-func startMembershipServerNode(ctx context.Context, name, rg, az string, bindPort int, servicePort int, seeds []string, advertiseAddr string, advertiseGossipPort, advertiseGrpcPort int) (*membership.ServerNode, string, error) {
-	cfg := &membership.ServerConfig{
-		NodeID:              name,
-		ResourceGroup:       rg,
-		AZ:                  az,
-		BindAddr:            "0.0.0.0",
-		BindPort:            bindPort,
-		ServicePort:         servicePort,
-		AdvertiseAddr:       advertiseAddr,
-		AdvertiseGossipPort: advertiseGossipPort,
-		AdvertiseGrpcPort:   advertiseGrpcPort,
-		Tags:                map[string]string{"role": "demo"},
-	}
-	n, err := membership.NewServerNode(cfg)
-	if err != nil {
-		logger.Ctx(ctx).Warn("create server failed", zap.Error(err))
-		return nil, "", err
-	}
+// GetServiceAdvertiseAddrPort use for test only
+func (s *Server) GetServiceAdvertiseAddrPort(ctx context.Context) string {
+	// Get the actual service endpoint from the node metadata (which contains the resolved address)
+	return s.serverNode.GetMeta().Endpoint
+}
 
-	// Return advertise address (ip:port)
-	adv := fmt.Sprintf("%s:%d", n.GetMemberlist().LocalNode().Addr.String(), int(n.GetMemberlist().LocalNode().Port))
-	logger.Ctx(ctx).Info("NODE_READY", zap.String("name", name), zap.String("advertise", adv))
-
-	// Start async join in background if seeds are provided [[memory:3527742]]
-	if len(seeds) > 0 {
-		go asyncJoinSeeds(ctx, n, seeds, name, adv)
-	}
-	return n, adv, nil
+// GetAdvertiseAddrPort Use for test only
+func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
+	// Get the actual gossip advertise address from the memberlist configuration
+	ml := s.serverNode.GetMemberlist()
+	config := ml.LocalNode()
+	// Use the actual advertise address from memberlist, fall back to bind address if not set
+	addr := config.Addr
+	port := config.Port
+	return fmt.Sprintf("%s:%d", addr, port)
 }
 
 // asyncJoinSeeds attempts to join seed nodes with retry mechanism in its own method [[memory:3527742]]
