@@ -1100,7 +1100,9 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 						// idempotent flush success
 						return nil
 					}
-					logger.Ctx(ctx).Warn("flush one block failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Error(putErr))
+					if putErr != nil {
+						logger.Ctx(ctx).Warn("flush one block failed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Error(putErr))
+					}
 					return putErr
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
