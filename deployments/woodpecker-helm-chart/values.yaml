@@ -1,0 +1,162 @@
+# Default values for woodpecker
+# This is a YAML-formatted file.
+global:
+  security:
+    allowInsecureImages: true
+
+# Woodpecker configuration
+woodpecker:
+  image:
+    repository: harbor.milvus.io/milvus/woodpecker
+    tag: x86_latest
+    pullPolicy: Always
+   
+  cluster:
+    name: woodpecker-cluster
+  
+  # StatefulSet replica count
+  replicaCount: 3
+  
+  # Storage configuration
+  storage:
+    type: service
+    bucket: woodpecker-cluster-data
+  
+  # Logging
+  logLevel: info
+  
+  # Dependencies
+  waitForDeps: true
+  depTimeout: 120
+  
+  # Resource limits
+  resources:
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+    requests:
+      memory: 512Mi
+      cpu: 500m
+
+# Service configuration
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Persistence for woodpecker data and logs
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  
+  logs:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 5Gi
+
+# etcd dependency configuration
+etcd:
+  enabled: true
+  image:
+    registry: harbor.milvus.io
+    repository: devops/etcd
+    tag: 3.6.4-debian-12-r3
+    pullPolicy: Always
+  auth:
+    rbac:
+      create: false
+    token:
+      type: simple
+  autoCompactionMode: revision
+  autoCompactionRetention: "1000"
+  quotaBackendBytes: 4294967296
+  snapshotCount: 50000
+  extraEnvVars:
+    - name: ETCD_EXPERIMENTAL_ENABLE_DISTRIBUTED_TRACING
+      value: "true"
+    - name: ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_SAMPLING_RATE
+      value: "1000000"
+    - name: ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_ADDRESS
+      value: "jaeger:4317"
+    - name: ETCD_EXPERIMENTAL_DISTRIBUTED_TRACING_SERVICE_NAME
+      value: "etcd"
+  service:
+    ports:
+      client: 2379
+  persistence:
+    enabled: true
+    size: 8Gi
+  preUpgradeJob:
+    enabled: false
+
+# MinIO dependency configuration  
+minio:
+  enabled: true
+  console:
+    enabled: false
+  image:
+    registry: harbor.milvus.io
+    repository: devops/minio
+    tag: 2025.7.23-debian-12-r3
+    pullPolicy: Always
+  auth:
+    rootUser: minioadmin
+    rootPassword: minioadmin
+  defaultBuckets: "woodpecker-cluster-data"
+  extraEnvVars:
+    - name: MINIO_TRACING_ENABLED
+      value: "1"
+    - name: MINIO_TRACING_ENDPOINT
+      value: "http://jaeger:4318"
+  service:
+    ports:
+      api: 9000
+      console: 9001
+  persistence:
+    enabled: true
+    size: 20Gi
+
+# Jaeger dependency configuration
+jaeger:
+  enabled: true
+  provisionDataStore:
+    cassandra: false
+    elasticsearch: false
+  storage:
+    type: memory
+  allInOne:
+    enabled: true
+    image:
+      repository: harbor.milvus.io/devops/jaegertracing/all-in-one
+      tag: 1.53.0 
+      pullPolicy: Always
+    extraEnv:
+      - name: SPAN_STORAGE_TYPE
+        value: memory
+      - name: LOG_LEVEL
+        value: info
+      - name: COLLECTOR_OTLP_ENABLED
+        value: "true"
+    args:
+      - --collector.otlp.grpc.host-port=0.0.0.0:4317
+      - --collector.otlp.http.host-port=0.0.0.0:4318
+      - --log-level=info
+  agent:
+    enabled: false
+  collector:
+    enabled: false
+  query:
+    enabled: false
+
+
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Network policy
+networkPolicy:
+  enabled: false

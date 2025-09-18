@@ -1,0 +1,51 @@
+# Headless service for StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "woodpecker.fullname" . }}-headless
+  labels:
+    {{- include "woodpecker.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - port: 18080
+      name: grpc
+      protocol: TCP
+    - port: 17946
+      name: gossip-tcp
+      protocol: TCP
+    - port: 17946
+      name: gossip-udp
+      protocol: UDP
+  selector:
+    {{- include "woodpecker.selectorLabels" . | nindent 4 }}
+
+---
+# LoadBalancer/NodePort service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "woodpecker.fullname" . }}
+  labels:
+    {{- include "woodpecker.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: 18080
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 17946
+      targetPort: gossip-tcp
+      protocol: TCP
+      name: gossip-tcp
+    - port: 17946
+      targetPort: gossip-udp
+      protocol: UDP
+      name: gossip-udp
+  selector:
+    {{- include "woodpecker.selectorLabels" . | nindent 4 }}

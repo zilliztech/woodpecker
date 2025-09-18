@@ -1,0 +1,12 @@
+dependencies:
+- name: etcd
+  repository: https://charts.bitnami.com/bitnami
+  version: 12.0.18
+- name: minio
+  repository: https://charts.bitnami.com/bitnami
+  version: 17.0.21
+- name: jaeger
+  repository: https://jaegertracing.github.io/helm-charts
+  version: 3.4.1
+digest: sha256:81648cd434525927f370d382a675bacc6d8f9a0ffc17b350d64979be2d30ea53
+generated: "2025-09-11T10:52:31.830623+08:00"
