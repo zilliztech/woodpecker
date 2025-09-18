@@ -17,8 +17,8 @@
 package config
 
 import (
+	"fmt"
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,10 +46,60 @@ type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
+	Quorum               QuorumConfig               `yaml:"quorum"`
 }
 
 type AuditorConfig struct {
 	MaxInterval int `yaml:"maxInterval"`
+}
+
+// QuorumBufferPool stores the quorum buffer pool configuration.
+type QuorumBufferPool struct {
+	Name  string   `yaml:"name"`
+	Seeds []string `yaml:"seeds"`
+}
+
+// CustomPlacement stores the custom node placement for a specific replica.
+type CustomPlacement struct {
+	Name          string `yaml:"name"`
+	Region        string `yaml:"region"`
+	Az            string `yaml:"az"`
+	ResourceGroup string `yaml:"resourceGroup"`
+}
+
+// QuorumSelectStrategy stores the quorum selection strategy configuration.
+type QuorumSelectStrategy struct {
+	AffinityMode    string            `yaml:"affinityMode"`
+	Replicas        int               `yaml:"replicas"`
+	Strategy        string            `yaml:"strategy"`
+	CustomPlacement []CustomPlacement `yaml:"customPlacement"`
+}
+
+// QuorumConfig stores the advanced quorum configuration.
+type QuorumConfig struct {
+	BufferPools    []QuorumBufferPool   `yaml:"quorumBufferPools"`
+	SelectStrategy QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
+}
+
+// GetEnsembleSize returns the ensemble size.
+func (q *QuorumConfig) GetEnsembleSize() int {
+	if q.SelectStrategy.Replicas == 3 {
+		return 3
+	}
+	if q.SelectStrategy.Replicas == 5 {
+		return 5
+	}
+	return 3
+}
+
+// GetWriteQuorumSize returns the write quorum size.
+func (q *QuorumConfig) GetWriteQuorumSize() int {
+	return q.GetEnsembleSize()
+}
+
+// GetAckQuorumSize returns the ack quorum size.
+func (q *QuorumConfig) GetAckQuorumSize() int {
+	return (q.GetWriteQuorumSize() / 2) + 1
 }
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
@@ -147,7 +197,7 @@ type EtcdLogConfig struct {
 
 // EtcdConfig stores the ETCD configuration.
 type EtcdConfig struct {
-	Endpoints      string         `yaml:"endpoints"`
+	Endpoints      []string       `yaml:"endpoints"`
 	RootPath       string         `yaml:"rootPath"`
 	MetaSubPath    string         `yaml:"metaSubPath"`
 	KvSubPath      string         `yaml:"kvSubPath"`
@@ -160,10 +210,7 @@ type EtcdConfig struct {
 }
 
 func (etcdCfg *EtcdConfig) GetEndpoints() []string {
-	if len(etcdCfg.Endpoints) == 0 {
-		return []string{}
-	}
-	return strings.Split(etcdCfg.Endpoints, ",")
+	return etcdCfg.Endpoints
 }
 
 // MinioSslConfig stores the MinIO SSL configuration.
@@ -265,7 +312,281 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 			return nil, err
 		}
 	}
+
+	err := config.Validate()
+	if err != nil {
+		return nil, err
+	}
 	return config, nil
+}
+
+func (c *Configuration) Validate() error {
+	// Validate Woodpecker configuration
+	if err := c.validateWoodpeckerConfig(); err != nil {
+		return fmt.Errorf("woodpecker config validation failed: %w", err)
+	}
+
+	// Validate other configurations if needed
+	// TODO: Add validation for dependent configurations, such as trace config, etcd config, minio config, etc.
+
+	return nil
+}
+
+func (c *Configuration) validateWoodpeckerConfig() error {
+	// Validate Meta configuration
+	if err := c.validateMetaConfig(); err != nil {
+		return fmt.Errorf("meta config validation failed: %w", err)
+	}
+
+	// Validate Client configuration
+	if err := c.validateClientConfig(); err != nil {
+		return fmt.Errorf("client config validation failed: %w", err)
+	}
+
+	// Validate Logstore configuration
+	if err := c.validateLogstoreConfig(); err != nil {
+		return fmt.Errorf("logstore config validation failed: %w", err)
+	}
+
+	// Validate Storage configuration
+	if err := c.validateStorageConfig(); err != nil {
+		return fmt.Errorf("storage config validation failed: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateMetaConfig() error {
+	meta := &c.Woodpecker.Meta
+
+	// Validate meta type
+	validMetaTypes := map[string]bool{"etcd": true}
+	if !validMetaTypes[meta.Type] {
+		return fmt.Errorf("invalid meta type '%s', must be 'etcd'", meta.Type)
+	}
+
+	// Validate prefix
+	if len(meta.Prefix) == 0 {
+		return fmt.Errorf("meta prefix cannot be empty")
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateClientConfig() error {
+	client := &c.Woodpecker.Client
+
+	// Validate SegmentAppend configuration
+	if client.SegmentAppend.QueueSize <= 0 {
+		return fmt.Errorf("segment append queue size must be positive, got %d", client.SegmentAppend.QueueSize)
+	}
+	if client.SegmentAppend.MaxRetries < 0 {
+		return fmt.Errorf("segment append max retries cannot be negative, got %d", client.SegmentAppend.MaxRetries)
+	}
+
+	// Validate SegmentRollingPolicy configuration
+	if client.SegmentRollingPolicy.MaxSize <= 0 {
+		return fmt.Errorf("segment rolling policy max size must be positive, got %d", client.SegmentRollingPolicy.MaxSize)
+	}
+	if client.SegmentRollingPolicy.MaxInterval <= 0 {
+		return fmt.Errorf("segment rolling policy max interval must be positive, got %d", client.SegmentRollingPolicy.MaxInterval)
+	}
+	if client.SegmentRollingPolicy.MaxBlocks <= 0 {
+		return fmt.Errorf("segment rolling policy max blocks must be positive, got %d", client.SegmentRollingPolicy.MaxBlocks)
+	}
+
+	// Validate Auditor configuration
+	if client.Auditor.MaxInterval <= 0 {
+		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval)
+	}
+
+	// Validate Quorum configuration only when storage type is "service"
+	if c.Woodpecker.Storage.IsStorageService() {
+		if err := c.validateQuorumConfig(); err != nil {
+			return fmt.Errorf("quorum config validation failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateQuorumConfig() error {
+	q := &c.Woodpecker.Client.Quorum
+
+	// Basic quorum size validation
+	ensembleSize := q.GetEnsembleSize()
+	writeQuorumSize := q.GetWriteQuorumSize()
+	ackQuorumSize := q.GetAckQuorumSize()
+
+	if ensembleSize <= 0 {
+		return fmt.Errorf("ensemble size must be positive, got %d", ensembleSize)
+	}
+	if writeQuorumSize <= 0 {
+		return fmt.Errorf("write quorum size must be positive, got %d", writeQuorumSize)
+	}
+	if ackQuorumSize <= 0 {
+		return fmt.Errorf("ack quorum size must be positive, got %d", ackQuorumSize)
+	}
+	if writeQuorumSize > ensembleSize {
+		return fmt.Errorf("write quorum size (%d) cannot be larger than ensemble size (%d)", writeQuorumSize, ensembleSize)
+	}
+	if ackQuorumSize > writeQuorumSize {
+		return fmt.Errorf("ack quorum size (%d) cannot be larger than write quorum size (%d)", ackQuorumSize, writeQuorumSize)
+	}
+
+	// Validate affinity mode (allow empty for backward compatibility)
+	validAffinityModes := map[string]bool{"soft": true, "hard": true, "": true}
+	if !validAffinityModes[q.SelectStrategy.AffinityMode] {
+		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode)
+	}
+
+	// Validate strategy (allow unknown strategies for backward compatibility - they'll default to random)
+	validStrategies := map[string]bool{
+		"single-az-single-rg": true,
+		"single-az-multi-rg":  true,
+		"multi-az-single-rg":  true,
+		"multi-az-multi-rg":   true,
+		"cross-region":        true,
+		"custom":              true,
+		"random":              true,
+		"":                    true, // Allow empty for backward compatibility
+	}
+	if !validStrategies[q.SelectStrategy.Strategy] {
+		// Log warning but don't fail for unknown strategies (backward compatibility)
+		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy)
+	}
+
+	// Validate BufferPools
+	if len(q.BufferPools) == 0 {
+		return fmt.Errorf("at least one buffer pool must be configured")
+	}
+
+	for i, pool := range q.BufferPools {
+		if len(pool.Name) == 0 {
+			return fmt.Errorf("buffer pool %d name cannot be empty", i)
+		}
+		if len(pool.Seeds) == 0 {
+			return fmt.Errorf("buffer pool '%s' must have at least one seed", pool.Name)
+		}
+		for j, seed := range pool.Seeds {
+			if len(seed) == 0 {
+				return fmt.Errorf("buffer pool '%s' seed %d cannot be empty", pool.Name, j)
+			}
+		}
+	}
+
+	// Validate custom placement if strategy is custom
+	if q.SelectStrategy.Strategy == "custom" {
+		if len(q.SelectStrategy.CustomPlacement) == 0 {
+			return fmt.Errorf("custom strategy requires at least one custom placement rule")
+		}
+		if len(q.SelectStrategy.CustomPlacement) != ensembleSize {
+			return fmt.Errorf("custom placement rules count (%d) must equal ensemble size (%d)",
+				len(q.SelectStrategy.CustomPlacement), ensembleSize)
+		}
+
+		// Validate each custom placement
+		for i, placement := range q.SelectStrategy.CustomPlacement {
+			if len(placement.Region) == 0 {
+				return fmt.Errorf("custom placement rule %d region cannot be empty", i)
+			}
+			if len(placement.Az) == 0 {
+				return fmt.Errorf("custom placement rule %d az cannot be empty", i)
+			}
+			if len(placement.ResourceGroup) == 0 {
+				return fmt.Errorf("custom placement rule %d resource group cannot be empty", i)
+			}
+
+			// Verify that the region exists in buffer pools
+			found := false
+			for _, pool := range q.BufferPools {
+				if pool.Name == placement.Region {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("custom placement rule %d references unknown region '%s'", i, placement.Region)
+			}
+		}
+	}
+
+	// Validate cross-region strategy requirements
+	if q.SelectStrategy.Strategy == "cross-region" {
+		if len(q.BufferPools) < 2 {
+			return fmt.Errorf("cross-region strategy requires at least 2 buffer pools, got %d", len(q.BufferPools))
+		}
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateLogstoreConfig() error {
+	logstore := &c.Woodpecker.Logstore
+
+	// Validate SegmentSyncPolicy
+	if logstore.SegmentSyncPolicy.MaxInterval <= 0 {
+		return fmt.Errorf("segment sync policy max interval must be positive, got %d", logstore.SegmentSyncPolicy.MaxInterval)
+	}
+	if logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage <= 0 {
+		return fmt.Errorf("segment sync policy max interval for local storage must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
+	}
+	if logstore.SegmentSyncPolicy.MaxEntries <= 0 {
+		return fmt.Errorf("segment sync policy max entries must be positive, got %d", logstore.SegmentSyncPolicy.MaxEntries)
+	}
+	if logstore.SegmentSyncPolicy.MaxBytes <= 0 {
+		return fmt.Errorf("segment sync policy max bytes must be positive, got %d", logstore.SegmentSyncPolicy.MaxBytes)
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushRetries < 0 {
+		return fmt.Errorf("segment sync policy max flush retries cannot be negative, got %d", logstore.SegmentSyncPolicy.MaxFlushRetries)
+	}
+	if logstore.SegmentSyncPolicy.RetryInterval <= 0 {
+		return fmt.Errorf("segment sync policy retry interval must be positive, got %d", logstore.SegmentSyncPolicy.RetryInterval)
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushSize <= 0 {
+		return fmt.Errorf("segment sync policy max flush size must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushSize)
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushThreads <= 0 {
+		return fmt.Errorf("segment sync policy max flush threads must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushThreads)
+	}
+
+	// Validate SegmentCompactionPolicy
+	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
+		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes)
+	}
+	if logstore.SegmentCompactionPolicy.MaxParallelUploads <= 0 {
+		return fmt.Errorf("segment compaction policy max parallel uploads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelUploads)
+	}
+	if logstore.SegmentCompactionPolicy.MaxParallelReads <= 0 {
+		return fmt.Errorf("segment compaction policy max parallel reads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelReads)
+	}
+
+	// Validate SegmentReadPolicy
+	if logstore.SegmentReadPolicy.MaxBatchSize <= 0 {
+		return fmt.Errorf("segment read policy max batch size must be positive, got %d", logstore.SegmentReadPolicy.MaxBatchSize)
+	}
+	if logstore.SegmentReadPolicy.MaxFetchThreads <= 0 {
+		return fmt.Errorf("segment read policy max fetch threads must be positive, got %d", logstore.SegmentReadPolicy.MaxFetchThreads)
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateStorageConfig() error {
+	storage := &c.Woodpecker.Storage
+
+	// Validate storage type
+	validStorageTypes := map[string]bool{"local": true, "minio": true, "default": true, "service": true, "": true}
+	if !validStorageTypes[storage.Type] {
+		return fmt.Errorf("invalid storage type '%s', must be one of: local, minio, default, service", storage.Type)
+	}
+
+	// Validate root path
+	if len(storage.RootPath) == 0 {
+		return fmt.Errorf("storage root path cannot be empty")
+	}
+
+	return nil
 }
 
 func getDefaultWoodpeckerConfig() WoodpeckerConfig {
@@ -286,6 +607,20 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 			Auditor: AuditorConfig{
 				MaxInterval: 5,
+			},
+			Quorum: QuorumConfig{
+				BufferPools: []QuorumBufferPool{
+					{
+						Name:  "default-pool",
+						Seeds: []string{},
+					},
+				},
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode:    "soft",
+					Replicas:        3,
+					Strategy:        "random",
+					CustomPlacement: []CustomPlacement{},
+				},
 			},
 		},
 		Logstore: LogstoreConfig{
@@ -348,7 +683,7 @@ func getDefaultTraceConfig() TraceConfig {
 
 func getDefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		Endpoints:      "localhost:2379",
+		Endpoints:      []string{"localhost:2379"},
 		RootPath:       "woodpecker",
 		MetaSubPath:    "meta",
 		KvSubPath:      "kv",

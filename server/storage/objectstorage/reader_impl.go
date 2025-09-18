@@ -160,24 +160,19 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 		zap.Int64("footerBlkSize", statInfo.Size),
 		zap.Int("footerBlkDataLength", len(footerBlkData)))
 
-	// Parse footer record from the end of the file
-	if len(footerBlkData) < codec.RecordHeaderSize+codec.FooterRecordSize {
+	// Parse footer record from the end of the file using compatibility parsing
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	if len(footerBlkData) < maxFooterSize {
 		return fmt.Errorf("footer.blk too small: %d bytes", len(footerBlkData))
 	}
 
-	footerRecordStart := len(footerBlkData) - codec.RecordHeaderSize - codec.FooterRecordSize
-	footerRecordData := footerBlkData[footerRecordStart:]
+	// Use the last maxFooterSize bytes for compatibility parsing
+	footerData := footerBlkData[len(footerBlkData)-maxFooterSize:]
 
-	footerRecord, err := codec.DecodeRecord(footerRecordData)
+	fr, err := codec.ParseFooterFromBytes(footerData)
 	if err != nil {
-		return fmt.Errorf("failed to decode footer record: %w", err)
+		return fmt.Errorf("failed to parse footer record: %w", err)
 	}
-
-	if footerRecord.Type() != codec.FooterRecordType {
-		return fmt.Errorf("expected footer record, got type %d", footerRecord.Type())
-	}
-
-	fr := footerRecord.(*codec.FooterRecord)
 	f.footer = fr
 	f.isCompacted.Store(codec.IsCompacted(f.footer.Flags))
 	f.isCompleted.Store(true)
@@ -185,6 +180,9 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 	f.flags.Store(uint32(fr.Flags))
 
 	// Parse index records sequentially from the beginning of the file
+	// Calculate the actual footer size from the parsed footer
+	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(fr.Version)
+	footerRecordStart := len(footerBlkData) - actualFooterSize
 	indexData := footerBlkData[:footerRecordStart]
 
 	logger.Ctx(ctx).Debug("parsing index records sequentially",
@@ -965,4 +963,9 @@ func (f *MinioFileReaderAdv) GetTotalBlocks() int32 {
 		return f.footer.TotalBlocks
 	}
 	return 0
+}
+
+func (f *MinioFileReaderAdv) UpdateLastAddConfirmed(ctx context.Context, lac int64) error {
+	// NO-OP
+	return nil
 }

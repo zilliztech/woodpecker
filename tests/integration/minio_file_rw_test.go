@@ -303,7 +303,7 @@ func TestMinioFileWriter_Finalize(t *testing.T) {
 	}
 
 	// Test finalize
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testData)-1), lastEntryId)
 
@@ -882,7 +882,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 		}
 	}
 
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -84,9 +84,55 @@ func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
-// CompleteSegment provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// Close provides a mock function with given fields: ctx
+func (_m *LogStoreClient) Close(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Close")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
+type LogStoreClient_Close_Call struct {
+	*mock.Call
+}
+
+// Close is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *LogStoreClient_Expecter) Close(ctx interface{}) *LogStoreClient_Close_Call {
+	return &LogStoreClient_Close_Call{Call: _e.mock.On("Close", ctx)}
+}
+
+func (_c *LogStoreClient_Close_Call) Run(run func(ctx context.Context)) *LogStoreClient_Close_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_Close_Call) Return(_a0 error) *LogStoreClient_Close_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_Close_Call) RunAndReturn(run func(context.Context) error) *LogStoreClient_Close_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CompleteSegment provides a mock function with given fields: ctx, logId, segmentId, lac
+func (_m *LogStoreClient) CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error) {
+	ret := _m.Called(ctx, logId, segmentId, lac)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CompleteSegment")
@@ -94,17 +140,17 @@ func (_m *LogStoreClient) CompleteSegment(ctx context.Context, logId int64, segm
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) (int64, error)); ok {
+		return rf(ctx, logId, segmentId, lac)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) int64); ok {
+		r0 = rf(ctx, logId, segmentId, lac)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64) error); ok {
+		r1 = rf(ctx, logId, segmentId, lac)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -121,13 +167,14 @@ type LogStoreClient_CompleteSegment_Call struct {
 //   - ctx context.Context
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) CompleteSegment(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_CompleteSegment_Call {
-	return &LogStoreClient_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, logId, segmentId)}
+//   - lac int64
+func (_e *LogStoreClient_Expecter) CompleteSegment(ctx interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStoreClient_CompleteSegment_Call {
+	return &LogStoreClient_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, logId, segmentId, lac)}
 }
 
-func (_c *LogStoreClient_CompleteSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_CompleteSegment_Call {
+func (_c *LogStoreClient_CompleteSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, lac int64)) *LogStoreClient_CompleteSegment_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64))
 	})
 	return _c
 }
@@ -137,7 +184,7 @@ func (_c *LogStoreClient_CompleteSegment_Call) Return(_a0 int64, _a1 error) *Log
 	return _c
 }
 
-func (_c *LogStoreClient_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_CompleteSegment_Call {
+func (_c *LogStoreClient_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64, int64) (int64, error)) *LogStoreClient_CompleteSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -484,6 +531,116 @@ func (_c *LogStoreClient_SegmentCompact_Call) Return(_a0 *proto.SegmentMetadata,
 }
 
 func (_c *LogStoreClient_SegmentCompact_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentCompact_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SelectNodes provides a mock function with given fields: ctx, strategyType, affinityMode, filters
+func (_m *LogStoreClient) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+	ret := _m.Called(ctx, strategyType, affinityMode, filters)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SelectNodes")
+	}
+
+	var r0 []*proto.NodeMeta
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)); ok {
+		return rf(ctx, strategyType, affinityMode, filters)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) []*proto.NodeMeta); ok {
+		r0 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*proto.NodeMeta)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) error); ok {
+		r1 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_SelectNodes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SelectNodes'
+type LogStoreClient_SelectNodes_Call struct {
+	*mock.Call
+}
+
+// SelectNodes is a helper method to define mock.On call
+//   - ctx context.Context
+//   - strategyType proto.StrategyType
+//   - affinityMode proto.AffinityMode
+//   - filters []*proto.NodeFilter
+func (_e *LogStoreClient_Expecter) SelectNodes(ctx interface{}, strategyType interface{}, affinityMode interface{}, filters interface{}) *LogStoreClient_SelectNodes_Call {
+	return &LogStoreClient_SelectNodes_Call{Call: _e.mock.On("SelectNodes", ctx, strategyType, affinityMode, filters)}
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Run(run func(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(proto.StrategyType), args[2].(proto.AffinityMode), args[3].([]*proto.NodeFilter))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Return(_a0 []*proto.NodeMeta, _a1 error) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) RunAndReturn(run func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateLastAddConfirmed provides a mock function with given fields: ctx, logId, segmentId, lac
+func (_m *LogStoreClient) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
+	ret := _m.Called(ctx, logId, segmentId, lac)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLastAddConfirmed")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64) error); ok {
+		r0 = rf(ctx, logId, segmentId, lac)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_UpdateLastAddConfirmed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLastAddConfirmed'
+type LogStoreClient_UpdateLastAddConfirmed_Call struct {
+	*mock.Call
+}
+
+// UpdateLastAddConfirmed is a helper method to define mock.On call
+//   - ctx context.Context
+//   - logId int64
+//   - segmentId int64
+//   - lac int64
+func (_e *LogStoreClient_Expecter) UpdateLastAddConfirmed(ctx interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	return &LogStoreClient_UpdateLastAddConfirmed_Call{Call: _e.mock.On("UpdateLastAddConfirmed", ctx, logId, segmentId, lac)}
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, lac int64)) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) Return(_a0 error) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64, int64, int64) error) *LogStoreClient_UpdateLastAddConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -3,6 +3,22 @@ PROTOC_GEN_GO_VERSION := v1.36.2
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 PROTOC_GEN_GO_VTPROTO_VERSION := v0.6.0
 
+# Default target - show help
+.DEFAULT_GOAL := help
+
+.PHONY: help
+help: ## Show this help message
+	@echo "🚀 Woodpecker Build System"
+	@echo "=========================="
+	@echo ""
+	@echo "Available targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "💡 For more advanced builds, use:"
+	@echo "   ./build/build_bin.sh --help     # Binary builds"
+	@echo "   ./build/build_image.sh --help   # Docker builds"
+	@echo "   ./deployments/deploy.sh help    # Cluster management"
+
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
@@ -23,11 +39,11 @@ $(BIN_DIR)/protoc-gen-go-vtproto: | $(BIN_DIR)
 
 # Install all tools
 .PHONY: install
-install: $(PROTOC_DIR) $(BIN_DIR)/protoc-gen-go $(BIN_DIR)/protoc-gen-go-grpc $(BIN_DIR)/protoc-gen-go-vtproto
+install: $(PROTOC_DIR) $(BIN_DIR)/protoc-gen-go $(BIN_DIR)/protoc-gen-go-grpc $(BIN_DIR)/protoc-gen-go-vtproto ## Install all protobuf tools
 	@echo "All tools installed in $(BIN_DIR)."
 
 .PHONY: proto
-proto:
+proto: ## Generate protobuf code
 	cd proto && \
 	protoc \
 		--go_out=. \
@@ -46,14 +62,50 @@ proto_clean:
 	rm -f */*.pb.go
 
 .PHONY: build
-build:
-	go build -v -o bin/woodpecker./cmd
+build: ## Build binary for current platform
+	go build -v -o bin/woodpecker ./cmd
 
-test: build
+test: build ## Run tests
 	go test -cover -race ./...
 
-clean:
+clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*
 
-docker:
-	docker build -t woodpecker:latest .
+# Docker targets (using new build system)
+docker: ## Build Docker image (auto-detect architecture)
+	./build/build_image.sh ubuntu22.04 auto -t woodpecker:latest
+
+# Multi-architecture Docker build
+docker-multiarch: ## Build multi-architecture Docker image
+	./build/build_image.sh ubuntu22.04 multiarch -t woodpecker:latest
+
+# Build binary for Linux (basic build commands)
+build-linux: ## Build Linux binary (AMD64)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o bin/woodpecker ./cmd
+
+# Build binary for Linux ARM64
+build-linux-arm64: ## Build Linux binary (ARM64)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -o bin/woodpecker ./cmd
+
+# Auto-detect architecture build (using new build system)
+build-auto: ## Build binary (auto-detect architecture)
+	./build/build_bin.sh auto
+
+# Cluster management (delegated to deploy.sh for consistency)
+cluster-up: ## Start the complete cluster
+	cd deployments && ./deploy.sh up
+
+cluster-down: ## Stop the cluster
+	cd deployments && ./deploy.sh down
+
+cluster-clean: ## Stop cluster and remove volumes
+	cd deployments && ./deploy.sh clean
+
+cluster-logs: ## View cluster logs
+	cd deployments && ./deploy.sh logs
+
+cluster-status: ## Check cluster status
+	cd deployments && ./deploy.sh status
+
+cluster-test: ## Test cluster connectivity
+	cd deployments && ./deploy.sh test
