@@ -838,8 +838,18 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 
 	// Check if segment is already compacted
 	if f.footerRecord != nil && codec.IsCompacted(f.footerRecord.Flags) {
-		logger.Ctx(ctx).Info("segment is already compacted, skipping",
+		logger.Ctx(ctx).Info("segment is already compacted, checking for cleanup of original files",
 			zap.String("segmentFileKey", f.segmentFileKey))
+
+		// Even if already compacted, we should clean up any remaining original files
+		// This handles the case where a previous compact operation was interrupted
+		cleanupErr := f.cleanupOriginalFilesIfCompacted(ctx)
+		if cleanupErr != nil {
+			logger.Ctx(ctx).Warn("failed to cleanup remaining original files after detecting compacted segment",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Error(cleanupErr))
+		}
+
 		return int64(f.footerRecord.TotalSize), nil
 	}
 
@@ -895,10 +905,32 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		return -1, fmt.Errorf("failed to upload compacted footer: %w", putErr)
 	}
 
-	// Update internal state
+	// Clean up original block files after successful compaction
+	originalBlockIndexes := f.blockIndexes // Save original blocks before updating
 	originalBlockCount := len(f.blockIndexes)
+
+	// Update internal state
 	f.blockIndexes = newBlockIndexes
 	f.footerRecord = newFooter
+
+	logger.Ctx(ctx).Info("compaction completed, starting cleanup of original blocks",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("originalBlockCount", originalBlockCount),
+		zap.Int("compactedBlockCount", len(newBlockIndexes)))
+
+	// Delete original block files concurrently
+	originalBlockKeys := f.convertBlockIndexesToKeys(originalBlockIndexes)
+	cleanupErr := f.deleteOriginalBlocksByKeys(ctx, originalBlockKeys)
+	if cleanupErr != nil {
+		// Log error but don't fail the compaction - the compacted files are already created
+		logger.Ctx(ctx).Warn("failed to cleanup some original block files after compaction",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Error(cleanupErr))
+	} else {
+		logger.Ctx(ctx).Info("successfully cleaned up all original block files",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int("deletedBlocks", originalBlockCount))
+	}
 
 	logger.Ctx(ctx).Info("successfully compacted segment",
 		zap.String("segmentFileKey", f.segmentFileKey),
@@ -1655,7 +1687,7 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 
 	// Plan merge block tasks - determine which original blocks go into each merge block
 	mergeBlockTasks := f.planMergeBlockTasks(targetBlockSize)
-	sp.AddEvent("plan merge block tasks", trace.WithAttributes(attribute.Int64("planTime", time.Now().Sub(startTime).Milliseconds())))
+	sp.AddEvent("plan merge block tasks", trace.WithAttributes(attribute.Int64("planTime", time.Since(startTime).Milliseconds())))
 	logger.Ctx(ctx).Info("plan merge block tasks",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("originalBlockCount", len(f.blockIndexes)),
@@ -2048,6 +2080,213 @@ func (f *MinioFileWriter) serializeCompactedFooterAndIndexes(ctx context.Context
 		zap.Int("totalSize", len(serializedData)))
 
 	return serializedData
+}
+
+// convertBlockIndexesToKeys converts block indexes to their corresponding object keys
+func (f *MinioFileWriter) convertBlockIndexesToKeys(blockIndexes []*codec.IndexRecord) []string {
+	if len(blockIndexes) == 0 {
+		return nil
+	}
+
+	keys := make([]string, len(blockIndexes))
+	for i, blockIndex := range blockIndexes {
+		keys[i] = getBlockKey(f.segmentFileKey, int64(blockIndex.BlockNumber))
+	}
+	return keys
+}
+
+// cleanupOriginalFilesIfCompacted cleans up any remaining original block files
+// when the segment is already compacted. This handles interrupted compact operations.
+func (f *MinioFileWriter) cleanupOriginalFilesIfCompacted(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "cleanupOriginalFilesIfCompacted")
+	defer sp.End()
+
+	// List all objects with the segment prefix to find original block files
+	originalBlockKeys, err := f.listOriginalBlockFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list original block files: %w", err)
+	}
+
+	if len(originalBlockKeys) == 0 {
+		logger.Ctx(ctx).Debug("no original block files found to cleanup",
+			zap.String("segmentFileKey", f.segmentFileKey))
+		return nil
+	}
+
+	logger.Ctx(ctx).Info("found original block files to cleanup after compaction",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("originalBlockCount", len(originalBlockKeys)))
+
+	// Delete the original block files
+	return f.deleteOriginalBlocksByKeys(ctx, originalBlockKeys)
+}
+
+// listOriginalBlockFiles lists all original (non-merged) block files for this segment
+func (f *MinioFileWriter) listOriginalBlockFiles(ctx context.Context) ([]string, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "listOriginalBlockFiles")
+	defer sp.End()
+
+	// List all objects with the segment prefix
+	objectCh := f.client.ListObjects(ctx, f.bucket, f.segmentFileKey+"/", false, minio.ListObjectsOptions{})
+
+	var originalBlockKeys []string
+	for object := range objectCh {
+		if object.Err != nil {
+			logger.Ctx(ctx).Warn("error listing objects during cleanup",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Error(object.Err))
+			continue
+		}
+
+		// Check if this is an original block file (not merged, not footer, not lock)
+		if f.isOriginalBlockFile(object.Key) {
+			originalBlockKeys = append(originalBlockKeys, object.Key)
+		}
+	}
+
+	logger.Ctx(ctx).Debug("listed original block files",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("originalBlockCount", len(originalBlockKeys)),
+		zap.Strings("blockKeys", originalBlockKeys))
+
+	return originalBlockKeys, nil
+}
+
+// isOriginalBlockFile checks if the given object key is an original block file
+// Original block files have pattern: {segmentFileKey}/{blockId}.blk (where blockId is a number)
+// Excludes: merged files (m_{blockId}.blk), footer.blk, write.lock
+func (f *MinioFileWriter) isOriginalBlockFile(objectKey string) bool {
+	// Check if it's under our segment directory
+	segmentPrefix := f.segmentFileKey + "/"
+	if !strings.HasPrefix(objectKey, segmentPrefix) {
+		return false
+	}
+
+	// Get the filename relative to the segment directory
+	relativePath := strings.TrimPrefix(objectKey, segmentPrefix)
+
+	// Skip footer.blk and write.lock
+	if relativePath == "footer.blk" || relativePath == "write.lock" {
+		return false
+	}
+
+	// Check if it matches the pattern {blockId}.blk
+	if !strings.HasSuffix(relativePath, ".blk") {
+		return false
+	}
+
+	filename := strings.TrimSuffix(relativePath, ".blk")
+
+	// Skip merged files (start with "m_")
+	if strings.HasPrefix(filename, "m_") {
+		return false
+	}
+
+	// Check if filename is a valid block ID (should be a number)
+	_, err := strconv.ParseInt(filename, 10, 64)
+	return err == nil
+}
+
+// deleteOriginalBlocksByKeys deletes the specified block files by their keys
+func (f *MinioFileWriter) deleteOriginalBlocksByKeys(ctx context.Context, blockKeys []string) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "deleteOriginalBlocksByKeys")
+	defer sp.End()
+
+	if len(blockKeys) == 0 {
+		return nil
+	}
+
+	startTime := time.Now()
+	logger.Ctx(ctx).Info("starting deletion of original block files by keys",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("blockCount", len(blockKeys)))
+
+	// Use a worker pool for concurrent deletion
+	maxWorkers := f.compactPolicyConfig.MaxParallelUploads
+	if maxWorkers <= 0 {
+		maxWorkers = 8 // Default to 8 concurrent deletions
+	}
+
+	deletePool := conc.NewPool[*deleteByKeyResult](maxWorkers, conc.WithPreAlloc(true))
+	defer deletePool.Release()
+
+	// Submit deletion tasks for all block keys
+	var deleteFutures []*conc.Future[*deleteByKeyResult]
+	for _, blockKey := range blockKeys {
+		key := blockKey // Capture for closure
+		future := deletePool.Submit(func() (*deleteByKeyResult, error) {
+			err := f.client.RemoveObject(ctx, f.bucket, key, minio.RemoveObjectOptions{})
+
+			result := &deleteByKeyResult{
+				blockKey: key,
+				success:  err == nil,
+				error:    err,
+			}
+
+			if err != nil {
+				// Check if the error is "object not found" - this is acceptable
+				if minioHandler.IsObjectNotExists(err) {
+					logger.Ctx(ctx).Debug("original block file already deleted or not found",
+						zap.String("segmentFileKey", f.segmentFileKey),
+						zap.String("blockKey", key))
+					result.success = true
+					result.error = nil
+				} else {
+					logger.Ctx(ctx).Warn("failed to delete original block file",
+						zap.String("segmentFileKey", f.segmentFileKey),
+						zap.String("blockKey", key),
+						zap.Error(err))
+				}
+			} else {
+				logger.Ctx(ctx).Debug("successfully deleted original block file",
+					zap.String("segmentFileKey", f.segmentFileKey),
+					zap.String("blockKey", key))
+			}
+
+			return result, err
+		})
+		deleteFutures = append(deleteFutures, future)
+	}
+
+	// Wait for all deletion tasks to complete and collect results
+	var failedDeletions []string
+	successCount := 0
+
+	for _, future := range deleteFutures {
+		result := future.Value()
+		if result.success {
+			successCount++
+		} else if result.error != nil {
+			failedDeletions = append(failedDeletions, fmt.Sprintf("%s: %v", result.blockKey, result.error))
+		}
+	}
+
+	deletionDuration := time.Since(startTime)
+	logger.Ctx(ctx).Info("completed deletion of original block files by keys",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("totalBlocks", len(blockKeys)),
+		zap.Int("successfulDeletions", successCount),
+		zap.Int("failedDeletions", len(failedDeletions)),
+		zap.Int64("deletionTimeMs", deletionDuration.Milliseconds()))
+
+	// Update metrics
+	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "compact_recovery_cleanup", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "compact_recovery_cleanup", "success").Observe(float64(deletionDuration.Milliseconds()))
+
+	// Return error if there were any failed deletions
+	if len(failedDeletions) > 0 {
+		return fmt.Errorf("failed to delete %d out of %d original block files: %v",
+			len(failedDeletions), len(blockKeys), failedDeletions)
+	}
+
+	return nil
+}
+
+// deleteByKeyResult represents the result of a single block file deletion by key
+type deleteByKeyResult struct {
+	blockKey string
+	success  bool
+	error    error
 }
 
 // BlockInfo is the information of a Block

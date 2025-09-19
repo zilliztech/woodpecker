@@ -13,15 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
-
-func init() {
-	cfg, _ := config.NewConfiguration()
-	logger.InitLogger(cfg)
-}
 
 // TODO: Verify that the MinIO version is v20240510 or newer to address a known issue with the 'if-not-match:*' condition.
 

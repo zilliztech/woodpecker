@@ -114,23 +114,17 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 	return reader, nil
 }
 
-func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryReadFooterAndIndex")
+// FooterAndIndex represents the parsed footer and index data
+type FooterAndIndex struct {
+	footer *codec.FooterRecord
+	blocks []*codec.IndexRecord
+}
+
+// readFooterAndIndexUnsafe reads and parses footer and index records without acquiring locks
+func (f *MinioFileReaderAdv) readFooterAndIndexUnsafe(ctx context.Context) (*FooterAndIndex, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readFooterAndIndexUnsafe")
 	defer sp.End()
-	logger.Ctx(ctx).Debug("try to read footer and block indexes", zap.String("segmentFileKey", f.segmentFileKey))
-
-	if f.isCompleted.Load() {
-		// already parse a footer
-		return nil
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.isCompleted.Load() {
-		// double check if already parse a footer
-		return nil
-	}
+	logger.Ctx(ctx).Debug("reading footer and block indexes", zap.String("segmentFileKey", f.segmentFileKey))
 
 	// Check if footer.blk exists
 	footerKey := getFooterBlockKey(f.segmentFileKey)
@@ -138,21 +132,21 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
 			// no footer blk yet
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 
 	// Read the entire footer.blk file
 	footerObj, err := f.client.GetObject(ctx, f.bucket, footerKey, minio.GetObjectOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer footerObj.Close()
 
 	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, statInfo.Size)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	logger.Ctx(ctx).Debug("read entire footer.blk",
@@ -162,7 +156,7 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 
 	// Parse footer record from the end of the file
 	if len(footerBlkData) < codec.RecordHeaderSize+codec.FooterRecordSize {
-		return fmt.Errorf("footer.blk too small: %d bytes", len(footerBlkData))
+		return nil, fmt.Errorf("footer.blk too small: %d bytes", len(footerBlkData))
 	}
 
 	footerRecordStart := len(footerBlkData) - codec.RecordHeaderSize - codec.FooterRecordSize
@@ -170,27 +164,23 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 
 	footerRecord, err := codec.DecodeRecord(footerRecordData)
 	if err != nil {
-		return fmt.Errorf("failed to decode footer record: %w", err)
+		return nil, fmt.Errorf("failed to decode footer record: %w", err)
 	}
 
 	if footerRecord.Type() != codec.FooterRecordType {
-		return fmt.Errorf("expected footer record, got type %d", footerRecord.Type())
+		return nil, fmt.Errorf("expected footer record, got type %d", footerRecord.Type())
 	}
 
 	fr := footerRecord.(*codec.FooterRecord)
-	f.footer = fr
-	f.isCompacted.Store(codec.IsCompacted(f.footer.Flags))
-	f.isCompleted.Store(true)
-	f.version.Store(uint32(fr.Version))
-	f.flags.Store(uint32(fr.Flags))
 
 	// Parse index records sequentially from the beginning of the file
 	indexData := footerBlkData[:footerRecordStart]
+	refreshBlocks := make([]*codec.IndexRecord, 0, fr.TotalBlocks)
 
 	logger.Ctx(ctx).Debug("parsing index records sequentially",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("indexDataLength", len(indexData)),
-		zap.Int32("expectedTotalBlocks", f.footer.TotalBlocks))
+		zap.Int32("expectedTotalBlocks", fr.TotalBlocks))
 
 	// Parse all index records sequentially
 	offset := 0
@@ -217,7 +207,7 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 		}
 
 		indexRecord := record.(*codec.IndexRecord)
-		f.blocks = append(f.blocks, indexRecord)
+		refreshBlocks = append(refreshBlocks, indexRecord)
 
 		// Move to next record (header + payload)
 		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize // IndexRecord payload size
@@ -231,10 +221,54 @@ func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
 			zap.Int64("lastEntryID", indexRecord.LastEntryID))
 	}
 
+	result := &FooterAndIndex{
+		footer: fr,
+		blocks: refreshBlocks,
+	}
+
 	logger.Ctx(ctx).Info("successfully parsed footer and index records",
 		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int("indexRecordCount", len(f.blocks)),
-		zap.Int32("expectedTotalBlocks", f.footer.TotalBlocks))
+		zap.Int("indexRecordCount", len(refreshBlocks)),
+		zap.Int32("expectedTotalBlocks", fr.TotalBlocks))
+
+	return result, nil
+}
+
+func (f *MinioFileReaderAdv) tryReadFooterAndIndex(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryReadFooterAndIndex")
+	defer sp.End()
+	logger.Ctx(ctx).Debug("try to read footer and block indexes", zap.String("segmentFileKey", f.segmentFileKey))
+
+	if f.isCompleted.Load() {
+		// already parse a footer
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.isCompleted.Load() {
+		// double check if already parse a footer
+		return nil
+	}
+
+	footerAndIndex, err := f.readFooterAndIndexUnsafe(ctx)
+	if err != nil {
+		return err
+	}
+
+	if footerAndIndex == nil {
+		// no footer yet
+		return nil
+	}
+
+	// Update internal state
+	f.footer = footerAndIndex.footer
+	f.blocks = footerAndIndex.blocks
+	f.isCompacted.Store(codec.IsCompacted(f.footer.Flags))
+	f.isCompleted.Store(true)
+	f.version.Store(uint32(f.footer.Version))
+	f.flags.Store(uint32(f.footer.Flags))
 
 	return nil
 }
@@ -403,12 +437,22 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 		zap.Any("opt", opt),
 		zap.Any("lastReadBatchInfo", lastReadBatchInfo))
 
+	lastReadState := lastReadBatchInfo
 	// apply adv options if possible
-	if lastReadBatchInfo != nil {
-		isCompacted := codec.IsCompacted(uint16(lastReadBatchInfo.Flags))
-		f.version.Store(uint32(lastReadBatchInfo.Version))
-		f.flags.Store(uint32(lastReadBatchInfo.Flags))
-		f.isCompacted.Store(isCompacted)
+	if lastReadState != nil {
+		isCompactedLast := codec.IsCompacted(uint16(lastReadState.Flags))
+		isCompactedNow := codec.IsCompacted(uint16(f.flags.Load()))
+		if isCompactedLast != isCompactedNow && isCompactedNow {
+			logger.Ctx(ctx).Info("adv options reset due to segment state changed after last read",
+				zap.Int64("logId", f.logId),
+				zap.Int64("segId", f.segmentId),
+				zap.Int64("startEntryID", opt.StartEntryID),
+				zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
+				zap.Bool("isCompactedLast", isCompactedLast),
+				zap.Bool("isCompactedNow", isCompactedNow))
+			// reset lastReadState, will try to read from merged blocks
+			lastReadState = nil
+		}
 	} else {
 		// try read footer and extract block index infos
 		err := f.tryReadFooterAndIndex(ctx)
@@ -428,9 +472,9 @@ func (f *MinioFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 
 	// start to read batch from a certain point
 	startBlockID := int64(0)
-	if lastReadBatchInfo != nil {
+	if lastReadState != nil {
 		// When we have lastReadBatchInfo, start from the block after the last read block
-		startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
+		startBlockID = int64(lastReadState.LastBlockId + 1)
 	} else if f.footer != nil {
 		// When we have footer, find the block containing the start entry ID
 		foundStartBlock, err := codec.SearchBlock(f.blocks, opt.StartEntryID)
@@ -515,10 +559,9 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	// Keep reading batches until we have data or reach end
 	for {
 		// 1. Read one batch of blocks (up to maxBytes)
-		batchFutures, nextBlockID, batchRawSize, hasMoreBlocks, hasReadBlockBatchErr := f.readBlockBatchUnsafe(ctx, currentBlockID, maxBytes, opt.StartEntryID)
+		batchFutures, nextBlockID, batchRawSize, hasMoreBlocks, readBlockBatchErr := f.readBlockBatchUnsafe(ctx, currentBlockID, maxBytes, opt.StartEntryID)
 
-		if hasReadBlockBatchErr {
-			// mark readBlockBatch encounter error
+		if readBlockBatchErr != nil {
 			hasDataReadError = true
 		}
 
@@ -532,7 +575,7 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			zap.Int64("currentBlockID", currentBlockID),
 			zap.Int("batchTasks", len(batchFutures)),
 			zap.Int64("batchRawSize", batchRawSize),
-			zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr),
+			zap.Bool("hasDataReadError", hasDataReadError),
 			zap.Bool("hasMoreBlocks", hasMoreBlocks))
 
 		// 2. Collect and process batch results
@@ -629,6 +672,7 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(allEntries)))
 
+		// If no data read error (or error is compaction-related), determine if it is EOF
 		if !hasDataReadError {
 			// only if no data read error, determine if it is EOF
 			if f.isCompleted.Load() || f.isFenced.Load() || f.isCompacted.Load() {
@@ -685,6 +729,15 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 	// Get the object
 	blockObj, getErr := f.client.GetObject(ctx, f.bucket, block.objKey, minio.GetObjectOptions{})
 	if getErr != nil {
+		// Check if block not found - use centralized handling
+		if minioHandler.IsObjectNotExists(getErr) {
+			handleErr := f.handleBlockNotFoundByCompaction(ctx, block.blockID, "GetObject")
+			if handleErr != nil {
+				result.err = handleErr
+				return result
+			}
+			// If handleErr is nil, block legitimately doesn't exist - fall through to return original error
+		}
 		result.err = getErr
 		return result
 	}
@@ -865,12 +918,12 @@ func (f *MinioFileReaderAdv) getBlockObjectKey(blockNumber int64) string {
 
 // readBlockBatch reads a single batch of blocks up to maxBytes raw size
 // Returns: futures, nextBlockID, totalRawSize, hasMoreBlocks
-func (f *MinioFileReaderAdv) readBlockBatchUnsafe(ctx context.Context, startBlockID int64, maxBytes int64, startEntryID int64) ([]*conc.Future[*BlockReadResult], int64, int64, bool, bool) {
+func (f *MinioFileReaderAdv) readBlockBatchUnsafe(ctx context.Context, startBlockID int64, maxBytes int64, startEntryID int64) ([]*conc.Future[*BlockReadResult], int64, int64, bool, error) {
 	futures := make([]*conc.Future[*BlockReadResult], 0)
 	currentBlockID := startBlockID
 	totalRawSize := int64(0)
 	hasMoreBlocks := true
-	hasReadBlockBatchErr := false
+	var readBlockBatchErr error
 
 	// Read blocks until we reach maxBytes raw size
 	for totalRawSize < maxBytes {
@@ -880,17 +933,24 @@ func (f *MinioFileReaderAdv) readBlockBatchUnsafe(ctx context.Context, startBloc
 		objInfo, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, minio.StatObjectOptions{})
 		if statErr != nil {
 			if minioHandler.IsObjectNotExists(statErr) {
-				logger.Ctx(ctx).Debug("block not found, reached end of data",
-					zap.String("segmentFileKey", f.segmentFileKey),
-					zap.Int64("blockNumber", currentBlockID))
-				hasMoreBlocks = false
+				// Use centralized block-not-found handling
+				handleErr := f.handleBlockNotFoundByCompaction(ctx, currentBlockID, "StatObject")
+				if handleErr == nil {
+					// Block legitimately doesn't exist - normal EOF
+					logger.Ctx(ctx).Debug("block not found, no more data",
+						zap.String("segmentFileKey", f.segmentFileKey),
+						zap.Int64("blockNumber", currentBlockID))
+					hasMoreBlocks = false
+					break
+				}
+				readBlockBatchErr = handleErr
 				break
 			}
 			logger.Ctx(ctx).Warn("Failed to stat block object",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(statErr))
-			hasReadBlockBatchErr = true
+			readBlockBatchErr = statErr
 			break
 		}
 
@@ -935,9 +995,9 @@ func (f *MinioFileReaderAdv) readBlockBatchUnsafe(ctx context.Context, startBloc
 		zap.Int("batchSize", len(futures)),
 		zap.Int64("totalRawSize", totalRawSize),
 		zap.Bool("hasMoreBlocks", hasMoreBlocks),
-		zap.Bool("hasReadBlockBatchErr", hasReadBlockBatchErr))
+		zap.Bool("hasReadBlockBatchErr", readBlockBatchErr == nil))
 
-	return futures, currentBlockID, totalRawSize, hasMoreBlocks, hasReadBlockBatchErr
+	return futures, currentBlockID, totalRawSize, hasMoreBlocks, readBlockBatchErr
 }
 
 // GetBlockIndexes Test only
@@ -965,4 +1025,91 @@ func (f *MinioFileReaderAdv) GetTotalBlocks() int32 {
 		return f.footer.TotalBlocks
 	}
 	return 0
+}
+
+// shouldBlockExist checks if a block should exist according to current segment state
+func (f *MinioFileReaderAdv) shouldBlockExist(blockID int64) bool {
+	// For completed/compacted segments, check against footer's total blocks
+	if f.footer != nil {
+		return blockID < int64(f.footer.TotalBlocks)
+	}
+	// For active segments, assume block might exist (let retry determine final state)
+	return true
+}
+
+// handleBlockNotFoundByCompaction centralizes block-not-found handling with compaction detection.
+// It determines if a block's absence is due to compaction during read operations and returns
+// appropriate errors or nil for legitimate cases.
+func (f *MinioFileReaderAdv) handleBlockNotFoundByCompaction(ctx context.Context, blockID int64, operation string) error {
+	// If block shouldn't exist according to current state, it's normal EOF
+	if !f.shouldBlockExist(blockID) {
+		return nil
+	}
+
+	// If already compacted, no need to check again
+	if f.isCompacted.Load() {
+		return fmt.Errorf("block %d not found during %s", blockID, operation)
+	}
+
+	logger.Ctx(ctx).Debug("Block not found, checking for compaction",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("blockNumber", blockID),
+		zap.String("operation", operation))
+
+	// Read footer to check if segment was compacted
+	footerAndIndex, err := f.readFooterAndIndexUnsafe(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to read footer when block not found",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("blockNumber", blockID),
+			zap.String("operation", operation),
+			zap.Error(err))
+		return err
+	}
+
+	// If compaction detected, trigger async state update and return specific error
+	if footerAndIndex != nil && codec.IsCompacted(footerAndIndex.footer.Flags) {
+		logger.Ctx(ctx).Info("Detected segment compaction during read",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int64("deletedBlockNumber", blockID),
+			zap.String("operation", operation))
+
+		go f.asyncUpdateReaderState(ctx, footerAndIndex)
+		return werr.ErrFileReaderBlockDeletedByCompaction.WithCauseErrMsg(
+			fmt.Sprintf("block %d deleted by compaction during %s", blockID, operation))
+	}
+
+	// Block not found but no compaction detected
+	return nil
+}
+
+// asyncUpdateReaderState updates reader state asynchronously to avoid blocking read operations
+func (f *MinioFileReaderAdv) asyncUpdateReaderState(ctx context.Context, footerAndIndex *FooterAndIndex) {
+	logger.Ctx(ctx).Debug("Starting async update of reader state",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Bool("isCompacted", codec.IsCompacted(footerAndIndex.footer.Flags)))
+
+	// Acquire lock for state update
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Double-check if already updated by another goroutine
+	if f.isCompacted.Load() {
+		logger.Ctx(ctx).Debug("Reader state already updated by another goroutine",
+			zap.String("segmentFileKey", f.segmentFileKey))
+		return
+	}
+
+	// Update internal state
+	f.footer = footerAndIndex.footer
+	f.blocks = footerAndIndex.blocks
+	f.isCompacted.Store(codec.IsCompacted(f.footer.Flags))
+	f.isCompleted.Store(true)
+	f.version.Store(uint32(f.footer.Version))
+	f.flags.Store(uint32(f.footer.Flags))
+
+	logger.Ctx(ctx).Info("Reader state updated asynchronously",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Bool("isCompacted", f.isCompacted.Load()),
+		zap.Int("totalBlocks", len(f.blocks)))
 }
