@@ -19,6 +19,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"strings"
@@ -30,13 +31,13 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"hash/crc32"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
@@ -674,8 +675,6 @@ func testSerialize(entries []*cache.BufferEntry) []byte {
 	finalData = append(finalData, encodedBlockHeaderRecord...)
 	finalData = append(finalData, serializedData...)
 	return finalData
-
-	return serializedData
 }
 
 // TestSerializeDecodeCompatibility tests that serialize and DecodeRecordList work together
@@ -1183,5 +1182,902 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 			}
 		}
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
+	})
+}
+
+// TestMinioFileWriter_CompactionWithCleanup tests compact functionality including small file cleanup
+func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
+	if os.Getenv("SKIP_MINIO_TESTS") != "" {
+		t.Skip("Skipping MinIO tests")
+	}
+
+	minioHdl, cfg := setupMinioFileWriterTest(t)
+	ctx := context.Background()
+
+	// Configure for small blocks to create multiple files for compaction
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 100    // Very small blocks
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = 1024 // Target 1KB merged blocks
+
+	logId := int64(60)
+	segmentId := int64(6000)
+	baseDir := fmt.Sprintf("test-compaction-cleanup-%d", time.Now().Unix())
+	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
+
+	t.Run("NormalCompactionWithCleanup", func(t *testing.T) {
+		// Create writer and write data that will create multiple small blocks
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+
+		// Write data that will create multiple small blocks
+		testData := [][]byte{
+			[]byte("Entry 0: " + string(generateTestData(80))), // Block 0
+			[]byte("Entry 1: " + string(generateTestData(80))), // Block 1
+			[]byte("Entry 2: " + string(generateTestData(80))), // Block 2
+			[]byte("Entry 3: " + string(generateTestData(80))), // Block 3
+			[]byte("Entry 4: " + string(generateTestData(80))), // Block 4
+		}
+
+		for i, data := range testData {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-compact-%d", i))
+			_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		// Finalize to complete writing
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len(testData)-1), lastEntryId)
+
+		// Close writer
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		// List objects before compaction
+		segmentPrefix := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId)
+		t.Log("Objects BEFORE compaction:")
+		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix, true, minio.ListObjectsOptions{})
+
+		originalBlocks := make([]string, 0)
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+			t.Logf("  Before compact: %s (size: %d)", object.Key, object.Size)
+
+			// Count original block files (exclude footer and lock)
+			if strings.HasSuffix(object.Key, ".blk") &&
+				!strings.HasSuffix(object.Key, "footer.blk") &&
+				!strings.Contains(object.Key, "m_") { // exclude merged files
+				originalBlocks = append(originalBlocks, object.Key)
+			}
+		}
+
+		assert.Greater(t, len(originalBlocks), 1, "Should have multiple original blocks before compaction")
+		t.Logf("Found %d original blocks before compaction", len(originalBlocks))
+
+		// Create a new writer for compaction (recovery mode)
+		writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
+		require.NoError(t, err)
+		require.NotNil(t, writerForCompact)
+
+		// Perform compaction
+		compactedSize, err := writerForCompact.Compact(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, compactedSize, int64(0), "Compacted size should be positive")
+		t.Logf("Compaction completed, compacted size: %d bytes", compactedSize)
+
+		// Close compaction writer
+		err = writerForCompact.Close(ctx)
+		require.NoError(t, err)
+
+		// List objects after compaction
+		t.Log("Objects AFTER compaction:")
+		objectCh = minioHdl.ListObjects(ctx, testBucket, segmentPrefix, true, minio.ListObjectsOptions{})
+
+		remainingOriginalBlocks := make([]string, 0)
+		mergedBlocks := make([]string, 0)
+		hasFooter := false
+
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+			t.Logf("  After compact: %s (size: %d)", object.Key, object.Size)
+
+			if strings.HasSuffix(object.Key, "footer.blk") {
+				hasFooter = true
+			} else if strings.HasSuffix(object.Key, ".blk") {
+				if strings.Contains(object.Key, "m_") {
+					mergedBlocks = append(mergedBlocks, object.Key)
+				} else if !strings.HasSuffix(object.Key, ".lock") {
+					remainingOriginalBlocks = append(remainingOriginalBlocks, object.Key)
+				}
+			}
+		}
+
+		// Verify compaction results
+		assert.True(t, hasFooter, "Should have footer.blk file")
+		assert.Greater(t, len(mergedBlocks), 0, "Should have created merged blocks")
+		assert.Equal(t, 0, len(remainingOriginalBlocks), "All original blocks should be deleted after compaction")
+
+		t.Logf("Compaction verification: %d merged blocks, %d remaining original blocks",
+			len(mergedBlocks), len(remainingOriginalBlocks))
+	})
+
+	t.Run("IdempotentCompaction", func(t *testing.T) {
+		// This test verifies that running compact multiple times is safe and idempotent
+		segmentId2 := segmentId + 1
+
+		// Create writer and write data
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg)
+		require.NoError(t, err)
+
+		// Write test data
+		testData := [][]byte{
+			[]byte("Idempotent 0: " + string(generateTestData(80))),
+			[]byte("Idempotent 1: " + string(generateTestData(80))),
+			[]byte("Idempotent 2: " + string(generateTestData(80))),
+		}
+
+		for i, data := range testData {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-idempotent-%d", i))
+			_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		_, err = writer.Finalize(ctx)
+		require.NoError(t, err)
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		// First compaction
+		writerForCompact1, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
+		require.NoError(t, err)
+
+		compactedSize1, err := writerForCompact1.Compact(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, compactedSize1, int64(0))
+
+		err = writerForCompact1.Close(ctx)
+		require.NoError(t, err)
+
+		// Second compaction (should be idempotent)
+		writerForCompact2, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId2, minioHdl, cfg, true)
+		require.NoError(t, err)
+
+		compactedSize2, err := writerForCompact2.Compact(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, compactedSize1, compactedSize2, "Idempotent compaction should return same size")
+
+		err = writerForCompact2.Close(ctx)
+		require.NoError(t, err)
+
+		// Verify objects remain consistent
+		segmentPrefix2 := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId2)
+		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix2, true, minio.ListObjectsOptions{})
+
+		remainingOriginalBlocks := 0
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+
+			if strings.HasSuffix(object.Key, ".blk") &&
+				!strings.HasSuffix(object.Key, "footer.blk") &&
+				!strings.Contains(object.Key, "m_") &&
+				!strings.HasSuffix(object.Key, ".lock") {
+				remainingOriginalBlocks++
+			}
+		}
+
+		assert.Equal(t, 0, remainingOriginalBlocks, "Should have no original blocks after idempotent compaction")
+		t.Log("Idempotent compaction test passed")
+	})
+
+	t.Run("CompactionRecoveryWithResidualFiles", func(t *testing.T) {
+		// This test simulates a scenario where compaction was interrupted and left some original files
+		segmentId3 := segmentId + 2
+
+		// Create writer and write data
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId3, minioHdl, cfg)
+		require.NoError(t, err)
+
+		// Write test data
+		testData := [][]byte{
+			[]byte("Recovery 0: " + string(generateTestData(80))),
+			[]byte("Recovery 1: " + string(generateTestData(80))),
+			[]byte("Recovery 2: " + string(generateTestData(80))),
+		}
+
+		for i, data := range testData {
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-%d", i))
+			_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		_, err = writer.Finalize(ctx)
+		require.NoError(t, err)
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		// Perform compaction but simulate interruption by doing it manually
+		writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId3, minioHdl, cfg, true)
+		require.NoError(t, err)
+
+		// Get the original blocks before compaction
+		segmentPrefix3 := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId3)
+		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix3, true, minio.ListObjectsOptions{})
+
+		originalBlockKeys := make([]string, 0)
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+			if strings.HasSuffix(object.Key, ".blk") &&
+				!strings.HasSuffix(object.Key, "footer.blk") &&
+				!strings.Contains(object.Key, "m_") {
+				originalBlockKeys = append(originalBlockKeys, object.Key)
+			}
+		}
+
+		// Complete compaction first
+		compactedSize, err := writerForCompact.Compact(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, compactedSize, int64(0))
+
+		// Manually restore one of the original blocks to simulate interrupted cleanup
+		if len(originalBlockKeys) > 0 {
+			// Create a dummy original block to simulate incomplete cleanup
+			dummyBlockKey := originalBlockKeys[0]
+			dummyData := []byte("dummy original block data")
+			_, err = minioHdl.PutObject(ctx, testBucket, dummyBlockKey,
+				strings.NewReader(string(dummyData)), int64(len(dummyData)), minio.PutObjectOptions{})
+			require.NoError(t, err)
+			t.Logf("Manually created residual file: %s", dummyBlockKey)
+		}
+
+		err = writerForCompact.Close(ctx)
+		require.NoError(t, err)
+
+		// Now perform recovery compaction which should clean up the residual file
+		writerForRecovery, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId3, minioHdl, cfg, true)
+		require.NoError(t, err)
+
+		// This should detect the compacted state and clean up residual files
+		recoverySize, err := writerForRecovery.Compact(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, compactedSize, recoverySize, "Recovery compaction should return same size")
+
+		err = writerForRecovery.Close(ctx)
+		require.NoError(t, err)
+
+		// Verify all original blocks are cleaned up
+		objectCh = minioHdl.ListObjects(ctx, testBucket, segmentPrefix3, true, minio.ListObjectsOptions{})
+
+		remainingOriginalBlocks := 0
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+			t.Logf("  After recovery: %s (size: %d)", object.Key, object.Size)
+
+			if strings.HasSuffix(object.Key, ".blk") &&
+				!strings.HasSuffix(object.Key, "footer.blk") &&
+				!strings.Contains(object.Key, "m_") &&
+				!strings.HasSuffix(object.Key, ".lock") {
+				remainingOriginalBlocks++
+			}
+		}
+
+		assert.Equal(t, 0, remainingOriginalBlocks, "Recovery should clean up all remaining original blocks")
+		t.Log("Compaction recovery test passed")
+	})
+
+	t.Run("CompactionDuringReadCrossCompletedAndCompacted", func(t *testing.T) {
+		// This test verifies that compaction doesn't interfere with ongoing read operations
+		segmentId4 := segmentId + 3
+
+		// Create writer and write 20 entries
+		writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segmentId4, minioHdl, cfg)
+		require.NoError(t, err)
+
+		// Write 20 test entries with fixed size for predictable batch control
+		entryCount := 20
+		entrySize := 100 // Fixed size per entry for predictable batch size calculation
+		testEntries := make([][]byte, entryCount)
+		for i := 0; i < entryCount; i++ {
+			entryData := fmt.Sprintf("Entry_%04d: %s", i, string(generateTestData(entrySize-20))) // Reserve 20 bytes for prefix
+			testEntries[i] = []byte(entryData)
+
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-ch-%d", i))
+			defer resultCh.Close(ctx)
+			_, err = writer.WriteDataAsync(ctx, int64(i), testEntries[i], resultCh)
+			require.NoError(t, err)
+			_, readResultErr := resultCh.ReadResult(ctx)
+			require.NoError(t, readResultErr)
+		}
+
+		// Finalize the writer
+		lastEntryId, err := writer.Finalize(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(entryCount-1), lastEntryId)
+
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+
+		t.Logf("Successfully wrote %d entries, each ~%d bytes", entryCount, entrySize)
+
+		// Calculate maxBatchSize to read approximately 10 entries in first batch
+		// Account for record headers and other overhead (approximately 50 bytes per entry overhead)
+		firstReadCount := 10
+		maxBatchSizeForFirstRead := int64(firstReadCount * entrySize)
+
+		// Create reader with controlled batch size for predictable reading
+		reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segmentId4, minioHdl, maxBatchSizeForFirstRead, 4)
+		require.NoError(t, err)
+
+		// Read first batch (should get approximately 10 entries)
+		readEntries := make([][]byte, 0, entryCount)
+
+		t.Logf("Reading first batch with maxBatchSize: %d bytes...", maxBatchSizeForFirstRead)
+		opt := storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: int64(entryCount), // Set high to let maxBatchSize control the limit
+		}
+
+		batch, err := reader.ReadNextBatchAdv(ctx, opt, nil)
+		require.NoError(t, err)
+		require.NotNil(t, batch)
+
+		for _, entry := range batch.Entries {
+			readEntries = append(readEntries, entry.Values)
+			t.Logf("Read entry %d: %s", entry.EntryId, string(entry.Values[:min(50, len(entry.Values))]))
+		}
+
+		firstBatchCount := len(readEntries)
+		t.Logf("First batch read %d entries (expected around %d)", firstBatchCount, firstReadCount)
+		assert.Greater(t, firstBatchCount, 5, "Should have read at least 5 entries in first batch")
+		assert.Less(t, firstBatchCount, entryCount, "Should not have read all entries in first batch")
+
+		// Now trigger compaction while reader is in middle of reading
+		t.Log("Triggering compaction during read...")
+		writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segmentId4, minioHdl, cfg, true)
+		require.NoError(t, err)
+
+		compactedSize, err := writerForCompact.Compact(ctx)
+		require.NoError(t, err)
+		assert.Greater(t, compactedSize, int64(0))
+
+		err = writerForCompact.Close(ctx)
+		require.NoError(t, err)
+
+		t.Logf("Compaction completed, size: %d bytes", compactedSize)
+
+		// Continue reading the remaining entries (should work normally after compaction)
+		t.Log("Continuing to read remaining entries after compaction...")
+
+		// Determine where to start reading next
+		lastReadEntryId := int64(-1)
+		if len(readEntries) > 0 {
+			// Find the last entry ID we actually read
+			for i, entry := range batch.Entries {
+				if i < len(readEntries) {
+					lastReadEntryId = entry.EntryId
+				}
+			}
+		}
+		nextStartEntryId := lastReadEntryId + 1
+		t.Logf("Continuing from entry ID: %d (last read: %d)", nextStartEntryId, lastReadEntryId)
+
+		// Continue reading the remaining entries using a larger batch size to get all remaining entries
+		opt2 := storage.ReaderOpt{
+			StartEntryID:    nextStartEntryId,
+			MaxBatchEntries: int64(entryCount), // Set high to get all remaining entries
+		}
+
+		// Use the LastReadState from previous batch to continue reading
+		// first read will fail
+		batchTmp, err := reader.ReadNextBatchAdv(ctx, opt2, batch.LastReadState)
+		require.Error(t, err, "Should read nothing due to blocks deleted by compaction after last read")
+		require.Nil(t, batchTmp)
+		// second read retry should success, cause footer refresh, and lastReadState != refresh footer will relocate to new merged blocks for reading
+		time.Sleep(time.Millisecond * 200) // mock 200 delay
+		batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch.LastReadState)
+		require.NoError(t, err, "Should be able to read remaining entries after compaction")
+		require.NotNil(t, batch2)
+
+		secondBatchCount := len(batch2.Entries)
+		t.Logf("Second batch read %d entries", secondBatchCount)
+
+		for _, entry := range batch2.Entries {
+			readEntries = append(readEntries, entry.Values)
+			t.Logf("Read entry %d after compaction: %s", entry.EntryId, string(entry.Values[:min(50, len(entry.Values))]))
+		}
+
+		totalReadCount := len(readEntries)
+		t.Logf("Total entries read: %d (expected: %d)", totalReadCount, entryCount)
+
+		// We should have read all entries
+		assert.Equal(t, entryCount, totalReadCount, "Should have read all %d entries", entryCount)
+
+		// Verify no more entries by trying to read beyond the last entry
+		opt3 := storage.ReaderOpt{
+			StartEntryID:    int64(entryCount),
+			MaxBatchEntries: 10,
+		}
+		batch3, err := reader.ReadNextBatchAdv(ctx, opt3, batch2.LastReadState)
+		if err == nil {
+			assert.Empty(t, batch3.Entries, "Should get no more entries beyond the end")
+		} else {
+			// It's also acceptable to get an error when reading beyond the end
+			t.Logf("Expected error when reading beyond end: %v", err)
+		}
+
+		// Verify content integrity - compare read entries with original
+		for i := 0; i < entryCount; i++ {
+			assert.Equal(t, testEntries[i], readEntries[i],
+				"Entry %d content should match after compaction", i)
+		}
+
+		err = reader.Close(ctx)
+		require.NoError(t, err)
+
+		// Verify that compaction actually happened and cleaned up original files
+		segmentPrefix4 := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId4)
+		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix4, true, minio.ListObjectsOptions{})
+
+		originalBlocks := 0
+		mergedBlocks := 0
+		hasFooter := false
+
+		for object := range objectCh {
+			require.NoError(t, object.Err)
+			t.Logf("  Final file: %s (size: %d)", object.Key, object.Size)
+
+			if strings.HasSuffix(object.Key, "footer.blk") {
+				hasFooter = true
+			} else if strings.HasSuffix(object.Key, ".blk") {
+				if strings.Contains(object.Key, "m_") {
+					mergedBlocks++
+				} else if !strings.HasSuffix(object.Key, ".lock") {
+					originalBlocks++
+				}
+			}
+		}
+
+		assert.True(t, hasFooter, "Should have footer after compaction")
+		assert.Greater(t, mergedBlocks, 0, "Should have merged blocks")
+		assert.Equal(t, 0, originalBlocks, "All original blocks should be cleaned up")
+
+		t.Logf("Read-during-compaction test passed: read %d entries successfully, %d merged blocks created",
+			entryCount, mergedBlocks)
+	})
+
+	// Test all possible reader state transitions during read operations
+	t.Run("ReaderStateTransitions", func(t *testing.T) {
+		baseSegmentId := segmentId + 10 // Use different segment IDs for each test
+
+		// Helper function to create test data
+		createTestData := func(count int) [][]byte {
+			entries := make([][]byte, count)
+			for i := 0; i < count; i++ {
+				entries[i] = []byte(fmt.Sprintf("StateTest_%04d: %s", i, string(generateTestData(80))))
+			}
+			return entries
+		}
+
+		// Helper function to write and prepare segment
+		writeAndPrepareSegment := func(segId int64, finalizeSegment bool, compactSegment bool) [][]byte {
+			writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg)
+			require.NoError(t, err)
+
+			testData := createTestData(15)
+			for i, data := range testData {
+				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("state-test-%d-%d", segId, i))
+				defer resultCh.Close(ctx)
+				_, err = writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+				require.NoError(t, err)
+				_, readResultErr := resultCh.ReadResult(ctx)
+				require.NoError(t, readResultErr)
+			}
+
+			if finalizeSegment {
+				_, err = writer.Finalize(ctx)
+				require.NoError(t, err)
+			}
+
+			err = writer.Close(ctx)
+			require.NoError(t, err)
+
+			if compactSegment && finalizeSegment {
+				writerForCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+				require.NoError(t, err)
+				_, err = writerForCompact.Compact(ctx)
+				require.NoError(t, err)
+				err = writerForCompact.Close(ctx)
+				require.NoError(t, err)
+			}
+
+			return testData
+		}
+
+		// Helper function to read first batch
+		readFirstBatch := func(segId int64, entryCount int) (*objectstorage.MinioFileReaderAdv, *proto.BatchReadResult, [][]byte) {
+			maxBatchSize := int64(8 * 120) // Read about 8 entries in first batch
+			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segId, minioHdl, maxBatchSize, 4)
+			require.NoError(t, err)
+
+			opt := storage.ReaderOpt{
+				StartEntryID:    0,
+				MaxBatchEntries: int64(entryCount),
+			}
+
+			batch, err := reader.ReadNextBatchAdv(ctx, opt, nil)
+			require.NoError(t, err)
+			require.NotNil(t, batch)
+
+			readEntries := make([][]byte, 0)
+			for _, entry := range batch.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			return reader, batch, readEntries
+		}
+
+		// Case 1: Active → Active (no state change)
+		t.Run("ActiveToActive", func(t *testing.T) {
+			segId := baseSegmentId + 1
+			testData := writeAndPrepareSegment(segId, false, false) // Keep active
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Active state", len(readEntries))
+
+			// Continue reading (segment remains active)
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Active→Active: Read %d total entries", len(readEntries))
+			assert.GreaterOrEqual(t, len(readEntries), len(testData), "Should read all entries")
+		})
+
+		// Case 2: Active → Completed
+		t.Run("ActiveToCompleted", func(t *testing.T) {
+			segId := baseSegmentId + 2
+			testData := writeAndPrepareSegment(segId, false, false) // Start active
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Active state", len(readEntries))
+
+			// Now finalize the segment (Active → Completed)
+			writerToFinalize, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+			require.NoError(t, err)
+			_, err = writerToFinalize.Finalize(ctx)
+			require.NoError(t, err)
+			err = writerToFinalize.Close(ctx)
+			require.NoError(t, err)
+
+			// Continue reading after finalization
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Active→Completed: Read %d total entries", len(readEntries))
+			assert.Equal(t, len(testData), len(readEntries), "Should read all entries")
+		})
+
+		// Case 3: Active → Compacted
+		t.Run("ActiveToCompacted", func(t *testing.T) {
+			segId := baseSegmentId + 3
+			testData := writeAndPrepareSegment(segId, false, false) // Start active
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Active state", len(readEntries))
+
+			// Now finalize and compact the segment (Active → Compacted)
+			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+			require.NoError(t, err)
+			_, err = writerToCompact.Finalize(ctx)
+			require.NoError(t, err)
+			_, err = writerToCompact.Compact(ctx)
+			require.NoError(t, err)
+			err = writerToCompact.Close(ctx)
+			require.NoError(t, err)
+
+			// Continue reading after compaction
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			// This might return an error due to block deletion, which is expected
+			// first read will fail
+			batchTmp, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.Error(t, err, "Should read nothing due to blocks deleted by compaction after last read")
+			require.Nil(t, batchTmp)
+			// second read retry should success, cause footer refresh, and lastReadState != refresh footer will relocate to new merged blocks for reading
+			time.Sleep(200 * time.Millisecond) // mock retry interval
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err, "Should be able to read remaining entries after compaction")
+			require.NotNil(t, batch2)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Active→Compacted: Read %d total entries", len(readEntries))
+			assert.Equal(t, len(testData), len(readEntries), "Should read all entries")
+		})
+
+		// Case 4: Completed → Completed (no state change)
+		t.Run("CompletedToCompleted", func(t *testing.T) {
+			segId := baseSegmentId + 4
+			testData := writeAndPrepareSegment(segId, true, false) // Start completed
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Completed state", len(readEntries))
+
+			// Continue reading (segment remains completed)
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Completed→Completed: Read %d total entries", len(readEntries))
+			assert.Equal(t, len(testData), len(readEntries), "Should read all entries")
+		})
+
+		// Case 5: Completed → Compacted
+		t.Run("CompletedToCompacted", func(t *testing.T) {
+			segId := baseSegmentId + 5
+			testData := writeAndPrepareSegment(segId, true, false) // Start completed
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Completed state", len(readEntries))
+
+			// Now compact the segment (Completed → Compacted)
+			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+			require.NoError(t, err)
+			_, err = writerToCompact.Compact(ctx)
+			require.NoError(t, err)
+			err = writerToCompact.Close(ctx)
+			require.NoError(t, err)
+
+			// Continue reading after compaction
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			// This might return an error due to block deletion, which is expected
+			// first read will fail
+			batchTmp, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.Error(t, err, "Should read nothing due to blocks deleted by compaction after last read")
+			require.Nil(t, batchTmp)
+			// second read retry should success, cause footer refresh, and lastReadState != refresh footer will relocate to new merged blocks for reading
+			time.Sleep(200 * time.Millisecond) // mock retry interval
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err, "Should be able to read remaining entries after compaction")
+			require.NotNil(t, batch2)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Completed→Compacted: Read %d total entries", len(readEntries))
+			assert.Equal(t, len(testData), len(readEntries), "Should read all entries")
+		})
+
+		// Case 6: Compacted → Compacted (no state change)
+		t.Run("CompactedToCompacted", func(t *testing.T) {
+			segId := baseSegmentId + 6
+			testData := writeAndPrepareSegment(segId, true, true) // Start compacted
+
+			reader, batch1, readEntries := readFirstBatch(segId, len(testData))
+			defer reader.Close(ctx)
+
+			t.Logf("First batch read %d entries in Compacted state", len(readEntries))
+
+			// Continue reading (segment remains compacted)
+			nextStartId := int64(len(readEntries))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			require.NoError(t, err)
+
+			for _, entry := range batch2.Entries {
+				readEntries = append(readEntries, entry.Values)
+			}
+
+			t.Logf("Compacted→Compacted: Read %d total entries", len(readEntries))
+			assert.Equal(t, len(testData), len(readEntries), "Should read all entries")
+		})
+
+		// Case 7: Read all data from Active segment, then Finalize+Compact, expect EOF on next read
+		t.Run("ActiveReadAllThenCompactEOF", func(t *testing.T) {
+			segId := baseSegmentId + 7
+
+			// Write 10 entries without finalizing
+			writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg)
+			require.NoError(t, err)
+
+			testData := createTestData(10)
+			for i, data := range testData {
+				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("eof-test1-%d-%d", segId, i))
+				defer resultCh.Close(ctx)
+				_, err = writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+				require.NoError(t, err)
+				_, readResultErr := resultCh.ReadResult(ctx)
+				require.NoError(t, readResultErr)
+			}
+
+			err = writer.Close(ctx)
+			require.NoError(t, err)
+
+			// Read all data from active segment
+			maxBatchSize := int64(10 * 120) // Large enough to read all entries in one batch
+			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segId, minioHdl, maxBatchSize, 4)
+			require.NoError(t, err)
+			defer reader.Close(ctx)
+
+			opt := storage.ReaderOpt{
+				StartEntryID:    0,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			// First read - get all data
+			batch1, err := reader.ReadNextBatchAdv(ctx, opt, nil)
+			require.NoError(t, err)
+			require.NotNil(t, batch1)
+			require.Equal(t, len(testData), len(batch1.Entries), "Should read all entries")
+
+			t.Logf("Read all %d entries from Active segment", len(batch1.Entries))
+
+			// Now finalize and compact the segment
+			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+			require.NoError(t, err)
+			_, err = writerToCompact.Finalize(ctx)
+			require.NoError(t, err)
+			_, err = writerToCompact.Compact(ctx)
+			require.NoError(t, err)
+			err = writerToCompact.Close(ctx)
+			require.NoError(t, err)
+
+			// Try to read next batch - should return EOF/no more data
+			nextStartId := int64(len(testData))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			if err != nil {
+				t.Logf("Got expected error when trying to read beyond EOF: %v", err)
+			} else {
+				// If no error, should have empty entries (EOF condition)
+				require.NotNil(t, batch2)
+				require.Empty(t, batch2.Entries, "Should have no more entries to read (EOF)")
+				t.Logf("Got EOF condition: no more entries to read")
+			}
+
+			t.Logf("ActiveReadAllThenCompactEOF test completed successfully")
+		})
+
+		// Case 8: Read all data from Completed segment, then Compact, expect EOF on next read
+		t.Run("CompletedReadAllThenCompactEOF", func(t *testing.T) {
+			segId := baseSegmentId + 8
+
+			// Write 10 entries and finalize
+			writer, err := objectstorage.NewMinioFileWriter(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg)
+			require.NoError(t, err)
+
+			testData := createTestData(10)
+			for i, data := range testData {
+				resultCh := channel.NewLocalResultChannel(fmt.Sprintf("eof-test2-%d-%d", segId, i))
+				defer resultCh.Close(ctx)
+				_, err = writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+				require.NoError(t, err)
+				_, readResultErr := resultCh.ReadResult(ctx)
+				require.NoError(t, readResultErr)
+			}
+
+			// Finalize the segment (Active -> Completed)
+			_, err = writer.Finalize(ctx)
+			require.NoError(t, err)
+			err = writer.Close(ctx)
+			require.NoError(t, err)
+
+			// Read all data from completed segment
+			maxBatchSize := int64(10 * 120) // Large enough to read all entries in one batch
+			reader, err := objectstorage.NewMinioFileReaderAdv(ctx, testBucket, baseDir, logId, segId, minioHdl, maxBatchSize, 4)
+			require.NoError(t, err)
+			defer reader.Close(ctx)
+
+			opt := storage.ReaderOpt{
+				StartEntryID:    0,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			// First read - get all data
+			batch1, err := reader.ReadNextBatchAdv(ctx, opt, nil)
+			require.NoError(t, err)
+			require.NotNil(t, batch1)
+			require.Equal(t, len(testData), len(batch1.Entries), "Should read all entries")
+
+			t.Logf("Read all %d entries from Completed segment", len(batch1.Entries))
+
+			// Now compact the segment (Completed -> Compacted)
+			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
+			require.NoError(t, err)
+			_, err = writerToCompact.Compact(ctx)
+			require.NoError(t, err)
+			err = writerToCompact.Close(ctx)
+			require.NoError(t, err)
+
+			// Try to read next batch - should return EOF/no more data
+			nextStartId := int64(len(testData))
+			opt2 := storage.ReaderOpt{
+				StartEntryID:    nextStartId,
+				MaxBatchEntries: int64(len(testData)),
+			}
+
+			batch2, err := reader.ReadNextBatchAdv(ctx, opt2, batch1.LastReadState)
+			if err != nil {
+				t.Logf("Got expected error when trying to read beyond EOF: %v", err)
+			} else {
+				// If no error, should have empty entries (EOF condition)
+				require.NotNil(t, batch2)
+				require.Empty(t, batch2.Entries, "Should have no more entries to read (EOF)")
+				t.Logf("Got EOF condition: no more entries to read")
+			}
+
+			t.Logf("CompletedReadAllThenCompactEOF test completed successfully")
+		})
+
+		t.Log("All reader state transition tests completed successfully")
 	})
 }

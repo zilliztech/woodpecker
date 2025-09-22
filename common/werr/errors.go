@@ -133,6 +133,7 @@ const (
 	FileReaderAlreadyClosed
 	FileEndOfFile
 	FileReaderNoBlockFound
+	FileReaderBlockDeletedByCompaction
 
 	// ---------------------------------------------
 	// Metadata Layer Error Codes
@@ -279,18 +280,19 @@ var (
 	ErrFileWriterAlreadyClosed        = newWoodpeckerError("writer already closed", FileWriterAlreadyClosed, false)
 
 	// file reader errors (disk/object storage)
-	ErrFileReaderNotFound             = newWoodpeckerError("reader file not found", FileReaderNotFound, false)
-	ErrFileReaderCorrupted            = newWoodpeckerError("reader data corrupted", FileReaderCorrupted, false)
-	ErrFileReaderInvalidRecord        = newWoodpeckerError("reader invalid record size", FileReaderInvalidRecord, false)
-	ErrFileReaderCodecNotFound        = newWoodpeckerError("reader codec not found", FileReaderCodecNotFound, false)
-	ErrFileReaderUnknownRecordType    = newWoodpeckerError("reader unknown record type", FileReaderUnknownRecordType, false)
-	ErrFileReaderUnexpectedRecordType = newWoodpeckerError("reader unexpected record type", FileReaderUnexpectedRecordType, false)
-	ErrFileReaderInvalidMagicCode     = newWoodpeckerError("reader invalid magic code", FileReaderInvalidMagicCode, false)
-	ErrFileReaderCRCMismatch          = newWoodpeckerError("reader crc mismatch", FileReaderCRCMismatch, false)
-	ErrFileReaderCloseFailed          = newWoodpeckerError("reader close failed", FileReaderCloseFailed, true)
-	ErrFileReaderNoBlockFound         = newWoodpeckerError("reader no block found", FileReaderNoBlockFound, false)
-	ErrFileReaderAlreadyClosed        = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
-	ErrFileReaderEndOfFile            = newWoodpeckerError("end of file", FileEndOfFile, false)
+	ErrFileReaderNotFound                 = newWoodpeckerError("reader file not found", FileReaderNotFound, false)
+	ErrFileReaderCorrupted                = newWoodpeckerError("reader data corrupted", FileReaderCorrupted, false)
+	ErrFileReaderInvalidRecord            = newWoodpeckerError("reader invalid record size", FileReaderInvalidRecord, false)
+	ErrFileReaderCodecNotFound            = newWoodpeckerError("reader codec not found", FileReaderCodecNotFound, false)
+	ErrFileReaderUnknownRecordType        = newWoodpeckerError("reader unknown record type", FileReaderUnknownRecordType, false)
+	ErrFileReaderUnexpectedRecordType     = newWoodpeckerError("reader unexpected record type", FileReaderUnexpectedRecordType, false)
+	ErrFileReaderInvalidMagicCode         = newWoodpeckerError("reader invalid magic code", FileReaderInvalidMagicCode, false)
+	ErrFileReaderCRCMismatch              = newWoodpeckerError("reader crc mismatch", FileReaderCRCMismatch, false)
+	ErrFileReaderCloseFailed              = newWoodpeckerError("reader close failed", FileReaderCloseFailed, true)
+	ErrFileReaderNoBlockFound             = newWoodpeckerError("reader no block found", FileReaderNoBlockFound, false)
+	ErrFileReaderAlreadyClosed            = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
+	ErrFileReaderEndOfFile                = newWoodpeckerError("end of file", FileEndOfFile, false)
+	ErrFileReaderBlockDeletedByCompaction = newWoodpeckerError("block deleted by compaction, client should retry without lastReadState", FileReaderBlockDeletedByCompaction, true)
 
 	// ---------------------------------------------
 	// Metadata Layer Errors

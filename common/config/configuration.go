@@ -76,12 +76,6 @@ type SegmentCompactionPolicy struct {
 	MaxParallelReads   int   `yaml:"maxParallelReads"`
 }
 
-// FragmentManagerConfig stores the fragment manager configuration.
-type FragmentManagerConfig struct {
-	MaxBytes    int64 `yaml:"maxBytes"`
-	MaxInterval int   `yaml:"maxInterval"`
-}
-
 // LogFileConfig stores the log file configuration.
 type LogFileConfig struct {
 	RootPath   string `yaml:"rootPath"`

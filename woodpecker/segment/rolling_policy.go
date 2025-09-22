@@ -66,11 +66,11 @@ type DefaultRollingPolicy struct {
 func (p *DefaultRollingPolicy) ShouldRollover(ctx context.Context, currentSegmentSize int64, currentBlocksCount int64, lastRolloverTimeMs int64) bool {
 	// Validate input parameters
 	if currentSegmentSize < 0 {
-		logger.Ctx(ctx).Warn("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
+		logger.Ctx(ctx).Info("Invalid currentSegmentSize", zap.Int64("currentSegmentSize", currentSegmentSize))
 		return false
 	}
 	if currentBlocksCount < 0 {
-		logger.Ctx(ctx).Info("Invalid currentBlocksCount", zap.Int64("currentBlocksCount", currentBlocksCount))
+		logger.Ctx(ctx).Debug("Invalid currentBlocksCount", zap.Int64("currentBlocksCount", currentBlocksCount))
 		return false
 	}
 

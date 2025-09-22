@@ -186,14 +186,14 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 			return info, stateErr
 		}
 		if IsFencedObject(objInfo) {
-			logger.Ctx(ctx).Warn("object already exists and it is a fence object", zap.String("objectName", objectName))
+			logger.Ctx(ctx).Info("object already exists and it is a fence object", zap.String("objectName", objectName))
 			return info, werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
-		logger.Ctx(ctx).Info("fragment already exists, idempotent flush success", zap.String("fragmentObjectKey", objectName))
+		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {

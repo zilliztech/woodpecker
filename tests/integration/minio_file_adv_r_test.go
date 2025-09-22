@@ -2609,8 +2609,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 		// Verify object structure
 		assert.True(t, footerFound, "Footer object should exist")
 		assert.Greater(t, len(mergedBlocks), 0, "Should have merged block objects")
-		assert.GreaterOrEqual(t, len(regularBlocks), 0, "May have original block objects")
-		assert.Less(t, len(mergedBlocks), len(regularBlocks), "Merged block objects should less than original block objects")
+		assert.Equal(t, len(regularBlocks), 0, "May have original block objects")
 
 		t.Logf("Object structure: %d regular blocks, %d merged blocks, footer: %v",
 			len(regularBlocks), len(mergedBlocks), footerFound)

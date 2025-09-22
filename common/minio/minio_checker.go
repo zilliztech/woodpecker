@@ -80,7 +80,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, minioHandler MinioHandl
 			"This indicates the underlying storage system doesn't support conditional writes (If-None-Match). Error: %v", err))
 	}
 
-	// Second upload to same object should return ErrFragmentAlreadyExists
+	// Second upload to same object should return ErrObjectAlreadyExists
 	_, err = minioHandler.PutObjectIfNoneMatch(ctx, bucketName, testObjectName,
 		bytes.NewReader(testData), int64(len(testData)))
 	if err == nil {
@@ -88,7 +88,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, minioHandler MinioHandl
 			"but it succeeded. This indicates conditional write protection is not working properly.")
 	}
 	if !werr.ErrObjectAlreadyExists.Is(err) {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrFragmentAlreadyExists "+
+		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrObjectAlreadyExists "+
 			"for existing object, but got: %v. This indicates the error handling for conditional writes is incorrect.", err))
 	}
 

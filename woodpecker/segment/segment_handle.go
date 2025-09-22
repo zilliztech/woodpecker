@@ -720,7 +720,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		logger.Ctx(ctx).Warn("Unsupported quorum configuration during get blocks count, return 0",
+		logger.Ctx(ctx).Debug("Unsupported quorum configuration during get blocks count, return 0",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
@@ -1002,7 +1002,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	}
 	defer func() {
 		s.doingCompact.Store(false)
-		logger.Ctx(ctx).Info("Compaction operation completed, released operation lock",
+		logger.Ctx(ctx).Info("Compaction operation completed, cleared compacting flag",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId))
@@ -1116,7 +1116,7 @@ func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
 	if s.appendOpsQueue.Len() > 0 {
-		logger.Ctx(ctx).Warn("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
+		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
 		return
 	}
 	// trigger immediately

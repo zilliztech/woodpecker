@@ -357,7 +357,7 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 			logger.Ctx(ctx).Debug("no more entries to read",
 				zap.String("filePath", r.filePath),
 				zap.Int64("startEntryId", opt.StartEntryID))
-			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+			return nil, werr.ErrFileReaderEndOfFile
 		}
 	}
 
@@ -693,7 +693,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			}
 		}
 		if blockHeaderRecord == nil {
-			logger.Ctx(ctx).Warn("block header record not found, stop reading",
+			logger.Ctx(ctx).Info("block header record not ready, stop reading",
 				zap.String("filePath", r.filePath),
 				zap.Int64("blockNumber", currentBlockID))
 			break
@@ -781,7 +781,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		if !hasDataReadError {
 			// only read without dataReadError, determine whether it is an EOF
 			if !r.isIncompleteFile.Load() || r.footer != nil {
-				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+				return nil, werr.ErrFileReaderEndOfFile
 			}
 			if r.isFooterExistsUnsafe(ctx) {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")

@@ -272,7 +272,7 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentI
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error").Observe(float64(time.Since(start).Milliseconds()))
-		if !werr.ErrEntryNotFound.Is(err) {
+		if !werr.ErrEntryNotFound.Is(err) && !werr.ErrFileReaderEndOfFile.Is(err) {
 			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		}
 		return nil, err
@@ -361,6 +361,10 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, logId int64, segmen
 
 	blockCount, err := segmentProcessor.GetBlocksCount(ctx)
 	if err != nil {
+		if werr.ErrSegmentProcessorNoWriter.Is(err) {
+			// means there is no data yet
+			return 0, nil
+		}
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "error").Inc()
 		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment block count failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
