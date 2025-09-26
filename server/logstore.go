@@ -23,16 +23,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/net"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
@@ -63,12 +62,12 @@ type LogStore interface {
 var _ LogStore = (*logStore)(nil)
 
 type logStore struct {
-	cfg      *config.Configuration
-	ctx      context.Context
-	cancel   context.CancelFunc
-	etcdCli  *clientv3.Client
-	minioCli minioHandler.MinioHandler
-	address  string
+	cfg           *config.Configuration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	etcdCli       *clientv3.Client
+	storageClient storageclient.ObjectStorage
+	address       string
 
 	spMu              sync.RWMutex
 	segmentProcessors map[int64]map[int64]processor.SegmentProcessor
@@ -78,14 +77,14 @@ type logStore struct {
 	cleanupDone chan struct{}
 }
 
-func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minioHandler.MinioHandler) LogStore {
+func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	logStore := &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
 		etcdCli:           etcdCli,
-		minioCli:          minioCli,
+		storageClient:     storageClient,
 		segmentProcessors: make(map[int64]map[int64]processor.SegmentProcessor),
 		address:           net.GetIP(""),
 		cleanupDone:       make(chan struct{}),
@@ -229,7 +228,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, logId int64,
 		zap.Int64("segmentId", segmentId),
 		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 
-	s := processor.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.minioCli)
+	s := processor.NewSegmentProcessor(ctx, l.cfg, logId, segmentId, l.storageClient)
 	segProcessors[segmentId] = s
 	l.segmentProcessors[logId] = segProcessors
 
