@@ -19,8 +19,10 @@ package minio
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/minio/aliyun"
 	"github.com/zilliztech/woodpecker/common/minio/gcp"
 	"github.com/zilliztech/woodpecker/common/minio/tencent"
@@ -222,10 +225,14 @@ func newMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*
 	return minioClient, nil
 }
 
+// IsPreconditionFailed if the error is condition predication failed
+// error code list: https://github.com/minio/minio/blob/master/cmd/api-errors.go
 func IsPreconditionFailed(err error) bool {
 	return minio.ToErrorResponse(err).Code == "PreconditionFailed"
 }
 
+// IsObjectNotExists if the error is object not exists
+// error code list: https://github.com/minio/minio/blob/master/cmd/api-errors.go
 func IsObjectNotExists(err error) bool {
 	return minio.ToErrorResponse(err).Code == "NoSuchKey"
 }
@@ -236,4 +243,47 @@ func IsFencedObject(objInfo minio.ObjectInfo) bool {
 		return true
 	}
 	return false
+}
+
+// ReadObjectFull reads all content from ObjectReader and returns a byte slice
+// It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
+func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSize int64) ([]byte, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
+	defer sp.End()
+	start := time.Now()
+	// Initial buffer size - 1MB is a reasonable starting point
+	buf := make([]byte, 0, initReadBufSize)
+
+	// Temporary read buffer
+	readBuf := make([]byte, 32*1024) // 32KB read block
+	bytesRead := int64(0)
+
+	for {
+		// Read a chunk of data
+		n, err := objectReader.Read(readBuf)
+
+		// If data is read, append to result buffer
+		if n > 0 {
+			buf = append(buf, readBuf[:n]...)
+			bytesRead += int64(n)
+		}
+
+		// Handle EOF and errors
+		if err == io.EOF {
+			// Normal completion
+			break
+		} else if err != nil {
+			// Error occurred
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "error").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
+			return nil, err
+		}
+	}
+
+	// Track metrics for successful read
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues("read").Add(float64(bytesRead))
+
+	return buf, nil
 }

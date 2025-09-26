@@ -69,7 +69,7 @@ func TestMinioPutIfMatch(t *testing.T) {
 	assert.NoError(t, err)
 	defer obj.Close()
 
-	data, err := minioHandler.ReadObjectFull(ctx, obj, 1024)
+	data, err := minioHandler.ReadObjectFull(ctx, &minioHandler.ObjectReader{Object: obj}, 1024)
 	require.NoError(t, err)
 
 	actualContent := data
@@ -288,7 +288,7 @@ func TestMinioHandlePutIfNotMatch(t *testing.T) {
 	require.NoError(t, err)
 	defer obj.Close()
 
-	data, err := minioHandler.ReadObjectFull(ctx, obj, 1024)
+	data, err := minioHandler.ReadObjectFull(ctx, &minioHandler.ObjectReader{Object: obj}, 1024)
 	require.NoError(t, err)
 	assert.Equal(t, testData, data, "Original content should be unchanged")
 
@@ -449,7 +449,7 @@ func TestMinioHandlePutIfNotMatchIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	defer obj.Close()
 
-	data, err := minioHandler.ReadObjectFull(ctx, obj, 1024)
+	data, err := minioHandler.ReadObjectFull(ctx, &minioHandler.ObjectReader{Object: obj}, 1024)
 	require.NoError(t, err)
 	assert.Equal(t, testData, data, "Original content should be preserved")
 

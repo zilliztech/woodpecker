@@ -28,7 +28,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
-	"github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -758,12 +758,12 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				// Create first client
 				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 				assert.NoError(t, err)
-				var minioCli minio.MinioHandler
+				var storageCli storageclient.ObjectStorage
 				if cfg.Woodpecker.Storage.IsStorageMinio() {
-					minioCli, err = minio.NewMinioHandler(ctx, cfg)
+					storageCli, err = storageclient.NewObjectStorage(ctx, cfg)
 					assert.NoError(t, err)
 				}
-				client1, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, minioCli, true)
+				client1, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, storageCli, true)
 				assert.NoError(t, err)
 
 				// Create a log or use existing one
@@ -808,12 +808,12 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				// Create second client
 				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 				assert.NoError(t, err)
-				var minioCli minio.MinioHandler
+				var storageCli storageclient.ObjectStorage
 				if cfg.Woodpecker.Storage.IsStorageMinio() {
-					minioCli, err = minio.NewMinioHandler(ctx, cfg)
+					storageCli, err = storageclient.NewObjectStorage(ctx, cfg)
 					assert.NoError(t, err)
 				}
-				client2, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, minioCli, true)
+				client2, err := woodpecker.NewEmbedClient(ctx, cfg, etcdCli, storageCli, true)
 				assert.NoError(t, err)
 
 				// Verify the log exists

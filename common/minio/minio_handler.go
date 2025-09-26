@@ -36,58 +36,10 @@ const (
 	FencedObjectMetaKey    = "Fenced"
 )
 
-type ObjectReader interface {
-	io.Reader
-	io.Closer
-}
-
-// ReadObjectFull reads all content from ObjectReader and returns a byte slice
-// It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
-func ReadObjectFull(ctx context.Context, objectReader ObjectReader, initReadBufSize int64) ([]byte, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
-	defer sp.End()
-	start := time.Now()
-	// Initial buffer size - 1MB is a reasonable starting point
-	buf := make([]byte, 0, initReadBufSize)
-
-	// Temporary read buffer
-	readBuf := make([]byte, 32*1024) // 32KB read block
-	bytesRead := int64(0)
-
-	for {
-		// Read a chunk of data
-		n, err := objectReader.Read(readBuf)
-
-		// If data is read, append to result buffer
-		if n > 0 {
-			buf = append(buf, readBuf[:n]...)
-			bytesRead += int64(n)
-		}
-
-		// Handle EOF and errors
-		if err == io.EOF {
-			// Normal completion
-			break
-		} else if err != nil {
-			// Error occurred
-			metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "error").Inc()
-			metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
-			return nil, err
-		}
-	}
-
-	// Track metrics for successful read
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("read").Add(float64(bytesRead))
-
-	return buf, nil
-}
-
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio
 type MinioHandler interface {
 	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
-	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error)
+	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (FileReader, int64, int64, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error)
 	PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error)
@@ -134,7 +86,7 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 	return obj, nil
 }
 
-func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (ObjectReader, int64, int64, error) {
+func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (FileReader, int64, int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObjectDataAndInfo")
 	defer sp.End()
 	start := time.Now()
@@ -153,7 +105,9 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("get_object").Add(float64(info.Size))
-	return obj, info.Size, info.LastModified.UnixMilli(), err
+	return &ObjectReader{
+		Object: obj,
+	}, info.Size, info.LastModified.UnixMilli(), err
 }
 
 func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {

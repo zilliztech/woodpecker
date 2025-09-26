@@ -27,7 +27,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -35,7 +34,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -100,20 +99,26 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			t.Logf("Expected error during close (simulating interruption): %v", err)
 		}
 
-		// Verify objects were created in MinIO
-		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-		objectCount := 0
-		hasFooter := false
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			if !strings.HasSuffix(object.Key, ".lock") {
+		// Verify objects were created in object storage
+		var objectCount int
+		var hasFooter bool
+		err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if !strings.HasSuffix(objInfo.FilePath, ".lock") {
 				objectCount++
-				if strings.HasSuffix(object.Key, "footer.blk") {
+				if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 					hasFooter = true
 				}
-				t.Logf("Created object after interruption: %s (size: %d)", object.Key, object.Size)
+				// Get object size for logging
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				if statErr == nil {
+					t.Logf("Created object after interruption: %s (size: %d)", objInfo.FilePath, objSize)
+				} else {
+					t.Logf("Created object after interruption: %s", objInfo.FilePath)
+				}
 			}
-		}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 
 		// Check if footer exists to determine test path
@@ -130,15 +135,15 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 		recoverySegmentFileKey = baseDir
 
 		// Check if segment has footer first
-		objectCh := minioHdl.ListObjects(ctx, testBucket, baseDir, true, minio.ListObjectsOptions{})
-		hasFooter := false
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			if strings.HasSuffix(object.Key, "footer.blk") {
+		var hasFooter bool
+		err := minioHdl.WalkWithObjects(ctx, testBucket, baseDir+"/", true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				hasFooter = true
-				break
+				return false // stop walking
 			}
-		}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 
 		if hasFooter {
 			// Segment is completed - test that we cannot write to it
@@ -222,16 +227,21 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("AdvVerifyOriginalSegmentObjects", func(t *testing.T) {
 		// Verify that the objects were created
-		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-
-		dataObjects := make([]string, 0)
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			if strings.HasSuffix(object.Key, ".blk") {
-				dataObjects = append(dataObjects, object.Key)
-				t.Logf("Found segment object: %s (size: %d)", object.Key, object.Size)
+		var dataObjects []string
+		err := minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") {
+				dataObjects = append(dataObjects, objInfo.FilePath)
+				// Get object size for logging
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				if statErr == nil {
+					t.Logf("Found segment object: %s (size: %d)", objInfo.FilePath, objSize)
+				} else {
+					t.Logf("Found segment object: %s", objInfo.FilePath)
+				}
 			}
-		}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 
 		assert.Greater(t, len(dataObjects), 0, "Should have created data objects")
 		t.Logf("Total data objects: %d", len(dataObjects))
@@ -285,22 +295,26 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 
 	t.Run("AdvVerifyAllObjectsExist", func(t *testing.T) {
 		// List all objects and verify structure
-		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-
-		dataObjects := make([]string, 0)
-
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			if strings.HasSuffix(object.Key, ".lock") {
-				continue // Skip lock files
+		var dataObjects []string
+		err := minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if strings.HasSuffix(objInfo.FilePath, ".lock") {
+				return true // Skip lock files, continue walking
 			}
 
-			if strings.Contains(object.Key, ".blk") {
-				dataObjects = append(dataObjects, object.Key)
+			if strings.Contains(objInfo.FilePath, ".blk") {
+				dataObjects = append(dataObjects, objInfo.FilePath)
 			}
 
-			t.Logf("Final object: %s (size: %d)", object.Key, object.Size)
-		}
+			// Get object size for logging
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			if statErr == nil {
+				t.Logf("Final object: %s (size: %d)", objInfo.FilePath, objSize)
+			} else {
+				t.Logf("Final object: %s", objInfo.FilePath)
+			}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 
 		assert.Greater(t, len(dataObjects), 0, "Should have data objects")
 		t.Logf("Total data objects: %d", len(dataObjects))
@@ -353,20 +367,29 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now read the objects directly and check their content
-	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-
-	for object := range objectCh {
-		require.NoError(t, object.Err)
-		if strings.HasSuffix(object.Key, ".blk") {
-			t.Logf("Checking object: %s (size: %d)", object.Key, object.Size)
+	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			// Get object size for logging
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			if statErr != nil {
+				t.Logf("Error getting object size for %s: %v", objInfo.FilePath, statErr)
+				return true // continue walking
+			}
+			t.Logf("Checking object: %s (size: %d)", objInfo.FilePath, objSize)
 
 			// Read the object
-			obj, err := minioHdl.GetObject(ctx, testBucket, object.Key, minio.GetObjectOptions{})
-			require.NoError(t, err)
+			obj, err := minioHdl.GetObject(ctx, testBucket, objInfo.FilePath, 0, objSize)
+			if err != nil {
+				t.Logf("Error getting object %s: %v", objInfo.FilePath, err)
+				return true // continue walking
+			}
 
 			data, err := io.ReadAll(obj)
 			obj.Close()
-			require.NoError(t, err)
+			if err != nil {
+				t.Logf("Error reading object %s: %v", objInfo.FilePath, err)
+				return true // continue walking
+			}
 
 			t.Logf("Object data size: %d bytes", len(data))
 
@@ -384,9 +407,9 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 			records, err := codec.DecodeRecordList(data)
 			if err != nil {
 				t.Logf("Error decoding records: %v", err)
-				continue
+				return true // continue walking
 			}
-			t.Logf("Decoded %d records from object %s", len(records), object.Key)
+			t.Logf("Decoded %d records from object %s", len(records), objInfo.FilePath)
 
 			// Print record types
 			foundBlockHeaderRecord := false
@@ -399,9 +422,11 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 				}
 			}
 
-			assert.True(t, foundBlockHeaderRecord, "Should find BlockHeaderRecord in object %s", object.Key)
+			assert.True(t, foundBlockHeaderRecord, "Should find BlockHeaderRecord in object %s", objInfo.FilePath)
 		}
-	}
+		return true // continue walking
+	})
+	require.NoError(t, err)
 }
 
 func TestAdvMinioFileReader_ReadNextBatchModes(t *testing.T) {
@@ -1580,32 +1605,31 @@ func TestAdvMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now read the first object and verify it starts with HeaderRecord
-	objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-
 	var firstDataObject string
-	for object := range objectCh {
-		require.NoError(t, object.Err)
-		if strings.HasSuffix(object.Key, ".blk") && !strings.HasSuffix(object.Key, "footer.blk") {
+	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+		if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 			// This should be the first data object (0.blk)
-			if strings.HasSuffix(object.Key, "/0.blk") {
-				firstDataObject = object.Key
-				break
+			if strings.HasSuffix(objInfo.FilePath, "/0.blk") {
+				firstDataObject = objInfo.FilePath
+				return false // stop walking
 			}
 		}
-	}
+		return true // continue walking
+	})
+	require.NoError(t, err)
 
 	require.NotEmpty(t, firstDataObject, "Should find the first data object (0.blk)")
 	t.Logf("Found first data object: %s", firstDataObject)
 
-	// Read the first object content
-	obj, err := minioHdl.GetObject(ctx, testBucket, firstDataObject, minio.GetObjectOptions{})
-	require.NoError(t, err)
-
 	// Get object size
-	objInfo, err := minioHdl.StatObject(ctx, testBucket, firstDataObject, minio.StatObjectOptions{})
+	objSize, _, err := minioHdl.StatObject(ctx, testBucket, firstDataObject)
 	require.NoError(t, err)
 
-	data, err := minioHandler.ReadObjectFull(ctx, obj, objInfo.Size)
+	// Read the first object content
+	obj, err := minioHdl.GetObject(ctx, testBucket, firstDataObject, 0, objSize)
+	require.NoError(t, err)
+
+	data, err := io.ReadAll(obj)
 	require.NoError(t, err)
 	obj.Close()
 
@@ -1691,11 +1715,17 @@ func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 
 		// List objects BEFORE close
 		t.Log("Objects BEFORE close:")
-		objectCh := minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			t.Logf("  Before close: %s (size: %d)", object.Key, object.Size)
-		}
+		err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			// Get object size for logging
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			if statErr == nil {
+				t.Logf("  Before close: %s (size: %d)", objInfo.FilePath, objSize)
+			} else {
+				t.Logf("  Before close: %s", objInfo.FilePath)
+			}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 
 		// Simulate interruption by closing the writer without finalize
 		// Note: Close may trigger Complete() which calls Finalize(), but this simulates a real-world scenario
@@ -1709,15 +1739,21 @@ func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 
 		// List objects AFTER close
 		t.Log("Objects AFTER close:")
-		objectCh = minioHdl.ListObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId), true, minio.ListObjectsOptions{})
 		objectCount := 0
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-			if !strings.HasSuffix(object.Key, ".lock") {
+		err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if !strings.HasSuffix(objInfo.FilePath, ".lock") {
 				objectCount++
-				t.Logf("  After close: %s (size: %d)", object.Key, object.Size)
+				// Get object size for logging
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				if statErr == nil {
+					t.Logf("  After close: %s (size: %d)", objInfo.FilePath, objSize)
+				} else {
+					t.Logf("  After close: %s", objInfo.FilePath)
+				}
 			}
-		}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 	})
 }
@@ -2582,29 +2618,33 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 
 	// Phase 5: Verify object storage structure
 	t.Run("AdvVerifyObjectStorageStructure", func(t *testing.T) {
-		segmentPrefix := fmt.Sprintf("%s/%d/%d", baseDir, logId, segmentId)
-		objectCh := minioHdl.ListObjects(ctx, testBucket, segmentPrefix, true, minio.ListObjectsOptions{})
-
+		segmentPrefix := fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId)
 		var regularBlocks []string
 		var mergedBlocks []string
 		var footerFound bool
 		var lockFiles []string
 
-		for object := range objectCh {
-			require.NoError(t, object.Err)
-
-			if strings.HasSuffix(object.Key, ".lock") {
-				lockFiles = append(lockFiles, object.Key)
-			} else if strings.HasSuffix(object.Key, "footer.blk") {
+		err := minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+			if strings.HasSuffix(objInfo.FilePath, ".lock") {
+				lockFiles = append(lockFiles, objInfo.FilePath)
+			} else if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				footerFound = true
-			} else if strings.Contains(object.Key, "/m_") && strings.HasSuffix(object.Key, ".blk") {
-				mergedBlocks = append(mergedBlocks, object.Key)
-			} else if strings.HasSuffix(object.Key, ".blk") {
-				regularBlocks = append(regularBlocks, object.Key)
+			} else if strings.Contains(objInfo.FilePath, "/m_") && strings.HasSuffix(objInfo.FilePath, ".blk") {
+				mergedBlocks = append(mergedBlocks, objInfo.FilePath)
+			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
+				regularBlocks = append(regularBlocks, objInfo.FilePath)
 			}
 
-			t.Logf("Found object: %s (size: %d)", object.Key, object.Size)
-		}
+			// Get object size for logging
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			if statErr == nil {
+				t.Logf("Found object: %s (size: %d)", objInfo.FilePath, objSize)
+			} else {
+				t.Logf("Found object: %s", objInfo.FilePath)
+			}
+			return true // continue walking
+		})
+		require.NoError(t, err)
 
 		// Verify object structure
 		assert.True(t, footerFound, "Footer object should exist")

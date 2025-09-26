@@ -134,6 +134,7 @@ const (
 	FileEndOfFile
 	FileReaderNoBlockFound
 	FileReaderBlockDeletedByCompaction
+	FileReaderSeek
 
 	// ---------------------------------------------
 	// Metadata Layer Error Codes
@@ -293,6 +294,7 @@ var (
 	ErrFileReaderAlreadyClosed            = newWoodpeckerError("reader already closed", FileReaderAlreadyClosed, false)
 	ErrFileReaderEndOfFile                = newWoodpeckerError("end of file", FileEndOfFile, false)
 	ErrFileReaderBlockDeletedByCompaction = newWoodpeckerError("block deleted by compaction, client should retry without lastReadState", FileReaderBlockDeletedByCompaction, true)
+	ErrFileReaderSeek                     = newWoodpeckerError("reader seek failed", FileReaderSeek, true)
 
 	// ---------------------------------------------
 	// Metadata Layer Errors
