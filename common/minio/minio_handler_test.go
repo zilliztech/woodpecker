@@ -25,52 +25,63 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// mockReader is a simple ObjectReader implementation for testing
-type mockReader struct {
-	data   []byte
-	offset int
-	err    error
+// testFileReader implements FileReader interface for testing
+type testFileReader struct {
+	data        []byte
+	position    int
+	maxReadSize int
+	readError   error
 }
 
-func (m *mockReader) Read(p []byte) (n int, err error) {
-	if m.err != nil {
-		return 0, m.err
+func (t *testFileReader) Read(p []byte) (int, error) {
+	if t.readError != nil {
+		return 0, t.readError
 	}
 
-	if m.offset >= len(m.data) {
+	if t.position >= len(t.data) {
 		return 0, io.EOF
 	}
 
-	n = copy(p, m.data[m.offset:])
-	m.offset += n
+	// Limit read size if specified
+	readLen := len(p)
+	if t.maxReadSize > 0 && readLen > t.maxReadSize {
+		readLen = t.maxReadSize
+	}
 
-	if m.offset >= len(m.data) {
+	// Calculate how much we can actually read
+	remaining := len(t.data) - t.position
+	if readLen > remaining {
+		readLen = remaining
+	}
+
+	// Copy data and update position
+	n := copy(p[:readLen], t.data[t.position:t.position+readLen])
+	t.position += n
+
+	var err error
+	if t.position >= len(t.data) {
 		err = io.EOF
 	}
 
-	return
+	return n, err
 }
 
-func (m *mockReader) Close() error {
+func (t *testFileReader) Close() error {
 	return nil
 }
 
-// customSizeReader is a wrapper that limits read size
-type customSizeReader struct {
-	reader      *mockReader
-	maxReadSize int
+func (t *testFileReader) ReadAt(p []byte, off int64) (int, error) {
+	// Simple implementation for interface compliance
+	return 0, io.ErrUnexpectedEOF
 }
 
-func (c *customSizeReader) Read(p []byte) (n int, err error) {
-	// Limit the size of each read
-	if len(p) > c.maxReadSize {
-		p = p[:c.maxReadSize]
-	}
-	return c.reader.Read(p)
+func (t *testFileReader) Seek(offset int64, whence int) (int64, error) {
+	// Simple implementation for interface compliance
+	return 0, io.ErrUnexpectedEOF
 }
 
-func (c *customSizeReader) Close() error {
-	return c.reader.Close()
+func (t *testFileReader) Size() (int64, error) {
+	return int64(len(t.data)), nil
 }
 
 func TestReadObjectFull(t *testing.T) {
@@ -108,19 +119,14 @@ func TestReadObjectFull(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create base reader
-			baseReader := &mockReader{
-				data: tt.input,
-			}
-
-			// Use wrapper to limit read size
-			customReader := &customSizeReader{
-				reader:      baseReader,
+			// Create test reader with specified read size limit
+			reader := &testFileReader{
+				data:        tt.input,
 				maxReadSize: tt.readSize,
 			}
 
 			// Call the function being tested
-			got, err := ReadObjectFull(context.TODO(), customReader, 1024*1024)
+			got, err := ReadObjectFull(context.TODO(), reader, 1024*1024)
 
 			// Verify results
 			if tt.wantErr {
@@ -134,11 +140,11 @@ func TestReadObjectFull(t *testing.T) {
 
 	// Test read error
 	t.Run("Read error", func(t *testing.T) {
-		r := &mockReader{
-			err: io.ErrClosedPipe, // Simulate a read error
+		reader := &testFileReader{
+			readError: io.ErrClosedPipe, // Simulate a read error
 		}
 
-		_, err := ReadObjectFull(context.TODO(), r, 1024*1024)
+		_, err := ReadObjectFull(context.TODO(), reader, 1024*1024)
 		assert.Error(t, err)
 		assert.Equal(t, io.ErrClosedPipe, err)
 	})

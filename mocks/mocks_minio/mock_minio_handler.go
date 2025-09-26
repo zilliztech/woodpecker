@@ -147,25 +147,25 @@ func (_c *MinioHandler_GetObject_Call) RunAndReturn(run func(context.Context, st
 }
 
 // GetObjectDataAndInfo provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error) {
+func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error) {
 	ret := _m.Called(ctx, bucketName, objectName, opts)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetObjectDataAndInfo")
 	}
 
-	var r0 commonminio.ObjectReader
+	var r0 commonminio.FileReader
 	var r1 int64
 	var r2 int64
 	var r3 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error)); ok {
 		return rf(ctx, bucketName, objectName, opts)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) commonminio.ObjectReader); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) commonminio.FileReader); ok {
 		r0 = rf(ctx, bucketName, objectName, opts)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(commonminio.ObjectReader)
+			r0 = ret.Get(0).(commonminio.FileReader)
 		}
 	}
 
@@ -211,12 +211,12 @@ func (_c *MinioHandler_GetObjectDataAndInfo_Call) Run(run func(ctx context.Conte
 	return _c
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) Return(_a0 commonminio.ObjectReader, _a1 int64, _a2 int64, _a3 error) *MinioHandler_GetObjectDataAndInfo_Call {
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) Return(_a0 commonminio.FileReader, _a1 int64, _a2 int64, _a3 error) *MinioHandler_GetObjectDataAndInfo_Call {
 	_c.Call.Return(_a0, _a1, _a2, _a3)
 	return _c
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (commonminio.ObjectReader, int64, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }

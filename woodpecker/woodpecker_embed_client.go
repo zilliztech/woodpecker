@@ -29,7 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	"github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -45,7 +45,7 @@ var (
 	isLogStoreRunning bool
 )
 
-func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler) (bool, error) {
+func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) (bool, error) {
 	embedLogStoreMu.Lock()
 	defer embedLogStoreMu.Unlock()
 
@@ -54,7 +54,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, min
 	}
 
 	var takeControlOfClients bool = false
-	embedLogStore = server.NewLogStore(context.Background(), cfg, etcdCli, minioCli)
+	embedLogStore = server.NewLogStore(context.Background(), cfg, etcdCli, storageClient)
 	embedLogStore.SetAddress("127.0.0.1:59456") // TODO only placeholder now
 
 	initError := embedLogStore.Start()
@@ -94,9 +94,9 @@ type woodpeckerEmbedClient struct {
 	Metadata   meta.MetadataProvider
 	clientPool client.LogStoreClientPool
 
-	managedCli bool
-	etcdCli    *clientv3.Client
-	minioCli   minio.MinioHandler
+	managedCli    bool
+	etcdCli       *clientv3.Client
+	storageClient storageclient.ObjectStorage
 
 	// close state
 	closeState atomic.Bool
@@ -112,27 +112,27 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	if err != nil {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 	}
-	var minioCli minio.MinioHandler
+	var storageCli storageclient.ObjectStorage
 	if config.Woodpecker.Storage.IsStorageMinio() {
-		minioCli, err = minio.NewMinioHandler(ctx, config)
+		storageCli, err = storageclient.NewObjectStorage(ctx, config)
 		if err != nil {
 			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 		}
 	}
-	return NewEmbedClient(ctx, config, etcdCli, minioCli, true)
+	return NewEmbedClient(ctx, config, etcdCli, storageCli, true)
 }
 
-func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, minioCli minio.MinioHandler, managed bool) (Client, error) {
+func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage, managed bool) (Client, error) {
 	// init logger
 	logger.InitLogger(cfg)
-	if minioCli != nil {
+	if storageClient != nil {
 		// Check if conditional write is supported.
 		// For MinIO, the version must be v20240510 or later.
 		// For cloud storage, the if-none-match feature is required.
-		minio.CheckIfConditionWriteSupport(ctx, minioCli, cfg.Minio.BucketName, cfg.Minio.RootPath)
+		storageclient.CheckIfConditionWriteSupport(ctx, storageClient, cfg.Minio.BucketName, cfg.Minio.RootPath)
 	}
 	// start embedded logStore
-	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, minioCli)
+	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, storageClient)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +141,12 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	}
 	clientPool := client.NewLogStoreClientPoolLocal(embedLogStore)
 	c := woodpeckerEmbedClient{
-		cfg:        cfg,
-		Metadata:   meta.NewMetadataProvider(ctx, etcdCli),
-		clientPool: clientPool,
-		managedCli: managed,
-		etcdCli:    etcdCli,
-		minioCli:   minioCli,
+		cfg:           cfg,
+		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
+		clientPool:    clientPool,
+		managedCli:    managed,
+		etcdCli:       etcdCli,
+		storageClient: storageClient,
 	}
 	c.closeState.Store(false)
 	initErr := c.initClient(ctx)

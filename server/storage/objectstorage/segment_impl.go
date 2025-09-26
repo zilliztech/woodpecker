@@ -23,12 +23,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
@@ -41,7 +40,7 @@ var _ storage.Segment = (*SegmentImpl)(nil)
 type SegmentImpl struct {
 	mu             sync.Mutex
 	cfg            *config.Configuration
-	client         minioHandler.MinioHandler
+	client         storageclient.ObjectStorage
 	bucket         string
 	logId          int64
 	segmentId      int64
@@ -49,7 +48,7 @@ type SegmentImpl struct {
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
-func NewSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+func NewSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli storageclient.ObjectStorage, cfg *config.Configuration) storage.Segment {
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
 	logger.Ctx(ctx).Debug("new SegmentImpl created", zap.String("segmentFileKey", segmentFileKey))
 	segmentImpl := &SegmentImpl{
@@ -82,35 +81,26 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 
 	// List all objects in the segment directory
 	listPrefix := fmt.Sprintf("%s/", s.segmentFileKey)
-	objectCh := s.client.ListObjects(ctx, s.bucket, listPrefix, false, minio.ListObjectsOptions{})
-
 	var objectsToDelete []string
 	var deletedCount int
 	var errorCount int
 
-	// Collect all objects to delete
-	for objInfo := range objectCh {
-		if objInfo.Err != nil {
-			logger.Ctx(ctx).Warn("error listing blocks during deletion",
-				zap.String("segmentFileKey", s.segmentFileKey),
-				zap.Error(objInfo.Err))
-			return deletedCount, objInfo.Err
-		}
-
+	// Collect all objects to delete using WalkWithObjects
+	walkErr := s.client.WalkWithObjects(ctx, s.bucket, listPrefix, false, func(objInfo *storageclient.ChunkObjectInfo) bool {
 		// Determine what to delete based on flag
 		shouldDelete := false
 		switch flag {
 		case 0:
 			// Delete all blocks
-			if strings.HasSuffix(objInfo.Key, ".blk") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") {
 				shouldDelete = true
 			}
 		case 1: // Delete only regular blocks (not merged)
-			if strings.HasSuffix(objInfo.Key, ".blk") && !strings.Contains(objInfo.Key, "/m_") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.Contains(objInfo.FilePath, "/m_") {
 				shouldDelete = true
 			}
 		case 2: // Delete only merged blocks
-			if strings.HasSuffix(objInfo.Key, ".blk") && strings.Contains(objInfo.Key, "/m_") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && strings.Contains(objInfo.FilePath, "/m_") {
 				shouldDelete = true
 			}
 		default:
@@ -119,13 +109,20 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 		}
 
 		// Skip lock files unless explicitly deleting all
-		if strings.HasSuffix(objInfo.Key, ".lock") && flag == 0 {
+		if strings.HasSuffix(objInfo.FilePath, ".lock") && flag == 0 {
 			shouldDelete = true
 		}
 
 		if shouldDelete {
-			objectsToDelete = append(objectsToDelete, objInfo.Key)
+			objectsToDelete = append(objectsToDelete, objInfo.FilePath)
 		}
+		return true // continue walking
+	})
+	if walkErr != nil {
+		logger.Ctx(ctx).Warn("error listing blocks during deletion",
+			zap.String("segmentFileKey", s.segmentFileKey),
+			zap.Error(walkErr))
+		return deletedCount, walkErr
 	}
 
 	logger.Ctx(ctx).Info("collected objects for deletion",
@@ -135,7 +132,7 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 
 	// Delete objects
 	for _, objectKey := range objectsToDelete {
-		err := s.client.RemoveObject(ctx, s.bucket, objectKey, minio.RemoveObjectOptions{})
+		err := s.client.RemoveObject(ctx, s.bucket, objectKey)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
