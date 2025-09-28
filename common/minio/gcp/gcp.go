@@ -70,7 +70,42 @@ func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		req.Header.Set("Authorization", "Bearer "+newToken.AccessToken)
 	}
 
-	return t.backend.RoundTrip(req)
+	// For MinIO "If-None-Match:*" (object must not exist), use "x-goog-if-generation-match: 0" on Google Cloud Storage.
+	if ifNoneMatch := req.Header.Get("If-None-Match"); ifNoneMatch == "*" {
+		req.Header.Set("x-goog-if-generation-match", "0")
+	}
+
+	// Map MinIO user metadata headers ("x-amz-meta-*") to GCS-compatible headers ("x-goog-meta-*").
+	for key, values := range req.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-amz-meta-") {
+			suffix := key[len("x-amz-meta-"):]
+			newKey := "x-goog-meta-" + suffix
+			for _, v := range values {
+				req.Header.Add(newKey, v)
+			}
+			req.Header.Del(key)
+		}
+	}
+
+	// ---- call backend ----
+	resp, respErr := t.backend.RoundTrip(req)
+	if respErr != nil {
+		return nil, respErr
+	}
+
+	// Translate metadata headers back for MinIO SDK (read)
+	for key, values := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-goog-meta-") {
+			suffix := key[len("x-goog-meta-"):]
+			newKey := "x-amz-meta-" + suffix
+			for _, v := range values {
+				resp.Header.Add(newKey, v)
+			}
+			resp.Header.Del(key)
+		}
+	}
+
+	return resp, nil
 }
 
 const GcsDefaultAddress = "storage.googleapis.com"
