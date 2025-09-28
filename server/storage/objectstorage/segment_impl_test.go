@@ -22,17 +22,17 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/errors"
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 )
 
 // TestNewSegmentImpl tests the NewSegmentImpl function.
 func TestNewSegmentImpl(t *testing.T) {
-	client := mocks_minio.NewMinioHandler(t)
+	client := mocks_objectstorage.NewObjectStorage(t)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Logstore: config.LogstoreConfig{
@@ -60,7 +60,7 @@ func TestNewSegmentImpl(t *testing.T) {
 // TestDeleteFileData tests the DeleteFileData function.
 func TestDeleteFileData(t *testing.T) {
 	t.Run("SuccessfulDeletion", func(t *testing.T) {
-		client := mocks_minio.NewMinioHandler(t)
+		client := mocks_objectstorage.NewObjectStorage(t)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -77,25 +77,22 @@ func TestDeleteFileData(t *testing.T) {
 			},
 		}
 
-		// Create a list of mock objects to be returned by ListObjects
-		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.blk", Size: 2048}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.blk", Size: 4096}
-		close(objectCh)
-
 		// Create the LogFile
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
-		objectCh2 := make(chan minio.ObjectInfo, 3)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.blk", Size: 2048}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.blk", Size: 4096}
-		close(objectCh2)
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything).Return(nil)
+		// Mock WalkWithObjects to simulate finding objects
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+				// Simulate walking through objects
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
+			}).Once()
+
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk").Return(nil)
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)
@@ -103,7 +100,7 @@ func TestDeleteFileData(t *testing.T) {
 	})
 
 	t.Run("ListObjectsError", func(t *testing.T) {
-		client := mocks_minio.NewMinioHandler(t)
+		client := mocks_objectstorage.NewObjectStorage(t)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -123,16 +120,12 @@ func TestDeleteFileData(t *testing.T) {
 			},
 		}
 
-		// Create an object channel with an error
-		emptyObjectCh := make(chan minio.ObjectInfo, 0)
-		close(emptyObjectCh)
 		// Create the LogFile
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
-		errorObjectCh := make(chan minio.ObjectInfo, 1)
-		errorObjectCh <- minio.ObjectInfo{Err: errors.New("list error")}
-		close(errorObjectCh)
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(errorObjectCh).Once()
+		// Mock WalkWithObjects to return an error
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+			Return(errors.New("list error")).Once()
 
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
@@ -141,7 +134,7 @@ func TestDeleteFileData(t *testing.T) {
 	})
 
 	t.Run("RemoveObjectError", func(t *testing.T) {
-		client := mocks_minio.NewMinioHandler(t)
+		client := mocks_objectstorage.NewObjectStorage(t)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -161,22 +154,20 @@ func TestDeleteFileData(t *testing.T) {
 			},
 		}
 
-		// Create a list of mock objects to be returned by ListObjects
-		objectCh := make(chan minio.ObjectInfo, 2)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/1.blk", Size: 2048}
-		close(objectCh)
-
 		// Create the LogFile
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
-		objectCh2 := make(chan minio.ObjectInfo, 2)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/1.blk", Size: 2048}
-		close(objectCh2)
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything).Return(errors.New("remove error"))
+		// Mock WalkWithObjects to simulate finding objects
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+				// Simulate walking through objects
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
+			}).Once()
+
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk").Return(errors.New("remove error"))
 
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
@@ -185,7 +176,7 @@ func TestDeleteFileData(t *testing.T) {
 	})
 
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
-		client := mocks_minio.NewMinioHandler(t)
+		client := mocks_objectstorage.NewObjectStorage(t)
 		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
@@ -206,15 +197,12 @@ func TestDeleteFileData(t *testing.T) {
 			},
 		}
 
-		// Empty object channel
-		objectCh := make(chan minio.ObjectInfo)
-		close(objectCh)
-
-		// Set up expectations
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh)
-
 		// Create the LogFile
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Mock WalkWithObjects to simulate no objects found
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+			Return(nil).Once()
 
 		// Call DeleteFileData
 		deleteCound, err := impl.DeleteFileData(context.Background(), 0)
@@ -224,7 +212,7 @@ func TestDeleteFileData(t *testing.T) {
 	})
 
 	t.Run("SkipNonFragmentFiles", func(t *testing.T) {
-		client := mocks_minio.NewMinioHandler(t)
+		client := mocks_objectstorage.NewObjectStorage(t)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -244,24 +232,21 @@ func TestDeleteFileData(t *testing.T) {
 			},
 		}
 
-		// Create a list of mock objects including non-blocks files
-		objectCh := make(chan minio.ObjectInfo, 3)
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a block
-		objectCh <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.blk", Size: 4096}
-		close(objectCh)
-
 		// Create the readonly segment impl
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
-		objectCh2 := make(chan minio.ObjectInfo, 3)
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/0.blk", Size: 1024}
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/metadata.json", Size: 256} // Not a fragment
-		objectCh2 <- minio.ObjectInfo{Key: "test-segment/1/0/m_0.blk", Size: 4096}
-		close(objectCh2)
-		client.EXPECT().ListObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).Return(objectCh2).Once()
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything).Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything).Return(nil)
+		// Mock WalkWithObjects to simulate finding objects including non-block files
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+				// Simulate walking through objects including non-block files
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/metadata.json"}) // Not a block
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
+			}).Once()
+
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk").Return(nil)
 		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)

@@ -27,7 +27,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
-	"github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -48,9 +48,9 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 	if err != nil {
 		panic(err)
 	}
-	var minioCli minio.MinioHandler
+	var storageClient storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() {
-		minioCli, err = minio.NewMinioHandler(ctx, configuration)
+		storageClient, err = storageclient.NewObjectStorage(ctx, configuration)
 		if err != nil {
 			panic(err)
 		}
@@ -60,7 +60,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration) *Server
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
 	}
-	s.logStore = NewLogStore(ctx, configuration, etcdCli, minioCli)
+	s.logStore = NewLogStore(ctx, configuration, etcdCli, storageClient)
 	return s
 }
 

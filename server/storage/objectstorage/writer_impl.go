@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,7 +32,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/minio/minio-go/v7"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -44,6 +42,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -57,11 +56,11 @@ var (
 
 var _ storage.Writer = (*MinioFileWriter)(nil)
 
-// MinioFileWriter implements a logical file writer for MinIO object storage
+// MinioFileWriter implements a logical file writer for object storage
 // Each flush operation creates a block of the segment file
 type MinioFileWriter struct {
 	mu             sync.Mutex
-	client         minioHandler.MinioHandler
+	client         storageclient.ObjectStorage
 	segmentFileKey string // The prefix key for the segment to which this Segment belongs
 	bucket         string // The bucket name
 	logId          int64
@@ -110,11 +109,11 @@ type MinioFileWriter struct {
 }
 
 // NewMinioFileWriter is used to create a new Segment File Writer, which is used to write data to object storage
-func NewMinioFileWriter(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration) (storage.Writer, error) {
+func NewMinioFileWriter(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli storageclient.ObjectStorage, cfg *config.Configuration) (storage.Writer, error) {
 	return NewMinioFileWriterWithMode(ctx, bucket, baseDir, logId, segId, objectCli, cfg, false)
 }
 
-func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration, recoveryMode bool) (storage.Writer, error) {
+func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, objectCli storageclient.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (storage.Writer, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "NewWriter")
 	defer sp.End()
 	segmentFileKey := getSegmentFileKey(baseDir, logId, segId)
@@ -200,33 +199,33 @@ func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 		zap.String("segmentFileKey", f.segmentFileKey))
 
 	footerBlockKey := getFooterBlockKey(f.segmentFileKey)
-	footerBlockObjInfo, err := f.client.StatObject(ctx, f.bucket, footerBlockKey, minio.StatObjectOptions{})
-	if err != nil && minioHandler.IsObjectNotExists(err) {
+	footerBlockSize, _, err := f.client.StatObject(ctx, f.bucket, footerBlockKey)
+	if err != nil && f.client.IsObjectNotExistsError(err) {
 		return f.recoverFromFullListing(ctx)
 	}
-	return f.recoverFromFooter(ctx, footerBlockKey, footerBlockObjInfo)
+	return f.recoverFromFooter(ctx, footerBlockKey, footerBlockSize)
 }
 
-func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey string, footerBlockObjInfo minio.ObjectInfo) error {
+func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey string, footerBlockSize int64) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromFooter")
 	defer sp.End()
 	startTime := time.Now()
 	// Read the entire footer.blk file
-	footerObj, err := f.client.GetObject(ctx, f.bucket, footerBlockKey, minio.GetObjectOptions{})
+	footerObj, err := f.client.GetObject(ctx, f.bucket, footerBlockKey, 0, footerBlockSize)
 	if err != nil {
 		return err
 	}
 	defer footerObj.Close()
-	f.lastModifiedTime = footerBlockObjInfo.LastModified.UnixMilli()
+	f.lastModifiedTime = time.Now().UnixMilli() // Use current time since we don't have LastModified info
 
-	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, footerBlockObjInfo.Size)
+	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, footerBlockSize)
 	if err != nil {
 		return err
 	}
 
 	logger.Ctx(ctx).Debug("read entire footer.blk",
 		zap.String("segmentFileKey", f.segmentFileKey),
-		zap.Int64("footerBlkSize", footerBlockObjInfo.Size),
+		zap.Int64("footerBlkSize", footerBlockSize),
 		zap.Int("footerBlkDataLength", len(footerBlkData)))
 
 	// Parse footer record from the end of the file
@@ -362,10 +361,10 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 	for {
 		blockKey := getBlockKey(f.segmentFileKey, blockID)
 
-		// Try to get object info first to check if it exists and get last modified time
-		objInfo, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, minio.StatObjectOptions{})
+		// Try to get object info first to check if it exists
+		objSize, isFenced, stateErr := f.client.StatObject(ctx, f.bucket, blockKey)
 		if stateErr != nil {
-			if minioHandler.IsObjectNotExists(stateErr) {
+			if f.client.IsObjectNotExistsError(stateErr) {
 				// Block doesn't exist, we've reached the end of continuous sequence
 				logger.Ctx(ctx).Debug("block not found, stopping recovery as sequence must be continuous",
 					zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockID", blockID), zap.String("blockKey", blockKey))
@@ -376,22 +375,23 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 				zap.String("blockKey", blockKey), zap.Error(stateErr))
 			return stateErr
 		}
-		if minioHandler.IsFencedObject(objInfo) {
+		if isFenced {
 			logger.Ctx(ctx).Warn("object is fenced, stopping recovery",
 				zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("fenceBlockID", blockID), zap.String("blockKey", blockKey))
 			fenceBlockId = blockID
 			break
 		}
 
-		// Update last modified time
-		if objInfo.LastModified.UnixMilli() > lastModifiedTime {
-			lastModifiedTime = objInfo.LastModified.UnixMilli()
+		// Update last modified time (use current time since we don't have exact modification time)
+		currentTime := time.Now().UnixMilli()
+		if currentTime > lastModifiedTime {
+			lastModifiedTime = currentTime
 		}
 
 		// Parse the data to find blockHeaderRecord
 		logger.Ctx(ctx).Debug("attempting to parse block header record during recovery",
 			zap.String("blockKey", blockKey),
-			zap.Int64("dataSize", objInfo.Size))
+			zap.Int64("dataSize", objSize))
 
 		blockHeaderRecord, parseBlockHeaderErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
 		if parseBlockHeaderErr != nil {
@@ -405,7 +405,7 @@ func (f *MinioFileWriter) recoverFromFullListing(ctx context.Context) error {
 		indexRecord := &codec.IndexRecord{
 			BlockNumber:  int32(blockID),
 			StartOffset:  blockID,
-			BlockSize:    uint32(objInfo.Size), // Use object size as block size
+			BlockSize:    uint32(objSize), // Use object size as block size
 			FirstEntryID: blockHeaderRecord.FirstEntryID,
 			LastEntryID:  blockHeaderRecord.LastEntryID,
 		}
@@ -492,15 +492,7 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 	}
 
 	// get block header record from the beginning of the block
-	getBlockHeaderRecordOpt := minio.GetObjectOptions{}
-	setOptErr := getBlockHeaderRecordOpt.SetRange(0, readSize-1)
-	if setOptErr != nil {
-		logger.Ctx(ctx).Warn("Error setting range for block header record",
-			zap.String("blockKey", blockKey),
-			zap.Error(setOptErr))
-		return nil, setOptErr
-	}
-	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, getBlockHeaderRecordOpt)
+	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, 0, readSize)
 	if getErr != nil {
 		logger.Ctx(ctx).Warn("Error getting block header record",
 			zap.String("blockKey", blockKey),
@@ -508,7 +500,7 @@ func (f *MinioFileWriter) parseBlockHeaderRecord(ctx context.Context, blockID in
 		return nil, getErr
 	}
 	defer headerRecordObj.Close()
-	data, readErr := io.ReadAll(headerRecordObj)
+	data, readErr := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize)
 	if readErr != nil {
 		logger.Ctx(ctx).Warn("failed to read object data during prefetch, please retry later",
 			zap.String("blockKey", blockKey),
@@ -897,7 +889,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 
 	// Upload new footer
 	footerKey := getFooterBlockKey(f.segmentFileKey)
-	_, putErr := f.client.PutObject(ctx, f.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), minio.PutObjectOptions{})
+	putErr := f.client.PutObject(ctx, f.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)))
 	if putErr != nil {
 		logger.Ctx(ctx).Warn("failed to upload compacted footer",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -1132,7 +1124,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
 				func() error {
-					_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize)
+					putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, blockKey, bytes.NewReader(blockRawData), actualDataSize)
 					if putErr != nil && werr.ErrObjectAlreadyExists.Is(putErr) {
 						// idempotent flush success
 						return nil
@@ -1326,7 +1318,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context) (int64, error) {
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int("footerBlockRawData", len(footerBlockRawData)))
 
-	_, putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, footerBlockKey, bytes.NewReader(footerBlockRawData), int64(len(footerBlockRawData)))
+	putErr := f.client.PutObjectIfNoneMatch(ctx, f.bucket, footerBlockKey, bytes.NewReader(footerBlockRawData), int64(len(footerBlockRawData)))
 	if putErr != nil && !werr.ErrObjectAlreadyExists.Is(putErr) { // if ErrObjectAlreadyExists, means idempotent finalize success
 		logger.Ctx(ctx).Warn("failed to put finalization object",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -1439,7 +1431,7 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			fenceBlockKey = getBlockKey(f.segmentFileKey, fenceBlockId)
 
 			// Try to create fence object
-			_, putErr := f.client.PutFencedObject(ctx, f.bucket, fenceBlockKey)
+			putErr := f.client.PutFencedObject(ctx, f.bucket, fenceBlockKey)
 			if putErr != nil {
 				if werr.ErrObjectAlreadyExists.Is(putErr) {
 					// Block already exists, this might be normal during concurrent operations
@@ -1559,7 +1551,7 @@ func (f *MinioFileWriter) createSegmentLock(ctx context.Context) error {
 		f.logId, f.segmentId, os.Getpid(), time.Now().Unix(), getHostname())
 
 	// Use PutObjectIfNoneMatch to atomically create lock object
-	_, err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.lockObjectKey,
+	err := f.client.PutObjectIfNoneMatch(ctx, f.bucket, f.lockObjectKey,
 		strings.NewReader(lockInfo), int64(len(lockInfo)))
 	if err != nil {
 		if werr.ErrObjectAlreadyExists.Is(err) {
@@ -1592,10 +1584,10 @@ func (f *MinioFileWriter) releaseSegmentLock(ctx context.Context) error {
 	}
 
 	// Remove the lock object
-	err := f.client.RemoveObject(ctx, f.bucket, f.lockObjectKey, minio.RemoveObjectOptions{})
+	err := f.client.RemoveObject(ctx, f.bucket, f.lockObjectKey)
 	if err != nil {
 		// Check if object doesn't exist (already removed)
-		if minioHandler.IsObjectNotExists(err) {
+		if f.client.IsObjectNotExistsError(err) {
 			logger.Ctx(ctx).Info("Lock object already removed",
 				zap.String("lockObjectKey", f.lockObjectKey))
 		} else {
@@ -1942,13 +1934,18 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 func (f *MinioFileWriter) readBlockData(ctx context.Context, blockKey string) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "readBlockData")
 	defer sp.End()
-	obj, err := f.client.GetObject(ctx, f.bucket, blockKey, minio.GetObjectOptions{})
+	// Get object size first, then read full object
+	objSize, _, err := f.client.StatObject(ctx, f.bucket, blockKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat object %s: %w", blockKey, err)
+	}
+	obj, err := f.client.GetObject(ctx, f.bucket, blockKey, 0, objSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object %s: %w", blockKey, err)
 	}
 	defer obj.Close()
 
-	data, err := io.ReadAll(obj)
+	data, err := minioHandler.ReadObjectFull(ctx, obj, objSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read object data %s: %w", blockKey, err)
 	}
@@ -2029,8 +2026,8 @@ func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlo
 
 	// Upload merged block with m_ prefix (use PutObject for idempotent overwrites)
 	mergedBlockKey := getMergedBlockKey(f.segmentFileKey, mergedBlockID)
-	_, putErr := f.client.PutObject(ctx, f.bucket, mergedBlockKey,
-		bytes.NewReader(completeBlockData), int64(len(completeBlockData)), minio.PutObjectOptions{})
+	putErr := f.client.PutObject(ctx, f.bucket, mergedBlockKey,
+		bytes.NewReader(completeBlockData), int64(len(completeBlockData)))
 	if putErr != nil {
 		logger.Ctx(ctx).Warn("failed to upload merged block",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -2126,22 +2123,17 @@ func (f *MinioFileWriter) listOriginalBlockFiles(ctx context.Context) ([]string,
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "listOriginalBlockFiles")
 	defer sp.End()
 
-	// List all objects with the segment prefix
-	objectCh := f.client.ListObjects(ctx, f.bucket, f.segmentFileKey+"/", false, minio.ListObjectsOptions{})
-
+	// List all objects with the segment prefix using WalkWithObjects
 	var originalBlockKeys []string
-	for object := range objectCh {
-		if object.Err != nil {
-			logger.Ctx(ctx).Warn("error listing objects during cleanup",
-				zap.String("segmentFileKey", f.segmentFileKey),
-				zap.Error(object.Err))
-			continue
-		}
-
+	err := f.client.WalkWithObjects(ctx, f.bucket, f.segmentFileKey+"/", false, func(info *storageclient.ChunkObjectInfo) bool {
 		// Check if this is an original block file (not merged, not footer, not lock)
-		if f.isOriginalBlockFile(object.Key) {
-			originalBlockKeys = append(originalBlockKeys, object.Key)
+		if f.isOriginalBlockFile(info.FilePath) {
+			originalBlockKeys = append(originalBlockKeys, info.FilePath)
 		}
+		return true // continue walking
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	logger.Ctx(ctx).Debug("listed original block files",
@@ -2215,7 +2207,7 @@ func (f *MinioFileWriter) deleteOriginalBlocksByKeys(ctx context.Context, blockK
 	for _, blockKey := range blockKeys {
 		key := blockKey // Capture for closure
 		future := deletePool.Submit(func() (*deleteByKeyResult, error) {
-			err := f.client.RemoveObject(ctx, f.bucket, key, minio.RemoveObjectOptions{})
+			err := f.client.RemoveObject(ctx, f.bucket, key)
 
 			result := &deleteByKeyResult{
 				blockKey: key,
@@ -2225,7 +2217,7 @@ func (f *MinioFileWriter) deleteOriginalBlocksByKeys(ctx context.Context, blockK
 
 			if err != nil {
 				// Check if the error is "object not found" - this is acceptable
-				if minioHandler.IsObjectNotExists(err) {
+				if f.client.IsObjectNotExistsError(err) {
 					logger.Ctx(ctx).Debug("original block file already deleted or not found",
 						zap.String("segmentFileKey", f.segmentFileKey),
 						zap.String("blockKey", key))

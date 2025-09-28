@@ -30,7 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -60,15 +60,15 @@ type SegmentProcessor interface {
 	Close(ctx context.Context) error
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, minioCli minioHandler.MinioHandler) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	s := &segmentProcessor{
-		cfg:         cfg,
-		logId:       logId,
-		segId:       segId,
-		minioClient: minioCli,
-		createTime:  ctime,
+		cfg:           cfg,
+		logId:         logId,
+		segId:         segId,
+		storageClient: storageClient,
+		createTime:    ctime,
 	}
 	s.lastAccessTime.Store(ctime)
 	s.fenced.Store(false)
@@ -79,10 +79,10 @@ var _ SegmentProcessor = (*segmentProcessor)(nil)
 
 type segmentProcessor struct {
 	sync.RWMutex
-	cfg         *config.Configuration
-	logId       int64
-	segId       int64
-	minioClient minioHandler.MinioHandler
+	cfg           *config.Configuration
+	logId         int64
+	segId         int64
+	storageClient storageclient.ObjectStorage
 
 	createTime     int64
 	lastAccessTime atomic.Int64
@@ -299,7 +299,7 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 			s.getLogBaseDir(),
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg)
 		logger.Ctx(ctx).Info("create segment impl for object", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentImpl)))
 	}
@@ -347,7 +347,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			s.getLogBaseDir(),
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize,
 			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 		if getReaderErr != nil {
@@ -405,14 +405,14 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		logger.Ctx(ctx).Info("create segment local writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
 		return s.currentSegmentWriter, err
 	} else {
-		// use MinIO-compatible storage
+		// use object storage
 		w, getWriterErr := objectstorage.NewMinioFileWriterWithMode(
 			ctx,
 			s.getInstanceBucket(),
 			s.getLogBaseDir(),
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg,
 			recoverMode)
 		if getWriterErr != nil {
