@@ -27,7 +27,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	objectStorageClient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"github.com/zilliztech/woodpecker/tests/utils"
 )
@@ -47,7 +47,7 @@ func TestMinioFileWriterPerformance(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	assert.NoError(t, err)
 
-	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	storageCli, err := objectStorageClient.NewObjectStorage(context.Background(), cfg)
 	assert.NoError(t, err)
 
 	// Create MinioFileWriter
@@ -59,7 +59,7 @@ func TestMinioFileWriterPerformance(t *testing.T) {
 		cfg.Minio.RootPath,
 		logId,
 		segId,
-		minioCli,
+		storageCli,
 		cfg,
 	)
 	assert.NoError(t, err)
