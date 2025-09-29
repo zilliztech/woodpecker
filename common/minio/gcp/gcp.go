@@ -33,6 +33,7 @@ type WrapHTTPTransport struct {
 	tokenSrc     oauth2.TokenSource
 	backend      transport
 	currentToken atomic.Pointer[oauth2.Token]
+	useOAuth2    bool // Flag to determine auth method
 }
 
 // transport abstracts http.Transport to simplify test
@@ -40,8 +41,8 @@ type transport interface {
 	RoundTrip(req *http.Request) (*http.Response, error)
 }
 
-// NewWrapHTTPTransport constructs a new WrapHTTPTransport
-func NewWrapHTTPTransport(secure bool) (*WrapHTTPTransport, error) {
+// NewWrapHTTPTransportWithOAuth2 constructs a new WrapHTTPTransport with OAuth2
+func NewWrapHTTPTransportWithOAuth2(secure bool) (*WrapHTTPTransport, error) {
 	tokenSrc := google.ComputeTokenSource("")
 	// in fact never return err
 	backend, err := minio.DefaultTransport(secure)
@@ -49,25 +50,41 @@ func NewWrapHTTPTransport(secure bool) (*WrapHTTPTransport, error) {
 		return nil, errors.Wrap(err, "failed to create default transport")
 	}
 	return &WrapHTTPTransport{
-		tokenSrc: tokenSrc,
-		backend:  backend,
+		tokenSrc:  tokenSrc,
+		backend:   backend,
+		useOAuth2: true,
+	}, nil
+}
+
+// NewWrapHTTPTransportWithCreds constructs a new WrapHTTPTransport with MinIO credentials
+func NewWrapHTTPTransportWithCreds(secure bool) (*WrapHTTPTransport, error) {
+	// in fact never return err
+	backend, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create default transport")
+	}
+	return &WrapHTTPTransport{
+		backend:   backend,
+		useOAuth2: false,
 	}, nil
 }
 
 // RoundTrip wraps original http.RoundTripper by Adding a Bearer token acquired from tokenSrc
 func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// here Valid() means the token won't be expired in 10 sec
-	// so the http client timeout shouldn't be longer, or we need to change the default `expiryDelta` time
-	currentToken := t.currentToken.Load()
-	if currentToken.Valid() {
-		req.Header.Set("Authorization", "Bearer "+currentToken.AccessToken)
-	} else {
-		newToken, err := t.tokenSrc.Token()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to acquire token")
+	// Handle authentication based on the configured method
+	if t.useOAuth2 {
+		// OAuth2 authentication for GCP native API
+		currentToken := t.currentToken.Load()
+		if currentToken.Valid() {
+			req.Header.Set("Authorization", "Bearer "+currentToken.AccessToken)
+		} else {
+			newToken, err := t.tokenSrc.Token()
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to acquire token")
+			}
+			t.currentToken.Store(newToken)
+			req.Header.Set("Authorization", "Bearer "+newToken.AccessToken)
 		}
-		t.currentToken.Store(newToken)
-		req.Header.Set("Authorization", "Bearer "+newToken.AccessToken)
 	}
 
 	// For MinIO "If-None-Match:*" (object must not exist), use "x-goog-if-generation-match: 0" on Google Cloud Storage.
@@ -125,16 +142,25 @@ func NewMinioClient(address string, opts *minio.Options) (*minio.Client, error) 
 		address = GcsDefaultAddress
 	}
 
+	// Always use our custom transport for header transformation
+	var transport *WrapHTTPTransport
+	var err error
+
 	if opts.Creds != nil {
-		// if creds is set, use it directly
-		return minio.New(address, opts)
+		// Use credentials-aware transport that handles both auth and header transformation
+		transport, err = NewWrapHTTPTransportWithCreds(opts.Secure)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create credentials transport")
+		}
+	} else {
+		// Use OAuth2 transport
+		transport, err = NewWrapHTTPTransportWithOAuth2(opts.Secure)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create OAuth2 transport")
+		}
+		opts.Creds = credentials.NewStaticV2("", "", "")
 	}
-	// opts.Creds == nil, assume using IAM
-	transport, err := NewWrapHTTPTransport(opts.Secure)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create default transport")
-	}
+
 	opts.Transport = transport
-	opts.Creds = credentials.NewStaticV2("", "", "")
 	return minio.New(address, opts)
 }
