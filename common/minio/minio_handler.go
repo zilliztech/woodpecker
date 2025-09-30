@@ -132,6 +132,10 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 	start := time.Now()
 	opts := minio.PutObjectOptions{}
 	opts.SetMatchETagExcept("*")
+	// TODO GOOGLE-SUPPORT-DEBUG
+	//opts.UserMetadata = map[string]string{
+	//	"mykey": "true",
+	//}
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil && IsPreconditionFailed(err) {
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})

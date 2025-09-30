@@ -137,6 +137,7 @@ etcd:
     userName:  # username for etcd authentication
     password:  # password for etcd authentication
 
+# TODO GOOGLE-SUPPORT-DEBUG
 # Related configuration of MinIO/S3/GCS or any other service supports S3 API, which is responsible for data persistence for Woodpecker.
 # We refer to the storage service as MinIO/S3 in the following description for simplicity.
 minio:
