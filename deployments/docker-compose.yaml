@@ -27,7 +27,7 @@ services:
       - --set=receivers.otlp.protocols.http.endpoint=0.0.0.0:4318
     ports:
       - "16686:16686"
-      - "4317:4317" 
+      - "4317:4317"
       - "4318:4318"
     environment:
       - LOG_LEVEL=info
@@ -55,7 +55,7 @@ services:
       - etcd_data:/etcd
     command: etcd
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
+      test: [ "CMD", "etcdctl", "endpoint", "health" ]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -82,7 +82,7 @@ services:
       - minio_data:/data
     command: minio server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -99,12 +99,10 @@ services:
     container_name: woodpecker-node1
     environment:
       - NODE_NAME=woodpecker-node1
-      - PORT=17946                               # Gossip port
+      - GOSSIP_PORT=17946                        # Gossip port
       - SERVICE_PORT=18080                       # Service port
-      - ADVERTISE_ADDR=woodpecker-node1          # Gossip advertise address
-      - ADVERTISE_PORT=17946                     # Gossip advertise port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node1  # Service advertise address
-      - ADVERTISE_SERVICE_PORT=18080             # Service advertise port
+      - ADVERTISE_GOSSIP_ADDR=woodpecker-node1:17946    # Gossip advertise address:port
+      - ADVERTISE_SERVICE_ADDR=woodpecker-node1:18080   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
@@ -116,8 +114,6 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
-      - WAIT_FOR_DEPS=true
-      - DEP_TIMEOUT=120
     ports:
       - "18080:18080"
       - "17946:17946"
@@ -146,12 +142,10 @@ services:
     container_name: woodpecker-node2
     environment:
       - NODE_NAME=woodpecker-node2
-      - PORT=17947                               # Gossip port
+      - GOSSIP_PORT=17947                        # Gossip port
       - SERVICE_PORT=18081                       # Service port
-      - ADVERTISE_ADDR=woodpecker-node2          # Gossip advertise address
-      - ADVERTISE_PORT=17947                     # Gossip advertise port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node2  # Service advertise address
-      - ADVERTISE_SERVICE_PORT=18081             # Service advertise port
+      - ADVERTISE_GOSSIP_ADDR=woodpecker-node2:17947    # Gossip advertise address:port
+      - ADVERTISE_SERVICE_ADDR=woodpecker-node2:18081   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
@@ -163,8 +157,6 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
-      - WAIT_FOR_DEPS=true
-      - DEP_TIMEOUT=120
     ports:
       - "18081:18081"
       - "17947:17947"
@@ -192,12 +184,10 @@ services:
     container_name: woodpecker-node3
     environment:
       - NODE_NAME=woodpecker-node3
-      - PORT=17948                               # Gossip port
+      - GOSSIP_PORT=17948                        # Gossip port
       - SERVICE_PORT=18082                       # Service port
-      - ADVERTISE_ADDR=woodpecker-node3          # Gossip advertise address
-      - ADVERTISE_PORT=17948                     # Gossip advertise port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node3  # Service advertise address
-      - ADVERTISE_SERVICE_PORT=18082             # Service advertise port
+      - ADVERTISE_GOSSIP_ADDR=woodpecker-node3:17948    # Gossip advertise address:port
+      - ADVERTISE_SERVICE_ADDR=woodpecker-node3:18082   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary
@@ -209,8 +199,6 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
-      - WAIT_FOR_DEPS=true
-      - DEP_TIMEOUT=120
     ports:
       - "18082:18082"
       - "17948:17948"
@@ -239,12 +227,10 @@ services:
     container_name: woodpecker-node4
     environment:
       - NODE_NAME=woodpecker-node4
-      - PORT=17949                               # Gossip port
+      - GOSSIP_PORT=17949                        # Gossip port
       - SERVICE_PORT=18083                       # Service port
-      - ADVERTISE_ADDR=woodpecker-node4          # Gossip advertise address
-      - ADVERTISE_PORT=17949                     # Gossip advertise port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node4  # Service advertise address
-      - ADVERTISE_SERVICE_PORT=18083             # Service advertise port
+      - ADVERTISE_GOSSIP_ADDR=woodpecker-node4:17949    # Gossip advertise address:port
+      - ADVERTISE_SERVICE_ADDR=woodpecker-node4:18083   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary
@@ -256,8 +242,6 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
-      - WAIT_FOR_DEPS=true
-      - DEP_TIMEOUT=120
     ports:
       - "18083:18083"
       - "17949:17949"
