@@ -19,7 +19,7 @@
 # Default values
 # Support both old and new naming conventions
 SERVICE_PORT=${SERVICE_PORT:-${SERVICE_PORT:-18080}}   # Service port (for client connections)
-GOSSIP_PORT=${GOSSIP_PORT:-${PORT:-17946}}       # Gossip port (for cluster communication)
+GOSSIP_PORT=${GOSSIP_PORT:-${GOSSIP_PORT:-17946}}       # Gossip port (for cluster communication)
 
 # Check if Woodpecker process is running
 if ! pgrep -f "woodpecker" > /dev/null; then

@@ -60,7 +60,7 @@ WORKDIR /woodpecker
 USER woodpecker
 
 # Environment variables with defaults (removed sensitive defaults)
-ENV PORT=17946 \
+ENV GOSSIP_PORT=17946 \
     SERVICE_PORT=18080 \
     NODE_NAME="" \
     DATA_DIR="/woodpecker/data" \

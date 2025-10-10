@@ -20,7 +20,7 @@ set -e
 # Default values
 # Support both old and new naming conventions
 SERVICE_PORT=${SERVICE_PORT:-${SERVICE_PORT:-18080}}   # Service port (for client connections)
-GOSSIP_PORT=${GOSSIP_PORT:-${PORT:-17946}}       # Gossip port (for cluster communication)
+GOSSIP_PORT=${GOSSIP_PORT:-${GOSSIP_PORT:-17946}}       # Gossip port (for cluster communication)
 NODE_NAME=${NODE_NAME:-$(hostname)}
 DATA_DIR=${DATA_DIR:-/woodpecker/data}
 CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
@@ -34,38 +34,36 @@ AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-default}
 
 # Advertise address configuration for Docker bridge networking
 # Gossip advertise configuration (for internal cluster communication)
-ADVERTISE_ADDR=${ADVERTISE_ADDR:-""}
-ADVERTISE_PORT=${ADVERTISE_PORT:-$GOSSIP_PORT}
+ADVERTISE_GOSSIP_ADDR=${ADVERTISE_GOSSIP_ADDR:-""}
 
 # Service advertise configuration (for client connections)
 ADVERTISE_SERVICE_ADDR=${ADVERTISE_SERVICE_ADDR:-""}
-ADVERTISE_SERVICE_PORT=${ADVERTISE_SERVICE_PORT:-$SERVICE_PORT}
 
 # Note: IP auto-detection is now primarily handled by the Go application
 # using the common/net package, but we keep this for backward compatibility
 # and explicit configuration in Docker environments
 
 # Auto-detect advertise addresses if set to "auto"
-if [ "$ADVERTISE_ADDR" = "auto" ]; then
+if [ "$ADVERTISE_GOSSIP_ADDR" = "auto" ]; then
     # Try to get Docker host gateway IP address
     HOST_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -1)
     if [ -z "$HOST_IP" ]; then
         # Fallback to common Docker gateway IP
         HOST_IP="172.17.0.1"
     fi
-    ADVERTISE_ADDR="$HOST_IP"
-    log "Auto-detected gossip advertise address: $ADVERTISE_ADDR"
+    ADVERTISE_GOSSIP_ADDR="$HOST_IP:$GOSSIP_PORT"
+    log "Auto-detected gossip advertise address:port: $ADVERTISE_GOSSIP_ADDR"
 fi
 
 if [ "$ADVERTISE_SERVICE_ADDR" = "auto" ]; then
     # Use the same logic as gossip address for Docker environments
     if [ -n "$HOST_IP" ]; then
-        ADVERTISE_SERVICE_ADDR="$HOST_IP"
+        ADVERTISE_SERVICE_ADDR="$HOST_IP:$SERVICE_PORT"
     else
         HOST_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -1)
-        ADVERTISE_SERVICE_ADDR="${HOST_IP:-172.17.0.1}"
+        ADVERTISE_SERVICE_ADDR="${HOST_IP:-172.17.0.1}:$SERVICE_PORT"
     fi
-    log "Auto-detected service advertise address: $ADVERTISE_SERVICE_ADDR"
+    log "Auto-detected service advertise address:port: $ADVERTISE_SERVICE_ADDR"
 fi
 
 # MinIO configuration
@@ -161,15 +159,13 @@ log "  Resource Group: $RESOURCE_GROUP"
 log "  Availability Zone: $AVAILABILITY_ZONE"
 
 # Log gossip advertise configuration
-if [ -n "$ADVERTISE_ADDR" ]; then
-    log "  Gossip Advertise Address: $ADVERTISE_ADDR"
-    log "  Gossip Advertise Port: $ADVERTISE_PORT"
+if [ -n "$ADVERTISE_GOSSIP_ADDR" ]; then
+    log "  Gossip Advertise Address:Port: $ADVERTISE_GOSSIP_ADDR"
 fi
 
 # Log service advertise configuration
 if [ -n "$ADVERTISE_SERVICE_ADDR" ]; then
-    log "  Service Advertise Address: $ADVERTISE_SERVICE_ADDR"
-    log "  Service Advertise Port: $ADVERTISE_SERVICE_PORT"
+    log "  Service Advertise Address:Port: $ADVERTISE_SERVICE_ADDR"
 fi
 log "  Seeds: $SEEDS"
 log "  Storage Type: $STORAGE_TYPE"
@@ -194,15 +190,13 @@ CMD_ARGS=(
 )
 
 # Add gossip advertise configuration if provided
-if [ -n "$ADVERTISE_ADDR" ]; then
-    CMD_ARGS+=("--advertise-addr" "$ADVERTISE_ADDR")
-    CMD_ARGS+=("--advertise-port" "$ADVERTISE_PORT")
+if [ -n "$ADVERTISE_GOSSIP_ADDR" ]; then
+    CMD_ARGS+=("--advertise-gossip-addr" "$ADVERTISE_GOSSIP_ADDR")
 fi
 
 # Add service advertise configuration if provided
 if [ -n "$ADVERTISE_SERVICE_ADDR" ]; then
     CMD_ARGS+=("--advertise-service-addr" "$ADVERTISE_SERVICE_ADDR")
-    CMD_ARGS+=("--advertise-service-port" "$ADVERTISE_SERVICE_PORT")
 fi
 
 # Add seeds if provided and not empty
