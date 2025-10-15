@@ -27,6 +27,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/zilliztech/woodpecker/cmd/external"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/server"
@@ -99,6 +100,7 @@ func main() {
 		advertiseServiceAddr = flag.String("advertise-service-addr", "", "Advertise address:port for service (for client connections)")
 		resourceGroup        = flag.String("resource-group", "default", "Resource group for node placement")
 		availabilityZone     = flag.String("availability-zone", "default", "Availability zone for node placement")
+		externalConfigFile   = flag.String("external-user-config", "/woodpecker/configs/user.yaml", "external user Configuration file path")
 	)
 
 	// First argument should be command
@@ -124,6 +126,15 @@ func main() {
 	cfg, err := config.NewConfiguration(*configFile)
 	if err != nil {
 		log.Fatalf("Failed to load configuration from %s: %v", *configFile, err)
+	}
+
+	externalCfg, err := external.LoadUserConfig(*externalConfigFile)
+	if err != nil {
+		log.Fatalf("Failed to load external user configuration from %s: %v", *externalConfigFile, err)
+	}
+
+	if err := externalCfg.ApplyToConfig(cfg); err != nil {
+		log.Fatalf("Failed to apply external user configuration: %v", err)
 	}
 
 	// Override data directory in config if specified

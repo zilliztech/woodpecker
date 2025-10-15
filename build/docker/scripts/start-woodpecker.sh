@@ -27,6 +27,7 @@ CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
 CLUSTER=${CLUSTER:-woodpecker-cluster}
 STORAGE_TYPE=${STORAGE_TYPE:-service}
 LOG_LEVEL=${LOG_LEVEL:-info}
+EXTERNAL_USER_CONFIG_FILE=${EXTERNAL_USER_CONFIG_FILE:-/woodpecker/configs/user.yaml}
 
 # Node metadata configuration
 RESOURCE_GROUP=${RESOURCE_GROUP:-default}
@@ -187,6 +188,7 @@ CMD_ARGS=(
     "--config" "$CONFIG_FILE"
     "--resource-group" "$RESOURCE_GROUP"
     "--availability-zone" "$AVAILABILITY_ZONE"
+    "--external-user-config" "$EXTERNAL_USER_CONFIG_FILE"
 )
 
 # Add gossip advertise configuration if provided
