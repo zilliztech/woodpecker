@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "woodpecker.fullname" . }}
+  labels:
+    {{- include "woodpecker.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "woodpecker.fullname" . }}-headless
+  replicas: {{ .Values.woodpecker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "woodpecker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "woodpecker.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: woodpecker
+          image: "{{ .Values.woodpecker.image.repository }}:{{ .Values.woodpecker.image.tag }}"
+          imagePullPolicy: {{ .Values.woodpecker.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Set SEEDS based on pod ordinal
+              POD_ORDINAL=${POD_NAME##*-}
+              if [ "$POD_ORDINAL" = "0" ]; then
+                export SEEDS=""
+              else
+                export SEEDS="{{ include "woodpecker.fullname" . }}-0.{{ include "woodpecker.fullname" . }}-headless:17946"
+              fi
+              # Start the original entrypoint
+              exec /woodpecker/bin/start-woodpecker.sh
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              value: "$(POD_NAME)"
+            - name: GRPC_PORT
+              value: "18080"
+            - name: GOSSIP_PORT
+              value: "17946"
+            - name: ORDINAL
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CLUSTER_NAME
+              value: {{ .Values.woodpecker.cluster.name }}
+            - name: RESOURCE_GROUP
+              value: "rg-primary"
+            - name: AVAILABILITY_ZONE
+              value: "az-$(echo $POD_NAME | sed 's/.*-//')"
+            - name: MINIO_ADDRESS
+              value: "{{ include "woodpecker.fullname" . }}-minio"
+            - name: MINIO_PORT
+              value: "{{ .Values.minio.service.ports.api }}"
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.minio.auth.rootUser }}
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "woodpecker.fullname" . }}-minio"
+                  key: root-password
+            - name: MINIO_BUCKET
+              value: {{ .Values.woodpecker.storage.bucket }}
+            - name: STORAGE_TYPE
+              value: {{ .Values.woodpecker.storage.type }}
+            - name: LOG_LEVEL
+              value: {{ .Values.woodpecker.logLevel }}
+            - name: WAIT_FOR_DEPS
+              value: "{{ .Values.woodpecker.waitForDeps }}"
+            - name: DEP_TIMEOUT
+              value: "{{ .Values.woodpecker.depTimeout }}"
+          ports:
+            - name: grpc
+              containerPort: 18080
+              protocol: TCP
+            - name: gossip-tcp
+              containerPort: 17946
+              protocol: TCP
+            - name: gossip-udp
+              containerPort: 17946
+              protocol: UDP
+          resources:
+            {{- toYaml .Values.woodpecker.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /woodpecker/data
+            - name: logs
+              mountPath: /woodpecker/logs
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "woodpecker.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+    {{- if .Values.persistence.logs.enabled }}
+    - metadata:
+        name: logs
+        labels:
+          {{- include "woodpecker.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.logs.accessMode }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.logs.size }}
+        {{- if .Values.persistence.logs.storageClass }}
+        storageClassName: {{ .Values.persistence.logs.storageClass }}
+        {{- end }}
+    {{- end }}
+  {{- end }}

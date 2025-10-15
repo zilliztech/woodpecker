@@ -1,0 +1,32 @@
+apiVersion: v2
+name: woodpecker
+description: A Helm chart for Woodpecker cluster with etcd, MinIO, and Jaeger dependencies
+type: application
+version: 0.1.0
+appVersion: "latest"
+
+dependencies:
+  - name: etcd
+    version: "12.0.18"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: etcd.enabled
+  - name: minio
+    version: "17.0.21"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: minio.enabled
+  - name: jaeger
+    version: "3.4.1"
+    repository: "https://jaegertracing.github.io/helm-charts"
+    condition: jaeger.enabled
+
+maintainers:
+  - name: woodpecker-team
+    email: team@woodpecker.com
+
+keywords:
+  - woodpecker
+  - cluster
+  - distributed-system
+  - etcd
+  - minio
+  - jaeger
