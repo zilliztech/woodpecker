@@ -18,18 +18,29 @@ package tencent
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"
 	minioCred "github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/signer"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+
+	"github.com/zilliztech/woodpecker/common/minio/utils"
 )
 
-// NewMinioClient returns a minio.Client which is compatible for tencent OSS
+// NewMinioClient returns a minio.Client which is compatible for tencent COS
 func NewMinioClient(address string, opts *minio.Options) (*minio.Client, error) {
 	if opts == nil {
 		opts = &minio.Options{}
 	}
+	if address == "" {
+		address = fmt.Sprintf("cos.%s.myqcloud.com", opts.Region)
+		opts.Secure = true
+	}
+
+	// Set up credentials if not provided
 	if opts.Creds == nil {
 		credProvider, err := NewCredentialProvider()
 		if err != nil {
@@ -37,10 +48,16 @@ func NewMinioClient(address string, opts *minio.Options) (*minio.Client, error) 
 		}
 		opts.Creds = minioCred.New(credProvider)
 	}
-	if address == "" {
-		address = fmt.Sprintf("cos.%s.myqcloud.com", opts.Region)
-		opts.Secure = true
+
+	// Set up custom transport for header transformations if not already provided
+	if opts.Transport == nil {
+		transportWrap, err := NewWrapHTTPTransport(opts.Secure, opts.Region, opts.Creds)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create wrap transport")
+		}
+		opts.Transport = transportWrap
 	}
+
 	return minio.New(address, opts)
 }
 
@@ -98,4 +115,82 @@ func (c *CredentialProvider) Retrieve() (minioCred.Value, error) {
 func (c CredentialProvider) IsExpired() bool {
 	ak := c.tencentCreds.GetSecretId()
 	return ak != c.akCache
+}
+
+// WrapHTTPTransport wraps http.Transport, add header transformations to support Tencent COS
+type WrapHTTPTransport struct {
+	creds   *minioCred.Credentials
+	backend transport
+	region  string
+}
+
+// transport abstracts http.Transport to simplify test
+type transport interface {
+	RoundTrip(req *http.Request) (*http.Response, error)
+}
+
+// NewWrapHTTPTransport constructs a new WrapHTTPTransport
+func NewWrapHTTPTransport(secure bool, region string, creds *minioCred.Credentials) (*WrapHTTPTransport, error) {
+	backend, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create default transport")
+	}
+	return &WrapHTTPTransport{
+		creds:   creds,
+		backend: backend,
+		region:  region,
+	}, nil
+}
+
+// RoundTrip wraps original http.RoundTripper by transforming headers for Tencent COS compatibility
+func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Create a copy of the request to avoid modifying the original
+	reqCopy := req.Clone(req.Context())
+
+	// For MinIO "If-None-Match:*" (object must not exist), add "x-cos-forbid-overwrite: true" for Tencent COS.
+	// We keep both headers to ensure compatibility
+	if ifNoneMatch := reqCopy.Header.Get("If-None-Match"); ifNoneMatch == "*" {
+		reqCopy.Header.Set("x-cos-forbid-overwrite", "true")
+		reqCopy.Header.Del("If-None-Match")
+	}
+
+	// Map MinIO user metadata headers ("x-amz-meta-*") to COS-compatible headers ("x-cos-meta-*").
+	// We add COS headers but keep the original AMZ headers for signature compatibility
+	for key, values := range reqCopy.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-amz-meta-") {
+			suffix := key[len("x-amz-meta-"):]
+			newKey := "x-cos-meta-" + suffix
+			for _, v := range values {
+				reqCopy.Header.Add(newKey, v)
+			}
+			reqCopy.Header.Del(key)
+		}
+	}
+
+	value, valueErr := t.creds.Get()
+	if valueErr != nil {
+		return nil, valueErr
+	}
+	location := utils.GetBucketLocation(*reqCopy.URL, t.region)
+	reqCopy = signer.SignV4(*reqCopy, value.AccessKeyID, value.SecretAccessKey, value.SessionToken, location)
+
+	// ---- call backend ----
+	resp, respErr := t.backend.RoundTrip(reqCopy)
+	if respErr != nil {
+		return nil, respErr
+	}
+
+	// Translate metadata headers back for MinIO SDK (read)
+	for key, values := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-cos-meta-") {
+			suffix := key[len("x-cos-meta-"):]
+			newKey := "x-amz-meta-" + suffix
+			for _, v := range values {
+				resp.Header.Add(newKey, v)
+			}
+			resp.Header.Del(key)
+		}
+	}
+
+	return resp, nil
 }

@@ -228,7 +228,8 @@ func newMinioClientFromConfig(ctx context.Context, cfg *config.Configuration) (*
 // IsPreconditionFailed if the error is condition predication failed
 // error code list: https://github.com/minio/minio/blob/master/cmd/api-errors.go
 func IsPreconditionFailed(err error) bool {
-	return minio.ToErrorResponse(err).Code == "PreconditionFailed"
+	minioErr := minio.ToErrorResponse(err)
+	return minioErr.Code == "PreconditionFailed" || minioErr.Code == "FileAlreadyExists"
 }
 
 // IsObjectNotExists if the error is object not exists
