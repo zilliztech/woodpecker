@@ -269,7 +269,7 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()), // local file baseDir
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg)
 		return s.currentSegmentImpl, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
@@ -322,7 +322,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg)
 		if err != nil {
 			return nil, err
@@ -337,7 +337,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +352,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			s.logId,
 			s.segId,
 			s.storageClient,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize,
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64(),
 			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 		if getReaderErr != nil {
 			return nil, getReaderErr
@@ -403,7 +403,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.minioClient,
+			s.storageClient,
 			s.cfg,
 			recoverMode)
 		s.currentSegmentWriter = writerFile

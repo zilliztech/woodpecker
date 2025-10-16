@@ -60,7 +60,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	w := &logWriterImpl{
 		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
 		logHandle:          logHandle,
-		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval,
+		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),

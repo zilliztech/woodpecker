@@ -20,8 +20,10 @@ package server
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"

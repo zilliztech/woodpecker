@@ -129,14 +129,14 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
 
-		maxBufferSize:       syncPolicyConfig.MaxBytes,
+		maxBufferSize:       syncPolicyConfig.MaxBytes.Int64(),
 		maxBufferEntries:    maxBufferEntries,
-		maxIntervalMs:       syncPolicyConfig.MaxInterval,
+		maxIntervalMs:       syncPolicyConfig.MaxInterval.Milliseconds(),
 		syncPolicyConfig:    syncPolicyConfig,
 		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
 		fileClose:           make(chan struct{}, 1),
 
-		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
+		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize.Int64(), // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
@@ -859,7 +859,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 	}
 
 	// Get target block size for compaction (use maxFlushSize as target)
-	targetBlockSize := f.compactPolicyConfig.MaxBytes
+	targetBlockSize := f.compactPolicyConfig.MaxBytes.Int64()
 	if targetBlockSize <= 0 {
 		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
@@ -1143,7 +1143,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				},
 				retry.Attempts(uint(f.syncPolicyConfig.MaxFlushRetries)),
 				retry.Sleep(100*time.Millisecond),
-				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval)*time.Millisecond),
+				retry.MaxSleepTime(time.Duration(f.syncPolicyConfig.RetryInterval.Milliseconds())*time.Millisecond),
 				retry.RetryErr(func(err error) bool {
 					// if it is not fenced error, retry
 					return !werr.ErrSegmentFenced.Is(err)
@@ -1498,7 +1498,7 @@ func (f *MinioFileWriter) prepareMultiBlockDataIfNecessary(toFlushData []*cache.
 		return nil, nil, nil
 	}
 
-	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize
+	maxPartitionSize := f.syncPolicyConfig.MaxFlushSize.Int64()
 
 	// First pass: calculate partition boundaries without copying data
 	type partitionRange struct {

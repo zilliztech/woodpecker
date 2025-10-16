@@ -26,14 +26,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
@@ -44,7 +43,7 @@ var (
 	StagedTestBucket = "a-bucket"
 )
 
-func setupStagedFileTest(t *testing.T, rootDir string) (minioHandler.MinioHandler, *config.Configuration, string) {
+func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStorage, *config.Configuration, string) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 
@@ -57,7 +56,7 @@ func setupStagedFileTest(t *testing.T, rootDir string) (minioHandler.MinioHandle
 	StagedTestBucket = cfg.Minio.BucketName
 	currentTime := time.Now().Unix()
 	cfg.Minio.RootPath = rootDir
-	minioHdl, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	storageCli, err := storageclient.NewObjectStorage(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Create a temporary directory for local files
@@ -69,22 +68,20 @@ func setupStagedFileTest(t *testing.T, rootDir string) (minioHandler.MinioHandle
 		os.RemoveAll(tempDir)
 	})
 
-	return minioHdl, cfg, tempDir
+	return storageCli, cfg, tempDir
 }
 
-func cleanupStagedTestObjects(t *testing.T, client minioHandler.MinioHandler, prefix string) {
+func cleanupStagedTestObjects(t *testing.T, client storageclient.ObjectStorage, prefix string) {
 	ctx := context.Background()
-	objectCh := client.ListObjects(ctx, StagedTestBucket, prefix, true, minio.ListObjectsOptions{})
-
-	for object := range objectCh {
-		if object.Err != nil {
-			t.Logf("Warning: failed to list object for cleanup: %v", object.Err)
-			continue
-		}
-		err := client.RemoveObject(ctx, StagedTestBucket, object.Key, minio.RemoveObjectOptions{})
+	err := client.WalkWithObjects(ctx, StagedTestBucket, prefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+		err := client.RemoveObject(ctx, StagedTestBucket, objInfo.FilePath)
 		if err != nil {
-			t.Logf("Warning: failed to cleanup object %s: %v", object.Key, err)
+			t.Logf("Warning: failed to cleanup object %s: %v", objInfo.FilePath, err)
 		}
+		return true // Continue walking
+	})
+	if err != nil {
+		t.Logf("Warning: failed to walk objects for cleanup: %v", err)
 	}
 }
 
@@ -98,15 +95,15 @@ func generateStagedTestData(size int) []byte {
 
 func TestStagedFileWriter_BasicWriteAndSync(t *testing.T) {
 	rootPath := fmt.Sprintf("test-staged-basic-write-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootPath)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 
 	logId := int64(1)
 	segmentId := int64(100)
-	defer cleanupStagedTestObjects(t, minioHdl, rootPath)
+	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	// Create QuorumFileWriter
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -155,7 +152,7 @@ func TestStagedFileWriter_BasicWriteAndSync(t *testing.T) {
 
 func TestStagedFileWriter_CompactOperation(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-compact-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 	ctx := context.Background()
 
 	// Configure for smaller blocks to test compaction
@@ -163,9 +160,9 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 
 	logId := int64(2)
 	segmentId := int64(200)
-	defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -204,23 +201,24 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 		t.Logf("Compacted size: %d bytes", compactedSize)
 
 		// Verify objects were created in MinIO
-		objectCh := minioHdl.ListObjects(ctx, StagedTestBucket, fmt.Sprintf("%s/%d/%d", rootDir, logId, segmentId), true, minio.ListObjectsOptions{})
+		prefix := fmt.Sprintf("%s/%d/%d", rootDir, logId, segmentId)
 		var objectCount int
 		var hasFooter bool
 		var hasMergedBlocks bool
 
-		for object := range objectCh {
-			require.NoError(t, object.Err)
+		walkErr := storageCli.WalkWithObjects(ctx, StagedTestBucket, prefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 			objectCount++
-			t.Logf("Compacted object: %s (size: %d)", object.Key, object.Size)
+			t.Logf("Compacted object: %s", objInfo.FilePath)
 
-			if strings.HasSuffix(object.Key, "footer.blk") {
+			if strings.HasSuffix(objInfo.FilePath, "footer.blk") {
 				hasFooter = true
 			}
-			if strings.Contains(object.Key, "/m_") && strings.HasSuffix(object.Key, ".blk") {
+			if strings.Contains(objInfo.FilePath, "/m_") && strings.HasSuffix(objInfo.FilePath, ".blk") {
 				hasMergedBlocks = true
 			}
-		}
+			return true // Continue walking
+		})
+		require.NoError(t, walkErr)
 
 		assert.Greater(t, objectCount, 0, "Should have created objects in MinIO")
 		assert.True(t, hasFooter, "Should have footer object")
@@ -230,7 +228,7 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 
 func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-reader-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 	ctx := context.Background()
 
 	// Configure for smaller blocks
@@ -241,10 +239,10 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 	logId := int64(3)
 	segmentId := int64(300)
 
-	defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
 	// Step 1: Write and finalize data
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 
 	testData := [][]byte{
@@ -270,7 +268,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 
 	// Step 2: Test reading from local files (before compaction)
 	t.Run("ReadFromLocal", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -299,7 +297,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 
 	// Step 4: Test reading from compacted data (MinIO)
 	t.Run("ReadFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -320,15 +318,15 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 
 func TestStagedFileWriter_ConcurrentWrites(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-concurrent-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 	ctx := context.Background()
 
 	logId := int64(4)
 	segmentId := int64(400)
 
-	defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -396,14 +394,14 @@ func TestStagedFileWriter_ConcurrentWrites(t *testing.T) {
 func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 	t.Run("EmptyPayload", func(t *testing.T) {
 		rootDir := fmt.Sprintf("test-staged-empty-payload-%d", time.Now().Unix())
-		minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+		storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 		ctx := context.Background()
 		logId := int64(5)
 		segmentId := int64(500)
 
-		defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -415,14 +413,14 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 
 	t.Run("WriteAfterFinalize", func(t *testing.T) {
 		rootDir := fmt.Sprintf("test-staged-write-after-finalize-%d", time.Now().Unix())
-		minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+		storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 		ctx := context.Background()
 
 		logId := int64(6)
 		segmentId := int64(600)
-		defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -447,14 +445,14 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 
 	t.Run("CompactBeforeFinalize", func(t *testing.T) {
 		rootDir := fmt.Sprintf("test-staged-compact-before-finalize-%d", time.Now().Unix())
-		minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+		storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 		ctx := context.Background()
 
 		logId := int64(7)
 		segmentId := int64(700)
-		defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -475,7 +473,7 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 
 func TestStagedFileReader_ErrorHandling(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-reader-errorhandling-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 	ctx := context.Background()
 
 	t.Run("ReadNonExistentSegment", func(t *testing.T) {
@@ -483,7 +481,7 @@ func TestStagedFileReader_ErrorHandling(t *testing.T) {
 		segmentId := int64(800)
 
 		// Try to read from non-existent segment
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.Error(t, err)
 		assert.True(t, werr.ErrEntryNotFound.Is(err))
 		assert.Nil(t, reader)
@@ -492,7 +490,7 @@ func TestStagedFileReader_ErrorHandling(t *testing.T) {
 
 func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-integrity-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
 	ctx := context.Background()
 
 	// Configure for smaller blocks to ensure we test both local and compacted reading
@@ -502,7 +500,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	logId := int64(9)
 	segmentId := int64(900)
-	defer cleanupStagedTestObjects(t, minioHdl, rootDir)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
 	// Generate test data with different sizes
 	testData := [][]byte{
@@ -516,7 +514,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 	}
 
 	// Step 1: Write all data
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -534,7 +532,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 2: Read from local files and verify data integrity
 	t.Run("LocalDataIntegrity", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -564,7 +562,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 4: Read from compacted data and verify data integrity
 	t.Run("CompactedDataIntegrity", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -585,7 +583,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 5: Test partial reads from different starting points
 	t.Run("PartialReadsFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 

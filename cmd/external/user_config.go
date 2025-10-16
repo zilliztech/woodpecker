@@ -19,508 +19,396 @@ package external
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
-// UserSegmentAppendConfig represents the external segment append configuration format
-type UserSegmentAppendConfig struct {
-	QueueSize  int `yaml:"queueSize"`
-	MaxRetries int `yaml:"maxRetries"`
-}
-
-// UserSegmentRollingPolicyConfig represents the external segment rolling policy configuration format
-type UserSegmentRollingPolicyConfig struct {
-	MaxSize     string `yaml:"maxSize"`     // e.g., "256M", "2G"
-	MaxInterval string `yaml:"maxInterval"` // e.g., "10m", "1h"
-	MaxBlocks   int64  `yaml:"maxBlocks"`
-}
-
-// UserAuditorConfig represents the external auditor configuration format
-type UserAuditorConfig struct {
-	MaxInterval string `yaml:"maxInterval"` // e.g., "10s"
-}
-
-// UserCustomPlacement represents the external custom placement configuration format
-type UserCustomPlacement struct {
-	Region        string `yaml:"region"`
-	Az            string `yaml:"az"`
-	ResourceGroup string `yaml:"resourceGroup"`
-}
-
-// UserQuorumSelectStrategy represents the external quorum selection strategy configuration format
-type UserQuorumSelectStrategy struct {
-	AffinityMode    string                         `yaml:"affinityMode"`
-	Replicas        int                            `yaml:"replicas"`
-	Strategy        string                         `yaml:"strategy"`
-	CustomPlacement map[string]UserCustomPlacement `yaml:"customPlacement"` // map: replica1, replica2, etc.
-}
-
-// UserQuorumConfig represents the external quorum configuration format
-type UserQuorumConfig struct {
-	QuorumBufferPools    map[string]string        `yaml:"quorumBufferPools"` // map: region1 -> comma-separated seeds string
-	QuorumSelectStrategy UserQuorumSelectStrategy `yaml:"quorumSelectStrategy"`
-}
-
-// UserClientConfig represents the external client configuration format
-type UserClientConfig struct {
-	SegmentAppend        UserSegmentAppendConfig        `yaml:"segmentAppend"`
-	SegmentRollingPolicy UserSegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
-	Auditor              UserAuditorConfig              `yaml:"auditor"`
-	Quorum               UserQuorumConfig               `yaml:"quorum"`
-}
-
-// UserSegmentSyncPolicyConfig represents the external segment sync policy configuration format
-type UserSegmentSyncPolicyConfig struct {
-	MaxInterval                string `yaml:"maxInterval"`                // e.g., "200ms"
-	MaxIntervalForLocalStorage string `yaml:"maxIntervalForLocalStorage"` // e.g., "10ms"
-	MaxBytes                   string `yaml:"maxBytes"`                   // e.g., "256M"
-	MaxEntries                 int    `yaml:"maxEntries"`
-	MaxFlushRetries            int    `yaml:"maxFlushRetries"`
-	RetryInterval              string `yaml:"retryInterval"` // e.g., "1000ms"
-	MaxFlushSize               string `yaml:"maxFlushSize"`  // e.g., "2M"
-	MaxFlushThreads            int    `yaml:"maxFlushThreads"`
-}
-
-// UserSegmentCompactionPolicyConfig represents the external segment compaction policy configuration format
-type UserSegmentCompactionPolicyConfig struct {
-	MaxSize            string `yaml:"maxSize"` // e.g., "2M"
-	MaxParallelUploads int    `yaml:"maxParallelUploads"`
-	MaxParallelReads   int    `yaml:"maxParallelReads"`
-}
-
-// UserSegmentReadPolicyConfig represents the external segment read policy configuration format
-type UserSegmentReadPolicyConfig struct {
-	MaxBatchSize    string `yaml:"maxBatchSize"` // e.g., "16M"
-	MaxFetchThreads int    `yaml:"maxFetchThreads"`
-}
-
-// UserLogstoreConfig represents the external logstore configuration format
-type UserLogstoreConfig struct {
-	SegmentSyncPolicy       UserSegmentSyncPolicyConfig       `yaml:"segmentSyncPolicy"`
-	SegmentCompactionPolicy UserSegmentCompactionPolicyConfig `yaml:"segmentCompactionPolicy"`
-	SegmentReadPolicy       UserSegmentReadPolicyConfig       `yaml:"segmentReadPolicy"`
-}
-
-// UserStorageConfig represents the external storage configuration format
-type UserStorageConfig struct {
-	Type     string `yaml:"type"`
-	RootPath string `yaml:"rootPath"`
-}
-
-// UserWoodpeckerConfig represents the external woodpecker configuration format
-type UserWoodpeckerConfig struct {
-	Meta     config.MetaConfig  `yaml:"meta"`     // Reuse internal struct
-	Client   UserClientConfig   `yaml:"client"`   // Custom due to unit formats
-	Logstore UserLogstoreConfig `yaml:"logstore"` // Custom due to unit formats
-	Storage  UserStorageConfig  `yaml:"storage"`  // Custom for flexibility
-}
-
-// UserLocalStorageConfig represents the local storage configuration
-type UserLocalStorageConfig struct {
+// LocalStorageConfig stores the local storage configuration
+type LocalStorageConfig struct {
 	Path string `yaml:"path"`
 }
 
-// UserMQConfig represents the message queue configuration
-type UserMQConfig struct {
-	Type string `yaml:"type"`
-}
-
-// UserConfig represents the external user configuration format
-// This is compatible with Milvus-style YAML configuration
+// UserConfig stores the user-provided configuration that can override the default configuration
+// It only includes the configurations we care about: etcd, localStorage, minio, woodpecker, trace, log
 type UserConfig struct {
-	Woodpecker   UserWoodpeckerConfig   `yaml:"woodpecker"`
-	LocalStorage UserLocalStorageConfig `yaml:"localStorage"`
-	MQ           UserMQConfig           `yaml:"mq"`
-	Log          config.LogConfig       `yaml:"log"`   // Reuse internal struct
-	Trace        config.TraceConfig     `yaml:"trace"` // Reuse internal struct
-	Etcd         config.EtcdConfig      `yaml:"etcd"`  // Reuse internal struct
-	Minio        config.MinioConfig     `yaml:"minio"` // Reuse internal struct
+	Etcd         *config.EtcdConfig       `yaml:"etcd"`
+	LocalStorage *LocalStorageConfig      `yaml:"localStorage"`
+	Minio        *config.MinioConfig      `yaml:"minio"`
+	Woodpecker   *config.WoodpeckerConfig `yaml:"woodpecker"`
+	Trace        *config.TraceConfig      `yaml:"trace"`
+	Log          *config.LogConfig        `yaml:"log"`
 }
 
-// LoadUserConfig loads external user configuration from YAML file(s)
-// If a file does not exist, it will be skipped silently (returns empty config)
-// This allows optional configuration files without causing errors
-func LoadUserConfig(files ...string) (*UserConfig, error) {
-	userConfig := &UserConfig{}
-
-	if len(files) == 0 {
-		return userConfig, nil
+// ApplyToConfig applies the user configuration to the given configuration, only overriding non-zero values
+func (c *UserConfig) ApplyToConfig(cfg *config.Configuration) error {
+	if c.Etcd != nil {
+		mergeEtcdConfig(&cfg.Etcd, c.Etcd)
 	}
 
-	// Read and merge all configuration files
-	for _, filePath := range files {
-		data, err := os.ReadFile(filePath)
+	if c.Minio != nil {
+		mergeMinioConfig(&cfg.Minio, c.Minio)
+	}
+
+	if c.Woodpecker != nil {
+		mergeWoodpeckerConfig(&cfg.Woodpecker, c.Woodpecker)
+	}
+
+	if c.Trace != nil {
+		mergeTraceConfig(&cfg.Trace, c.Trace)
+	}
+
+	if c.Log != nil {
+		mergeLogConfig(&cfg.Log, c.Log)
+	}
+
+	return nil
+}
+
+// LoadUserConfig loads user configuration from YAML files.
+// Multiple files can be provided, and they will be merged in order (later files override earlier ones).
+// If a file does not exist, it will be skipped without error.
+// If all files do not exist, an empty UserConfig will be returned.
+func LoadUserConfig(files ...string) (*UserConfig, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no configuration files provided")
+	}
+
+	userConfig := &UserConfig{}
+
+	for _, file := range files {
+		data, err := os.ReadFile(file)
 		if err != nil {
-			// If file doesn't exist, skip it silently (optional config file)
+			// Skip if file does not exist
 			if os.IsNotExist(err) {
 				continue
 			}
-			// For other errors (permission denied, etc.), return error
-			return nil, fmt.Errorf("failed to read config file %s: %w", filePath, err)
+			return nil, fmt.Errorf("failed to read config file %s: %w", file, err)
 		}
+
+		// Skip empty files
 		if len(data) == 0 {
 			continue
 		}
 
-		err = yaml.Unmarshal(data, userConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse config file %s: %w", filePath, err)
+		tempConfig := &UserConfig{}
+		if err := yaml.Unmarshal(data, tempConfig); err != nil {
+			return nil, fmt.Errorf("failed to parse config file %s: %w", file, err)
+		}
+
+		// Merge tempConfig into userConfig
+		if tempConfig.Etcd != nil {
+			if userConfig.Etcd == nil {
+				userConfig.Etcd = &config.EtcdConfig{}
+			}
+			mergeEtcdConfig(userConfig.Etcd, tempConfig.Etcd)
+		}
+
+		if tempConfig.LocalStorage != nil {
+			if userConfig.LocalStorage == nil {
+				userConfig.LocalStorage = &LocalStorageConfig{}
+			}
+			if tempConfig.LocalStorage.Path != "" {
+				userConfig.LocalStorage.Path = tempConfig.LocalStorage.Path
+			}
+		}
+
+		if tempConfig.Minio != nil {
+			if userConfig.Minio == nil {
+				userConfig.Minio = &config.MinioConfig{}
+			}
+			mergeMinioConfig(userConfig.Minio, tempConfig.Minio)
+		}
+
+		if tempConfig.Woodpecker != nil {
+			if userConfig.Woodpecker == nil {
+				userConfig.Woodpecker = &config.WoodpeckerConfig{}
+			}
+			mergeWoodpeckerConfig(userConfig.Woodpecker, tempConfig.Woodpecker)
+		}
+
+		if tempConfig.Trace != nil {
+			if userConfig.Trace == nil {
+				userConfig.Trace = &config.TraceConfig{}
+			}
+			mergeTraceConfig(userConfig.Trace, tempConfig.Trace)
+		}
+
+		if tempConfig.Log != nil {
+			if userConfig.Log == nil {
+				userConfig.Log = &config.LogConfig{}
+			}
+			mergeLogConfig(userConfig.Log, tempConfig.Log)
 		}
 	}
 
 	return userConfig, nil
 }
 
-// ApplyToConfig applies the user configuration to the internal Woodpecker configuration
-// This method converts external configuration format to internal format and overrides settings
-// It safely handles nil or empty user configurations
-func (u *UserConfig) ApplyToConfig(cfg *config.Configuration) error {
-	if cfg == nil {
-		return fmt.Errorf("configuration cannot be nil")
+// mergeEtcdConfig merges src into dst, only overriding non-zero values
+func mergeEtcdConfig(dst, src *config.EtcdConfig) {
+	if len(src.Endpoints) > 0 {
+		dst.Endpoints = src.Endpoints
+	}
+	if src.RootPath != "" {
+		dst.RootPath = src.RootPath
+	}
+	if src.MetaSubPath != "" {
+		dst.MetaSubPath = src.MetaSubPath
+	}
+	if src.KvSubPath != "" {
+		dst.KvSubPath = src.KvSubPath
+	}
+	if src.RequestTimeout.Milliseconds() > 0 {
+		dst.RequestTimeout = src.RequestTimeout
 	}
 
-	// If user config is nil or empty, nothing to apply
-	if u == nil {
-		return nil
+	// Merge nested structs
+	if src.Log.Level != "" {
+		dst.Log.Level = src.Log.Level
+	}
+	if src.Log.Path != "" {
+		dst.Log.Path = src.Log.Path
 	}
 
-	// Apply Woodpecker configuration
-	if err := u.applyWoodpeckerConfig(&cfg.Woodpecker); err != nil {
-		return fmt.Errorf("failed to apply woodpecker config: %w", err)
+	if src.Ssl.TlsCert != "" {
+		dst.Ssl.TlsCert = src.Ssl.TlsCert
+	}
+	if src.Ssl.TlsKey != "" {
+		dst.Ssl.TlsKey = src.Ssl.TlsKey
+	}
+	if src.Ssl.TlsCACert != "" {
+		dst.Ssl.TlsCACert = src.Ssl.TlsCACert
+	}
+	if src.Ssl.TlsMinVersion != "" {
+		dst.Ssl.TlsMinVersion = src.Ssl.TlsMinVersion
+	}
+	// Note: Enabled is bool, needs special handling
+	dst.Ssl.Enabled = src.Ssl.Enabled
+
+	if src.Use.Embed {
+		dst.Use.Embed = src.Use.Embed
 	}
 
-	// Apply Log configuration (direct copy, already compatible)
-	if u.Log.Level != "" {
-		cfg.Log = u.Log
+	if src.Data.Dir != "" {
+		dst.Data.Dir = src.Data.Dir
 	}
 
-	// Apply Trace configuration (direct copy, already compatible)
-	if u.Trace.Exporter != "" {
-		cfg.Trace = u.Trace
+	if src.Auth.UserName != "" {
+		dst.Auth.UserName = src.Auth.UserName
 	}
-
-	// Apply Etcd configuration (direct copy, already compatible)
-	if len(u.Etcd.Endpoints) > 0 {
-		cfg.Etcd = u.Etcd
+	if src.Auth.Password != "" {
+		dst.Auth.Password = src.Auth.Password
 	}
-
-	// Apply Minio configuration (direct copy, already compatible)
-	if u.Minio.Address != "" {
-		cfg.Minio = u.Minio
-	}
-
-	return nil
+	dst.Auth.Enabled = src.Auth.Enabled
 }
 
-// applyWoodpeckerConfig applies woodpecker-specific configuration
-func (u *UserConfig) applyWoodpeckerConfig(cfg *config.WoodpeckerConfig) error {
-	// Apply Meta configuration (direct copy, already compatible)
-	if u.Woodpecker.Meta.Type != "" {
-		cfg.Meta = u.Woodpecker.Meta
+// mergeMinioConfig merges src into dst, only overriding non-zero values
+func mergeMinioConfig(dst, src *config.MinioConfig) {
+	if src.Address != "" {
+		dst.Address = src.Address
+	}
+	if src.Port > 0 {
+		dst.Port = src.Port
+	}
+	if src.AccessKeyID != "" {
+		dst.AccessKeyID = src.AccessKeyID
+	}
+	if src.SecretAccessKey != "" {
+		dst.SecretAccessKey = src.SecretAccessKey
+	}
+	if src.BucketName != "" {
+		dst.BucketName = src.BucketName
+	}
+	if src.RootPath != "" {
+		dst.RootPath = src.RootPath
+	}
+	if src.CloudProvider != "" {
+		dst.CloudProvider = src.CloudProvider
+	}
+	if src.GcpCredentialJSON != "" {
+		dst.GcpCredentialJSON = src.GcpCredentialJSON
+	}
+	if src.IamEndpoint != "" {
+		dst.IamEndpoint = src.IamEndpoint
+	}
+	if src.LogLevel != "" {
+		dst.LogLevel = src.LogLevel
+	}
+	if src.Region != "" {
+		dst.Region = src.Region
+	}
+	if src.RequestTimeoutMs.Milliseconds() > 0 {
+		dst.RequestTimeoutMs = src.RequestTimeoutMs
+	}
+	if src.ListObjectsMaxKeys > 0 {
+		dst.ListObjectsMaxKeys = src.ListObjectsMaxKeys
 	}
 
-	// Apply Client configuration
-	if err := u.applyClientConfig(&cfg.Client); err != nil {
-		return fmt.Errorf("failed to apply client config: %w", err)
-	}
+	// Bool fields
+	dst.UseSSL = src.UseSSL
+	dst.CreateBucket = src.CreateBucket
+	dst.UseIAM = src.UseIAM
+	dst.UseVirtualHost = src.UseVirtualHost
 
-	// Apply Logstore configuration
-	if err := u.applyLogstoreConfig(&cfg.Logstore); err != nil {
-		return fmt.Errorf("failed to apply logstore config: %w", err)
+	// Nested struct
+	if src.Ssl.TlsCACert != "" {
+		dst.Ssl.TlsCACert = src.Ssl.TlsCACert
 	}
-
-	// Apply Storage configuration
-	if u.Woodpecker.Storage.Type != "" {
-		cfg.Storage.Type = u.Woodpecker.Storage.Type
-	}
-	if u.Woodpecker.Storage.RootPath != "" {
-		cfg.Storage.RootPath = u.Woodpecker.Storage.RootPath
-	}
-
-	return nil
 }
 
-// applyClientConfig applies client-specific configuration
-func (u *UserConfig) applyClientConfig(cfg *config.ClientConfig) error {
-	// Apply SegmentAppend configuration
-	if u.Woodpecker.Client.SegmentAppend.QueueSize > 0 {
-		cfg.SegmentAppend.QueueSize = u.Woodpecker.Client.SegmentAppend.QueueSize
+// mergeWoodpeckerConfig merges src into dst, only overriding non-zero values
+func mergeWoodpeckerConfig(dst, src *config.WoodpeckerConfig) {
+	// Meta
+	if src.Meta.Type != "" {
+		dst.Meta.Type = src.Meta.Type
 	}
-	if u.Woodpecker.Client.SegmentAppend.MaxRetries >= 0 {
-		cfg.SegmentAppend.MaxRetries = u.Woodpecker.Client.SegmentAppend.MaxRetries
-	}
-
-	// Apply SegmentRollingPolicy configuration
-	if u.Woodpecker.Client.SegmentRollingPolicy.MaxSize != "" {
-		size, err := parseSize(u.Woodpecker.Client.SegmentRollingPolicy.MaxSize)
-		if err != nil {
-			return fmt.Errorf("failed to parse maxSize: %w", err)
-		}
-		cfg.SegmentRollingPolicy.MaxSize = size
-	}
-	if u.Woodpecker.Client.SegmentRollingPolicy.MaxInterval != "" {
-		duration, err := parseDuration(u.Woodpecker.Client.SegmentRollingPolicy.MaxInterval, time.Second)
-		if err != nil {
-			return fmt.Errorf("failed to parse maxInterval: %w", err)
-		}
-		cfg.SegmentRollingPolicy.MaxInterval = int(duration.Seconds())
-	}
-	if u.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks > 0 {
-		cfg.SegmentRollingPolicy.MaxBlocks = u.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks
+	if src.Meta.Prefix != "" {
+		dst.Meta.Prefix = src.Meta.Prefix
 	}
 
-	// Apply Auditor configuration
-	if u.Woodpecker.Client.Auditor.MaxInterval != "" {
-		duration, err := parseDuration(u.Woodpecker.Client.Auditor.MaxInterval, time.Second)
-		if err != nil {
-			return fmt.Errorf("failed to parse auditor maxInterval: %w", err)
-		}
-		cfg.Auditor.MaxInterval = int(duration.Seconds())
+	// Client
+	if src.Client.SegmentAppend.QueueSize > 0 {
+		dst.Client.SegmentAppend.QueueSize = src.Client.SegmentAppend.QueueSize
+	}
+	if src.Client.SegmentAppend.MaxRetries > 0 {
+		dst.Client.SegmentAppend.MaxRetries = src.Client.SegmentAppend.MaxRetries
 	}
 
-	// Apply Quorum configuration
-	if err := u.applyQuorumConfig(&cfg.Quorum); err != nil {
-		return fmt.Errorf("failed to apply quorum config: %w", err)
+	if src.Client.SegmentRollingPolicy.MaxSize.Int64() > 0 {
+		dst.Client.SegmentRollingPolicy.MaxSize = src.Client.SegmentRollingPolicy.MaxSize
+	}
+	if src.Client.SegmentRollingPolicy.MaxInterval.Seconds() > 0 {
+		dst.Client.SegmentRollingPolicy.MaxInterval = src.Client.SegmentRollingPolicy.MaxInterval
+	}
+	if src.Client.SegmentRollingPolicy.MaxBlocks > 0 {
+		dst.Client.SegmentRollingPolicy.MaxBlocks = src.Client.SegmentRollingPolicy.MaxBlocks
 	}
 
-	return nil
+	if src.Client.Auditor.MaxInterval.Seconds() > 0 {
+		dst.Client.Auditor.MaxInterval = src.Client.Auditor.MaxInterval
+	}
+
+	// Quorum
+	if len(src.Client.Quorum.BufferPools) > 0 {
+		dst.Client.Quorum.BufferPools = src.Client.Quorum.BufferPools
+	}
+	if src.Client.Quorum.SelectStrategy.AffinityMode != "" {
+		dst.Client.Quorum.SelectStrategy.AffinityMode = src.Client.Quorum.SelectStrategy.AffinityMode
+	}
+	if src.Client.Quorum.SelectStrategy.Replicas > 0 {
+		dst.Client.Quorum.SelectStrategy.Replicas = src.Client.Quorum.SelectStrategy.Replicas
+	}
+	if src.Client.Quorum.SelectStrategy.Strategy != "" {
+		dst.Client.Quorum.SelectStrategy.Strategy = src.Client.Quorum.SelectStrategy.Strategy
+	}
+	if len(src.Client.Quorum.SelectStrategy.CustomPlacement) > 0 {
+		dst.Client.Quorum.SelectStrategy.CustomPlacement = src.Client.Quorum.SelectStrategy.CustomPlacement
+	}
+
+	// Logstore - SegmentSyncPolicy
+	if src.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxInterval = src.Logstore.SegmentSyncPolicy.MaxInterval
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = src.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxEntries > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxEntries = src.Logstore.SegmentSyncPolicy.MaxEntries
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxBytes.Int64() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxBytes = src.Logstore.SegmentSyncPolicy.MaxBytes
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxFlushRetries > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxFlushRetries = src.Logstore.SegmentSyncPolicy.MaxFlushRetries
+	}
+	if src.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds() > 0 {
+		dst.Logstore.SegmentSyncPolicy.RetryInterval = src.Logstore.SegmentSyncPolicy.RetryInterval
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64() > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxFlushSize = src.Logstore.SegmentSyncPolicy.MaxFlushSize
+	}
+	if src.Logstore.SegmentSyncPolicy.MaxFlushThreads > 0 {
+		dst.Logstore.SegmentSyncPolicy.MaxFlushThreads = src.Logstore.SegmentSyncPolicy.MaxFlushThreads
+	}
+
+	// Logstore - SegmentCompactionPolicy
+	if src.Logstore.SegmentCompactionPolicy.MaxBytes.Int64() > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxBytes = src.Logstore.SegmentCompactionPolicy.MaxBytes
+	}
+	if src.Logstore.SegmentCompactionPolicy.MaxParallelUploads > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxParallelUploads = src.Logstore.SegmentCompactionPolicy.MaxParallelUploads
+	}
+	if src.Logstore.SegmentCompactionPolicy.MaxParallelReads > 0 {
+		dst.Logstore.SegmentCompactionPolicy.MaxParallelReads = src.Logstore.SegmentCompactionPolicy.MaxParallelReads
+	}
+
+	// Logstore - SegmentReadPolicy
+	if src.Logstore.SegmentReadPolicy.MaxBatchSize.Int64() > 0 {
+		dst.Logstore.SegmentReadPolicy.MaxBatchSize = src.Logstore.SegmentReadPolicy.MaxBatchSize
+	}
+	if src.Logstore.SegmentReadPolicy.MaxFetchThreads > 0 {
+		dst.Logstore.SegmentReadPolicy.MaxFetchThreads = src.Logstore.SegmentReadPolicy.MaxFetchThreads
+	}
+
+	// Storage
+	if src.Storage.Type != "" {
+		dst.Storage.Type = src.Storage.Type
+	}
+	if src.Storage.RootPath != "" {
+		dst.Storage.RootPath = src.Storage.RootPath
+	}
 }
 
-// applyQuorumConfig applies quorum-specific configuration
-func (u *UserConfig) applyQuorumConfig(cfg *config.QuorumConfig) error {
-	// Apply buffer pools (convert from map with comma-separated strings to slice)
-	if len(u.Woodpecker.Client.Quorum.QuorumBufferPools) > 0 {
-		cfg.BufferPools = make([]config.QuorumBufferPool, 0, len(u.Woodpecker.Client.Quorum.QuorumBufferPools))
-		for name, seedsStr := range u.Woodpecker.Client.Quorum.QuorumBufferPools {
-			// Skip empty seed strings
-			if seedsStr == "" {
-				continue
-			}
-			// Parse comma-separated seeds
-			seeds := parseSeeds(seedsStr)
-			if len(seeds) > 0 {
-				cfg.BufferPools = append(cfg.BufferPools, config.QuorumBufferPool{
-					Name:  name,
-					Seeds: seeds,
-				})
-			}
-		}
+// mergeTraceConfig merges src into dst, only overriding non-zero values
+func mergeTraceConfig(dst, src *config.TraceConfig) {
+	if src.Exporter != "" {
+		dst.Exporter = src.Exporter
+	}
+	if src.SampleFraction > 0 {
+		dst.SampleFraction = src.SampleFraction
+	}
+	if src.InitTimeout.Seconds() > 0 {
+		dst.InitTimeout = src.InitTimeout
 	}
 
-	// Apply select strategy
-	strategy := &u.Woodpecker.Client.Quorum.QuorumSelectStrategy
-	if strategy.AffinityMode != "" {
-		cfg.SelectStrategy.AffinityMode = strategy.AffinityMode
-	}
-	if strategy.Replicas > 0 {
-		cfg.SelectStrategy.Replicas = strategy.Replicas
-	}
-	if strategy.Strategy != "" {
-		cfg.SelectStrategy.Strategy = strategy.Strategy
+	// Jaeger
+	if src.Jaeger.URL != "" {
+		dst.Jaeger.URL = src.Jaeger.URL
 	}
 
-	// Apply custom placement (convert from map to slice)
-	if len(strategy.CustomPlacement) > 0 {
-		cfg.SelectStrategy.CustomPlacement = make([]config.CustomPlacement, 0, len(strategy.CustomPlacement))
-		for name, placement := range strategy.CustomPlacement {
-			cfg.SelectStrategy.CustomPlacement = append(cfg.SelectStrategy.CustomPlacement, config.CustomPlacement{
-				Name:          name, // Use the map key as the name (replica1, replica2, etc.)
-				Region:        placement.Region,
-				Az:            placement.Az,
-				ResourceGroup: placement.ResourceGroup,
-			})
-		}
+	// Otlp
+	if src.Otlp.Endpoint != "" {
+		dst.Otlp.Endpoint = src.Otlp.Endpoint
 	}
-
-	return nil
+	if src.Otlp.Method != "" {
+		dst.Otlp.Method = src.Otlp.Method
+	}
+	dst.Otlp.Secure = src.Otlp.Secure
 }
 
-// applyLogstoreConfig applies logstore-specific configuration
-func (u *UserConfig) applyLogstoreConfig(cfg *config.LogstoreConfig) error {
-	// Apply SegmentSyncPolicy configuration
-	syncPolicy := &u.Woodpecker.Logstore.SegmentSyncPolicy
-	if syncPolicy.MaxInterval != "" {
-		duration, err := parseDuration(syncPolicy.MaxInterval, time.Millisecond)
-		if err != nil {
-			return fmt.Errorf("failed to parse sync policy maxInterval: %w", err)
-		}
-		cfg.SegmentSyncPolicy.MaxInterval = int(duration.Milliseconds())
+// mergeLogConfig merges src into dst, only overriding non-zero values
+func mergeLogConfig(dst, src *config.LogConfig) {
+	if src.Level != "" {
+		dst.Level = src.Level
 	}
-	if syncPolicy.MaxIntervalForLocalStorage != "" {
-		duration, err := parseDuration(syncPolicy.MaxIntervalForLocalStorage, time.Millisecond)
-		if err != nil {
-			return fmt.Errorf("failed to parse sync policy maxIntervalForLocalStorage: %w", err)
-		}
-		cfg.SegmentSyncPolicy.MaxIntervalForLocalStorage = int(duration.Milliseconds())
+	if src.Format != "" {
+		dst.Format = src.Format
 	}
-	if syncPolicy.MaxBytes != "" {
-		size, err := parseSize(syncPolicy.MaxBytes)
-		if err != nil {
-			return fmt.Errorf("failed to parse sync policy maxBytes: %w", err)
-		}
-		cfg.SegmentSyncPolicy.MaxBytes = size
-	}
-	if syncPolicy.MaxEntries > 0 {
-		cfg.SegmentSyncPolicy.MaxEntries = syncPolicy.MaxEntries
-	}
-	if syncPolicy.MaxFlushRetries >= 0 {
-		cfg.SegmentSyncPolicy.MaxFlushRetries = syncPolicy.MaxFlushRetries
-	}
-	if syncPolicy.RetryInterval != "" {
-		duration, err := parseDuration(syncPolicy.RetryInterval, time.Millisecond)
-		if err != nil {
-			return fmt.Errorf("failed to parse sync policy retryInterval: %w", err)
-		}
-		cfg.SegmentSyncPolicy.RetryInterval = int(duration.Milliseconds())
-	}
-	if syncPolicy.MaxFlushSize != "" {
-		size, err := parseSize(syncPolicy.MaxFlushSize)
-		if err != nil {
-			return fmt.Errorf("failed to parse sync policy maxFlushSize: %w", err)
-		}
-		cfg.SegmentSyncPolicy.MaxFlushSize = size
-	}
-	if syncPolicy.MaxFlushThreads > 0 {
-		cfg.SegmentSyncPolicy.MaxFlushThreads = syncPolicy.MaxFlushThreads
-	}
+	dst.Stdout = src.Stdout
 
-	// Apply SegmentCompactionPolicy configuration
-	compactionPolicy := &u.Woodpecker.Logstore.SegmentCompactionPolicy
-	if compactionPolicy.MaxSize != "" {
-		size, err := parseSize(compactionPolicy.MaxSize)
-		if err != nil {
-			return fmt.Errorf("failed to parse compaction policy maxSize: %w", err)
-		}
-		cfg.SegmentCompactionPolicy.MaxBytes = size
+	// File
+	if src.File.RootPath != "" {
+		dst.File.RootPath = src.File.RootPath
 	}
-	if compactionPolicy.MaxParallelUploads > 0 {
-		cfg.SegmentCompactionPolicy.MaxParallelUploads = compactionPolicy.MaxParallelUploads
+	if src.File.MaxSize > 0 {
+		dst.File.MaxSize = src.File.MaxSize
 	}
-	if compactionPolicy.MaxParallelReads > 0 {
-		cfg.SegmentCompactionPolicy.MaxParallelReads = compactionPolicy.MaxParallelReads
+	if src.File.MaxAge > 0 {
+		dst.File.MaxAge = src.File.MaxAge
 	}
-
-	// Apply SegmentReadPolicy configuration
-	readPolicy := &u.Woodpecker.Logstore.SegmentReadPolicy
-	if readPolicy.MaxBatchSize != "" {
-		size, err := parseSize(readPolicy.MaxBatchSize)
-		if err != nil {
-			return fmt.Errorf("failed to parse read policy maxBatchSize: %w", err)
-		}
-		cfg.SegmentReadPolicy.MaxBatchSize = size
+	if src.File.MaxBackups > 0 {
+		dst.File.MaxBackups = src.File.MaxBackups
 	}
-	if readPolicy.MaxFetchThreads > 0 {
-		cfg.SegmentReadPolicy.MaxFetchThreads = readPolicy.MaxFetchThreads
-	}
-
-	return nil
-}
-
-// Helper functions for parsing various formats
-
-// parseSeeds parses comma-separated seed addresses into a slice
-func parseSeeds(seeds string) []string {
-	if seeds == "" {
-		return nil
-	}
-	var result []string
-	for _, seed := range strings.Split(seeds, ",") {
-		if trimmed := strings.TrimSpace(seed); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
-}
-
-// parseSize parses size strings like "256M", "2GB", "1024" (bytes)
-// Supports: G/GB, M/MB, K/KB, or plain numbers
-func parseSize(sizeStr string) (int64, error) {
-	if sizeStr == "" {
-		return 0, nil
-	}
-
-	valueStr := strings.ToLower(strings.TrimSpace(sizeStr))
-	if valueStr == "" {
-		return 0, nil
-	}
-
-	// Handle GB/G suffix
-	if strings.HasSuffix(valueStr, "gb") || strings.HasSuffix(valueStr, "g") {
-		numStr := strings.Split(valueStr, "g")[0]
-		size, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size format '%s': %w", sizeStr, err)
-		}
-		return size * 1024 * 1024 * 1024, nil
-	}
-
-	// Handle MB/M suffix
-	if strings.HasSuffix(valueStr, "mb") || strings.HasSuffix(valueStr, "m") {
-		numStr := strings.Split(valueStr, "m")[0]
-		size, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size format '%s': %w", sizeStr, err)
-		}
-		return size * 1024 * 1024, nil
-	}
-
-	// Handle KB/K suffix
-	if strings.HasSuffix(valueStr, "kb") || strings.HasSuffix(valueStr, "k") {
-		numStr := strings.Split(valueStr, "k")[0]
-		size, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size format '%s': %w", sizeStr, err)
-		}
-		return size * 1024, nil
-	}
-
-	// Handle TB/T suffix
-	if strings.HasSuffix(valueStr, "tb") || strings.HasSuffix(valueStr, "t") {
-		numStr := strings.Split(valueStr, "t")[0]
-		size, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size format '%s': %w", sizeStr, err)
-		}
-		return size * 1024 * 1024 * 1024 * 1024, nil
-	}
-
-	// No unit, parse as plain number (bytes)
-	size, err := strconv.ParseInt(valueStr, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size format '%s': %w", sizeStr, err)
-	}
-	return size, nil
-}
-
-// parseDuration parses duration strings and returns time.Duration
-// Uses Go's standard time.ParseDuration for better compatibility
-// Also supports plain numbers with a default unit for backward compatibility
-func parseDuration(durationStr string, defaultUnit time.Duration) (time.Duration, error) {
-	if durationStr == "" {
-		return 0, nil
-	}
-
-	durationStr = strings.TrimSpace(durationStr)
-	if durationStr == "" {
-		return 0, nil
-	}
-
-	// Try to parse as plain number first (for backward compatibility)
-	if value, err := strconv.ParseInt(durationStr, 10, 64); err == nil {
-		return time.Duration(value) * defaultUnit, nil
-	}
-
-	// Try to parse as Go duration format (supports ns, us, ms, s, m, h)
-	duration, err := time.ParseDuration(durationStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration format '%s': %w", durationStr, err)
-	}
-
-	return duration, nil
 }

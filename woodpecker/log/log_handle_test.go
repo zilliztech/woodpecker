@@ -40,7 +40,7 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
-					MaxInterval: 10,
+					MaxInterval: config.NewDurationSecondsFromInt(10),
 					MaxSize:     64 * 1024 * 1024,
 					MaxBlocks:   1000,
 				},

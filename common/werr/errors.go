@@ -140,6 +140,7 @@ var (
 	ErrFileReaderEndOfFile                = newWoodpeckerError("end of file", 2310, false)
 	ErrFileReaderNoBlockFound             = newWoodpeckerError("reader no block found", 2311, false)
 	ErrFileReaderBlockDeletedByCompaction = newWoodpeckerError("block deleted by compaction, client should retry without lastReadState", 2312, true)
+	ErrFileReaderSeek                     = newWoodpeckerError("reader seek failed", 2313, true)
 
 	// ---------------------------------------------
 	// Metadata Layer Errors
