@@ -1861,7 +1861,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Setup cluster if needed
 			var client woodpecker.Client
@@ -2257,7 +2257,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 			// Set small segment rolling policy to force multiple segments
-			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = 2 // 2s
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = config.NewDurationSecondsFromInt(2) // 2s
 
 			// Setup cluster if needed
 			var client woodpecker.Client

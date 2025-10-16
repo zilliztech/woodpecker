@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,9 +32,9 @@ type MetaConfig struct {
 
 // SegmentRollingPolicyConfig stores the segment rolling policy configuration.
 type SegmentRollingPolicyConfig struct {
-	MaxSize     int64 `yaml:"maxSize"`
-	MaxInterval int   `yaml:"maxInterval"`
-	MaxBlocks   int64 `yaml:"maxBlocks"`
+	MaxSize     ByteSize        `yaml:"maxSize"`
+	MaxInterval DurationSeconds `yaml:"maxInterval"`
+	MaxBlocks   int64           `yaml:"maxBlocks"`
 }
 
 type SegmentAppendConfig struct {
@@ -50,7 +51,7 @@ type ClientConfig struct {
 }
 
 type AuditorConfig struct {
-	MaxInterval int `yaml:"maxInterval"`
+	MaxInterval DurationSeconds `yaml:"maxInterval"`
 }
 
 // QuorumBufferPool stores the quorum buffer pool configuration.
@@ -104,26 +105,26 @@ func (q *QuorumConfig) GetAckQuorumSize() int {
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
 type SegmentReadPolicyConfig struct {
-	MaxBatchSize    int64 `yaml:"maxBatchSize"`
-	MaxFetchThreads int   `yaml:"maxFetchThreads"`
+	MaxBatchSize    ByteSize `yaml:"maxBatchSize"`
+	MaxFetchThreads int      `yaml:"maxFetchThreads"`
 }
 
 // SegmentSyncPolicyConfig stores the log file sync policy configuration.
 type SegmentSyncPolicyConfig struct {
-	MaxInterval                int   `yaml:"maxInterval"`
-	MaxIntervalForLocalStorage int   `yaml:"maxIntervalForLocalStorage"`
-	MaxEntries                 int   `yaml:"maxEntries"`
-	MaxBytes                   int64 `yaml:"maxBytes"`
-	MaxFlushRetries            int   `yaml:"maxFlushRetries"`
-	RetryInterval              int   `yaml:"retryInterval"`
-	MaxFlushSize               int64 `yaml:"maxFlushSize"`
-	MaxFlushThreads            int   `yaml:"maxFlushThreads"`
+	MaxInterval                DurationMilliseconds `yaml:"maxInterval"`
+	MaxIntervalForLocalStorage DurationMilliseconds `yaml:"maxIntervalForLocalStorage"`
+	MaxEntries                 int                  `yaml:"maxEntries"`
+	MaxBytes                   ByteSize             `yaml:"maxBytes"`
+	MaxFlushRetries            int                  `yaml:"maxFlushRetries"`
+	RetryInterval              DurationMilliseconds `yaml:"retryInterval"`
+	MaxFlushSize               ByteSize             `yaml:"maxFlushSize"`
+	MaxFlushThreads            int                  `yaml:"maxFlushThreads"`
 }
 
 type SegmentCompactionPolicy struct {
-	MaxBytes           int64 `yaml:"maxBytes"`
-	MaxParallelUploads int   `yaml:"maxParallelUploads"`
-	MaxParallelReads   int   `yaml:"maxParallelReads"`
+	MaxBytes           ByteSize `yaml:"maxBytes"`
+	MaxParallelUploads int      `yaml:"maxParallelUploads"`
+	MaxParallelReads   int      `yaml:"maxParallelReads"`
 }
 
 // LogFileConfig stores the log file configuration.
@@ -156,11 +157,11 @@ type OtlpConfig struct {
 
 // TraceConfig stores the trace configuration.
 type TraceConfig struct {
-	Exporter       string       `yaml:"exporter"`
-	SampleFraction float64      `yaml:"sampleFraction"`
-	Jaeger         JaegerConfig `yaml:"jaeger"`
-	Otlp           OtlpConfig   `yaml:"otlp"`
-	InitTimeout    int          `yaml:"initTimeoutSeconds"`
+	Exporter       string          `yaml:"exporter"`
+	SampleFraction float64         `yaml:"sampleFraction"`
+	Jaeger         JaegerConfig    `yaml:"jaeger"`
+	Otlp           OtlpConfig      `yaml:"otlp"`
+	InitTimeout    DurationSeconds `yaml:"initTimeoutSeconds"`
 }
 
 // EtcdSslConfig stores the ETCD SSL configuration.
@@ -197,16 +198,16 @@ type EtcdLogConfig struct {
 
 // EtcdConfig stores the ETCD configuration.
 type EtcdConfig struct {
-	Endpoints      []string       `yaml:"endpoints"`
-	RootPath       string         `yaml:"rootPath"`
-	MetaSubPath    string         `yaml:"metaSubPath"`
-	KvSubPath      string         `yaml:"kvSubPath"`
-	Log            EtcdLogConfig  `yaml:"log"`
-	Ssl            EtcdSslConfig  `yaml:"ssl"`
-	RequestTimeout int            `yaml:"requestTimeout"`
-	Use            EtcdUseConfig  `yaml:"use"`
-	Data           EtcdDataConfig `yaml:"data"`
-	Auth           EtcdAuthConfig `yaml:"auth"`
+	Endpoints      []string             `yaml:"endpoints"`
+	RootPath       string               `yaml:"rootPath"`
+	MetaSubPath    string               `yaml:"metaSubPath"`
+	KvSubPath      string               `yaml:"kvSubPath"`
+	Log            EtcdLogConfig        `yaml:"log"`
+	Ssl            EtcdSslConfig        `yaml:"ssl"`
+	RequestTimeout DurationMilliseconds `yaml:"requestTimeout"`
+	Use            EtcdUseConfig        `yaml:"use"`
+	Data           EtcdDataConfig       `yaml:"data"`
+	Auth           EtcdAuthConfig       `yaml:"auth"`
 }
 
 func (etcdCfg *EtcdConfig) GetEndpoints() []string {
@@ -220,24 +221,24 @@ type MinioSslConfig struct {
 
 // MinioConfig stores the MinIO configuration.
 type MinioConfig struct {
-	Address            string         `yaml:"address"`
-	Port               int            `yaml:"port"`
-	AccessKeyID        string         `yaml:"accessKeyID"`
-	SecretAccessKey    string         `yaml:"secretAccessKey"`
-	UseSSL             bool           `yaml:"useSSL"`
-	Ssl                MinioSslConfig `yaml:"ssl"`
-	BucketName         string         `yaml:"bucketName"`
-	CreateBucket       bool           `yaml:"createBucket"`
-	RootPath           string         `yaml:"rootPath"`
-	UseIAM             bool           `yaml:"useIAM"`
-	CloudProvider      string         `yaml:"cloudProvider"`
-	GcpCredentialJSON  string         `yaml:"gcpCredentialJSON"`
-	IamEndpoint        string         `yaml:"iamEndpoint"`
-	LogLevel           string         `yaml:"logLevel"`
-	Region             string         `yaml:"region"`
-	UseVirtualHost     bool           `yaml:"useVirtualHost"`
-	RequestTimeoutMs   int            `yaml:"requestTimeoutMs"`
-	ListObjectsMaxKeys int            `yaml:"listObjectsMaxKeys"`
+	Address            string               `yaml:"address"`
+	Port               int                  `yaml:"port"`
+	AccessKeyID        string               `yaml:"accessKeyID"`
+	SecretAccessKey    string               `yaml:"secretAccessKey"`
+	UseSSL             bool                 `yaml:"useSSL"`
+	Ssl                MinioSslConfig       `yaml:"ssl"`
+	BucketName         string               `yaml:"bucketName"`
+	CreateBucket       bool                 `yaml:"createBucket"`
+	RootPath           string               `yaml:"rootPath"`
+	UseIAM             bool                 `yaml:"useIAM"`
+	CloudProvider      string               `yaml:"cloudProvider"`
+	GcpCredentialJSON  string               `yaml:"gcpCredentialJSON"`
+	IamEndpoint        string               `yaml:"iamEndpoint"`
+	LogLevel           string               `yaml:"logLevel"`
+	Region             string               `yaml:"region"`
+	UseVirtualHost     bool                 `yaml:"useVirtualHost"`
+	RequestTimeoutMs   DurationMilliseconds `yaml:"requestTimeoutMs"`
+	ListObjectsMaxKeys int                  `yaml:"listObjectsMaxKeys"`
 }
 
 // LogstoreConfig stores the logstore configuration.
@@ -386,18 +387,18 @@ func (c *Configuration) validateClientConfig() error {
 
 	// Validate SegmentRollingPolicy configuration
 	if client.SegmentRollingPolicy.MaxSize <= 0 {
-		return fmt.Errorf("segment rolling policy max size must be positive, got %d", client.SegmentRollingPolicy.MaxSize)
+		return fmt.Errorf("segment rolling policy max size must be positive, got %d", client.SegmentRollingPolicy.MaxSize.Int64())
 	}
-	if client.SegmentRollingPolicy.MaxInterval <= 0 {
-		return fmt.Errorf("segment rolling policy max interval must be positive, got %d", client.SegmentRollingPolicy.MaxInterval)
+	if client.SegmentRollingPolicy.MaxInterval.Seconds() <= 0 {
+		return fmt.Errorf("segment rolling policy max interval must be positive, got %d", client.SegmentRollingPolicy.MaxInterval.Seconds())
 	}
 	if client.SegmentRollingPolicy.MaxBlocks <= 0 {
 		return fmt.Errorf("segment rolling policy max blocks must be positive, got %d", client.SegmentRollingPolicy.MaxBlocks)
 	}
 
 	// Validate Auditor configuration
-	if client.Auditor.MaxInterval <= 0 {
-		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval)
+	if client.Auditor.MaxInterval.Seconds() <= 0 {
+		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
 	}
 
 	// Validate Quorum configuration only when storage type is "service"
@@ -525,26 +526,26 @@ func (c *Configuration) validateLogstoreConfig() error {
 	logstore := &c.Woodpecker.Logstore
 
 	// Validate SegmentSyncPolicy
-	if logstore.SegmentSyncPolicy.MaxInterval <= 0 {
-		return fmt.Errorf("segment sync policy max interval must be positive, got %d", logstore.SegmentSyncPolicy.MaxInterval)
+	if logstore.SegmentSyncPolicy.MaxInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy max interval must be positive, got %d", logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
 	}
-	if logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage <= 0 {
-		return fmt.Errorf("segment sync policy max interval for local storage must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage)
+	if logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy max interval for local storage must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
 	}
 	if logstore.SegmentSyncPolicy.MaxEntries <= 0 {
 		return fmt.Errorf("segment sync policy max entries must be positive, got %d", logstore.SegmentSyncPolicy.MaxEntries)
 	}
 	if logstore.SegmentSyncPolicy.MaxBytes <= 0 {
-		return fmt.Errorf("segment sync policy max bytes must be positive, got %d", logstore.SegmentSyncPolicy.MaxBytes)
+		return fmt.Errorf("segment sync policy max bytes must be positive, got %d", logstore.SegmentSyncPolicy.MaxBytes.Int64())
 	}
 	if logstore.SegmentSyncPolicy.MaxFlushRetries < 0 {
 		return fmt.Errorf("segment sync policy max flush retries cannot be negative, got %d", logstore.SegmentSyncPolicy.MaxFlushRetries)
 	}
-	if logstore.SegmentSyncPolicy.RetryInterval <= 0 {
-		return fmt.Errorf("segment sync policy retry interval must be positive, got %d", logstore.SegmentSyncPolicy.RetryInterval)
+	if logstore.SegmentSyncPolicy.RetryInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy retry interval must be positive, got %d", logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	}
 	if logstore.SegmentSyncPolicy.MaxFlushSize <= 0 {
-		return fmt.Errorf("segment sync policy max flush size must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushSize)
+		return fmt.Errorf("segment sync policy max flush size must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	}
 	if logstore.SegmentSyncPolicy.MaxFlushThreads <= 0 {
 		return fmt.Errorf("segment sync policy max flush threads must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushThreads)
@@ -552,7 +553,7 @@ func (c *Configuration) validateLogstoreConfig() error {
 
 	// Validate SegmentCompactionPolicy
 	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
-		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes)
+		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	}
 	if logstore.SegmentCompactionPolicy.MaxParallelUploads <= 0 {
 		return fmt.Errorf("segment compaction policy max parallel uploads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelUploads)
@@ -563,7 +564,7 @@ func (c *Configuration) validateLogstoreConfig() error {
 
 	// Validate SegmentReadPolicy
 	if logstore.SegmentReadPolicy.MaxBatchSize <= 0 {
-		return fmt.Errorf("segment read policy max batch size must be positive, got %d", logstore.SegmentReadPolicy.MaxBatchSize)
+		return fmt.Errorf("segment read policy max batch size must be positive, got %d", logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 	}
 	if logstore.SegmentReadPolicy.MaxFetchThreads <= 0 {
 		return fmt.Errorf("segment read policy max fetch threads must be positive, got %d", logstore.SegmentReadPolicy.MaxFetchThreads)
@@ -601,12 +602,12 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxRetries: 2,
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
-				MaxSize:     100000000,
-				MaxInterval: 800,
+				MaxSize:     ByteSize(100000000),
+				MaxInterval: DurationSeconds{Duration: Duration{duration: 800 * 1000000000}}, // 800s
 				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
-				MaxInterval: 5,
+				MaxInterval: DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
 			},
 			Quorum: QuorumConfig{
 				BufferPools: []QuorumBufferPool{
@@ -625,22 +626,22 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
-				MaxInterval:                1000,
-				MaxIntervalForLocalStorage: 5,
+				MaxInterval:                DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
+				MaxIntervalForLocalStorage: DurationMilliseconds{Duration: Duration{duration: 5 * 1000000}},    // 5ms
 				MaxEntries:                 2000,
-				MaxBytes:                   100000000,
+				MaxBytes:                   ByteSize(100000000),
 				MaxFlushRetries:            3,
-				RetryInterval:              2000,
-				MaxFlushSize:               16000000,
+				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
+				MaxFlushSize:               ByteSize(16000000),
 				MaxFlushThreads:            8,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes:           32000000,
+				MaxBytes:           ByteSize(32000000),
 				MaxParallelUploads: 4,
 				MaxParallelReads:   8,
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
-				MaxBatchSize:    16000000,
+				MaxBatchSize:    ByteSize(16000000),
 				MaxFetchThreads: 32,
 			},
 		},
@@ -677,7 +678,7 @@ func getDefaultTraceConfig() TraceConfig {
 			Secure:   false,
 		},
 		SampleFraction: 1.0,
-		InitTimeout:    10,
+		InitTimeout:    DurationSeconds{Duration: Duration{duration: 10 * 1000000000}}, // 10s
 	}
 }
 
@@ -689,7 +690,7 @@ func getDefaultEtcdConfig() EtcdConfig {
 		KvSubPath:      "kv",
 		Log:            EtcdLogConfig{Level: "info", Path: "./logs"},
 		Ssl:            EtcdSslConfig{Enabled: false},
-		RequestTimeout: 10000,
+		RequestTimeout: DurationMilliseconds{Duration: Duration{duration: 10000 * time.Millisecond}}, // 10000ms
 		Use:            EtcdUseConfig{Embed: false},
 	}
 }
@@ -714,7 +715,7 @@ func getDefaultMinioConfig() MinioConfig {
 		LogLevel:           "fatal",
 		Region:             "",
 		UseVirtualHost:     false,
-		RequestTimeoutMs:   1000,
+		RequestTimeoutMs:   DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
 		ListObjectsMaxKeys: 0,
 	}
 }

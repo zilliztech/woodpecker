@@ -26,13 +26,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
 
@@ -55,11 +54,11 @@ type StagedSegmentImpl struct {
 	// minio related fields
 	bucket         string
 	segmentFileKey string
-	client         minioHandler.MinioHandler
+	client         objectstorage.ObjectStorage
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
-func NewStagedSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler, cfg *config.Configuration) storage.Segment {
+func NewStagedSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) storage.Segment {
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	filePath := getSegmentFilePath(baseDir, logId, segId)
 	segmentFileKey := fmt.Sprintf("%d/%d", logId, segId)
@@ -77,7 +76,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, baseDir string, lo
 		segmentFilePath: filePath,
 		bucket:          bucket,
 		segmentFileKey:  segmentFileKey,
-		client:          client,
+		client:          storageCli,
 	}
 	return segmentImpl
 }
@@ -155,77 +154,81 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 
 	// List all objects in the segment directory
 	listPrefix := fmt.Sprintf("%s/", rs.segmentFileKey)
-	objectCh := rs.client.ListObjects(ctx, rs.bucket, listPrefix, false, minio.ListObjectsOptions{})
-
 	var objectsToDelete []string
 	var deletedCount int
 	var errorCount int
 
-	// Collect all objects to delete
-	for objInfo := range objectCh {
-		if objInfo.Err != nil {
-			logger.Ctx(ctx).Warn("error listing objects during deletion",
-				zap.String("segmentFileKey", rs.segmentFileKey),
-				zap.Error(objInfo.Err))
-			return deletedCount, objInfo.Err
-		}
-
+	// Collect all objects to delete using WalkWithObjects
+	walkErr := rs.client.WalkWithObjects(ctx, rs.bucket, listPrefix, false, func(objInfo *objectstorage.ChunkObjectInfo) bool {
 		// Determine what to delete based on flag
 		shouldDelete := false
 		switch flag {
 		case 0:
-			// Delete all blocks and footer
-			if strings.HasSuffix(objInfo.Key, ".blk") {
+			// Delete all blocks
+			if strings.HasSuffix(objInfo.FilePath, ".blk") {
 				shouldDelete = true
 			}
 		case 1: // Delete only regular blocks (not merged)
-			if strings.HasSuffix(objInfo.Key, ".blk") && !strings.Contains(objInfo.Key, "/m_") && !strings.Contains(objInfo.Key, "/footer.blk") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.Contains(objInfo.FilePath, "/m_") {
 				shouldDelete = true
 			}
 		case 2: // Delete only merged blocks
-			if strings.HasSuffix(objInfo.Key, ".blk") && strings.Contains(objInfo.Key, "/m_") {
+			if strings.HasSuffix(objInfo.FilePath, ".blk") && strings.Contains(objInfo.FilePath, "/m_") {
 				shouldDelete = true
 			}
 		default:
-			// Delete all files including footer
-			shouldDelete = strings.HasSuffix(objInfo.Key, ".blk")
+			// Delete all files
+			shouldDelete = false
+		}
+
+		// Skip lock files unless explicitly deleting all
+		if strings.HasSuffix(objInfo.FilePath, ".lock") && flag == 0 {
+			shouldDelete = true
 		}
 
 		if shouldDelete {
-			objectsToDelete = append(objectsToDelete, objInfo.Key)
+			objectsToDelete = append(objectsToDelete, objInfo.FilePath)
 		}
+		return true // continue walking
+	})
+	if walkErr != nil {
+		logger.Ctx(ctx).Warn("error listing blocks during deletion",
+			zap.String("segmentFileKey", rs.segmentFileKey),
+			zap.Error(walkErr))
+		return deletedCount, walkErr
 	}
 
-	logger.Ctx(ctx).Info("collected minio objects for deletion",
+	logger.Ctx(ctx).Info("collected objects for deletion",
 		zap.String("segmentFileKey", rs.segmentFileKey),
 		zap.Int("objectCount", len(objectsToDelete)),
 		zap.Int("flag", flag))
 
 	// Delete objects
 	for _, objectKey := range objectsToDelete {
-		err := rs.client.RemoveObject(ctx, rs.bucket, objectKey, minio.RemoveObjectOptions{})
+		err := rs.client.RemoveObject(ctx, rs.bucket, objectKey)
 		if err != nil {
 			// Log error but continue with other deletions
-			logger.Ctx(ctx).Warn("failed to delete minio object",
+			logger.Ctx(ctx).Warn("failed to delete block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
 				zap.String("objectKey", objectKey),
 				zap.Error(err))
 			errorCount++
 		} else {
-			logger.Ctx(ctx).Debug("successfully deleted minio object",
+			logger.Ctx(ctx).Debug("successfully deleted block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
 				zap.String("objectKey", objectKey))
 			deletedCount++
 		}
 	}
 
-	logger.Ctx(ctx).Info("minio objects deletion completed",
+	logger.Ctx(ctx).Info("segment blocks deletion completed",
 		zap.String("segmentFileKey", rs.segmentFileKey),
 		zap.Int("deletedCount", deletedCount),
-		zap.Int("errorCount", errorCount))
+		zap.Int("errorCount", errorCount),
+		zap.Int("flag", flag))
 
 	if errorCount > 0 {
-		return deletedCount, fmt.Errorf("failed to delete %d out of %d minio objects", errorCount, len(objectsToDelete))
+		return deletedCount, fmt.Errorf("failed to delete %d out of %d objects", errorCount, len(objectsToDelete))
 	}
 
 	return deletedCount, nil

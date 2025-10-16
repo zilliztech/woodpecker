@@ -68,7 +68,7 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Create LocalFileWriter
 	logId := int64(1)
@@ -135,7 +135,7 @@ func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(128 * 1024) // 128KB per block to test multi-block scenario
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(2)
 	segmentId := int64(200)
@@ -182,7 +182,7 @@ func TestLocalFileWriter_ConcurrentWrites(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(3)
 	segmentId := int64(300)
@@ -253,7 +253,7 @@ func TestLocalFileWriter_ErrorHandling(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	t.Run("EmptyPayloadValidation", func(t *testing.T) {
 		logId := int64(4)
@@ -534,7 +534,7 @@ func TestLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	blockSize := int64(256 * 1024)
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(16)
 	segmentId := int64(1600)
@@ -620,7 +620,7 @@ func BenchmarkLocalFileWriter_WriteDataAsync(b *testing.B) {
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
 	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(17)
 	segmentId := int64(1700)
@@ -662,7 +662,7 @@ func BenchmarkLocalFileReader_ReadNextBatchAdv(b *testing.B) {
 	ctx := context.Background()
 	blockSize := int64(2 * 1024 * 1024) // 2MB
 	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Prepare test data
 	logId := int64(18)

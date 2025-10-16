@@ -96,7 +96,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			assert.NoError(t, res2.Err)
 			assert.NotNil(t, res2.LogMessageId)
 
-			flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+			flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 			time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 			r, err := lh.OpenLogReader(ctx, &log.LogMessageId{SegmentId: first.SegmentId, EntryId: first.EntryId}, "basic")
@@ -186,7 +186,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 
 			assert.NoError(t, w1.Close(ctx))
 
-			flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+			flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 			time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 			r, err := lh.OpenLogReader(ctx, &log.LogMessageId{SegmentId: res.LogMessageId.SegmentId, EntryId: res.LogMessageId.EntryId}, "preempt")

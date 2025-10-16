@@ -115,11 +115,11 @@ func NewLocalFileWriter(ctx context.Context, baseDir string, logId int64, segmen
 func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64, segmentId int64, cfg *config.Configuration, recoveryMode bool) (*LocalFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
 	defer sp.End()
-	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize
+	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
-	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes
+	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
-	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
+	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
 	logger.Ctx(ctx).Debug("creating new local file writer",
 		zap.String("baseDir", baseDir),
 		zap.Int64("logId", logId),

@@ -27,16 +27,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zilliztech/woodpecker/common/conc"
-	"github.com/zilliztech/woodpecker/common/config"
-
-	"github.com/minio/minio-go/v7"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
-
 	"go.uber.org/zap"
 
+	"github.com/zilliztech/woodpecker/common/conc"
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
@@ -61,7 +59,7 @@ type StagedFileReaderAdv struct {
 	// object access, only used for compacted object access
 	bucket          string
 	rootPath        string
-	client          minioHandler.MinioHandler
+	storageCli      objectstorage.ObjectStorage
 	pool            *conc.Pool[*BlockReadResult]
 	maxFetchThreads int
 	maxBatchSize    int64
@@ -84,11 +82,11 @@ type StagedFileReaderAdv struct {
 }
 
 // NewStagedFileReaderAdv creates a new staged file reader
-func NewStagedFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, client minioHandler.MinioHandler, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
+func NewStagedFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 
-	maxBatchSize := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize
+	maxBatchSize := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64()
 	maxFetchThreads := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads
 	rootPath := cfg.Minio.RootPath
 	logger.Ctx(ctx).Debug("creating new staged file reader",
@@ -150,7 +148,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, baseDir string, 
 		rootPath:        rootPath,
 		maxFetchThreads: maxFetchThreads,
 		pool:            conc.NewPool[*BlockReadResult](maxFetchThreads),
-		client:          client,
+		storageCli:      storageCli,
 	}
 	reader.flags.Store(0)
 	reader.version.Store(codec.FormatVersion)
@@ -219,8 +217,8 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseMinioFooterUnsafe")
 	defer sp.End()
 
-	if r.client == nil {
-		return fmt.Errorf("minio client not available")
+	if r.storageCli == nil {
+		return fmt.Errorf("storage client not available")
 	}
 
 	// Check if compacted footer exists in minio
@@ -231,7 +229,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 		zap.String("footerKey", footerKey))
 
 	// Check if footer exists
-	statInfo, err := r.client.StatObject(ctx, r.bucket, footerKey, minio.StatObjectOptions{})
+	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey)
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
 			logger.Ctx(ctx).Debug("no compacted footer found in minio",
@@ -245,7 +243,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 
 	// Read the entire footer file
-	reader, err := r.client.GetObject(ctx, r.bucket, footerKey, minio.GetObjectOptions{})
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to get footer object from minio",
 			zap.String("footerKey", footerKey),
@@ -254,7 +252,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 	defer reader.Close()
 
-	footerData := make([]byte, statInfo.Size)
+	footerData := make([]byte, objSize)
 	_, err = io.ReadFull(reader, footerData)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read footer data from minio",
@@ -1394,7 +1392,7 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 	}
 
 	// Read block data from minio
-	blockData, err := r.readBlockFromMinioByKey(ctx, blockToRead.objKey)
+	blockData, err := r.readBlockFromMinioByKey(ctx, blockToRead.objKey, blockToRead.size)
 	if err != nil {
 		result.err = fmt.Errorf("failed to read block %d from minio: %w", blockToRead.blockID, err)
 		return result
@@ -1413,7 +1411,7 @@ func (r *StagedFileReaderAdv) readAndExtractBlockConcurrently(ctx context.Contex
 }
 
 // readBlockFromMinioByKey reads a block from minio using the object key
-func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKey string) ([]byte, error) {
+func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKey string, objSize int64) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readBlockFromMinioByKey")
 	defer sp.End()
 
@@ -1422,7 +1420,7 @@ func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKe
 		zap.String("objKey", objKey))
 
 	// Read the block object
-	reader, err := r.client.GetObject(ctx, r.bucket, objKey, minio.GetObjectOptions{})
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, objKey, 0, objSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block object: %w", err)
 	}
@@ -1484,12 +1482,6 @@ func (r *StagedFileReaderAdv) extractEntriesFromBlockDataWithBytes(ctx context.C
 		zap.Int("readBytes", readBytes))
 
 	return entries, readBytes, nil
-}
-
-// readBlockFromMinio reads a specific block from minio (legacy method, kept for compatibility)
-func (r *StagedFileReaderAdv) readBlockFromMinio(ctx context.Context, blockNumber int32) ([]byte, error) {
-	blockKey := r.getCompactedBlockKey(int64(blockNumber))
-	return r.readBlockFromMinioByKey(ctx, blockKey)
 }
 
 // extractEntriesFromBlockData extracts log entries from block data (legacy method, kept for compatibility)

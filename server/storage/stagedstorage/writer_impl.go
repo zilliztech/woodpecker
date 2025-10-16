@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
@@ -38,7 +37,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
@@ -80,7 +79,7 @@ type StagedFileWriter struct {
 	maxIntervalMs    int   // Max interval to sync buffer to disk
 
 	// object cli, only used for uploading compacted blocks
-	client              minioHandler.MinioHandler
+	storageCli          objectstorage.ObjectStorage
 	bucket              string
 	rootPath            string
 	compactPolicyConfig *config.SegmentCompactionPolicy
@@ -120,19 +119,19 @@ type StagedFileWriter struct {
 }
 
 // NewStagedFileWriter creates a new staged file writer
-func NewStagedFileWriter(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration) (*StagedFileWriter, error) {
-	return NewStagedFileWriterWithMode(ctx, bucket, baseDir, logId, segmentId, objectCli, cfg, false)
+func NewStagedFileWriter(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
+	return NewStagedFileWriterWithMode(ctx, bucket, baseDir, logId, segmentId, storageCli, cfg, false)
 }
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
-func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, objectCli minioHandler.MinioHandler, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
+func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
-	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize
+	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
-	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes
+	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
-	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage
+	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
 	rootPath := cfg.Minio.RootPath
 	logger.Ctx(ctx).Debug("creating new staged file writer",
 		zap.String("baseDir", baseDir),
@@ -170,7 +169,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir str
 		logIdStr:            fmt.Sprintf("%d", logId),
 		bucket:              bucket,
 		rootPath:            rootPath,
-		client:              objectCli,
+		storageCli:          storageCli,
 		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
 		blockIndexes:        make([]*codec.IndexRecord, 0),
 		writtenBytes:        0,
@@ -1038,7 +1037,7 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
 
 	// Get target block size for compaction
-	targetBlockSize := w.compactPolicyConfig.MaxBytes
+	targetBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
 	if targetBlockSize <= 0 {
 		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
@@ -1283,7 +1282,7 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	blockKey := w.getCompactedBlockKey(mergedBlockID)
 
 	// Upload merged block to minio
-	uploadInfo, err := w.client.PutObject(ctx, w.bucket, blockKey, bytes.NewReader(mergedData), int64(len(mergedData)), minio.PutObjectOptions{})
+	err := w.storageCli.PutObject(ctx, w.bucket, blockKey, bytes.NewReader(mergedData), int64(len(mergedData)))
 	if err != nil {
 		return &mergedBlockUploadResult{
 			error: fmt.Errorf("failed to upload merged block: %w", err),
@@ -1302,13 +1301,13 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	logger.Ctx(ctx).Debug("uploaded merged block",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.String("blockKey", blockKey),
-		zap.Int64("blockSize", uploadInfo.Size),
+		zap.Int64("blockSize", int64(len(mergedData))),
 		zap.Int64("firstEntryID", firstEntryID),
 		zap.Int64("lastEntryID", lastEntryID))
 
 	return &mergedBlockUploadResult{
 		blockIndex: newBlockIndex,
-		blockSize:  uploadInfo.Size,
+		blockSize:  int64(len(mergedData)),
 		error:      nil,
 	}
 
@@ -1368,7 +1367,7 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 
 	// Upload footer
 	footerKey := w.getFooterBlockKey()
-	uploadInfo, err := w.client.PutObject(ctx, w.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), minio.PutObjectOptions{})
+	err := w.storageCli.PutObject(ctx, w.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)))
 	if err != nil {
 		return 0, fmt.Errorf("failed to upload footer: %w", err)
 	}
@@ -1376,9 +1375,9 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 	logger.Ctx(ctx).Info("uploaded compacted footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.String("footerKey", footerKey),
-		zap.Int64("footerSize", uploadInfo.Size))
+		zap.Int64("footerSize", int64(len(footerData))))
 
-	return uploadInfo.Size, nil
+	return int64(len(footerData)), nil
 }
 
 // serializeCompactedFooterAndIndexes serializes footer and indexes for compacted segment

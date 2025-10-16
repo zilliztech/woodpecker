@@ -24,21 +24,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
-	minioHandler "github.com/zilliztech/woodpecker/common/minio"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 	"github.com/zilliztech/woodpecker/tests/utils"
 )
 
-func setupStagedAdvTest(t *testing.T, rootDir string) (minioHandler.MinioHandler, *config.Configuration, string) {
+func setupStagedAdvTest(t *testing.T, rootDir string) (storageclient.ObjectStorage, *config.Configuration, string) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 
@@ -49,7 +48,7 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (minioHandler.MinioHandler
 	// Initialize logger with debug level
 	logger.InitLogger(cfg)
 
-	minioHdl, err := minioHandler.NewMinioHandler(context.Background(), cfg)
+	storageCli, err := storageclient.NewObjectStorage(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Create a temporary directory for local files
@@ -61,10 +60,10 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (minioHandler.MinioHandler
 		os.RemoveAll(tempDir)
 	})
 
-	return minioHdl, cfg, tempDir
+	return storageCli, cfg, tempDir
 }
 
-func cleanupStagedAdvTestObjects(t *testing.T, client minioHandler.MinioHandler, prefix string) {
+func cleanupStagedAdvTestObjects(t *testing.T, client storageclient.ObjectStorage, prefix string) {
 	ctx := context.Background()
 	cfg, _ := config.NewConfiguration("../../config/woodpecker.yaml")
 	if cfg == nil {
@@ -72,17 +71,15 @@ func cleanupStagedAdvTestObjects(t *testing.T, client minioHandler.MinioHandler,
 		return
 	}
 
-	objectCh := client.ListObjects(ctx, cfg.Minio.BucketName, prefix, true, minio.ListObjectsOptions{})
-
-	for object := range objectCh {
-		if object.Err != nil {
-			t.Logf("Warning: failed to list object for cleanup: %v", object.Err)
-			continue
-		}
-		err := client.RemoveObject(ctx, cfg.Minio.BucketName, object.Key, minio.RemoveObjectOptions{})
+	err := client.WalkWithObjects(ctx, cfg.Minio.BucketName, prefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
+		err := client.RemoveObject(ctx, cfg.Minio.BucketName, objInfo.FilePath)
 		if err != nil {
-			t.Logf("Warning: failed to cleanup object %s: %v", object.Key, err)
+			t.Logf("Warning: failed to cleanup object %s: %v", objInfo.FilePath, err)
 		}
+		return true // Continue walking
+	})
+	if err != nil {
+		t.Logf("Warning: failed to walk objects for cleanup: %v", err)
 	}
 }
 
@@ -96,17 +93,17 @@ func generateAdvTestData(size int) []byte {
 
 func TestAdvStagedFileReader_BasicRead(t *testing.T) {
 	rootDir := fmt.Sprintf("test-adv-staged-basic-read-%d", time.Now().Unix())
-	minioHdl, cfg, tempDir := setupStagedAdvTest(t, rootDir)
+	storageCli, cfg, tempDir := setupStagedAdvTest(t, rootDir)
 	ctx := context.Background()
 	cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize = 16_000_000
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads = 32
 
 	logId := int64(1)
 	segmentId := int64(100)
-	defer cleanupStagedAdvTestObjects(t, minioHdl, rootDir)
+	defer cleanupStagedAdvTestObjects(t, storageCli, rootDir)
 
 	// Step 1: Create test data
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, cfg.Minio.BucketName, tempDir, logId, segmentId, minioHdl, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, cfg.Minio.BucketName, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 
 	testData := [][]byte{
@@ -134,7 +131,7 @@ func TestAdvStagedFileReader_BasicRead(t *testing.T) {
 
 	// Step 2: Test reading from local files
 	t.Run("ReadFromLocal", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, tempDir, logId, segmentId, minioHdl, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
