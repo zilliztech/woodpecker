@@ -51,12 +51,14 @@ var _ Operation = (*AppendOp)(nil)
 // If it is, it sends an acknowledgment back to the application.
 // If a LogStore fails, it retries multiple times.
 type AppendOp struct {
-	mu        sync.Mutex
-	logId     int64
-	segmentId int64
-	entryId   int64
-	value     []byte
-	callback  func(segmentId int64, entryId int64, err error)
+	mu         sync.Mutex
+	bucketName string
+	rootPath   string
+	logId      int64
+	segmentId  int64
+	entryId    int64
+	value      []byte
+	callback   func(segmentId int64, entryId int64, err error)
 
 	clientPool      client.LogStoreClientPool
 	handle          SegmentHandle
@@ -71,14 +73,16 @@ type AppendOp struct {
 	err        error
 }
 
-func NewAppendOp(logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
+func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
 	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
 	op := &AppendOp{
-		logId:     logId,
-		segmentId: segmentId,
-		entryId:   entryId,
-		value:     value,
-		callback:  callback,
+		bucketName: bucketName,
+		rootPath:   rootPath,
+		logId:      logId,
+		segmentId:  segmentId,
+		entryId:    entryId,
+		value:      value,
+		callback:   callback,
 
 		clientPool:      clientPool,
 		handle:          handle,
@@ -145,7 +149,7 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	}
 
 	// order request
-	entryId, err := cli.AppendEntry(ctx, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
+	entryId, err := cli.AppendEntry(ctx, op.bucketName, op.rootPath, op.logId, op.toLogEntry(), op.resultChannels[serverIndex])
 	sp.AddEvent("AppendEntryCall", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex)))
 
 	// TODO: Consider using a centralized register and notification mechanism for improved efficiency

@@ -82,28 +82,27 @@ type StagedFileReaderAdv struct {
 }
 
 // NewStagedFileReaderAdv creates a new staged file reader
-func NewStagedFileReaderAdv(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
+func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileReaderAdv, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "NewStagedFileReader")
 	defer sp.End()
 
 	maxBatchSize := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64()
 	maxFetchThreads := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads
-	rootPath := cfg.Minio.RootPath
 	logger.Ctx(ctx).Debug("creating new staged file reader",
-		zap.String("baseDir", baseDir),
+		zap.String("localBaseDir", localBaseDir),
 		zap.Int64("logId", logId),
 		zap.Int64("segId", segId),
 		zap.String("rootPath", rootPath),
 		zap.Int("maxFetchThreads", maxFetchThreads),
 		zap.Int64("maxBatchSize", maxBatchSize))
 
-	segmentDir := getSegmentDir(baseDir, logId, segId)
+	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
-	filePath := getSegmentFilePath(baseDir, logId, segId)
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
 	logger.Ctx(ctx).Debug("attempting to open file for reading",
 		zap.String("filePath", filePath))
 

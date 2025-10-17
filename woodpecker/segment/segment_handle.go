@@ -93,6 +93,8 @@ type SegmentHandle interface {
 func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
+		bucketName:     cfg.Minio.BucketName,
+		rootPath:       cfg.Minio.RootPath,
 		logId:          logId,
 		logName:        logName,
 		segmentId:      segmentMeta.Metadata.SegNo,
@@ -126,6 +128,8 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
+		bucketName:     cfg.Minio.BucketName,
+		rootPath:       cfg.Minio.RootPath,
 		logId:          logId,
 		logName:        logName,
 		segmentId:      segmentMeta.Metadata.SegNo,
@@ -159,6 +163,8 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 var _ SegmentHandle = (*segmentHandleImpl)(nil)
 
 type segmentHandleImpl struct {
+	bucketName       string
+	rootPath         string
 	logId            int64
 	logName          string
 	segmentId        int64
@@ -249,6 +255,8 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 
 func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
 	pendingAppendOp := NewAppendOp(
+		s.bucketName,
+		s.rootPath,
 		s.logId,
 		s.GetId(ctx),
 		s.lastPushed.Add(1),
@@ -487,7 +495,7 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 			nodeLastReadState = lastReadState
 		}
 
-		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
+		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		if err != nil {
 			// For other errors, return immediately
 			logger.Ctx(ctx).Warn("read batch failed on node",
@@ -563,7 +571,7 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
-	lac, err := cli.GetLastAddConfirmed(ctx, s.logId, currentSegmentMeta.Metadata.SegNo)
+	lac, err := cli.GetLastAddConfirmed(ctx, s.bucketName, s.rootPath, s.logId, currentSegmentMeta.Metadata.SegNo)
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "get_lac", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lac, err
@@ -834,7 +842,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", s.logId)
-	currentBlockCounts, err := cli.GetBlockCount(ctx, s.logId, currentSegmentMeta.Metadata.SegNo)
+	currentBlockCounts, err := cli.GetBlockCount(ctx, s.bucketName, s.rootPath, s.logId, currentSegmentMeta.Metadata.SegNo)
 	if err != nil {
 		logger.Ctx(ctx).Info("Failed to get blocks count",
 			zap.String("logName", s.logName),
@@ -1056,7 +1064,7 @@ func (s *segmentHandleImpl) syncLACToNode(ctx context.Context, node string, lac 
 		return
 	}
 
-	err = cli.UpdateLastAddConfirmed(ctx, s.logId, s.segmentId, lac)
+	err = cli.UpdateLastAddConfirmed(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, lac)
 	resultChan <- nodeLACSyncResult{
 		node: node,
 		err:  err,
@@ -1081,7 +1089,7 @@ func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node stri
 		return
 	}
 
-	lastEntryId, err := cli.CompleteSegment(ctx, s.logId, s.segmentId, lac)
+	lastEntryId, err := cli.CompleteSegment(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, lac)
 	resultChan <- nodeCompleteResult{
 		node:        node,
 		lastEntryId: lastEntryId,
@@ -1205,7 +1213,7 @@ func (s *segmentHandleImpl) fenceSegmentOnNode(ctx context.Context, node string,
 		return
 	}
 
-	lastEntryId, err := cli.FenceSegment(ctx, s.logId, s.segmentId)
+	lastEntryId, err := cli.FenceSegment(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId)
 	resultChan <- nodeFenceResult{
 		node:        node,
 		lastEntryId: lastEntryId,
@@ -1241,7 +1249,7 @@ func (s *segmentHandleImpl) compactSegmentQuorum(ctx context.Context, quorumInfo
 		}
 
 		// Try compaction on this node
-		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.logId, s.segmentId)
+		compactSegMetaInfo, compactErr := cli.SegmentCompact(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId)
 		if compactErr != nil {
 			logger.Ctx(ctx).Warn("Segment compaction failed on node, trying next",
 				zap.String("logName", s.logName),

@@ -81,8 +81,10 @@ message Status {
 }
 
 message AddEntryRequest {
-  int64 log_id = 1;
-  LogEntry entry = 2;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  LogEntry entry = 4;
 }
 
 message AddEntryResponse {
@@ -99,11 +101,13 @@ enum AddEntryState {
 
 // Advanced batch read
 message GetBatchEntriesAdvRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
-  int64 from_entry_id = 3;
-  int64 max_entries = 4;
-  LastReadState last_read_state = 5;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 from_entry_id = 5;
+  int64 max_entries = 6;
+  LastReadState last_read_state = 7;
 }
 
 message GetBatchEntriesAdvResponse {
@@ -114,8 +118,10 @@ message GetBatchEntriesAdvResponse {
 
 // Segment state transitions
 message FenceSegmentRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
 }
 
 message FenceSegmentResponse {
@@ -124,9 +130,11 @@ message FenceSegmentResponse {
 }
 
 message CompleteSegmentRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
-  int64 last_add_confirmed = 3;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 last_add_confirmed = 5;
 }
 
 message CompleteSegmentResponse {
@@ -135,8 +143,10 @@ message CompleteSegmentResponse {
 }
 
 message CompactSegmentRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
 }
 
 message CompactSegmentResponse {
@@ -146,8 +156,10 @@ message CompactSegmentResponse {
 
 // Segment introspection
 message GetSegmentLastAddConfirmedRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
 }
 message GetSegmentLastAddConfirmedResponse {
   Status status = 1 ;
@@ -155,8 +167,10 @@ message GetSegmentLastAddConfirmedResponse {
 }
 
 message GetSegmentBlockCountRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
 }
 message GetSegmentBlockCountResponse {
   Status status = 1 ;
@@ -165,9 +179,11 @@ message GetSegmentBlockCountResponse {
 
 // Maintenance
 message CleanSegmentRequest {
-  int64 log_id = 1;
-  int64 segment_id = 2;
-  int32 flag = 3;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int32 flag = 5;
 }
 message CleanSegmentResponse {
   Status status = 1 ;
@@ -175,7 +191,9 @@ message CleanSegmentResponse {
 
 // Subscribe append results
 message AppendResultsSubscribeRequest {
-  int64 log_id = 1;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
 }
 
 // One append result update event
@@ -187,9 +205,11 @@ message AppendResultUpdate {
 }
 
 message UpdateLastAddConfirmedRequest{
-  int64 log_id = 1;
-  int64 segment_id = 2;
-  int64 last_add_confirmed = 3;
+  string bucket_name = 1;
+  string root_path = 2;
+  int64 log_id = 3;
+  int64 segment_id = 4;
+  int64 last_add_confirmed = 5;
 }
 
 message UpdateLastAddConfirmedResponse {

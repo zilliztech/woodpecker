@@ -193,7 +193,7 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 	// Use stream context for consistency
 	streamCtx := serverStream.Context()
 	resultCh := channel.NewLocalResultChannel(fmt.Sprintf("srv/%d/%d/%d", request.LogId, request.Entry.SegId, request.Entry.EntryId))
-	bufferedId, err := s.logStore.AddEntry(streamCtx, request.LogId, entry, resultCh)
+	bufferedId, err := s.logStore.AddEntry(streamCtx, request.BucketName, request.RootPath, request.LogId, entry, resultCh)
 	if err != nil {
 		// entry add to buffer failed - send error response and close stream
 		sendErr := serverStream.Send(&proto.AddEntryResponse{
@@ -241,7 +241,7 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 }
 
 func (s *Server) GetBatchEntriesAdv(ctx context.Context, request *proto.GetBatchEntriesAdvRequest) (*proto.GetBatchEntriesAdvResponse, error) {
-	result, err := s.logStore.GetBatchEntriesAdv(ctx, request.LogId, request.SegmentId, request.FromEntryId, request.MaxEntries, request.LastReadState)
+	result, err := s.logStore.GetBatchEntriesAdv(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.FromEntryId, request.MaxEntries, request.LastReadState)
 	if err != nil {
 		return &proto.GetBatchEntriesAdvResponse{
 			Status: werr.Status(err),
@@ -251,7 +251,7 @@ func (s *Server) GetBatchEntriesAdv(ctx context.Context, request *proto.GetBatch
 }
 
 func (s *Server) FenceSegment(ctx context.Context, request *proto.FenceSegmentRequest) (*proto.FenceSegmentResponse, error) {
-	lastId, err := s.logStore.FenceSegment(ctx, request.LogId, request.SegmentId)
+	lastId, err := s.logStore.FenceSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
 	if err != nil {
 		return &proto.FenceSegmentResponse{Status: werr.Status(err)}, nil
 	}
@@ -259,7 +259,7 @@ func (s *Server) FenceSegment(ctx context.Context, request *proto.FenceSegmentRe
 }
 
 func (s *Server) CompleteSegment(ctx context.Context, request *proto.CompleteSegmentRequest) (*proto.CompleteSegmentResponse, error) {
-	lastId, err := s.logStore.CompleteSegment(ctx, request.LogId, request.SegmentId, request.LastAddConfirmed)
+	lastId, err := s.logStore.CompleteSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.LastAddConfirmed)
 	if err != nil {
 		return &proto.CompleteSegmentResponse{Status: werr.Status(err)}, nil
 	}
@@ -267,7 +267,7 @@ func (s *Server) CompleteSegment(ctx context.Context, request *proto.CompleteSeg
 }
 
 func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegmentRequest) (*proto.CompactSegmentResponse, error) {
-	meta, err := s.logStore.CompactSegment(ctx, request.LogId, request.SegmentId)
+	meta, err := s.logStore.CompactSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
 	if err != nil {
 		return &proto.CompactSegmentResponse{Status: werr.Status(err)}, nil
 	}
@@ -276,7 +276,7 @@ func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegme
 }
 
 func (s *Server) GetSegmentLastAddConfirmed(ctx context.Context, request *proto.GetSegmentLastAddConfirmedRequest) (*proto.GetSegmentLastAddConfirmedResponse, error) {
-	lac, err := s.logStore.GetSegmentLastAddConfirmed(ctx, request.LogId, request.SegmentId)
+	lac, err := s.logStore.GetSegmentLastAddConfirmed(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
 	if err != nil {
 		return &proto.GetSegmentLastAddConfirmedResponse{Status: werr.Status(err)}, nil
 	}
@@ -284,7 +284,7 @@ func (s *Server) GetSegmentLastAddConfirmed(ctx context.Context, request *proto.
 }
 
 func (s *Server) GetSegmentBlockCount(ctx context.Context, request *proto.GetSegmentBlockCountRequest) (*proto.GetSegmentBlockCountResponse, error) {
-	count, err := s.logStore.GetSegmentBlockCount(ctx, request.LogId, request.SegmentId)
+	count, err := s.logStore.GetSegmentBlockCount(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId)
 	if err != nil {
 		return &proto.GetSegmentBlockCountResponse{Status: werr.Status(err)}, nil
 	}
@@ -292,14 +292,14 @@ func (s *Server) GetSegmentBlockCount(ctx context.Context, request *proto.GetSeg
 }
 
 func (s *Server) CleanSegment(ctx context.Context, request *proto.CleanSegmentRequest) (*proto.CleanSegmentResponse, error) {
-	if err := s.logStore.CleanSegment(ctx, request.LogId, request.SegmentId, int(request.Flag)); err != nil {
+	if err := s.logStore.CleanSegment(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, int(request.Flag)); err != nil {
 		return &proto.CleanSegmentResponse{Status: werr.Status(err)}, nil
 	}
 	return &proto.CleanSegmentResponse{Status: werr.Success()}, nil
 }
 
 func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.UpdateLastAddConfirmedRequest) (*proto.UpdateLastAddConfirmedResponse, error) {
-	if err := s.logStore.UpdateLastAddConfirmed(ctx, request.LogId, request.SegmentId, request.LastAddConfirmed); err != nil {
+	if err := s.logStore.UpdateLastAddConfirmed(ctx, request.BucketName, request.RootPath, request.LogId, request.SegmentId, request.LastAddConfirmed); err != nil {
 		return &proto.UpdateLastAddConfirmedResponse{Status: werr.Status(err)}, nil
 	}
 	return &proto.UpdateLastAddConfirmedResponse{Status: werr.Success()}, nil

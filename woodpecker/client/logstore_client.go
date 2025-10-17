@@ -26,23 +26,23 @@ import (
 //go:generate mockery --dir=./woodpecker/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_woodpecker/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
-	AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
-	ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
+	ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
-	CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error)
+	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
-	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
-	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
-	SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error
+	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
-	GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// GetBlockCount gets the block count of the specified log segment and returns it and an error if any.
-	GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// UpdateLastAddConfirmed updates the lastAddConfirmed entryID of the specified log segment.
-	UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error
+	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
 	// SelectNodes selects nodes based on the specified filter and returns a list of node IDs.
 	SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error)
 	// Close closes the log store client and returns an error if any.

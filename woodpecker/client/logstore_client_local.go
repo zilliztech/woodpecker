@@ -32,39 +32,39 @@ type logStoreClientLocal struct {
 	store server.LogStore
 }
 
-func (l *logStoreClientLocal) CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error) {
-	return l.store.CompleteSegment(ctx, logId, segmentId, lac)
+func (l *logStoreClientLocal) CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error) {
+	return l.store.CompleteSegment(ctx, bucketName, rootPath, logId, segmentId, lac)
 }
 
-func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
+func (l *logStoreClientLocal) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+	return l.store.AddEntry(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 }
 
-func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
-	return l.store.GetBatchEntriesAdv(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	return l.store.GetBatchEntriesAdv(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 }
 
-func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.FenceSegment(ctx, logId, segmentId)
+func (l *logStoreClientLocal) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return l.store.FenceSegment(ctx, bucketName, rootPath, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.GetSegmentLastAddConfirmed(ctx, logId, segmentId)
+func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return l.store.GetSegmentLastAddConfirmed(ctx, bucketName, rootPath, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.GetSegmentBlockCount(ctx, logId, segmentId)
+func (l *logStoreClientLocal) GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return l.store.GetSegmentBlockCount(ctx, bucketName, rootPath, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.CompactSegment(ctx, logId, segmentId)
+func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	return l.store.CompactSegment(ctx, bucketName, rootPath, logId, segmentId)
 }
 
-func (l *logStoreClientLocal) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
-	return l.store.CleanSegment(ctx, logId, segmentId, flag)
+func (l *logStoreClientLocal) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
+	return l.store.CleanSegment(ctx, bucketName, rootPath, logId, segmentId, flag)
 }
 
-func (l *logStoreClientLocal) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
+func (l *logStoreClientLocal) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
 	// NO-OP
 	return nil
 }

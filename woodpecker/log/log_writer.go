@@ -63,7 +63,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
-		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
 		session:            session,
 	}
 	// Set sessionValid to true

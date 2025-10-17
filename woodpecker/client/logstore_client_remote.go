@@ -40,8 +40,8 @@ type logStoreClientRemote struct {
 	closed bool
 }
 
-func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, logId int64, segmentId int64, lac int64) (int64, error) {
-	resp, err := l.innerClient.CompleteSegment(ctx, &proto.CompleteSegmentRequest{LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
+func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error) {
+	resp, err := l.innerClient.CompleteSegment(ctx, &proto.CompleteSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
 	if err != nil {
 		return -1, err
 	}
@@ -52,7 +52,7 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, logId int64,
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
 	l.mu.RLock()
 	if l.closed {
 		l.mu.RUnlock()
@@ -64,7 +64,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, ent
 	streamCtx, streamCancel := context.WithCancel(ctx)
 
 	// Send unary append request first to get the actual entryId
-	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{LogId: logId, Entry: entry})
+	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Entry: entry})
 	if err != nil {
 		streamCancel() // Cancel context on error
 		return -1, err
@@ -112,8 +112,8 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, ent
 	return addEntryFirstResponse.GetEntryId(), statusErr
 }
 
-func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
-	resp, err := l.innerClient.GetBatchEntriesAdv(ctx, &proto.GetBatchEntriesAdvRequest{LogId: logId, SegmentId: segmentId, FromEntryId: fromEntryId, MaxEntries: maxEntries, LastReadState: lastReadState})
+func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	resp, err := l.innerClient.GetBatchEntriesAdv(ctx, &proto.GetBatchEntriesAdvRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, FromEntryId: fromEntryId, MaxEntries: maxEntries, LastReadState: lastReadState})
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +124,8 @@ func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, logId in
 	return resp.GetResult(), nil
 }
 
-func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	resp, err := l.innerClient.FenceSegment(ctx, &proto.FenceSegmentRequest{LogId: logId, SegmentId: segmentId})
+func (l *logStoreClientRemote) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	resp, err := l.innerClient.FenceSegment(ctx, &proto.FenceSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
 	}
@@ -136,8 +136,8 @@ func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, se
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	resp, err := l.innerClient.GetSegmentLastAddConfirmed(ctx, &proto.GetSegmentLastAddConfirmedRequest{LogId: logId, SegmentId: segmentId})
+func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	resp, err := l.innerClient.GetSegmentLastAddConfirmed(ctx, &proto.GetSegmentLastAddConfirmedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
 	}
@@ -148,8 +148,8 @@ func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId in
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	resp, err := l.innerClient.GetSegmentBlockCount(ctx, &proto.GetSegmentBlockCountRequest{LogId: logId, SegmentId: segmentId})
+func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	resp, err := l.innerClient.GetSegmentBlockCount(ctx, &proto.GetSegmentBlockCountRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
 	}
@@ -160,8 +160,8 @@ func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, logId int64, s
 	return resp.GetBlockCount(), nil
 }
 
-func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	resp, err := l.innerClient.CompactSegment(ctx, &proto.CompactSegmentRequest{LogId: logId, SegmentId: segmentId})
+func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	resp, err := l.innerClient.CompactSegment(ctx, &proto.CompactSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +172,8 @@ func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, 
 	return resp.GetMetadata(), nil
 }
 
-func (l *logStoreClientRemote) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
-	resp, err := l.innerClient.CleanSegment(ctx, &proto.CleanSegmentRequest{LogId: logId, SegmentId: segmentId, Flag: int32(flag)})
+func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
+	resp, err := l.innerClient.CleanSegment(ctx, &proto.CleanSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, Flag: int32(flag)})
 	if err != nil {
 		return err
 	}
@@ -184,8 +184,8 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, logId int64, se
 	return nil
 }
 
-func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, logId int64, segmentId int64, lac int64) error {
-	resp, err := l.innerClient.UpdateLastAddConfirmed(ctx, &proto.UpdateLastAddConfirmedRequest{LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
+func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
+	resp, err := l.innerClient.UpdateLastAddConfirmed(ctx, &proto.UpdateLastAddConfirmedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
 	if err != nil {
 		return err
 	}
