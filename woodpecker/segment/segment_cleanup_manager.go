@@ -38,6 +38,8 @@ type SegmentCleanupManager interface {
 }
 
 type segmentCleanupManagerImpl struct {
+	bucketName         string
+	rootPath           string
 	metadata           meta.MetadataProvider
 	clientPool         client.LogStoreClientPool
 	cleanupMutex       sync.Mutex
@@ -45,8 +47,10 @@ type segmentCleanupManagerImpl struct {
 }
 
 // NewSegmentCleanupManager creates a new segment cleanup manager
-func NewSegmentCleanupManager(metadata meta.MetadataProvider, clientPool client.LogStoreClientPool) SegmentCleanupManager {
+func NewSegmentCleanupManager(bucketName string, rootPath string, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool) SegmentCleanupManager {
 	return &segmentCleanupManagerImpl{
+		bucketName:         bucketName,
+		rootPath:           rootPath,
 		metadata:           metadata,
 		clientPool:         clientPool,
 		inProgressCleanups: make(map[string]bool),
@@ -417,7 +421,7 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 		zap.Int64("quorumId", quorumId))
 
 	// Get node client
-	logStoreCli, err := s.clientPool.GetLogStoreClient(nodeAddress)
+	logStoreCli, err := s.clientPool.GetLogStoreClient(ctx, nodeAddress)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to get logstore client", zap.String("node", nodeAddress), zap.Error(err))
 		// Use mutex to protect status updates
@@ -436,7 +440,7 @@ func (s *segmentCleanupManagerImpl) sendCleanupRequestToNode(
 	// Use the dedicated SegmentClean interface to clean up the truncated segment
 	// The flag parameter specifies the type of cleanup operation, using 0 here to clean truncated segments
 	// Different flag values can be defined for different cleanup modes based on requirements
-	err = logStoreCli.SegmentClean(ctx, logId, segmentId, 0)
+	err = logStoreCli.SegmentClean(ctx, s.bucketName, s.rootPath, logId, segmentId, 0)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to cleanup segment", zap.String("node", nodeAddress), zap.Error(err))
 		// Use mutex to protect status updates

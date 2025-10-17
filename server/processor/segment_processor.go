@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/disk"
 	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
+	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
 
 const (
@@ -51,27 +52,29 @@ type SegmentProcessor interface {
 	AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error)
 	ReadBatchEntriesAdv(ctx context.Context, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	Fence(ctx context.Context) (int64, error)
-	Complete(ctx context.Context) (int64, error)
+	Complete(ctx context.Context, lac int64) (int64, error)
 	Compact(ctx context.Context) (*proto.SegmentMetadata, error)
 	GetSegmentLastAddConfirmed(ctx context.Context) (int64, error)
 	GetBlocksCount(ctx context.Context) (int64, error)
 	GetLastAccessTime() int64
 	Clean(ctx context.Context, flag int) error
+	UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error
 	Close(ctx context.Context) error
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	s := &segmentProcessor{
 		cfg:           cfg,
+		bucketName:    userBucketName,
+		rootPath:      userRootPath,
 		logId:         logId,
 		segId:         segId,
 		storageClient: storageClient,
 		createTime:    ctime,
 	}
 	s.lastAccessTime.Store(ctime)
-	s.fenced.Store(false)
 	return s
 }
 
@@ -80,6 +83,8 @@ var _ SegmentProcessor = (*segmentProcessor)(nil)
 type segmentProcessor struct {
 	sync.RWMutex
 	cfg           *config.Configuration
+	bucketName    string // user bucket name
+	rootPath      string // user root path
 	logId         int64
 	segId         int64
 	storageClient storageclient.ObjectStorage
@@ -91,7 +96,6 @@ type segmentProcessor struct {
 	currentSegmentImpl   storage.Segment
 	currentSegmentWriter storage.Writer
 	currentSegmentReader storage.Reader
-	fenced               atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage backend for a fence flag file/object.
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
@@ -122,7 +126,7 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 	}
 
 	// fence
-	_, fenceErr := writer.Fence(ctx)
+	lastEntryID, fenceErr := writer.Fence(ctx)
 	if fenceErr != nil {
 		logger.Ctx(ctx).Warn("Failed to fence segment",
 			zap.Int64("logId", s.logId),
@@ -131,17 +135,6 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 		return -1, fenceErr
 	}
 
-	// finalize
-	lastEntryID, finalizeErr := writer.Finalize(ctx)
-	if finalizeErr != nil {
-		logger.Ctx(ctx).Warn("Failed to finalize segment when fencing",
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segId),
-			zap.Error(finalizeErr))
-		return -1, finalizeErr
-	}
-
-	s.fenced.CompareAndSwap(false, true)
 	logger.Ctx(ctx).Info("Segment processor fence operation completed successfully",
 		zap.Int64("logId", s.logId),
 		zap.Int64("segId", s.segId),
@@ -150,22 +143,17 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 	return lastEntryID, nil
 }
 
-func (s *segmentProcessor) Complete(ctx context.Context) (int64, error) {
+func (s *segmentProcessor) Complete(ctx context.Context, lac int64) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Complete")
 	defer sp.End()
 	s.updateAccessTime()
-	logger.Ctx(ctx).Debug("segment processor call complete", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
-
-	if s.fenced.Load() {
-		// fast return if fenced
-		return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("log:%d segment:%d is fenced", s.logId, s.segId))
-	}
+	logger.Ctx(ctx).Debug("segment processor call complete", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("lac", lac), zap.String("segmentProcessorInstance", fmt.Sprintf("%p", s)))
 
 	writer, err := s.getSegmentWriter(ctx)
 	if err != nil {
 		return -1, err
 	}
-	return writer.Finalize(ctx)
+	return writer.Finalize(ctx, lac)
 }
 
 func (s *segmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
@@ -173,11 +161,6 @@ func (s *segmentProcessor) AddEntry(ctx context.Context, entry *proto.LogEntry, 
 	defer sp.End()
 	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("segment processor add entry", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Int64("entryId", entry.EntryId), zap.String("ch", fmt.Sprintf("%p", resultCh)), zap.String("inst", fmt.Sprintf("%p", s)))
-
-	if s.fenced.Load() {
-		// fast return if fenced
-		return -1, werr.ErrSegmentFenced.WithCauseErrMsg(fmt.Sprintf("append entry:%d failed, log:%d segment:%d is fenced", entry.EntryId, s.logId, s.segId))
-	}
 
 	writer, err := s.getOrCreateSegmentWriter(ctx, false)
 	if err != nil {
@@ -283,7 +266,18 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	}
 
 	// use local FileSystem or local FileSystem + minio-compatible
-	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
+	if s.cfg.Woodpecker.Storage.IsStorageService() {
+		s.currentSegmentImpl = stagedstorage.NewStagedSegmentImpl(
+			ctx,
+			s.getInstanceBucket(), // bucketName
+			s.getLogBaseDir(),     // rootPath
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()), // local file baseDir
+			s.logId,
+			s.segId,
+			s.storageClient,
+			s.cfg)
+		return s.currentSegmentImpl, nil
+	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		s.currentSegmentImpl = disk.NewDiskSegmentImpl(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
@@ -326,14 +320,30 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 	}
 
 	//Initialize reader
-	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
+	if s.cfg.Woodpecker.Storage.IsStorageService() {
+		stagedReader, err := stagedstorage.NewStagedFileReaderAdv(
+			ctx,
+			s.getInstanceBucket(),
+			s.getLogBaseDir(),
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
+			s.logId,
+			s.segId,
+			s.storageClient,
+			s.cfg)
+		if err != nil {
+			return nil, err
+		}
+		logger.Ctx(ctx).Info("created segment reader", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", stagedReader)))
+		s.currentSegmentReader = stagedReader
+		return stagedReader, nil
+	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
 		localReader, err := disk.NewLocalFileReaderAdv(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64())
 		if err != nil {
 			return nil, err
 		}
@@ -348,7 +358,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 			s.logId,
 			s.segId,
 			s.storageClient,
-			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize,
+			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64(),
 			s.cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
 		if getReaderErr != nil {
 			return nil, getReaderErr
@@ -392,18 +402,35 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 	}
 
 	// Initialize writer
-	if s.cfg.Woodpecker.Storage.IsStorageLocal() || s.cfg.Woodpecker.Storage.IsStorageService() {
+	if s.cfg.Woodpecker.Storage.IsStorageService() {
+		writerFile, err := stagedstorage.NewStagedFileWriterWithMode(
+			ctx,
+			s.getInstanceBucket(), // user instance bucket
+			s.getLogBaseDir(),     // user instance rootPath
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
+			s.logId,
+			s.segId,
+			s.storageClient,
+			s.cfg,
+			recoverMode)
+		s.currentSegmentWriter = writerFile
+		logger.Ctx(ctx).Info("create segment writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
+		return s.currentSegmentWriter, err
+	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
-		writerFile, err := disk.NewLocalFileWriterWithMode(
+		writerFile, getWriterErr := disk.NewLocalFileWriterWithMode(
 			ctx,
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
 			s.logId,
 			s.segId,
 			s.cfg,
 			recoverMode)
+		if getWriterErr != nil {
+			return nil, getWriterErr
+		}
 		s.currentSegmentWriter = writerFile
 		logger.Ctx(ctx).Info("create segment local writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
-		return s.currentSegmentWriter, err
+		return s.currentSegmentWriter, nil
 	} else {
 		// use object storage
 		w, getWriterErr := objectstorage.NewMinioFileWriterWithMode(
@@ -420,8 +447,8 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 		}
 		s.currentSegmentWriter = w
 		logger.Ctx(ctx).Info("create segment writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", s.currentSegmentWriter)))
+		return s.currentSegmentWriter, nil
 	}
-	return s.currentSegmentWriter, nil
 }
 
 func (s *segmentProcessor) getInstanceBucket() string {
@@ -429,7 +456,7 @@ func (s *segmentProcessor) getInstanceBucket() string {
 }
 
 func (s *segmentProcessor) getLogBaseDir() string {
-	return fmt.Sprintf("%s", s.cfg.Minio.RootPath)
+	return s.cfg.Minio.RootPath
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
@@ -527,6 +554,49 @@ func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 		zap.Int("cleanupFlag", flag),
 		zap.Duration("totalDuration", cleanupDuration))
 
+	return nil
+}
+
+func (s *segmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Clean")
+	defer sp.End()
+	s.updateAccessTime()
+	start := time.Now()
+	logger.Ctx(ctx).Info("Starting segment processor update lac operation",
+		zap.Int64("logId", s.logId),
+		zap.Int64("segId", s.segId),
+		zap.Int64("lac", lac))
+
+	reader, err := s.getOrCreateSegmentReader(ctx)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to update segment lac for cleanup",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Int64("lac", lac),
+			zap.Error(err))
+		return err
+	}
+
+	logger.Ctx(ctx).Info("Starting update lac operation",
+		zap.Int64("logId", s.logId),
+		zap.Int64("segId", s.segId),
+		zap.Int64("lac", lac))
+
+	err = reader.UpdateLastAddConfirmed(ctx, lac)
+	if err != nil {
+		logger.Ctx(ctx).Warn("segment update lac operation failed",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+		return err
+	}
+
+	cleanupDuration := time.Since(start)
+	logger.Ctx(ctx).Info("Segment processor update lac operation completed successfully",
+		zap.Int64("logId", s.logId),
+		zap.Int64("segId", s.segId),
+		zap.Duration("totalDuration", cleanupDuration))
 	return nil
 }
 

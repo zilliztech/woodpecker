@@ -17,6 +17,7 @@ package bitset
 import (
 	"fmt"
 	"math/bits"
+	"sync"
 )
 
 const MaxBitSetSize = 16
@@ -24,16 +25,31 @@ const MaxBitSetSize = 16
 // BitSet
 // Simplified and compact bitset.
 type BitSet struct {
+	mu   sync.RWMutex
 	bits uint16
 }
 
 func (bs *BitSet) Count() int {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
 	return bits.OnesCount16(bs.bits)
 }
 
 func (bs *BitSet) Set(idx int) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
 	if idx < 0 || idx >= MaxBitSetSize {
 		panic(fmt.Sprintf("invalid index: %d", idx))
 	}
 	bs.bits |= 1 << idx
+}
+
+func (bs *BitSet) SetAndCount(idx int) int {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if idx < 0 || idx >= MaxBitSetSize {
+		panic(fmt.Sprintf("invalid index: %d", idx))
+	}
+	bs.bits |= 1 << idx
+	return bits.OnesCount16(bs.bits)
 }
