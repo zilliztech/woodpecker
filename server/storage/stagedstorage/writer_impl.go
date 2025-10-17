@@ -66,7 +66,7 @@ type StagedFileWriter struct {
 	mu sync.Mutex
 
 	// Disk
-	baseDir         string
+	localBaseDir    string
 	segmentFilePath string
 	logId           int64
 	segmentId       int64
@@ -119,12 +119,12 @@ type StagedFileWriter struct {
 }
 
 // NewStagedFileWriter creates a new staged file writer
-func NewStagedFileWriter(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
-	return NewStagedFileWriterWithMode(ctx, bucket, baseDir, logId, segmentId, storageCli, cfg, false)
+func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
+	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false)
 }
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
-func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
+func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
@@ -132,11 +132,11 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir str
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
 	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
-	rootPath := cfg.Minio.RootPath
 	logger.Ctx(ctx).Debug("creating new staged file writer",
-		zap.String("baseDir", baseDir),
+		zap.String("localBaseDir", localBaseDir),
 		zap.Int64("logId", logId),
 		zap.Int64("segmentId", segmentId),
+		zap.String("bucket", bucket),
 		zap.String("rootPath", rootPath),
 		zap.Int64("maxBlockSize", blockSize),
 		zap.Int("maxBufferEntries", maxBufferEntries),
@@ -144,7 +144,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir str
 		zap.Int("flushQueueSize", flushQueueSize),
 		zap.Bool("recoveryMode", recoveryMode))
 
-	segmentDir := getSegmentDir(baseDir, logId, segmentId)
+	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
 	// Ensure directory exists
 	if err := os.MkdirAll(segmentDir, 0755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
@@ -153,7 +153,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir str
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
-	filePath := getSegmentFilePath(baseDir, logId, segmentId)
+	filePath := getSegmentFilePath(localBaseDir, logId, segmentId)
 	logger.Ctx(ctx).Debug("segment directory and file path prepared",
 		zap.String("segmentDir", segmentDir),
 		zap.String("filePath", filePath))
@@ -162,7 +162,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, baseDir str
 	runCtx, runCancel := context.WithCancel(context.Background())
 
 	writer := &StagedFileWriter{
-		baseDir:             baseDir,
+		localBaseDir:        localBaseDir,
 		segmentFilePath:     filePath,
 		logId:               logId,
 		segmentId:           segmentId,

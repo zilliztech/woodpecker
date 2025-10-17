@@ -128,7 +128,7 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 			}
 
 			// Append entry
-			entryId, err := remoteClient.AppendEntry(ctx, logId, entry, resultCh)
+			entryId, err := remoteClient.AppendEntry(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, entry, resultCh)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(0), entryId) // Expect entryId 0
 
@@ -143,7 +143,7 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 			assert.NoError(t, result.Err)
 
 			// Test reading the entry back
-			batchResult, err := remoteClient.ReadEntriesBatchAdv(ctx, logId, 100, 0, 100, nil)
+			batchResult, err := remoteClient.ReadEntriesBatchAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, 100, 0, 100, nil)
 			assert.NoError(t, err)
 			assert.NotNil(t, batchResult)
 			assert.Len(t, batchResult.Entries, 1) // Should have 1 entry
@@ -253,7 +253,7 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 					Values:  []byte(fmt.Sprintf("test data %d", i)),
 				}
 
-				entryIds[i], err = remoteClient.AppendEntry(ctx, logId, entry, resultChannels[i])
+				entryIds[i], err = remoteClient.AppendEntry(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, entry, resultChannels[i])
 				assert.NoError(t, err)
 				assert.Equal(t, int64(i), entryIds[i])
 			}
@@ -270,7 +270,7 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 			}
 
 			// Test reading all entries back
-			batchResult, err := remoteClient.ReadEntriesBatchAdv(ctx, logId, 100, 0, int64(numAppends), nil)
+			batchResult, err := remoteClient.ReadEntriesBatchAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, 100, 0, int64(numAppends), nil)
 			assert.NoError(t, err)
 			assert.NotNil(t, batchResult)
 			assert.Len(t, batchResult.Entries, numAppends) // Should have all entries
@@ -376,7 +376,7 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 				Values:  []byte("test data"),
 			}
 
-			entryId, err := remoteClient.AppendEntry(ctx, logId, entry, resultCh)
+			entryId, err := remoteClient.AppendEntry(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, entry, resultCh)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(0), entryId)
 
@@ -385,7 +385,7 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Subsequent appends should fail
-			_, err = remoteClient.AppendEntry(ctx, logId, entry, resultCh)
+			_, err = remoteClient.AppendEntry(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, logId, entry, resultCh)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "client is closed")
 		})

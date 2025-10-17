@@ -62,11 +62,13 @@ type SegmentProcessor interface {
 	Close(ctx context.Context) error
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	s := &segmentProcessor{
 		cfg:           cfg,
+		bucketName:    userBucketName,
+		rootPath:      userRootPath,
 		logId:         logId,
 		segId:         segId,
 		storageClient: storageClient,
@@ -81,6 +83,8 @@ var _ SegmentProcessor = (*segmentProcessor)(nil)
 type segmentProcessor struct {
 	sync.RWMutex
 	cfg           *config.Configuration
+	bucketName    string // user bucket name
+	rootPath      string // user root path
 	logId         int64
 	segId         int64
 	storageClient storageclient.ObjectStorage
@@ -266,7 +270,8 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 		s.currentSegmentImpl = stagedstorage.NewStagedSegmentImpl(
 			ctx,
 			s.getInstanceBucket(), // bucketName
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()), // local file baseDir
+			s.getLogBaseDir(),     // rootPath
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()), // local file baseDir
 			s.logId,
 			s.segId,
 			s.storageClient,
@@ -319,7 +324,8 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		stagedReader, err := stagedstorage.NewStagedFileReaderAdv(
 			ctx,
 			s.getInstanceBucket(),
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
+			s.getLogBaseDir(),
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
 			s.storageClient,
@@ -399,8 +405,9 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
 		writerFile, err := stagedstorage.NewStagedFileWriterWithMode(
 			ctx,
-			s.getInstanceBucket(),
-			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getLogBaseDir()),
+			s.getInstanceBucket(), // user instance bucket
+			s.getLogBaseDir(),     // user instance rootPath
+			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()),
 			s.logId,
 			s.segId,
 			s.storageClient,
@@ -449,7 +456,7 @@ func (s *segmentProcessor) getInstanceBucket() string {
 }
 
 func (s *segmentProcessor) getLogBaseDir() string {
-	return fmt.Sprintf("%s", s.cfg.Minio.RootPath)
+	return s.cfg.Minio.RootPath
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {

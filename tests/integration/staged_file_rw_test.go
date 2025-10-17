@@ -103,7 +103,7 @@ func TestStagedFileWriter_BasicWriteAndSync(t *testing.T) {
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	// Create QuorumFileWriter
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, writer)
 
@@ -162,7 +162,7 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 	segmentId := int64(200)
 	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -242,7 +242,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
 	// Step 1: Write and finalize data
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 
 	testData := [][]byte{
@@ -268,7 +268,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 
 	// Step 2: Test reading from local files (before compaction)
 	t.Run("ReadFromLocal", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -297,7 +297,7 @@ func TestStagedFileReader_ReadLocalAndCompacted(t *testing.T) {
 
 	// Step 4: Test reading from compacted data (MinIO)
 	t.Run("ReadFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -326,7 +326,7 @@ func TestStagedFileWriter_ConcurrentWrites(t *testing.T) {
 
 	defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 	defer writer.Close(ctx)
 
@@ -401,7 +401,7 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 
 		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -420,7 +420,7 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 		segmentId := int64(600)
 		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -452,7 +452,7 @@ func TestStagedFileWriter_ErrorHandling(t *testing.T) {
 		segmentId := int64(700)
 		defer cleanupStagedTestObjects(t, storageCli, rootDir)
 
-		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer writer.Close(ctx)
 
@@ -481,7 +481,7 @@ func TestStagedFileReader_ErrorHandling(t *testing.T) {
 		segmentId := int64(800)
 
 		// Try to read from non-existent segment
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.Error(t, err)
 		assert.True(t, werr.ErrEntryNotFound.Is(err))
 		assert.Nil(t, reader)
@@ -514,7 +514,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 	}
 
 	// Step 1: Write all data
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 	require.NoError(t, err)
 
 	for i, data := range testData {
@@ -532,7 +532,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 2: Read from local files and verify data integrity
 	t.Run("LocalDataIntegrity", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 		_ = reader.UpdateLastAddConfirmed(ctx, int64(len(testData))-1) // set lac to simulate that the test data has been persisted
@@ -562,7 +562,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 4: Read from compacted data and verify data integrity
 	t.Run("CompactedDataIntegrity", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 
@@ -583,7 +583,7 @@ func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 
 	// Step 5: Test partial reads from different starting points
 	t.Run("PartialReadsFromCompacted", func(t *testing.T) {
-		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, tempDir, logId, segmentId, storageCli, cfg)
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
 		require.NoError(t, err)
 		defer reader.Close(ctx)
 

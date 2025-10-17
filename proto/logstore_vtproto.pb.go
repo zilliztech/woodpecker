@@ -168,6 +168,8 @@ func (m *AddEntryRequest) CloneVT() *AddEntryRequest {
 		return (*AddEntryRequest)(nil)
 	}
 	r := new(AddEntryRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.Entry = m.Entry.CloneVT()
 	if len(m.unknownFields) > 0 {
@@ -205,6 +207,8 @@ func (m *GetBatchEntriesAdvRequest) CloneVT() *GetBatchEntriesAdvRequest {
 		return (*GetBatchEntriesAdvRequest)(nil)
 	}
 	r := new(GetBatchEntriesAdvRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	r.FromEntryId = m.FromEntryId
@@ -244,6 +248,8 @@ func (m *FenceSegmentRequest) CloneVT() *FenceSegmentRequest {
 		return (*FenceSegmentRequest)(nil)
 	}
 	r := new(FenceSegmentRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	if len(m.unknownFields) > 0 {
@@ -280,6 +286,8 @@ func (m *CompleteSegmentRequest) CloneVT() *CompleteSegmentRequest {
 		return (*CompleteSegmentRequest)(nil)
 	}
 	r := new(CompleteSegmentRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	r.LastAddConfirmed = m.LastAddConfirmed
@@ -317,6 +325,8 @@ func (m *CompactSegmentRequest) CloneVT() *CompactSegmentRequest {
 		return (*CompactSegmentRequest)(nil)
 	}
 	r := new(CompactSegmentRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	if len(m.unknownFields) > 0 {
@@ -353,6 +363,8 @@ func (m *GetSegmentLastAddConfirmedRequest) CloneVT() *GetSegmentLastAddConfirme
 		return (*GetSegmentLastAddConfirmedRequest)(nil)
 	}
 	r := new(GetSegmentLastAddConfirmedRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	if len(m.unknownFields) > 0 {
@@ -389,6 +401,8 @@ func (m *GetSegmentBlockCountRequest) CloneVT() *GetSegmentBlockCountRequest {
 		return (*GetSegmentBlockCountRequest)(nil)
 	}
 	r := new(GetSegmentBlockCountRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	if len(m.unknownFields) > 0 {
@@ -425,6 +439,8 @@ func (m *CleanSegmentRequest) CloneVT() *CleanSegmentRequest {
 		return (*CleanSegmentRequest)(nil)
 	}
 	r := new(CleanSegmentRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	r.Flag = m.Flag
@@ -461,6 +477,8 @@ func (m *AppendResultsSubscribeRequest) CloneVT() *AppendResultsSubscribeRequest
 		return (*AppendResultsSubscribeRequest)(nil)
 	}
 	r := new(AppendResultsSubscribeRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
@@ -498,6 +516,8 @@ func (m *UpdateLastAddConfirmedRequest) CloneVT() *UpdateLastAddConfirmedRequest
 		return (*UpdateLastAddConfirmedRequest)(nil)
 	}
 	r := new(UpdateLastAddConfirmedRequest)
+	r.BucketName = m.BucketName
+	r.RootPath = m.RootPath
 	r.LogId = m.LogId
 	r.SegmentId = m.SegmentId
 	r.LastAddConfirmed = m.LastAddConfirmed
@@ -831,6 +851,12 @@ func (this *AddEntryRequest) EqualVT(that *AddEntryRequest) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
+		return false
+	}
 	if this.LogId != that.LogId {
 		return false
 	}
@@ -876,6 +902,12 @@ func (this *GetBatchEntriesAdvRequest) EqualVT(that *GetBatchEntriesAdvRequest) 
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
+		return false
+	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
 		return false
 	}
 	if this.LogId != that.LogId {
@@ -931,6 +963,12 @@ func (this *FenceSegmentRequest) EqualVT(that *FenceSegmentRequest) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
+		return false
+	}
 	if this.LogId != that.LogId {
 		return false
 	}
@@ -973,6 +1011,12 @@ func (this *CompleteSegmentRequest) EqualVT(that *CompleteSegmentRequest) bool {
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
+		return false
+	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
 		return false
 	}
 	if this.LogId != that.LogId {
@@ -1022,6 +1066,12 @@ func (this *CompactSegmentRequest) EqualVT(that *CompactSegmentRequest) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
+		return false
+	}
 	if this.LogId != that.LogId {
 		return false
 	}
@@ -1064,6 +1114,12 @@ func (this *GetSegmentLastAddConfirmedRequest) EqualVT(that *GetSegmentLastAddCo
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
+		return false
+	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
 		return false
 	}
 	if this.LogId != that.LogId {
@@ -1110,6 +1166,12 @@ func (this *GetSegmentBlockCountRequest) EqualVT(that *GetSegmentBlockCountReque
 	} else if this == nil || that == nil {
 		return false
 	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
+		return false
+	}
 	if this.LogId != that.LogId {
 		return false
 	}
@@ -1154,6 +1216,12 @@ func (this *CleanSegmentRequest) EqualVT(that *CleanSegmentRequest) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
+		return false
+	}
 	if this.LogId != that.LogId {
 		return false
 	}
@@ -1196,6 +1264,12 @@ func (this *AppendResultsSubscribeRequest) EqualVT(that *AppendResultsSubscribeR
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
+		return false
+	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
 		return false
 	}
 	if this.LogId != that.LogId {
@@ -1243,6 +1317,12 @@ func (this *UpdateLastAddConfirmedRequest) EqualVT(that *UpdateLastAddConfirmedR
 	if this == that {
 		return true
 	} else if this == nil || that == nil {
+		return false
+	}
+	if this.BucketName != that.BucketName {
+		return false
+	}
+	if this.RootPath != that.RootPath {
 		return false
 	}
 	if this.LogId != that.LogId {
@@ -1840,12 +1920,26 @@ func (m *AddEntryRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= size
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x22
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -1941,27 +2035,41 @@ func (m *GetBatchEntriesAdvRequest) MarshalToSizedBufferVT(dAtA []byte) (int, er
 		i -= size
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
-		dAtA[i] = 0x2a
+		dAtA[i] = 0x3a
 	}
 	if m.MaxEntries != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.MaxEntries))
 		i--
-		dAtA[i] = 0x20
+		dAtA[i] = 0x30
 	}
 	if m.FromEntryId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.FromEntryId))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x28
 	}
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2052,12 +2160,26 @@ func (m *FenceSegmentRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2143,17 +2265,31 @@ func (m *CompleteSegmentRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error
 	if m.LastAddConfirmed != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LastAddConfirmed))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x28
 	}
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2239,12 +2375,26 @@ func (m *CompactSegmentRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error)
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2335,12 +2485,26 @@ func (m *GetSegmentLastAddConfirmedRequest) MarshalToSizedBufferVT(dAtA []byte) 
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2426,12 +2590,26 @@ func (m *GetSegmentBlockCountRequest) MarshalToSizedBufferVT(dAtA []byte) (int, 
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2517,17 +2695,31 @@ func (m *CleanSegmentRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.Flag != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Flag))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x28
 	}
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2608,7 +2800,21 @@ func (m *AppendResultsSubscribeRequest) MarshalToSizedBufferVT(dAtA []byte) (int
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -2704,17 +2910,31 @@ func (m *UpdateLastAddConfirmedRequest) MarshalToSizedBufferVT(dAtA []byte) (int
 	if m.LastAddConfirmed != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LastAddConfirmed))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x28
 	}
 	if m.SegmentId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.SegmentId))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x20
 	}
 	if m.LogId != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.LogId))
 		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0x18
+	}
+	if len(m.RootPath) > 0 {
+		i -= len(m.RootPath)
+		copy(dAtA[i:], m.RootPath)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.RootPath)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.BucketName) > 0 {
+		i -= len(m.BucketName)
+		copy(dAtA[i:], m.BucketName)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.BucketName)))
+		i--
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -3186,6 +3406,14 @@ func (m *AddEntryRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3223,6 +3451,14 @@ func (m *GetBatchEntriesAdvRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3267,6 +3503,14 @@ func (m *FenceSegmentRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3300,6 +3544,14 @@ func (m *CompleteSegmentRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3336,6 +3588,14 @@ func (m *CompactSegmentRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3370,6 +3630,14 @@ func (m *GetSegmentLastAddConfirmedRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3403,6 +3671,14 @@ func (m *GetSegmentBlockCountRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3436,6 +3712,14 @@ func (m *CleanSegmentRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3469,6 +3753,14 @@ func (m *AppendResultsSubscribeRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -3505,6 +3797,14 @@ func (m *UpdateLastAddConfirmedRequest) SizeVT() (n int) {
 	}
 	var l int
 	_ = l
+	l = len(m.BucketName)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
+	l = len(m.RootPath)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	if m.LogId != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.LogId))
 	}
@@ -4699,6 +4999,70 @@ func (m *AddEntryRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -4717,7 +5081,7 @@ func (m *AddEntryRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Entry", wireType)
 			}
@@ -4930,6 +5294,70 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -4948,7 +5376,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -4967,7 +5395,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field FromEntryId", wireType)
 			}
@@ -4986,7 +5414,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 4:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field MaxEntries", wireType)
 			}
@@ -5005,7 +5433,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 5:
+		case 7:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastReadState", wireType)
 			}
@@ -5216,6 +5644,70 @@ func (m *FenceSegmentRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -5234,7 +5726,7 @@ func (m *FenceSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -5411,6 +5903,70 @@ func (m *CompleteSegmentRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -5429,7 +5985,7 @@ func (m *CompleteSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -5448,7 +6004,7 @@ func (m *CompleteSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastAddConfirmed", wireType)
 			}
@@ -5625,6 +6181,70 @@ func (m *CompactSegmentRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -5643,7 +6263,7 @@ func (m *CompactSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -5837,6 +6457,70 @@ func (m *GetSegmentLastAddConfirmedRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -5855,7 +6539,7 @@ func (m *GetSegmentLastAddConfirmedRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -6032,6 +6716,70 @@ func (m *GetSegmentBlockCountRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -6050,7 +6798,7 @@ func (m *GetSegmentBlockCountRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -6227,6 +6975,70 @@ func (m *CleanSegmentRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -6245,7 +7057,7 @@ func (m *CleanSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -6264,7 +7076,7 @@ func (m *CleanSegmentRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Flag", wireType)
 			}
@@ -6422,6 +7234,70 @@ func (m *AppendResultsSubscribeRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -6636,6 +7512,70 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVT(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BucketName = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RootPath = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -6654,7 +7594,7 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -6673,7 +7613,7 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastAddConfirmed", wireType)
 			}
@@ -8744,6 +9684,78 @@ func (m *AddEntryRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -8762,7 +9774,7 @@ func (m *AddEntryRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Entry", wireType)
 			}
@@ -8975,6 +9987,78 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -8993,7 +10077,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -9012,7 +10096,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field FromEntryId", wireType)
 			}
@@ -9031,7 +10115,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 4:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field MaxEntries", wireType)
 			}
@@ -9050,7 +10134,7 @@ func (m *GetBatchEntriesAdvRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 5:
+		case 7:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastReadState", wireType)
 			}
@@ -9261,6 +10345,78 @@ func (m *FenceSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -9279,7 +10435,7 @@ func (m *FenceSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -9456,6 +10612,78 @@ func (m *CompleteSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -9474,7 +10702,7 @@ func (m *CompleteSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -9493,7 +10721,7 @@ func (m *CompleteSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastAddConfirmed", wireType)
 			}
@@ -9670,6 +10898,78 @@ func (m *CompactSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -9688,7 +10988,7 @@ func (m *CompactSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -9882,6 +11182,78 @@ func (m *GetSegmentLastAddConfirmedRequest) UnmarshalVTUnsafe(dAtA []byte) error
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -9900,7 +11272,7 @@ func (m *GetSegmentLastAddConfirmedRequest) UnmarshalVTUnsafe(dAtA []byte) error
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -10077,6 +11449,78 @@ func (m *GetSegmentBlockCountRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -10095,7 +11539,7 @@ func (m *GetSegmentBlockCountRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -10272,6 +11716,78 @@ func (m *CleanSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -10290,7 +11806,7 @@ func (m *CleanSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -10309,7 +11825,7 @@ func (m *CleanSegmentRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Flag", wireType)
 			}
@@ -10467,6 +11983,78 @@ func (m *AppendResultsSubscribeRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -10681,6 +12269,78 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BucketName", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.BucketName = stringValue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RootPath", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.RootPath = stringValue
+			iNdEx = postIndex
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LogId", wireType)
 			}
@@ -10699,7 +12359,7 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field SegmentId", wireType)
 			}
@@ -10718,7 +12378,7 @@ func (m *UpdateLastAddConfirmedRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LastAddConfirmed", wireType)
 			}

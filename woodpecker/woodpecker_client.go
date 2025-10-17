@@ -140,12 +140,16 @@ func (c *woodpeckerClient) GetMetadataProvider() meta.MetadataProvider {
 
 // CreateLog creates a new log with the specified name.
 func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return werr.ErrWoodpeckerClientClosed
 	}
+	return createLogUnsafe(ctx, c.Metadata, logName)
+}
+
+func createLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string) error {
 	start := time.Now()
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	// try create new log
 	// Add retry logic for CreateLog when encountering ErrCreateLogMetadataTxn
 	const maxRetries = 5
@@ -153,7 +157,7 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 
 	for i := 0; i < maxRetries; i++ {
 		// Try to create the log
-		err := c.Metadata.CreateLog(ctx, logName)
+		err := metadata.CreateLog(ctx, logName)
 		if err == nil {
 			// Success, return immediately
 			metrics.WpClientOperationsTotal.WithLabelValues("create_log", "success").Inc()
@@ -191,21 +195,26 @@ func (c *woodpeckerClient) CreateLog(ctx context.Context, logName string) error 
 
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+}
+
+func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) (log.LogHandle, error) {
 	start := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	// Open log and retrieve metadata with detailed comments
-	logMeta, segmentsMeta, err := c.Metadata.OpenLog(ctx, logName)
+	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("open_log", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("open_log", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, c.GetMetadataProvider(), c.clientPool, c.cfg, c.SelectQuorumNodes)
+	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc)
 	metrics.WpClientOperationsTotal.WithLabelValues("open_log", "success").Inc()
 	metrics.WpClientOperationLatency.WithLabelValues("open_log", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
@@ -230,14 +239,18 @@ func (c *woodpeckerClient) DeleteLog(ctx context.Context, logName string) error 
 
 // LogExists checks if a log with the specified name exists.
 func (c *woodpeckerClient) LogExists(ctx context.Context, logName string) (bool, error) {
-	start := time.Now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closeState.Load() {
 		return false, werr.ErrWoodpeckerClientClosed
 	}
+	return logExistsUnsafe(ctx, c.Metadata, logName)
+}
+
+func logExistsUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string) (bool, error) {
+	start := time.Now()
 	// Check if log exists in meta
-	exists, err := c.Metadata.CheckExists(ctx, logName)
+	exists, err := metadata.CheckExists(ctx, logName)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("log_exists", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("log_exists", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -258,9 +271,13 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return getAllLogsUnsafe(ctx, c.Metadata)
+}
+
+func getAllLogsUnsafe(ctx context.Context, metadata meta.MetadataProvider) ([]string, error) {
 	start := time.Now()
 	// Retrieve all logs with detailed comments
-	logs, err := c.Metadata.ListLogs(ctx)
+	logs, err := metadata.ListLogs(ctx)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("get_all_logs", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("get_all_logs", "error").Observe(float64(time.Since(start).Milliseconds()))
@@ -277,9 +294,13 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
+}
+
+func getLogsWithPrefix(ctx context.Context, metadata meta.MetadataProvider, logNamePrefix string) ([]string, error) {
 	start := time.Now()
 	// Retrieve logs with the given prefix with detailed comments
-	logs, err := c.Metadata.ListLogsWithPrefix(ctx, logNamePrefix)
+	logs, err := metadata.ListLogsWithPrefix(ctx, logNamePrefix)
 	if err != nil {
 		metrics.WpClientOperationsTotal.WithLabelValues("get_logs_with_prefix", "error").Inc()
 		metrics.WpClientOperationLatency.WithLabelValues("get_logs_with_prefix", "error").Observe(float64(time.Since(start).Milliseconds()))

@@ -53,20 +53,22 @@ type StagedSegmentImpl struct {
 	segmentFilePath string
 	// minio related fields
 	bucket         string
+	rootPath       string
 	segmentFileKey string
 	client         objectstorage.ObjectStorage
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
-func NewStagedSegmentImpl(ctx context.Context, bucket string, baseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) storage.Segment {
-	segmentDir := getSegmentDir(baseDir, logId, segId)
-	filePath := getSegmentFilePath(baseDir, logId, segId)
+func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) storage.Segment {
+	segmentDir := getSegmentDir(localBaseDir, logId, segId)
+	filePath := getSegmentFilePath(localBaseDir, logId, segId)
 	segmentFileKey := fmt.Sprintf("%d/%d", logId, segId)
 
 	logger.Ctx(ctx).Debug("new StagedSegmentImpl created",
 		zap.String("segmentFilePath", filePath),
 		zap.String("segmentFileKey", segmentFileKey),
-		zap.String("bucket", bucket))
+		zap.String("bucket", bucket),
+		zap.String("rootPath", rootPath))
 
 	segmentImpl := &StagedSegmentImpl{
 		cfg:             cfg,
@@ -75,6 +77,7 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, baseDir string, lo
 		segmentDir:      segmentDir,
 		segmentFilePath: filePath,
 		bucket:          bucket,
+		rootPath:        rootPath,
 		segmentFileKey:  segmentFileKey,
 		client:          storageCli,
 	}
@@ -153,7 +156,7 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.Int("flag", flag))
 
 	// List all objects in the segment directory
-	listPrefix := fmt.Sprintf("%s/", rs.segmentFileKey)
+	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
 	var objectsToDelete []string
 	var deletedCount int
 	var errorCount int
