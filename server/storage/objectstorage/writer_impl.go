@@ -579,6 +579,10 @@ func (f *MinioFileWriter) run() {
 				logger.Ctx(ctx).Info("sync error",
 					zap.String("segmentFileKey", f.segmentFileKey),
 					zap.Error(err))
+				if werr.ErrStorageNotWritable.Is(err) {
+					// storage not writable, stop sync periodically. instead , client should roll segment and retry later
+					return
+				}
 			}
 			sp.End()
 			ticker.Reset(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
