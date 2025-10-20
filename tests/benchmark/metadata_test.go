@@ -61,7 +61,7 @@ func TestCheckLogExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metaProvider := meta.NewMetadataProvider(context.Background(), cli)
+	metaProvider := meta.NewMetadataProvider(context.Background(), cli, 10000)
 	defer metaProvider.Close()
 	exists, err := metaProvider.CheckExists(context.Background(), logName)
 	assert.NoError(t, err)
@@ -87,7 +87,7 @@ func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, 
 }
 
 func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) {
-	metaProvider := meta.NewMetadataProvider(ctx, cli)
+	metaProvider := meta.NewMetadataProvider(ctx, cli, 10000)
 	defer metaProvider.Close()
 	logs, err := metaProvider.ListLogs(ctx)
 	assert.NoError(t, err)
@@ -144,7 +144,7 @@ func TestAcquireLogWriterLockPerformance(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 	})
 	assert.NoError(t, err)
-	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli)
+	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli, 10000)
 	defer metaProvider.Close()
 	_ = metaProvider.InitIfNecessary(context.TODO())
 	exists, err := metaProvider.CheckExists(context.Background(), logName)

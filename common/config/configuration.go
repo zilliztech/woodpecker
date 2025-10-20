@@ -354,7 +354,7 @@ func getDefaultEtcdConfig() EtcdConfig {
 		KvSubPath:      "kv",
 		Log:            EtcdLogConfig{Level: "info", Path: "./logs"},
 		Ssl:            EtcdSslConfig{Enabled: false},
-		RequestTimeout: 10,
+		RequestTimeout: 10000,
 		Use:            EtcdUseConfig{Embed: false},
 	}
 }

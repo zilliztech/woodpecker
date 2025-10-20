@@ -148,7 +148,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, "info", defaultConfig.Etcd.Log.Level)
 	assert.Equal(t, "./logs", defaultConfig.Etcd.Log.Path)
 	assert.False(t, defaultConfig.Etcd.Ssl.Enabled)
-	assert.Equal(t, 10, defaultConfig.Etcd.RequestTimeout)
+	assert.Equal(t, 10000, defaultConfig.Etcd.RequestTimeout)
 	assert.False(t, defaultConfig.Etcd.Use.Embed)
 	assert.Equal(t, "localhost", defaultConfig.Minio.Address)
 	assert.Equal(t, 9000, defaultConfig.Minio.Port)

@@ -38,9 +38,9 @@ func TestLogWriterLock(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 	})
 	assert.NoError(t, err)
-	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli1)
+	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli1, 10000)
 	defer metaProvider.Close()
-	metaProvider2 := meta.NewMetadataProvider(context.Background(), etcdCli2)
+	metaProvider2 := meta.NewMetadataProvider(context.Background(), etcdCli2, 10000)
 	defer metaProvider2.Close()
 	_ = metaProvider.InitIfNecessary(context.TODO())
 	exists, err := metaProvider.CheckExists(context.Background(), logName)

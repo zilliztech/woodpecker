@@ -142,7 +142,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	clientPool := client.NewLogStoreClientPoolLocal(embedLogStore)
 	c := woodpeckerEmbedClient{
 		cfg:           cfg,
-		Metadata:      meta.NewMetadataProvider(ctx, etcdCli),
+		Metadata:      meta.NewMetadataProvider(ctx, etcdCli, cfg.Etcd.RequestTimeout),
 		clientPool:    clientPool,
 		managedCli:    managed,
 		etcdCli:       etcdCli,
