@@ -81,7 +81,7 @@ func testInitIfNecessary(t *testing.T) {
 	}
 
 	// Init metadata
-	metadataProvider := NewMetadataProvider(context.Background(), etcdCli)
+	metadataProvider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	initErr := metadataProvider.InitIfNecessary(context.Background())
 	assert.NoError(t, initErr)
 
@@ -135,7 +135,7 @@ func testCreateLogAndOpen(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -221,7 +221,7 @@ func testCheckExists(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -280,7 +280,7 @@ func testStoreQuorumInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -313,7 +313,7 @@ func testStoreSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -356,7 +356,7 @@ func testUpdateSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -409,7 +409,7 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -467,7 +467,7 @@ func testLogWriterLock(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	defer provider.Close()
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
@@ -517,7 +517,7 @@ func testUpdateLogMetaForTruncation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -561,10 +561,7 @@ func testCreateReaderTempInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create a metadata provider with the session
-	provider := &metadataProviderEtcd{
-		client:         etcdCli,
-		logWriterLocks: make(map[string]*concurrency.Mutex),
-	}
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
@@ -636,7 +633,7 @@ func testGetReaderTempInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -689,7 +686,7 @@ func testUpdateReaderTempInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -774,7 +771,7 @@ func testDeleteReaderTempInfo(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -853,7 +850,7 @@ func testGetAllReaderTempInfoForLog(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -931,7 +928,7 @@ func setupSegmentCleanupTest(t *testing.T) (MetadataProvider, string, int64) {
 	assert.NoError(t, err)
 
 	// Create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -1222,7 +1219,7 @@ func testUpdateLogMetaWithWrongRevision(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
@@ -1288,7 +1285,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 	assert.NoError(t, err)
 
 	// create metadata provider
-	provider := NewMetadataProvider(context.Background(), etcdCli)
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
 	err = provider.InitIfNecessary(context.Background())
 	assert.NoError(t, err)
 
