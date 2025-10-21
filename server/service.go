@@ -30,7 +30,6 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
@@ -69,13 +68,10 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 // NewServerWithConfig creates a new server instance with custom configuration
 func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, seeds []string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	etcdCli, err := etcd.GetRemoteEtcdClient(configuration.Etcd.GetEndpoints())
-	if err != nil {
-		panic(err)
-	}
-	var storageClient storageclient.ObjectStorage
+	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
-		storageClient, err = storageclient.NewObjectStorage(ctx, configuration)
+		var err error
+		storageCli, err = storageclient.NewObjectStorage(ctx, configuration)
 		if err != nil {
 			panic(err)
 		}
@@ -85,7 +81,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
 	}
-	s.logStore = NewLogStore(ctx, configuration, etcdCli, storageClient)
+	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
 	s.seeds = seeds

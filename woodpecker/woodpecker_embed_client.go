@@ -46,7 +46,7 @@ var (
 	isLogStoreRunning bool
 )
 
-func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) (bool, error) {
+func startEmbedLogStore(cfg *config.Configuration, storageClient storageclient.ObjectStorage) (bool, error) {
 	embedLogStoreMu.Lock()
 	defer embedLogStoreMu.Unlock()
 
@@ -55,7 +55,7 @@ func startEmbedLogStore(cfg *config.Configuration, etcdCli *clientv3.Client, sto
 	}
 
 	var takeControlOfClients bool = false
-	embedLogStore = server.NewLogStore(context.Background(), cfg, etcdCli, storageClient)
+	embedLogStore = server.NewLogStore(context.Background(), cfg, storageClient)
 	embedLogStore.SetAddress("127.0.0.1:59456") // TODO only placeholder now
 
 	initError := embedLogStore.Start()
@@ -136,7 +136,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		storageclient.CheckIfConditionWriteSupport(ctx, storageClient, cfg.Minio.BucketName, cfg.Minio.RootPath)
 	}
 	// start embedded logStore
-	managedByLogStore, err := startEmbedLogStore(cfg, etcdCli, storageClient)
+	managedByLogStore, err := startEmbedLogStore(cfg, storageClient)
 	if err != nil {
 		return nil, err
 	}

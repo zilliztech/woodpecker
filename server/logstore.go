@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
@@ -64,7 +63,6 @@ type logStore struct {
 	cfg           *config.Configuration
 	ctx           context.Context
 	cancel        context.CancelFunc
-	etcdCli       *clientv3.Client
 	storageClient storageclient.ObjectStorage
 	address       string
 
@@ -76,13 +74,12 @@ type logStore struct {
 	cleanupDone chan struct{}
 }
 
-func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) LogStore {
+func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {
 	ctx, cancel := context.WithCancel(ctx)
 	logStore := &logStore{
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		etcdCli:           etcdCli,
 		storageClient:     storageClient,
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		address:           net.GetIP(""),
