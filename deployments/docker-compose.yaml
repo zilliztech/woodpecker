@@ -9,13 +9,9 @@ volumes:
   etcd_data:
   minio_data:
   woodpecker-node1_data:
-  woodpecker-node1_logs:
   woodpecker-node2_data:
-  woodpecker-node2_logs:
   woodpecker-node3_data:
-  woodpecker-node3_logs:
   woodpecker-node4_data:
-  woodpecker-node4_logs:
 
 services:
   # Jaeger for distributed tracing
@@ -104,6 +100,7 @@ services:
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node1:17946    # Gossip advertise address:port
       - ADVERTISE_SERVICE_ADDR=localhost:18080   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
+      - SERVICE_SEEDS=woodpecker-node1:18080,woodpecker-node2:18081,woodpecker-node3:18082
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
       - AVAILABILITY_ZONE=az-1
@@ -120,7 +117,6 @@ services:
       - "17946:17946/udp"
     volumes:
       - woodpecker-node1_data:/woodpecker/data
-      - woodpecker-node1_logs:/woodpecker/logs
     networks:
       - woodpecker
     depends_on:
@@ -147,6 +143,7 @@ services:
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node2:17947    # Gossip advertise address:port
       - ADVERTISE_SERVICE_ADDR=localhost:18081   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
+      - SERVICE_SEEDS=woodpecker-node1:18080,woodpecker-node2:18081,woodpecker-node3:18082
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
       - AVAILABILITY_ZONE=az-2
@@ -163,7 +160,6 @@ services:
       - "17947:17947/udp"
     volumes:
       - woodpecker-node2_data:/woodpecker/data
-      - woodpecker-node2_logs:/woodpecker/logs
     networks:
       - woodpecker
     depends_on:
@@ -189,6 +185,7 @@ services:
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node3:17948    # Gossip advertise address:port
       - ADVERTISE_SERVICE_ADDR=localhost:18082   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
+      - SERVICE_SEEDS=woodpecker-node1:18080,woodpecker-node2:18081,woodpecker-node3:18082
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary
       - AVAILABILITY_ZONE=az-3
@@ -205,7 +202,6 @@ services:
       - "17948:17948/udp"
     volumes:
       - woodpecker-node3_data:/woodpecker/data
-      - woodpecker-node3_logs:/woodpecker/logs
     networks:
       - woodpecker
     depends_on:
@@ -232,6 +228,7 @@ services:
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node4:17949    # Gossip advertise address:port
       - ADVERTISE_SERVICE_ADDR=localhost:18083   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
+      - SERVICE_SEEDS=woodpecker-node1:18080,woodpecker-node2:18081,woodpecker-node3:18082
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary
       - AVAILABILITY_ZONE=az-3
@@ -248,7 +245,6 @@ services:
       - "17949:17949/udp"
     volumes:
       - woodpecker-node4_data:/woodpecker/data
-      - woodpecker-node4_logs:/woodpecker/logs
     networks:
       - woodpecker
     depends_on:

@@ -79,6 +79,7 @@ WAIT_FOR_DEPS=${WAIT_FOR_DEPS:-true}
 
 # Seeds configuration
 SEEDS=${SEEDS:-""}
+SERVICE_SEEDS=${SERVICE_SEEDS:-""}
 
 # Log function
 log() {
@@ -133,13 +134,12 @@ woodpecker:
     quorum:
       quorumBufferPools:
         - name: default-region-pool
-          seeds: [$SEEDS]
+          seeds: [$SERVICE_SEEDS]
 log:
   level: $LOG_LEVEL
   stdout: true
 etcd:
   endpoints: [$ETCD_ENDPOINTS]
-  rootPath: woodpecker
 minio:
   address: $MINIO_ADDRESS
   port: $MINIO_PORT
@@ -169,6 +169,7 @@ if [ -n "$ADVERTISE_SERVICE_ADDR" ]; then
     log "  Service Advertise Address:Port: $ADVERTISE_SERVICE_ADDR"
 fi
 log "  Seeds: $SEEDS"
+log "  Service Seeds: $SERVICE_SEEDS"
 log "  Storage Type: $STORAGE_TYPE"
 log "  Cluster: $CLUSTER"
 log "  etcd: $ETCD_ENDPOINTS"

@@ -74,7 +74,8 @@ ENV GOSSIP_PORT=17946 \
     MINIO_ACCESS_KEY="" \
     MINIO_SECRET_KEY="" \
     MINIO_BUCKET="" \
-    SEEDS=""
+    SEEDS="" \
+    SERVICE_SEEDS=""
 
 # Expose ports (use fixed ports for better documentation)
 EXPOSE 18080 17946
