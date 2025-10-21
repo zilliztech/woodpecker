@@ -88,7 +88,7 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	clientPool := client.NewLogStoreClientPool()
 	c := &woodpeckerClient{
 		cfg:        cfg,
-		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout),
+		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout.Milliseconds()),
 		clientPool: clientPool,
 		managedCli: managed,
 		etcdCli:    etcdClient,

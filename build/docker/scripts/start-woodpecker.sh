@@ -87,12 +87,12 @@ log() {
 
 # Validate configuration
 if [ -z "$NODE_NAME" ]; then
-    log "❌ NODE_NAME cannot be empty"
+    log "ERROR NODE_NAME cannot be empty"
     exit 1
 fi
 
 if [ "$SERVICE_PORT" -eq "$GOSSIP_PORT" ]; then
-    log "❌ service port and Gossip port cannot be the same: $SERVICE_PORT"
+    log "ERROR service port and Gossip port cannot be the same: $SERVICE_PORT"
     exit 1
 fi
 
@@ -113,11 +113,11 @@ if [ "$WAIT_FOR_DEPS" = "true" ]; then
     done
 
     if [ $timeout -eq 0 ]; then
-        log "❌ MinIO is not available at $MINIO_ADDRESS:$MINIO_PORT after 120s"
+        log "ERROR MinIO is not available at $MINIO_ADDRESS:$MINIO_PORT after 120s"
         exit 1
     fi
 else
-    log "ℹ️ Skipping dependency checks (WAIT_FOR_DEPS=false)"
+    log "WARN Skipping dependency checks (WAIT_FOR_DEPS=false)"
 fi
 
 # Create configuration if it doesn't exist

@@ -102,7 +102,7 @@ services:
       - GOSSIP_PORT=17946                        # Gossip port
       - SERVICE_PORT=18080                       # Service port
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node1:17946    # Gossip advertise address:port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node1:18080   # Service advertise address:port
+      - ADVERTISE_SERVICE_ADDR=localhost:18080   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
@@ -145,7 +145,7 @@ services:
       - GOSSIP_PORT=17947                        # Gossip port
       - SERVICE_PORT=18081                       # Service port
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node2:17947    # Gossip advertise address:port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node2:18081   # Service advertise address:port
+      - ADVERTISE_SERVICE_ADDR=localhost:18081   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-primary
@@ -187,7 +187,7 @@ services:
       - GOSSIP_PORT=17948                        # Gossip port
       - SERVICE_PORT=18082                       # Service port
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node3:17948    # Gossip advertise address:port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node3:18082   # Service advertise address:port
+      - ADVERTISE_SERVICE_ADDR=localhost:18082   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary
@@ -230,7 +230,7 @@ services:
       - GOSSIP_PORT=17949                        # Gossip port
       - SERVICE_PORT=18083                       # Service port
       - ADVERTISE_GOSSIP_ADDR=woodpecker-node4:17949    # Gossip advertise address:port
-      - ADVERTISE_SERVICE_ADDR=woodpecker-node4:18083   # Service advertise address:port
+      - ADVERTISE_SERVICE_ADDR=localhost:18083   # Service advertise address:port
       - SEEDS=woodpecker-node1:17946,woodpecker-node2:17947,woodpecker-node3:17948
       - CLUSTER_NAME=woodpecker-cluster
       - RESOURCE_GROUP=rg-secondary

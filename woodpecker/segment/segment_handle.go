@@ -497,13 +497,13 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 
 		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		if err != nil {
-			// For other errors, return immediately
-			logger.Ctx(ctx).Warn("read batch failed on node",
-				zap.String("logName", s.logName),
-				zap.Int64("logId", s.logId),
-				zap.Int64("segId", s.segmentId),
-				zap.String("node", node),
-				zap.Error(err))
+			if werr.ErrEntryNotFound.Is(err) {
+				logger.Ctx(ctx).Info("read batch empty on node",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node))
+			} else {
+				logger.Ctx(ctx).Warn("read batch failed on node",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node), zap.Error(err))
+			}
 			lastError = err
 			if werr.ErrFileReaderEndOfFile.Is(err) {
 				// encounter EOF, stop reading immediately
@@ -530,12 +530,13 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 	}
 
 	// All nodes failed
-	logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
-		zap.String("logName", s.logName),
-		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segmentId),
-		zap.Int("totalNodes", nodeCount),
-		zap.Error(lastError))
+	if werr.ErrEntryNotFound.Is(lastError) {
+		logger.Ctx(ctx).Info("read batch empty on all quorum nodes",
+			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount))
+	} else {
+		logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
+			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount), zap.Error(lastError))
+	}
 
 	if lastError != nil {
 		return nil, lastError

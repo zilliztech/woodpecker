@@ -22,7 +22,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "🚀 Woodpecker Cluster Deployment"
+echo "Woodpecker Cluster Deployment"
 echo "=================================="
 
 # Function to show usage
@@ -48,22 +48,22 @@ usage() {
 
 # Build Woodpecker binary and Docker image
 build() {
-    echo "🔨 Building Woodpecker..."
+    echo "Building Woodpecker..."
     cd "$PROJECT_DIR"
     
     # Use the new build system
-    echo "📦 Building binary..."
+    echo "Building binary..."
     ./build/build_bin.sh
-    echo "✅ Binary built successfully"
+    echo "Binary built successfully"
     
-    echo "🐳 Building Docker image..."
+    echo "Building Docker image..."
     ./build/build_image.sh ubuntu22.04 auto -t woodpecker:latest
-    echo "✅ Docker image built successfully"
+    echo "Docker image built successfully"
 }
 
 # Start the cluster
 up() {
-    echo "🚀 Starting Woodpecker cluster..."
+    echo "Starting Woodpecker cluster..."
     cd "$SCRIPT_DIR"
     
     # Check if woodpecker:latest image exists
@@ -77,11 +77,11 @@ up() {
     docker-compose up -d
     
     echo ""
-    echo "⏳ Waiting for services to be ready..."
+    echo "Waiting for services to be ready..."
     sleep 10
     
     echo ""
-    echo "🌐 Cluster Services:"
+    echo "Cluster Services:"
     echo "==================="
     echo "• Woodpecker Node 1: http://localhost:18080"
     echo "• Woodpecker Node 2: http://localhost:18081"
@@ -90,30 +90,30 @@ up() {
     echo "• Jaeger UI:         http://localhost:16686"
     echo "• etcd:              http://localhost:2379"
     echo ""
-    echo "✅ Cluster is starting up!"
-    echo "💡 Use '$0 status' to check service health"
-    echo "💡 Use '$0 logs' to view logs"
+    echo "Success: Cluster is starting up!"
+    echo "Tips: Use '$0 status' to check service health"
+    echo "Tips: Use '$0 logs' to view logs"
 }
 
 # Stop the cluster
 down() {
-    echo "🛑 Stopping Woodpecker cluster..."
+    echo "Stopping Woodpecker cluster..."
     cd "$SCRIPT_DIR"
     docker-compose down
-    echo "✅ Cluster stopped"
+    echo "Success: Cluster stopped"
 }
 
 # Clean cluster and volumes
 clean() {
-    echo "🧹 Cleaning Woodpecker cluster..."
+    echo "Cleaning Woodpecker cluster..."
     cd "$SCRIPT_DIR"
     docker-compose down -v --remove-orphans
-    echo "✅ Cluster cleaned (all data removed)"
+    echo "Success: Cluster cleaned (all data removed)"
 }
 
 # Show logs
 logs() {
-    echo "📋 Cluster Logs:"
+    echo "Cluster Logs:"
     echo "================"
     cd "$SCRIPT_DIR"
     docker-compose logs --tail=50 -f
@@ -121,7 +121,7 @@ logs() {
 
 # Show cluster status
 status() {
-    echo "📊 Cluster Status:"
+    echo "Cluster Status:"
     echo "=================="
     cd "$SCRIPT_DIR"
     
@@ -143,46 +143,46 @@ status() {
         
         # Check container health status and internal health check
         if docker inspect --format='{{.State.Health.Status}}' $container 2>/dev/null | grep -q "healthy"; then
-            echo "✅ Woodpecker $container (port $port): Healthy"
+            echo "Success: Woodpecker $container (port $port): Healthy"
         elif nc -z localhost $port 2>/dev/null; then
-            echo "⚠️  Woodpecker $container (port $port): gRPC port open, checking container health..."
+            echo "Warn: Woodpecker $container (port $port): gRPC port open, checking container health..."
             if docker exec $container /woodpecker/bin/health-check.sh >/dev/null 2>&1; then
-                echo "✅ Woodpecker $container (port $port): Internal health check passed"
+                echo "Success: Woodpecker $container (port $port): Internal health check passed"
             else
-                echo "❌ Woodpecker $container (port $port): Internal health check failed"
+                echo "Error: Woodpecker $container (port $port): Internal health check failed"
             fi
         else
-            echo "❌ Woodpecker $container (port $port): Not accessible"
+            echo "Error: Woodpecker $container (port $port): Not accessible"
         fi
     done
     
     # Check MinIO
     if curl -s --connect-timeout 2 http://localhost:9000/minio/health/live >/dev/null 2>&1; then
-        echo "✅ MinIO: Healthy"
+        echo "Success: MinIO Healthy"
     else
-        echo "❌ MinIO: Not accessible"
+        echo "Error: MinIO Not accessible"
     fi
     
     # Check etcd
     if curl -s --connect-timeout 2 http://localhost:2379/health >/dev/null 2>&1; then
-        echo "✅ etcd: Healthy"
+        echo "Success: etcd Healthy"
     elif nc -z localhost 2379 2>/dev/null; then
-        echo "⚠️  etcd: Port open but no health endpoint"
+        echo "Warn: etcd Port open but no health endpoint"
     else
-        echo "❌ etcd: Not accessible"
+        echo "Error: etcd Not accessible"
     fi
     
     # Check Jaeger
     if curl -s --connect-timeout 2 http://localhost:16686 >/dev/null 2>&1; then
-        echo "✅ Jaeger: Healthy"
+        echo "Success: Jaeger Healthy"
     else
-        echo "❌ Jaeger: Not accessible"
+        echo "Error: Jaeger Not accessible"
     fi
 }
 
 # Test cluster connectivity
 test() {
-    echo "🧪 Testing Cluster Connectivity:"
+    echo "Testing Cluster Connectivity:"
     echo "================================="
     echo ""
     
@@ -190,9 +190,9 @@ test() {
     echo "Testing gRPC ports..."
     for port in 18080 18081 18082; do
         if nc -z localhost $port 2>/dev/null; then
-            echo "✅ Port $port: Available"
+            echo "Success: Port $port Available"
         else
-            echo "❌ Port $port: Not available"
+            echo "Error: Port $port Not available"
         fi
     done
     
@@ -201,14 +201,14 @@ test() {
     echo "Testing gossip ports..."
     for port in 17946 17947 17948; do
         if nc -z localhost $port 2>/dev/null; then
-            echo "✅ Port $port: Available"
+            echo "Success: Port $port Available"
         else
-            echo "❌ Port $port: Not available"
+            echo "Error: Port $port Not available"
         fi
     done
     
     echo ""
-    echo "💡 If tests fail, check '$0 status' for more details"
+    echo "Tips: If tests fail, check '$0 status' for more details"
 }
 
 # Main script logic
@@ -238,13 +238,13 @@ case "${1:-}" in
         usage
         ;;
     "")
-        echo "❌ No command specified"
+        echo "Error: No command specified"
         echo ""
         usage
         exit 1
         ;;
     *)
-        echo "❌ Unknown command: $1"
+        echo "Error: Unknown command: $1"
         echo ""
         usage
         exit 1

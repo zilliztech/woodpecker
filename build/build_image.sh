@@ -73,7 +73,7 @@ validate_os() {
             return 0
             ;;
         *)
-            echo "❌ Error: Unsupported OS '$os'"
+            echo "Error: Unsupported OS '$os'"
             echo "Supported OS: ubuntu20.04, ubuntu22.04, amazonlinux2023, rockylinux8"
             exit 1
             ;;
@@ -86,7 +86,7 @@ check_dockerfile() {
     local dockerfile="build/docker/$os/Dockerfile"
     
     if [ ! -f "$dockerfile" ]; then
-        echo "❌ Error: Dockerfile not found: $dockerfile"
+        echo "Error: Dockerfile not found: $dockerfile"
         exit 1
     fi
     echo "$dockerfile"
@@ -135,7 +135,7 @@ case $ARCH in
     amd64|arm64)
         ;;
     *)
-        echo "❌ Error: Unsupported architecture '$ARCH'"
+        echo "Error: Unsupported architecture '$ARCH'"
         echo "Supported architectures: amd64, arm64, auto"
         exit 1
         ;;
@@ -151,8 +151,8 @@ cd "$(dirname "$0")/.."
 echo "📦 Building binary for architecture: $ARCH"
 ./build/build_bin.sh "$ARCH"
 
-echo "🚀 Building Woodpecker Docker image..."
-echo "📋 Configuration:"
+echo "   Building Woodpecker Docker image..."
+echo "   Configuration:"
 echo "   OS: $OS"
 echo "   Architecture: $ARCH"
 echo "   Dockerfile: $DOCKERFILE"
@@ -173,17 +173,17 @@ eval $BUILD_CMD
 # Extract image name without tag for grep
 IMAGE_NAME=$(echo "$TAG" | cut -d':' -f1)
 if docker images | grep -q "$IMAGE_NAME"; then
-    echo "✅ Image built successfully: $TAG"
+    echo "Success: Image built successfully: $TAG"
     docker images "$TAG"
 else
-    echo "❌ Build failed: Image not found"
+    echo "Error: Build failed, Image not found"
     exit 1
 fi
 
-echo "🎉 Build completed successfully!"
+echo "   Build completed successfully!"
 
 # Show next steps
 echo ""
-echo "💡 Next steps:"
+echo "   Next steps:"
 echo "   To run the image: docker run -it $TAG"
 echo "   To test deployment: cd deployments && ./deploy.sh up"

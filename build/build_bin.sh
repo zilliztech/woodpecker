@@ -66,13 +66,13 @@ case $ARCH in
     amd64|arm64)
         ;;
     *)
-        echo "❌ Error: Unsupported architecture '$ARCH'"
+        echo "Error: Unsupported architecture '$ARCH'"
         echo "Supported architectures: amd64, arm64, auto"
         exit 1
         ;;
 esac
 
-echo "🚀 Building Woodpecker binary for $ARCH architecture..."
+echo "   Building Woodpecker binary for $ARCH architecture..."
 
 # Change to project root if not already there
 cd "$(dirname "$0")/.."
@@ -80,23 +80,23 @@ cd "$(dirname "$0")/.."
 # Build based on architecture
 case $ARCH in
     amd64)
-        echo "📦 Building for AMD64/x86-64..."
+        echo "   Building for AMD64/x86-64..."
         make build-linux
         ;;
     arm64)
-        echo "📦 Building for ARM64..."
+        echo "   Building for ARM64..."
         make build-linux-arm64
         ;;
 esac
 
 # Verify the build
 if [ -f "bin/woodpecker" ]; then
-    echo "✅ Binary built successfully: bin/woodpecker"
+    echo "Success: Binary built successfully: bin/woodpecker"
     file bin/woodpecker
     ls -lh bin/woodpecker
 else
-    echo "❌ Build failed: bin/woodpecker not found"
+    echo "Error: Build failed: bin/woodpecker not found"
     exit 1
 fi
 
-echo "🎉 Build completed successfully!"
+echo "   Build completed successfully!"

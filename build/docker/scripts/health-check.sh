@@ -23,21 +23,21 @@ GOSSIP_PORT=${GOSSIP_PORT:-${GOSSIP_PORT:-17946}}       # Gossip port (for clust
 
 # Check if Woodpecker process is running
 if ! pgrep -f "woodpecker" > /dev/null; then
-    echo "❌ Woodpecker process not running"
+    echo "Error: Woodpecker process not running"
     exit 1
 fi
 
 # Check service port (gRPC port)
 if ! ss -tuln | grep -q ":$SERVICE_PORT "; then
-    echo "❌ service port $SERVICE_PORT not available"
+    echo "Error: service port $SERVICE_PORT not available"
     exit 1
 fi
 
 # Check gossip port (check for any binding, not just localhost)
 if ! ss -tuln | grep -q ":$GOSSIP_PORT "; then
-    echo "❌ Gossip port $GOSSIP_PORT not available"  
+    echo "Error: Gossip port $GOSSIP_PORT not available"
     exit 1
 fi
 
-echo "✅ Woodpecker is healthy"
+echo "Success: Woodpecker is healthy"
 exit 0
