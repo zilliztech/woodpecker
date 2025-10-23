@@ -17,17 +17,17 @@
 
 package codec
 
-import (
-	"time"
-)
-
 const (
-	FormatVersion         = 5
+	FormatVersion         = 6  // Latest version with LAC support
 	RecordHeaderSize      = 9  // CRC32(4) + Type(1) + Length(4)
 	HeaderRecordSize      = 16 // Version(2) + Flags(2) + FirstEntryID(8) + Magic(4)
 	BlockHeaderRecordSize = 28 // BlockNumber(4) + FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4)
 	IndexRecordSize       = 32 // BlockNumber(4) + StartOffset(8) + BlockSize(4) + FirstEntryID(8) + LastEntryID(8)
-	FooterRecordSize      = 36 // TotalBlocks(4) + TotalRecords(4) + TotalSize(8) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+
+	// Footer sizes for different versions
+	FooterRecordSizeV5 = 36                 // Version 5: TotalBlocks(4) + TotalRecords(4) + TotalSize(8) + IndexOffset(8) + IndexLength(4) + Version(2) + Flags(2) + Magic(4)
+	FooterRecordSizeV6 = 44                 // Version 6: V5 fields + LAC(8)
+	FooterRecordSize   = FooterRecordSizeV6 // Current version footer size
 )
 
 // Record types
@@ -43,6 +43,12 @@ const (
 var (
 	HeaderMagic = [4]byte{0x48, 0x44, 0x52, 0x01} // HDR\x01
 	FooterMagic = [4]byte{0x46, 0x54, 0x52, 0x01} // FTR\x01
+)
+
+// Footer flags
+const (
+	FooterFlagCompacted uint16 = 1 << 0 // bit 0: whether segment is compacted
+	FooterFlagReserved  uint16 = 0xFFFE // bits 1-15: reserved for future use
 )
 
 // Record interface
@@ -98,14 +104,43 @@ type FooterRecord struct {
 	IndexOffset  uint64 // Offset where index section starts
 	IndexLength  uint32 // Length of index section
 	Version      uint16
-	Flags        uint16 // [compacted:1][reserve:15]
+	Flags        uint16 // [compacted:1][reserved:15]
+	LAC          int64  // Last Add Confirmed entry ID (>=0: valid, -1: invalid/not set)
 }
 
 func (f *FooterRecord) Type() byte { return FooterRecordType }
 
-// FileInfo represents a file in storage
-type FileInfo struct {
-	Key          string
-	Size         int64
-	LastModified time.Time
+// HasLAC returns true if this footer contains a valid LAC value
+func (f *FooterRecord) HasLAC() bool {
+	return f.Version >= 6 && f.LAC >= 0
+}
+
+// IsCompacted returns true if this segment is compacted
+func (f *FooterRecord) IsCompacted() bool {
+	return f.Flags&FooterFlagCompacted != 0
+}
+
+// SetCompacted sets the compacted flag
+func (f *FooterRecord) SetCompacted(compacted bool) {
+	if compacted {
+		f.Flags |= FooterFlagCompacted
+	} else {
+		f.Flags &= ^FooterFlagCompacted
+	}
+}
+
+// GetFooterSize returns the actual footer size based on version
+func (f *FooterRecord) GetFooterSize() int {
+	if f.Version >= 6 {
+		return FooterRecordSizeV6
+	}
+	return FooterRecordSizeV5
+}
+
+// GetFooterRecordSize returns the footer record size for a given version
+func GetFooterRecordSize(version uint16) int {
+	if version >= 6 {
+		return FooterRecordSizeV6
+	}
+	return FooterRecordSizeV5
 }

@@ -25,9 +25,9 @@ func (_m *LogStoreClient) EXPECT() *LogStoreClient_Expecter {
 	return &LogStoreClient_Expecter{mock: &_m.Mock}
 }
 
-// AppendEntry provides a mock function with given fields: ctx, logId, entry, syncedResultCh
-func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	ret := _m.Called(ctx, logId, entry, syncedResultCh)
+// AppendEntry provides a mock function with given fields: ctx, bucketName, rootPath, logId, entry, syncedResultCh
+func (_m *LogStoreClient) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AppendEntry")
@@ -35,17 +35,17 @@ func (_m *LogStoreClient) AppendEntry(ctx context.Context, logId int64, entry *p
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)); ok {
-		return rf(ctx, logId, entry, syncedResultCh)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) int64); ok {
-		r0 = rf(ctx, logId, entry, syncedResultCh)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, *proto.LogEntry, channel.ResultChannel) int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) error); ok {
-		r1 = rf(ctx, logId, entry, syncedResultCh)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, *proto.LogEntry, channel.ResultChannel) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -60,16 +60,18 @@ type LogStoreClient_AppendEntry_Call struct {
 
 // AppendEntry is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - entry *proto.LogEntry
 //   - syncedResultCh channel.ResultChannel
-func (_e *LogStoreClient_Expecter) AppendEntry(ctx interface{}, logId interface{}, entry interface{}, syncedResultCh interface{}) *LogStoreClient_AppendEntry_Call {
-	return &LogStoreClient_AppendEntry_Call{Call: _e.mock.On("AppendEntry", ctx, logId, entry, syncedResultCh)}
+func (_e *LogStoreClient_Expecter) AppendEntry(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, entry interface{}, syncedResultCh interface{}) *LogStoreClient_AppendEntry_Call {
+	return &LogStoreClient_AppendEntry_Call{Call: _e.mock.On("AppendEntry", ctx, bucketName, rootPath, logId, entry, syncedResultCh)}
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(*proto.LogEntry), args[3].(channel.ResultChannel))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(*proto.LogEntry), args[5].(channel.ResultChannel))
 	})
 	return _c
 }
@@ -79,14 +81,60 @@ func (_c *LogStoreClient_AppendEntry_Call) Return(_a0 int64, _a1 error) *LogStor
 	return _c
 }
 
-func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)) *LogStoreClient_AppendEntry_Call {
+func (_c *LogStoreClient_AppendEntry_Call) RunAndReturn(run func(context.Context, string, string, int64, *proto.LogEntry, channel.ResultChannel) (int64, error)) *LogStoreClient_AppendEntry_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// CompleteSegment provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// Close provides a mock function with given fields: ctx
+func (_m *LogStoreClient) Close(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Close")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
+type LogStoreClient_Close_Call struct {
+	*mock.Call
+}
+
+// Close is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *LogStoreClient_Expecter) Close(ctx interface{}) *LogStoreClient_Close_Call {
+	return &LogStoreClient_Close_Call{Call: _e.mock.On("Close", ctx)}
+}
+
+func (_c *LogStoreClient_Close_Call) Run(run func(ctx context.Context)) *LogStoreClient_Close_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_Close_Call) Return(_a0 error) *LogStoreClient_Close_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_Close_Call) RunAndReturn(run func(context.Context) error) *LogStoreClient_Close_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CompleteSegment provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, lac
+func (_m *LogStoreClient) CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, lac)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CompleteSegment")
@@ -94,17 +142,17 @@ func (_m *LogStoreClient) CompleteSegment(ctx context.Context, logId int64, segm
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64) (int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId, lac)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64) int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, lac)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId, lac)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -119,15 +167,18 @@ type LogStoreClient_CompleteSegment_Call struct {
 
 // CompleteSegment is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) CompleteSegment(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_CompleteSegment_Call {
-	return &LogStoreClient_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, logId, segmentId)}
+//   - lac int64
+func (_e *LogStoreClient_Expecter) CompleteSegment(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStoreClient_CompleteSegment_Call {
+	return &LogStoreClient_CompleteSegment_Call{Call: _e.mock.On("CompleteSegment", ctx, bucketName, rootPath, logId, segmentId, lac)}
 }
 
-func (_c *LogStoreClient_CompleteSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_CompleteSegment_Call {
+func (_c *LogStoreClient_CompleteSegment_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64)) *LogStoreClient_CompleteSegment_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(int64))
 	})
 	return _c
 }
@@ -137,14 +188,14 @@ func (_c *LogStoreClient_CompleteSegment_Call) Return(_a0 int64, _a1 error) *Log
 	return _c
 }
 
-func (_c *LogStoreClient_CompleteSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_CompleteSegment_Call {
+func (_c *LogStoreClient_CompleteSegment_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, int64) (int64, error)) *LogStoreClient_CompleteSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// FenceSegment provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// FenceSegment provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
+func (_m *LogStoreClient) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FenceSegment")
@@ -152,17 +203,17 @@ func (_m *LogStoreClient) FenceSegment(ctx context.Context, logId int64, segment
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -177,15 +228,17 @@ type LogStoreClient_FenceSegment_Call struct {
 
 // FenceSegment is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) FenceSegment(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_FenceSegment_Call {
-	return &LogStoreClient_FenceSegment_Call{Call: _e.mock.On("FenceSegment", ctx, logId, segmentId)}
+func (_e *LogStoreClient_Expecter) FenceSegment(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_FenceSegment_Call {
+	return &LogStoreClient_FenceSegment_Call{Call: _e.mock.On("FenceSegment", ctx, bucketName, rootPath, logId, segmentId)}
 }
 
-func (_c *LogStoreClient_FenceSegment_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_FenceSegment_Call {
+func (_c *LogStoreClient_FenceSegment_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStoreClient_FenceSegment_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
@@ -195,14 +248,14 @@ func (_c *LogStoreClient_FenceSegment_Call) Return(_a0 int64, _a1 error) *LogSto
 	return _c
 }
 
-func (_c *LogStoreClient_FenceSegment_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_FenceSegment_Call {
+func (_c *LogStoreClient_FenceSegment_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (int64, error)) *LogStoreClient_FenceSegment_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetBlockCount provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// GetBlockCount provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
+func (_m *LogStoreClient) GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBlockCount")
@@ -210,17 +263,17 @@ func (_m *LogStoreClient) GetBlockCount(ctx context.Context, logId int64, segmen
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -235,15 +288,17 @@ type LogStoreClient_GetBlockCount_Call struct {
 
 // GetBlockCount is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) GetBlockCount(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_GetBlockCount_Call {
-	return &LogStoreClient_GetBlockCount_Call{Call: _e.mock.On("GetBlockCount", ctx, logId, segmentId)}
+func (_e *LogStoreClient_Expecter) GetBlockCount(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_GetBlockCount_Call {
+	return &LogStoreClient_GetBlockCount_Call{Call: _e.mock.On("GetBlockCount", ctx, bucketName, rootPath, logId, segmentId)}
 }
 
-func (_c *LogStoreClient_GetBlockCount_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_GetBlockCount_Call {
+func (_c *LogStoreClient_GetBlockCount_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStoreClient_GetBlockCount_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
@@ -253,14 +308,14 @@ func (_c *LogStoreClient_GetBlockCount_Call) Return(_a0 int64, _a1 error) *LogSt
 	return _c
 }
 
-func (_c *LogStoreClient_GetBlockCount_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_GetBlockCount_Call {
+func (_c *LogStoreClient_GetBlockCount_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (int64, error)) *LogStoreClient_GetBlockCount_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetLastAddConfirmed provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// GetLastAddConfirmed provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
+func (_m *LogStoreClient) GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetLastAddConfirmed")
@@ -268,17 +323,17 @@ func (_m *LogStoreClient) GetLastAddConfirmed(ctx context.Context, logId int64, 
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (int64, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (int64, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) int64); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) int64); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -293,15 +348,17 @@ type LogStoreClient_GetLastAddConfirmed_Call struct {
 
 // GetLastAddConfirmed is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) GetLastAddConfirmed(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_GetLastAddConfirmed_Call {
-	return &LogStoreClient_GetLastAddConfirmed_Call{Call: _e.mock.On("GetLastAddConfirmed", ctx, logId, segmentId)}
+func (_e *LogStoreClient_Expecter) GetLastAddConfirmed(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_GetLastAddConfirmed_Call {
+	return &LogStoreClient_GetLastAddConfirmed_Call{Call: _e.mock.On("GetLastAddConfirmed", ctx, bucketName, rootPath, logId, segmentId)}
 }
 
-func (_c *LogStoreClient_GetLastAddConfirmed_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_GetLastAddConfirmed_Call {
+func (_c *LogStoreClient_GetLastAddConfirmed_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStoreClient_GetLastAddConfirmed_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
@@ -311,14 +368,14 @@ func (_c *LogStoreClient_GetLastAddConfirmed_Call) Return(_a0 int64, _a1 error) 
 	return _c
 }
 
-func (_c *LogStoreClient_GetLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64, int64) (int64, error)) *LogStoreClient_GetLastAddConfirmed_Call {
+func (_c *LogStoreClient_GetLastAddConfirmed_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (int64, error)) *LogStoreClient_GetLastAddConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// ReadEntriesBatchAdv provides a mock function with given fields: ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState
-func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
-	ret := _m.Called(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+// ReadEntriesBatchAdv provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState
+func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadEntriesBatchAdv")
@@ -326,19 +383,19 @@ func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, logId int64, 
 
 	var r0 *proto.BatchReadResult
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)); ok {
-		return rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) *proto.BatchReadResult); ok {
-		r0 = rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64, int64, *proto.LastReadState) *proto.BatchReadResult); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*proto.BatchReadResult)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64, int64, int64, *proto.LastReadState) error); ok {
-		r1 = rf(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64, int64, int64, *proto.LastReadState) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -353,18 +410,20 @@ type LogStoreClient_ReadEntriesBatchAdv_Call struct {
 
 // ReadEntriesBatchAdv is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
 //   - fromEntryId int64
 //   - maxEntries int64
 //   - lastReadState *proto.LastReadState
-func (_e *LogStoreClient_Expecter) ReadEntriesBatchAdv(ctx interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxEntries interface{}, lastReadState interface{}) *LogStoreClient_ReadEntriesBatchAdv_Call {
-	return &LogStoreClient_ReadEntriesBatchAdv_Call{Call: _e.mock.On("ReadEntriesBatchAdv", ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)}
+func (_e *LogStoreClient_Expecter) ReadEntriesBatchAdv(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}, fromEntryId interface{}, maxEntries interface{}, lastReadState interface{}) *LogStoreClient_ReadEntriesBatchAdv_Call {
+	return &LogStoreClient_ReadEntriesBatchAdv_Call{Call: _e.mock.On("ReadEntriesBatchAdv", ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)}
 }
 
-func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState)) *LogStoreClient_ReadEntriesBatchAdv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int64), args[4].(int64), args[5].(*proto.LastReadState))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(int64), args[6].(int64), args[7].(*proto.LastReadState))
 	})
 	return _c
 }
@@ -374,22 +433,22 @@ func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) Return(_a0 *proto.BatchReadRe
 	return _c
 }
 
-func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context.Context, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *LogStoreClient_ReadEntriesBatchAdv_Call {
+func (_c *LogStoreClient_ReadEntriesBatchAdv_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *LogStoreClient_ReadEntriesBatchAdv_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// SegmentClean provides a mock function with given fields: ctx, logId, segmentId, flag
-func (_m *LogStoreClient) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
-	ret := _m.Called(ctx, logId, segmentId, flag)
+// SegmentClean provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, flag
+func (_m *LogStoreClient) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, flag)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SegmentClean")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64, int) error); ok {
-		r0 = rf(ctx, logId, segmentId, flag)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, flag)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -404,16 +463,18 @@ type LogStoreClient_SegmentClean_Call struct {
 
 // SegmentClean is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
 //   - flag int
-func (_e *LogStoreClient_Expecter) SegmentClean(ctx interface{}, logId interface{}, segmentId interface{}, flag interface{}) *LogStoreClient_SegmentClean_Call {
-	return &LogStoreClient_SegmentClean_Call{Call: _e.mock.On("SegmentClean", ctx, logId, segmentId, flag)}
+func (_e *LogStoreClient_Expecter) SegmentClean(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}, flag interface{}) *LogStoreClient_SegmentClean_Call {
+	return &LogStoreClient_SegmentClean_Call{Call: _e.mock.On("SegmentClean", ctx, bucketName, rootPath, logId, segmentId, flag)}
 }
 
-func (_c *LogStoreClient_SegmentClean_Call) Run(run func(ctx context.Context, logId int64, segmentId int64, flag int)) *LogStoreClient_SegmentClean_Call {
+func (_c *LogStoreClient_SegmentClean_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int)) *LogStoreClient_SegmentClean_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(int))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(int))
 	})
 	return _c
 }
@@ -423,14 +484,14 @@ func (_c *LogStoreClient_SegmentClean_Call) Return(_a0 error) *LogStoreClient_Se
 	return _c
 }
 
-func (_c *LogStoreClient_SegmentClean_Call) RunAndReturn(run func(context.Context, int64, int64, int) error) *LogStoreClient_SegmentClean_Call {
+func (_c *LogStoreClient_SegmentClean_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, int) error) *LogStoreClient_SegmentClean_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// SegmentCompact provides a mock function with given fields: ctx, logId, segmentId
-func (_m *LogStoreClient) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	ret := _m.Called(ctx, logId, segmentId)
+// SegmentCompact provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId
+func (_m *LogStoreClient) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SegmentCompact")
@@ -438,19 +499,19 @@ func (_m *LogStoreClient) SegmentCompact(ctx context.Context, logId int64, segme
 
 	var r0 *proto.SegmentMetadata
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) (*proto.SegmentMetadata, error)); ok {
-		return rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (*proto.SegmentMetadata, error)); ok {
+		return rf(ctx, bucketName, rootPath, logId, segmentId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, int64, int64) *proto.SegmentMetadata); ok {
-		r0 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) *proto.SegmentMetadata); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*proto.SegmentMetadata)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, int64, int64) error); ok {
-		r1 = rf(ctx, logId, segmentId)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
+		r1 = rf(ctx, bucketName, rootPath, logId, segmentId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -465,15 +526,17 @@ type LogStoreClient_SegmentCompact_Call struct {
 
 // SegmentCompact is a helper method to define mock.On call
 //   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
 //   - logId int64
 //   - segmentId int64
-func (_e *LogStoreClient_Expecter) SegmentCompact(ctx interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_SegmentCompact_Call {
-	return &LogStoreClient_SegmentCompact_Call{Call: _e.mock.On("SegmentCompact", ctx, logId, segmentId)}
+func (_e *LogStoreClient_Expecter) SegmentCompact(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}) *LogStoreClient_SegmentCompact_Call {
+	return &LogStoreClient_SegmentCompact_Call{Call: _e.mock.On("SegmentCompact", ctx, bucketName, rootPath, logId, segmentId)}
 }
 
-func (_c *LogStoreClient_SegmentCompact_Call) Run(run func(ctx context.Context, logId int64, segmentId int64)) *LogStoreClient_SegmentCompact_Call {
+func (_c *LogStoreClient_SegmentCompact_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64)) *LogStoreClient_SegmentCompact_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(int64), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
 	})
 	return _c
 }
@@ -483,7 +546,119 @@ func (_c *LogStoreClient_SegmentCompact_Call) Return(_a0 *proto.SegmentMetadata,
 	return _c
 }
 
-func (_c *LogStoreClient_SegmentCompact_Call) RunAndReturn(run func(context.Context, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentCompact_Call {
+func (_c *LogStoreClient_SegmentCompact_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (*proto.SegmentMetadata, error)) *LogStoreClient_SegmentCompact_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SelectNodes provides a mock function with given fields: ctx, strategyType, affinityMode, filters
+func (_m *LogStoreClient) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+	ret := _m.Called(ctx, strategyType, affinityMode, filters)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SelectNodes")
+	}
+
+	var r0 []*proto.NodeMeta
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)); ok {
+		return rf(ctx, strategyType, affinityMode, filters)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) []*proto.NodeMeta); ok {
+		r0 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*proto.NodeMeta)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) error); ok {
+		r1 = rf(ctx, strategyType, affinityMode, filters)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LogStoreClient_SelectNodes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SelectNodes'
+type LogStoreClient_SelectNodes_Call struct {
+	*mock.Call
+}
+
+// SelectNodes is a helper method to define mock.On call
+//   - ctx context.Context
+//   - strategyType proto.StrategyType
+//   - affinityMode proto.AffinityMode
+//   - filters []*proto.NodeFilter
+func (_e *LogStoreClient_Expecter) SelectNodes(ctx interface{}, strategyType interface{}, affinityMode interface{}, filters interface{}) *LogStoreClient_SelectNodes_Call {
+	return &LogStoreClient_SelectNodes_Call{Call: _e.mock.On("SelectNodes", ctx, strategyType, affinityMode, filters)}
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Run(run func(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(proto.StrategyType), args[2].(proto.AffinityMode), args[3].([]*proto.NodeFilter))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) Return(_a0 []*proto.NodeMeta, _a1 error) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LogStoreClient_SelectNodes_Call) RunAndReturn(run func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error)) *LogStoreClient_SelectNodes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateLastAddConfirmed provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, lac
+func (_m *LogStoreClient) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
+	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, lac)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLastAddConfirmed")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, int64) error); ok {
+		r0 = rf(ctx, bucketName, rootPath, logId, segmentId, lac)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// LogStoreClient_UpdateLastAddConfirmed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLastAddConfirmed'
+type LogStoreClient_UpdateLastAddConfirmed_Call struct {
+	*mock.Call
+}
+
+// UpdateLastAddConfirmed is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bucketName string
+//   - rootPath string
+//   - logId int64
+//   - segmentId int64
+//   - lac int64
+func (_e *LogStoreClient_Expecter) UpdateLastAddConfirmed(ctx interface{}, bucketName interface{}, rootPath interface{}, logId interface{}, segmentId interface{}, lac interface{}) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	return &LogStoreClient_UpdateLastAddConfirmed_Call{Call: _e.mock.On("UpdateLastAddConfirmed", ctx, bucketName, rootPath, logId, segmentId, lac)}
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) Run(run func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64)) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(int64))
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) Return(_a0 error) *LogStoreClient_UpdateLastAddConfirmed_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_UpdateLastAddConfirmed_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, int64) error) *LogStoreClient_UpdateLastAddConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }

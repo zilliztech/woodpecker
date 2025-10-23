@@ -19,9 +19,8 @@ package codec
 
 import (
 	"bytes"
-	"testing"
-
 	"hash/crc32"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,6 +145,7 @@ func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
 		TotalSize:    2048576, // 2MB file size
 		Version:      FormatVersion,
 		Flags:        0x5678,
+		LAC:          12345, // Set LAC for V6
 	}
 
 	// Test encoding
@@ -166,6 +166,7 @@ func TestFooterRecord_EncodeDecodeRoundTrip(t *testing.T) {
 	assert.Equal(t, original.TotalSize, footerRecord.TotalSize)
 	assert.Equal(t, original.Version, footerRecord.Version)
 	assert.Equal(t, original.Flags, footerRecord.Flags)
+	assert.Equal(t, original.LAC, footerRecord.LAC)
 }
 
 func TestDecodeRecordList_MultipleRecords(t *testing.T) {
@@ -175,7 +176,7 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, BlockSize: 2048576, FirstEntryID: 1000, LastEntryID: 1010},
 		&BlockHeaderRecord{BlockNumber: 1, FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
-		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, TotalSize: 2048, IndexOffset: 200, IndexLength: 44, Version: FormatVersion, Flags: 0x5678},
+		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, TotalSize: 2048, IndexOffset: 200, IndexLength: 44, Version: FormatVersion, Flags: 0x5678, LAC: 12345},
 	}
 
 	// Encode all records into a single buffer
@@ -228,6 +229,9 @@ func TestDecodeRecordList_MultipleRecords(t *testing.T) {
 			assert.Equal(t, original.IndexLength, footerRecord.IndexLength)
 			assert.Equal(t, original.Version, footerRecord.Version)
 			assert.Equal(t, original.Flags, footerRecord.Flags)
+			if original.Version >= 6 {
+				assert.Equal(t, original.LAC, footerRecord.LAC)
+			}
 		}
 	}
 }
@@ -643,7 +647,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, BlockSize: 2048576, FirstEntryID: 500, LastEntryID: 600}},
 		{"BlockHeaderRecord", &BlockHeaderRecord{BlockNumber: 1, FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
-		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
+		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: FormatVersion, Flags: 0x5678, LAC: 12345}},
 	}
 
 	for _, tc := range testCases {
@@ -666,7 +670,7 @@ func BenchmarkDecodeRecord(b *testing.B) {
 		{"DataRecord_Large", &DataRecord{Payload: bytes.Repeat([]byte("test"), 1000)}},
 		{"IndexRecord", &IndexRecord{BlockNumber: 10, StartOffset: 1024, BlockSize: 2048576, FirstEntryID: 500, LastEntryID: 600}},
 		{"BlockHeaderRecord", &BlockHeaderRecord{BlockNumber: 1, FirstEntryID: 1000, LastEntryID: 2000, BlockLength: 4096, BlockCrc: 0x12345678}},
-		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: 1, Flags: 0x5678}},
+		{"FooterRecord", &FooterRecord{TotalBlocks: 100, TotalRecords: 5000, TotalSize: 2048576, IndexOffset: 10240, IndexLength: 512, Version: FormatVersion, Flags: 0x5678, LAC: 12345}},
 	}
 
 	for _, tc := range testCases {
@@ -687,7 +691,7 @@ func BenchmarkDecodeRecordList(b *testing.B) {
 		&DataRecord{Payload: []byte("hello world")},
 		&IndexRecord{BlockNumber: 1, StartOffset: 100, BlockSize: 2048576, FirstEntryID: 1000, LastEntryID: 1010},
 		&BlockHeaderRecord{BlockNumber: 1, FirstEntryID: 1000, LastEntryID: 1010, BlockLength: 2048, BlockCrc: 0xABCDEF01},
-		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 44, Version: 1, Flags: 0x5678},
+		&FooterRecord{TotalBlocks: 1, TotalRecords: 2, IndexOffset: 200, IndexLength: 44, Version: FormatVersion, Flags: 0x5678, LAC: 12345},
 	}
 
 	var buf bytes.Buffer
@@ -849,4 +853,397 @@ func TestBlockHeaderRecordWithIntegrity(t *testing.T) {
 	err = VerifyBlockDataIntegrity(decodedBlockHeader, corruptedData)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "block CRC mismatch")
+}
+
+// TestGetMaxFooterReadSize tests the GetMaxFooterReadSize function
+func TestGetMaxFooterReadSize(t *testing.T) {
+	maxSize := GetMaxFooterReadSize()
+	expectedSize := RecordHeaderSize + FooterRecordSizeV6
+	assert.Equal(t, expectedSize, maxSize)
+	assert.Equal(t, 53, maxSize) // 9 + 44 = 53
+}
+
+// TestFooterV5Compatibility tests compatibility with V5 footer format
+func TestFooterV5Compatibility(t *testing.T) {
+	t.Run("CreateAndParseV5Footer", func(t *testing.T) {
+		// Create a V5 footer
+		footerV5 := &FooterRecord{
+			TotalBlocks:  10,
+			TotalRecords: 100,
+			TotalSize:    1048576,
+			IndexOffset:  1000000,
+			IndexLength:  512,
+			Version:      5, // V5
+			Flags:        FooterFlagCompacted,
+			LAC:          -1, // Not used in V5
+		}
+
+		// Encode V5 footer
+		encoded := EncodeRecord(footerV5)
+		assert.Equal(t, RecordHeaderSize+FooterRecordSizeV5, len(encoded))
+
+		// Decode V5 footer
+		decoded, err := DecodeRecord(encoded)
+		require.NoError(t, err)
+
+		decodedFooter := decoded.(*FooterRecord)
+		assert.Equal(t, footerV5.TotalBlocks, decodedFooter.TotalBlocks)
+		assert.Equal(t, footerV5.TotalRecords, decodedFooter.TotalRecords)
+		assert.Equal(t, footerV5.TotalSize, decodedFooter.TotalSize)
+		assert.Equal(t, footerV5.IndexOffset, decodedFooter.IndexOffset)
+		assert.Equal(t, footerV5.IndexLength, decodedFooter.IndexLength)
+		assert.Equal(t, uint16(5), decodedFooter.Version)
+		assert.Equal(t, FooterFlagCompacted, decodedFooter.Flags)
+		assert.False(t, decodedFooter.HasLAC())
+		assert.Equal(t, int64(-1), decodedFooter.LAC)
+	})
+
+	t.Run("ParseV5FooterWithParseFooterFromBytes", func(t *testing.T) {
+		// Create a V5 footer manually
+		footerV5 := &FooterRecord{
+			TotalBlocks:  5,
+			TotalRecords: 50,
+			TotalSize:    524288,
+			IndexOffset:  500000,
+			IndexLength:  256,
+			Version:      5,
+			Flags:        0,
+		}
+
+		encoded := EncodeRecord(footerV5)
+
+		// Parse using ParseFooterFromBytes
+		parsed, err := ParseFooterFromBytes(encoded)
+		require.NoError(t, err)
+
+		assert.Equal(t, footerV5.TotalBlocks, parsed.TotalBlocks)
+		assert.Equal(t, uint16(5), parsed.Version)
+		assert.False(t, parsed.HasLAC())
+		assert.Equal(t, int64(-1), parsed.LAC)
+	})
+}
+
+// TestFooterV6Compatibility tests the V6 footer format with LAC support
+func TestFooterV6Compatibility(t *testing.T) {
+	t.Run("CreateAndParseV6FooterWithLAC", func(t *testing.T) {
+		// Create a V6 footer with LAC
+		footerV6 := &FooterRecord{
+			TotalBlocks:  20,
+			TotalRecords: 200,
+			TotalSize:    2097152,
+			IndexOffset:  2000000,
+			IndexLength:  1024,
+			Version:      6, // V6
+			Flags:        FooterFlagCompacted,
+			LAC:          12345,
+		}
+
+		// Encode V6 footer
+		encoded := EncodeRecord(footerV6)
+		assert.Equal(t, RecordHeaderSize+FooterRecordSizeV6, len(encoded))
+
+		// Decode V6 footer
+		decoded, err := DecodeRecord(encoded)
+		require.NoError(t, err)
+
+		decodedFooter := decoded.(*FooterRecord)
+		assert.Equal(t, footerV6.TotalBlocks, decodedFooter.TotalBlocks)
+		assert.Equal(t, footerV6.TotalRecords, decodedFooter.TotalRecords)
+		assert.Equal(t, footerV6.TotalSize, decodedFooter.TotalSize)
+		assert.Equal(t, footerV6.IndexOffset, decodedFooter.IndexOffset)
+		assert.Equal(t, footerV6.IndexLength, decodedFooter.IndexLength)
+		assert.Equal(t, uint16(6), decodedFooter.Version)
+		assert.Equal(t, FooterFlagCompacted, decodedFooter.Flags)
+		assert.True(t, decodedFooter.HasLAC())
+		assert.Equal(t, int64(12345), decodedFooter.LAC)
+	})
+
+	t.Run("CreateAndParseV6FooterWithoutLAC", func(t *testing.T) {
+		// Create a V6 footer without valid LAC value
+		footerV6 := &FooterRecord{
+			TotalBlocks:  15,
+			TotalRecords: 150,
+			TotalSize:    1572864,
+			IndexOffset:  1500000,
+			IndexLength:  768,
+			Version:      6,
+			Flags:        FooterFlagCompacted,
+			LAC:          -1, // -1 indicates no valid LAC
+		}
+
+		// Encode and decode
+		encoded := EncodeRecord(footerV6)
+		decoded, err := DecodeRecord(encoded)
+		require.NoError(t, err)
+
+		decodedFooter := decoded.(*FooterRecord)
+		assert.Equal(t, uint16(6), decodedFooter.Version)
+		assert.False(t, decodedFooter.HasLAC())
+		// LAC is physically present in V6 format but logically invalid when < 0
+		assert.Equal(t, int64(-1), decodedFooter.LAC)
+	})
+
+	t.Run("ParseV6FooterWithParseFooterFromBytes", func(t *testing.T) {
+		// Create a V6 footer with LAC
+		footerV6 := &FooterRecord{
+			TotalBlocks:  25,
+			TotalRecords: 250,
+			TotalSize:    2621440,
+			IndexOffset:  2500000,
+			IndexLength:  1280,
+			Version:      6,
+			Flags:        0,
+			LAC:          67890,
+		}
+
+		encoded := EncodeRecord(footerV6)
+
+		// Parse using ParseFooterFromBytes
+		parsed, err := ParseFooterFromBytes(encoded)
+		require.NoError(t, err)
+
+		assert.Equal(t, footerV6.TotalBlocks, parsed.TotalBlocks)
+		assert.Equal(t, uint16(6), parsed.Version)
+		assert.True(t, parsed.HasLAC())
+		assert.Equal(t, int64(67890), parsed.LAC)
+	})
+}
+
+// TestParseFooterFromBytes tests the main compatibility parsing function
+func TestParseFooterFromBytes(t *testing.T) {
+	t.Run("ParseBothV5AndV6FromBuffer", func(t *testing.T) {
+		// Create both V5 and V6 footers
+		footerV5 := &FooterRecord{
+			TotalBlocks:  3,
+			TotalRecords: 30,
+			TotalSize:    327680,
+			IndexOffset:  300000,
+			IndexLength:  128,
+			Version:      5,
+			Flags:        0,
+		}
+
+		footerV6 := &FooterRecord{
+			TotalBlocks:  6,
+			TotalRecords: 60,
+			TotalSize:    655360,
+			IndexOffset:  600000,
+			IndexLength:  256,
+			Version:      6,
+			Flags:        0,
+			LAC:          99999,
+		}
+
+		// Test V5
+		encodedV5 := EncodeRecord(footerV5)
+		parsedV5, err := ParseFooterFromBytes(encodedV5)
+		require.NoError(t, err)
+		assert.Equal(t, uint16(5), parsedV5.Version)
+		assert.False(t, parsedV5.HasLAC())
+
+		// Test V6
+		encodedV6 := EncodeRecord(footerV6)
+		parsedV6, err := ParseFooterFromBytes(encodedV6)
+		require.NoError(t, err)
+		assert.Equal(t, uint16(6), parsedV6.Version)
+		assert.True(t, parsedV6.HasLAC())
+		assert.Equal(t, int64(99999), parsedV6.LAC)
+	})
+
+	t.Run("ParseFromLargerBuffer", func(t *testing.T) {
+		// Test parsing when footer is at the end of a larger buffer
+		footer := &FooterRecord{
+			TotalBlocks:  8,
+			TotalRecords: 80,
+			TotalSize:    819200,
+			IndexOffset:  800000,
+			IndexLength:  512,
+			Version:      6,
+			Flags:        0,
+			LAC:          123456,
+		}
+
+		// Create a larger buffer with some data at the beginning
+		prefixData := make([]byte, 1000)
+		for i := range prefixData {
+			prefixData[i] = byte(i % 256)
+		}
+
+		encodedFooter := EncodeRecord(footer)
+		largerBuffer := append(prefixData, encodedFooter...)
+
+		// Parse should find the footer at the end
+		parsed, err := ParseFooterFromBytes(largerBuffer)
+		require.NoError(t, err)
+
+		assert.Equal(t, footer.TotalBlocks, parsed.TotalBlocks)
+		assert.Equal(t, uint16(6), parsed.Version)
+		assert.True(t, parsed.HasLAC())
+		assert.Equal(t, int64(123456), parsed.LAC)
+	})
+
+	t.Run("InvalidFooterData", func(t *testing.T) {
+		// Test with invalid data
+		invalidData := []byte{0x01, 0x02, 0x03}
+		_, err := ParseFooterFromBytes(invalidData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no valid footer found")
+	})
+
+	t.Run("EmptyBuffer", func(t *testing.T) {
+		_, err := ParseFooterFromBytes([]byte{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no valid footer found")
+	})
+}
+
+// TestTryParseFooterSize tests the helper function for parsing footer with specific size
+func TestTryParseFooterSize(t *testing.T) {
+	t.Run("ValidV5Footer", func(t *testing.T) {
+		footer := &FooterRecord{
+			TotalBlocks:  2,
+			TotalRecords: 20,
+			TotalSize:    204800,
+			IndexOffset:  200000,
+			IndexLength:  64,
+			Version:      5,
+			Flags:        0,
+		}
+
+		encoded := EncodeRecord(footer)
+		parsed, err := tryParseFooterSize(encoded, FooterRecordSizeV5)
+		require.NoError(t, err)
+
+		assert.Equal(t, footer.TotalBlocks, parsed.TotalBlocks)
+		assert.Equal(t, uint16(5), parsed.Version)
+	})
+
+	t.Run("ValidV6Footer", func(t *testing.T) {
+		footer := &FooterRecord{
+			TotalBlocks:  4,
+			TotalRecords: 40,
+			TotalSize:    409600,
+			IndexOffset:  400000,
+			IndexLength:  128,
+			Version:      6,
+			Flags:        0,
+			LAC:          77777,
+		}
+
+		encoded := EncodeRecord(footer)
+		parsed, err := tryParseFooterSize(encoded, FooterRecordSizeV6)
+		require.NoError(t, err)
+
+		assert.Equal(t, footer.TotalBlocks, parsed.TotalBlocks)
+		assert.Equal(t, uint16(6), parsed.Version)
+		assert.True(t, parsed.HasLAC())
+		assert.Equal(t, int64(77777), parsed.LAC)
+	})
+
+	t.Run("InsufficientData", func(t *testing.T) {
+		data := make([]byte, 10) // Too small
+		_, err := tryParseFooterSize(data, FooterRecordSizeV6)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "insufficient data")
+	})
+
+	t.Run("NotFooterRecord", func(t *testing.T) {
+		// Create a header record instead
+		header := &HeaderRecord{
+			Version:      6,
+			Flags:        0,
+			FirstEntryID: 1,
+		}
+		encoded := EncodeRecord(header)
+
+		_, err := tryParseFooterSize(encoded, HeaderRecordSize)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not a footer record")
+	})
+}
+
+// TestFooterCompatibilityIntegration tests the complete integration flow
+func TestFooterCompatibilityIntegration(t *testing.T) {
+	t.Run("ExternalAPIUsage", func(t *testing.T) {
+		// Simulate external caller usage pattern
+
+		// Step 1: Get the maximum footer read size
+		maxSize := GetMaxFooterReadSize()
+		assert.Equal(t, 53, maxSize) // 9 + 44
+
+		// Step 2: Create test data that represents file content ending with a footer
+		footer := &FooterRecord{
+			TotalBlocks:  50,
+			TotalRecords: 500,
+			TotalSize:    51200000,
+			IndexOffset:  50000000,
+			IndexLength:  2048,
+			Version:      6,
+			Flags:        FooterFlagCompacted,
+			LAC:          999999,
+		}
+
+		// Create a file-like buffer with some content and footer at the end
+		fileContent := make([]byte, 10000)
+		for i := range fileContent {
+			fileContent[i] = byte(i % 256)
+		}
+
+		encodedFooter := EncodeRecord(footer)
+		fileContent = append(fileContent, encodedFooter...)
+
+		// Step 3: Read the last maxSize bytes (simulating what external caller would do)
+		var readBuffer []byte
+		if len(fileContent) < maxSize {
+			readBuffer = fileContent
+		} else {
+			readBuffer = fileContent[len(fileContent)-maxSize:]
+		}
+
+		// Step 4: Parse footer from the read buffer
+		parsedFooter, err := ParseFooterFromBytes(readBuffer)
+		require.NoError(t, err)
+
+		// Verify the parsed footer matches original
+		assert.Equal(t, footer.TotalBlocks, parsedFooter.TotalBlocks)
+		assert.Equal(t, footer.TotalRecords, parsedFooter.TotalRecords)
+		assert.Equal(t, footer.TotalSize, parsedFooter.TotalSize)
+		assert.Equal(t, footer.IndexOffset, parsedFooter.IndexOffset)
+		assert.Equal(t, footer.IndexLength, parsedFooter.IndexLength)
+		assert.Equal(t, footer.Version, parsedFooter.Version)
+		assert.Equal(t, footer.Flags, parsedFooter.Flags)
+		assert.Equal(t, footer.LAC, parsedFooter.LAC)
+		assert.True(t, parsedFooter.HasLAC())
+		assert.True(t, parsedFooter.IsCompacted())
+	})
+
+	t.Run("BackwardCompatibilityV5ToV6", func(t *testing.T) {
+		// Test that V5 footers can be read and converted to V6 structure
+		footerV5 := &FooterRecord{
+			TotalBlocks:  100,
+			TotalRecords: 1000,
+			TotalSize:    100000000,
+			IndexOffset:  99000000,
+			IndexLength:  4096,
+			Version:      5,
+			Flags:        FooterFlagCompacted,
+		}
+
+		encoded := EncodeRecord(footerV5)
+		maxSize := GetMaxFooterReadSize()
+
+		// Simulate reading from end of file
+		readBuffer := make([]byte, maxSize)
+		copy(readBuffer[maxSize-len(encoded):], encoded)
+
+		parsed, err := ParseFooterFromBytes(readBuffer)
+		require.NoError(t, err)
+
+		// V5 footer should be parsed correctly
+		assert.Equal(t, uint16(5), parsed.Version)
+		assert.Equal(t, footerV5.TotalBlocks, parsed.TotalBlocks)
+		assert.False(t, parsed.HasLAC())
+		assert.Equal(t, int64(-1), parsed.LAC) // Default value for V5
+		assert.True(t, parsed.IsCompacted())
+	})
 }

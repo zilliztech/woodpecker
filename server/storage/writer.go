@@ -43,7 +43,7 @@ type Writer interface {
 	GetBlockCount(ctx context.Context) int64
 
 	// Finalize write indexes and footer, return last entry ID
-	Finalize(ctx context.Context) (int64, error)
+	Finalize(ctx context.Context, lac int64) (int64, error)
 
 	// Close finalizes the writer and releases resources
 	Close(ctx context.Context) error

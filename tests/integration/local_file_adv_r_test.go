@@ -26,6 +26,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -69,7 +70,7 @@ func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// First, create a file with test data
 	testData := [][]byte{
@@ -96,7 +97,7 @@ func TestAdvLocalFileReader_BasicRead(t *testing.T) {
 		require.NoError(t, result.Err)
 	}
 
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -183,7 +184,7 @@ func TestAdvLocalFileReader_MultipleBlocks(t *testing.T) {
 	blockSize := int64(100 * 1024) // Small 100KB blocks to force multiple blocks
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Create test data that will span multiple blocks
 	totalEntries := 20
@@ -214,7 +215,7 @@ func TestAdvLocalFileReader_MultipleBlocks(t *testing.T) {
 		}
 	}
 
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -272,7 +273,7 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 	blockSize := int64(256 * 1024)
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	t.Run("AdvNonExistentFile", func(t *testing.T) {
 		nonExistentPath := filepath.Join(tempDir, "non-existent.log")
@@ -301,7 +302,7 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 			require.NoError(t, result.Err)
 		}
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -336,7 +337,7 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, result.Err)
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -366,7 +367,7 @@ func TestAdvLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	blockSize := int64(512 * 1024) // 512KB blocks
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Test various data sizes
 	testCases := []struct {
@@ -404,7 +405,7 @@ func TestAdvLocalFileRW_DataIntegrityWithDifferentSizes(t *testing.T) {
 	}
 
 	// Finalize and close writer
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testCases)-1), lastEntryId)
 
@@ -440,7 +441,7 @@ func TestAdvLocalFileRW_EmptyPayloadValidation(t *testing.T) {
 	blockSize := int64(256 * 1024)
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(16)
 	segmentId := int64(1600)
@@ -522,7 +523,7 @@ func TestAdvLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	blockSize := int64(200) // Very small to force block creation
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Create writer
 	logId := int64(19)
@@ -549,7 +550,7 @@ func TestAdvLocalFileRW_BlockHeaderRecordVerification(t *testing.T) {
 	}
 
 	// Finalize the segment
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), lastEntryId)
 
@@ -582,7 +583,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	// Phase 1: Write some data and simulate interruption
 	t.Run("AdvWriteDataAndInterrupt", func(t *testing.T) {
@@ -682,7 +683,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		assert.Equal(t, expectedLastEntryId, writer2.GetLastEntryId(ctx))
 
 		// Finalize the segment to make it complete
-		lastEntryId, err := writer2.Finalize(ctx)
+		lastEntryId, err := writer2.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, expectedLastEntryId, lastEntryId)
 
@@ -786,7 +787,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, result.Err)
 
 		// Finalize and close
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -815,7 +816,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, result.Err)
 
 		// Finalize and close
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -883,7 +884,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NoError(t, result.Err)
 
 		// Finalize and close
-		_, err = writer2.Finalize(ctx)
+		_, err = writer2.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer2.Close(ctx)
 		require.NoError(t, err)
@@ -898,7 +899,7 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(30)
 	segmentId := int64(3000)
@@ -1008,7 +1009,7 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		}
 
 		// Finalize this file
-		_, err = writer2.Finalize(ctx)
+		_, err = writer2.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer2.Close(ctx)
 		require.NoError(t, err)
@@ -1057,7 +1058,7 @@ func TestAdvLocalFileReader_DynamicScanning(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(40)
 	segmentId := int64(4000)
@@ -1244,7 +1245,7 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(50)
 	segmentId := int64(5000)
@@ -1489,7 +1490,7 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 	require.NoError(t, err)
 	blockSize := int64(256 * 1024) // 256KB per block
-	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = blockSize
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	logId := int64(60)
 	segmentId := int64(6000)
@@ -1859,7 +1860,7 @@ func TestAdvLocalFileReader_ReadNextBatchAdvScenarios(t *testing.T) {
 	}
 
 	// Complete the file to create footer
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), lastEntryId)
 	writer.Close(ctx)
@@ -1990,7 +1991,7 @@ func TestAdvLocalFileReader_AdvOptContinuation(t *testing.T) {
 		assert.Equal(t, int64(i), result.SyncedId)
 	}
 
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(14), lastEntryId)
 	writer.Close(ctx)
@@ -2075,7 +2076,7 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), result.SyncedId)
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), lastEntryId)
 		writer.Close(ctx)
@@ -2111,7 +2112,7 @@ func TestAdvLocalFileReader_EdgeCases(t *testing.T) {
 			assert.Equal(t, int64(i), result.SyncedId)
 		}
 
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), lastEntryId)
 		writer.Close(ctx)
