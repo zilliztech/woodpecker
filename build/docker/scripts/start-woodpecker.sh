@@ -135,6 +135,9 @@ woodpecker:
       quorumBufferPools:
         - name: default-region-pool
           seeds: [$SERVICE_SEEDS]
+  logstore:
+    segmentReadPolicy:
+      maxBatchSize: 2000000
 log:
   level: $LOG_LEVEL
   stdout: true

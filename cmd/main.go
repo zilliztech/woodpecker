@@ -152,7 +152,7 @@ func main() {
 	}
 
 	// Parse advertise addresses
-	var advertiseAddr string
+	var advertiseAddrStr string
 	var advertisePort int
 	var advertiseServiceAddrStr string
 	var advertiseServicePort int
@@ -162,11 +162,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to parse advertise-gossip-addr: %v", err)
 		}
-		advertiseAddr = addr
+		advertiseAddrStr = addr
 		advertisePort = port
 	} else {
 		advertisePort = *gossipPort
 	}
+	resourceAdvertiseGossipAddrStr := resolveAdvertiseAddr(advertiseAddrStr)
 
 	if *advertiseServiceAddr != "" {
 		addr, port, err := parseAdvertiseAddr(*advertiseServiceAddr)
@@ -179,19 +180,15 @@ func main() {
 		advertiseServicePort = *servicePort
 	}
 
-	// Resolve advertise addresses to IP if they're hostnames
-	resolvedAdvertiseAddr := resolveAdvertiseAddr(advertiseAddr)
-	resolvedAdvertiseServiceAddr := resolveAdvertiseAddr(advertiseServiceAddrStr)
-
 	// Create server config with advertise options and node metadata
 	serverConfig := &membership.ServerConfig{
 		NodeID:               *nodeName,
 		BindPort:             *gossipPort,
 		ServicePort:          *servicePort,
-		AdvertiseAddr:        resolvedAdvertiseAddr,        // Gossip advertise address
-		AdvertisePort:        advertisePort,                // Gossip advertise port
-		AdvertiseServiceAddr: resolvedAdvertiseServiceAddr, // Service advertise address
-		AdvertiseServicePort: advertiseServicePort,         // Service advertise port
+		AdvertiseAddr:        resourceAdvertiseGossipAddrStr, // Gossip advertise address (IP only)
+		AdvertisePort:        advertisePort,                  // Gossip advertise port
+		AdvertiseServiceAddr: advertiseServiceAddrStr,        // Service advertise address (hostname only)
+		AdvertiseServicePort: advertiseServicePort,           // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
 		Tags:                 map[string]string{"role": "logstore"},
@@ -215,22 +212,12 @@ func main() {
 
 	// Log gossip advertise configuration
 	if *advertiseGossipAddr != "" {
-		if resolvedAdvertiseAddr != advertiseAddr {
-			log.Printf("  Gossip Advertise Address: %s (resolved from %s)", resolvedAdvertiseAddr, advertiseAddr)
-		} else {
-			log.Printf("  Gossip Advertise Address: %s", advertiseAddr)
-		}
-		log.Printf("  Gossip Advertise Port: %d", advertisePort)
+		log.Printf("  Gossip Advertise Addr: %s Port: %d", advertiseAddrStr, advertisePort)
 	}
 
 	// Log service advertise configuration
 	if *advertiseServiceAddr != "" {
-		if resolvedAdvertiseServiceAddr != advertiseServiceAddrStr {
-			log.Printf("  Service Advertise Address: %s (resolved from %s)", resolvedAdvertiseServiceAddr, advertiseServiceAddrStr)
-		} else {
-			log.Printf("  Service Advertise Address: %s", advertiseServiceAddrStr)
-		}
-		log.Printf("  Service Advertise Port: %d", advertiseServicePort)
+		log.Printf("  Service Advertise Addr: %s Port: %d", advertiseServiceAddrStr, advertiseServicePort)
 	}
 	log.Printf("  Seeds: %v", seedNodes)
 	log.Printf("  Data Directory: %s", cfg.Woodpecker.Storage.RootPath)

@@ -30,7 +30,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 			name:         "ServiceStorage",
 			storageType:  "service",
 			rootPath:     rootPath + "_service",
-			serviceSeeds: []string{"localhost:18080", "localhost:18081", "localhost:18080"},
+			serviceSeeds: []string{"localhost:18080", "localhost:18081", "localhost:18082"},
 		},
 	}
 
