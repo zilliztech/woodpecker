@@ -31,6 +31,7 @@ import (
 // WrapHTTPTransport wraps http.Transport, add an auth header to support GCP native auth
 type WrapHTTPTransport struct {
 	tokenSrc     oauth2.TokenSource
+	creds        *credentials.Credentials
 	backend      transport
 	currentToken atomic.Pointer[oauth2.Token]
 	useOAuth2    bool // Flag to determine auth method
@@ -57,13 +58,14 @@ func NewWrapHTTPTransportWithOAuth2(secure bool) (*WrapHTTPTransport, error) {
 }
 
 // NewWrapHTTPTransportWithCreds constructs a new WrapHTTPTransport with MinIO credentials
-func NewWrapHTTPTransportWithCreds(secure bool) (*WrapHTTPTransport, error) {
+func NewWrapHTTPTransportWithCreds(secure bool, creds *credentials.Credentials) (*WrapHTTPTransport, error) {
 	// in fact never return err
 	backend, err := minio.DefaultTransport(secure)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create default transport")
 	}
 	return &WrapHTTPTransport{
+		creds:     creds,
 		backend:   backend,
 		useOAuth2: false,
 	}, nil
@@ -87,9 +89,14 @@ func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 	}
 
+	// Transform headers BEFORE looking at the signing, as we'll need to re-sign after transformation
+	needsResigning := false
+
 	// For MinIO "If-None-Match:*" (object must not exist), use "x-goog-if-generation-match: 0" on Google Cloud Storage.
 	if ifNoneMatch := req.Header.Get("If-None-Match"); ifNoneMatch == "*" {
 		req.Header.Set("x-goog-if-generation-match", "0")
+		req.Header.Del("If-None-Match")
+		needsResigning = true
 	}
 
 	// Map MinIO user metadata headers ("x-amz-meta-*") to GCS-compatible headers ("x-goog-meta-*").
@@ -101,6 +108,28 @@ func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error)
 				req.Header.Add(newKey, v)
 			}
 			req.Header.Del(key)
+			needsResigning = true
+		}
+	}
+
+	// Re-sign the request after header transformation for credentials-based auth
+	// Use GOOG4-HMAC-SHA256 signing (Google Cloud Storage's signing method)
+	if needsResigning && !t.useOAuth2 && t.creds != nil {
+		// Remove old authorization header and AWS-specific headers
+		req.Header.Del("Authorization")
+		req.Header.Del("x-amz-date")
+		req.Header.Del("x-amz-content-sha256")
+
+		// Get credentials
+		credValue, err := t.creds.Get()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get credentials for re-signing")
+		}
+
+		// Re-sign with GOOG4-HMAC-SHA256
+		err = signRequestGoog4(req, credValue.AccessKeyID, credValue.SecretAccessKey)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to sign request with GOOG4")
 		}
 	}
 
@@ -148,7 +177,7 @@ func NewMinioClient(address string, opts *minio.Options) (*minio.Client, error) 
 
 	if opts.Creds != nil {
 		// Use credentials-aware transport that handles both auth and header transformation
-		transport, err = NewWrapHTTPTransportWithCreds(opts.Secure)
+		transport, err = NewWrapHTTPTransportWithCreds(opts.Secure, opts.Creds)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create credentials transport")
 		}
