@@ -66,11 +66,11 @@ type AppendOp struct {
 	quorumInfo      *proto.QuorumInfo
 	resultChannels  []channel.ResultChannel
 	channelAttempts []int
+	channelErrors   []error // Each channel has its own error
 	finalFailureSet *bitset.BitSet
 
 	completed  atomic.Bool
 	fastCalled atomic.Bool // Prevent repeated calls to FastFail/FastSuccess
-	err        error
 }
 
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
@@ -90,6 +90,7 @@ func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int6
 		quorumInfo:      quorumInfo,
 		resultChannels:  make([]channel.ResultChannel, 0),
 		channelAttempts: make([]int, len(quorumInfo.Nodes)),
+		channelErrors:   make([]error, len(quorumInfo.Nodes)),
 		finalFailureSet: &bitset.BitSet{},
 	}
 	op.completed.Store(false)
@@ -119,11 +120,13 @@ func (op *AppendOp) Execute() {
 
 // sendWriteRequestRetry used for retry single request
 func (op *AppendOp) sendWriteRequestRetry(ctx context.Context, serverIndex int) {
-	serverAddr := op.quorumInfo.Nodes[serverIndex]
+	// clear channel error before start send
+	op.channelErrors[serverIndex] = nil
 	// get client from clientPool according node addr
+	serverAddr := op.quorumInfo.Nodes[serverIndex]
 	cli, clientErr := op.clientPool.GetLogStoreClient(ctx, serverAddr)
 	if clientErr != nil {
-		op.err = clientErr
+		op.channelErrors[serverIndex] = clientErr
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, clientErr, serverIndex, serverAddr)
 		return
 	}
@@ -162,7 +165,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	defer sp.End()
 	// sync call error, return directly
 	if err != nil {
-		op.err = err
+		op.channelErrors[serverIndex] = err
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, serverIndex, serverAddr)
 		return
 	}
@@ -175,7 +178,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
 			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
-			op.err = readChanErr
+			op.channelErrors[serverIndex] = readChanErr
 			op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
 			return
 		}
@@ -190,7 +193,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	}
 
 	if syncedResult.SyncedId == -1 || syncedResult.Err != nil {
-		op.err = syncedResult.Err
+		op.channelErrors[serverIndex] = syncedResult.Err
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, syncedResult.Err, serverIndex, serverAddr)
 		return
 	}
