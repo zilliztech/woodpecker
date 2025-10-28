@@ -124,7 +124,7 @@ func TestAppendOp_Execute_GetClientError(t *testing.T) {
 
 	op.Execute()
 
-	assert.Equal(t, expectedErr, op.err)
+	assert.Equal(t, expectedErr, op.channelErrors[0])
 }
 
 func TestAppendOp_receivedAckCallback_Success(t *testing.T) {
@@ -169,7 +169,7 @@ func TestAppendOp_receivedAckCallback_SyncError(t *testing.T) {
 	op.receivedAckCallback(context.Background(), time.Now(), 3, nil, expectedErr, 0, "node0")
 
 	// Verify
-	assert.Equal(t, expectedErr, op.err)
+	assert.Equal(t, expectedErr, op.channelErrors[0])
 }
 
 func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
@@ -932,7 +932,7 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 	// Verify that operation did not complete successfully
 	assert.False(t, op.completed.Load(), "Operation should not be completed")
 	assert.Equal(t, 0, op.ackSet.Count(), "No nodes should have acked")
-	assert.Equal(t, failureErr, op.err, "Error should be set")
+	assert.Equal(t, failureErr, op.channelErrors[0], "Error should be set for channel 0")
 }
 
 // TestAppendOp_QuorumWrite_Case5_SimpleQuorumTest tests basic quorum behavior

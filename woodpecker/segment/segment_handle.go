@@ -366,8 +366,9 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 		return
 	}
 	op := element.Value.(*AppendOp)
+	channelErr := op.channelErrors[serverIndex]
 	if op.channelAttempts[serverIndex]+1 < s.cfg.Woodpecker.Client.SegmentAppend.MaxRetries &&
-		(op.err == nil || op.err != nil && werr.IsRetryableErr(op.err)) &&
+		(channelErr == nil || channelErr != nil && werr.IsRetryableErr(channelErr)) &&
 		(err == nil || !werr.IsSegmentNotWritableErr(err)) {
 		logger.Ctx(ctx).Debug("appendOp should retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("attempt", op.channelAttempts[serverIndex]), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr), zap.Error(err))
 		op.channelAttempts[serverIndex]++
