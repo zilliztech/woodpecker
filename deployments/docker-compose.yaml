@@ -111,10 +111,12 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
+      - METRICS_PORT=9091
     ports:
       - "18080:18080"
       - "17946:17946"
       - "17946:17946/udp"
+      - "9091:9091"
     volumes:
       - woodpecker-node1_data:/woodpecker/data
     networks:
@@ -154,10 +156,12 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
+      - METRICS_PORT=9092
     ports:
       - "18081:18081"
       - "17947:17947"
       - "17947:17947/udp"
+      - "9092:9092"
     volumes:
       - woodpecker-node2_data:/woodpecker/data
     networks:
@@ -196,10 +200,12 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
+      - METRICS_PORT=9093
     ports:
       - "18082:18082"
       - "17948:17948"
       - "17948:17948/udp"
+      - "9093:9093"
     volumes:
       - woodpecker-node3_data:/woodpecker/data
     networks:
@@ -239,10 +245,12 @@ services:
       - MINIO_BUCKET=woodpecker-cluster-data
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
+      - METRICS_PORT=9094
     ports:
       - "18083:18083"
       - "17949:17949"
       - "17949:17949/udp"
+      - "9094:9094"
     volumes:
       - woodpecker-node4_data:/woodpecker/data
     networks:

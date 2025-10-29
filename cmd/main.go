@@ -29,6 +29,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/cmd/external"
 	"github.com/zilliztech/woodpecker/common/config"
+	commonhttp "github.com/zilliztech/woodpecker/common/http"
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/server"
 )
@@ -203,6 +204,12 @@ func main() {
 		log.Fatalf("Failed to prepare server: %v", err)
 	}
 
+	// Start HTTP server for metrics, health check, and pprof
+	if err := commonhttp.Start(cfg); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
+	log.Printf("HTTP server started on port %s (metrics, health, pprof)", commonhttp.DefaultListenPort)
+
 	log.Printf("Starting Woodpecker Server:")
 	log.Printf("  Node Name: %s", *nodeName)
 	log.Printf("  Service Port: %d", *servicePort)
@@ -246,9 +253,18 @@ func main() {
 
 	// Graceful shutdown
 	log.Println("Stopping server...")
+
+	// Stop main server
 	if err := srv.Stop(); err != nil {
-		log.Printf("Error during shutdown: %v", err)
+		log.Printf("Error during server shutdown: %v", err)
 		os.Exit(1)
 	}
+
+	// Stop HTTP server
+	if err := commonhttp.Stop(); err != nil {
+		log.Printf("Error during HTTP server shutdown: %v", err)
+		os.Exit(1)
+	}
+
 	log.Println("Server stopped successfully")
 }
