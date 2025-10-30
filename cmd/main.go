@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"log"
 	"net"
 	"os"
@@ -137,6 +138,9 @@ func main() {
 	if err := externalCfg.ApplyToConfig(cfg); err != nil {
 		log.Fatalf("Failed to apply external user configuration: %v", err)
 	}
+
+	// init logger
+	logger.InitLogger(cfg)
 
 	// Override data directory in config if specified
 	if *dataDir != "" {
