@@ -346,3 +346,38 @@ func TestSearchBlock_EdgeCasesWithNegativeValues(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchBlock_OnlyOneBlk(t *testing.T) {
+	blocks := []*IndexRecord{
+		{BlockNumber: 0, FirstEntryID: 0, LastEntryID: 0},
+	}
+
+	tests := []struct {
+		name        string
+		entryId     int64
+		expectedIdx int
+	}{
+		{"zero entry", 0, 0},
+		{"positive entry", 1, -1},
+		{"negative entry out of range", -200, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := SearchBlock(blocks, tt.entryId)
+			require.NoError(t, err)
+
+			if tt.expectedIdx == -1 {
+				if result != nil {
+					assert.False(t,
+						result.FirstEntryID <= tt.entryId && tt.entryId <= result.LastEntryID,
+						"Found block should not contain the entryId when no match expected")
+				}
+			} else {
+				require.NotNil(t, result)
+				expectedBlock := blocks[tt.expectedIdx]
+				assert.Equal(t, expectedBlock, result)
+			}
+		})
+	}
+}

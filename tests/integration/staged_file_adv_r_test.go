@@ -19,6 +19,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"os"
 	"path/filepath"
 	"testing"
@@ -203,8 +204,19 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 		require.NoError(t, result.Err)
 	}
 
+	// add reader with cache before finalize
+	readerBeforeFinalize, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	defer readerBeforeFinalize.Close(ctx)
+
+	// finalize
 	_, err = writer.Finalize(ctx, int64(len(testData))-1)
 	require.NoError(t, err)
+
+	// add reader with cache before compact
+	readerBeforeCompact, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+	require.NoError(t, err)
+	defer readerBeforeCompact.Close(ctx)
 
 	// Step 2: Compact the data
 	compactedSize, err := writer.Compact(ctx)
@@ -234,7 +246,7 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 			assert.Equal(t, testData[i], entry.Values)
 		}
 
-		// Test reading from different starting points
+		// Test reading from middle starting points
 		result, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
 			StartEntryID:    2,
 			MaxBatchEntries: 3,
@@ -246,6 +258,106 @@ func TestAdvStagedFileReader_CompactedDataRead(t *testing.T) {
 			assert.Equal(t, int64(i+2), result.Entries[i].EntryId)
 			assert.Equal(t, testData[i+2], result.Entries[i].Values)
 		}
+
+		// Test reading from last one as  starting points
+		result, err = reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    5,
+			MaxBatchEntries: 3,
+		}, nil)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, 1, len(result.Entries)) // after compact, result >= 3, because one block may contain multi entries
+
+		for i := 0; i < 1; i++ {
+			assert.Equal(t, int64(i+5), result.Entries[i].EntryId)
+			assert.Equal(t, testData[i+5], result.Entries[i].Values)
+		}
+	})
+	// Step 4: Reading a non-existent entry should return EOF, as scanning a sealed segment only results in two outcomes: exists or EOF
+	// NOTE: Scanning a segment can return three types of results: exists, EntryNotFound (currently not found but may exist in the future),
+	// and EOF (meaning no entry is found now or in the future)
+	t.Run("ReadNonExistentEntry", func(t *testing.T) {
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Test reading a non-existent entry
+		result1, err1 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    6,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err1)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err1))
+		assert.Nil(t, result1)
+
+		result2, err2 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    100,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err2)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err2))
+		assert.Nil(t, result2)
+	})
+
+	t.Run("readerBeforeFinalize ReadNonExistentEntry", func(t *testing.T) {
+		// Test reading a non-existent entry
+		result1, err1 := readerBeforeFinalize.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    6,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err1)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err1))
+		assert.Nil(t, result1)
+
+		result2, err2 := readerBeforeFinalize.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    100,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err2)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err2))
+		assert.Nil(t, result2)
+	})
+
+	t.Run("readerBeforeCompact ReadNonExistentEntry", func(t *testing.T) {
+		// Test reading a non-existent entry
+		result1, err1 := readerBeforeCompact.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    6,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err1)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err1))
+		assert.Nil(t, result1)
+
+		result2, err2 := readerBeforeCompact.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    100,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, err2)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err2))
+		assert.Nil(t, result2)
+	})
+
+	t.Run("reader using advOpt to continue Read next NonExistentEntry", func(t *testing.T) {
+		// first read all
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, cfg.Minio.BucketName, cfg.Minio.RootPath, tempDir, logId, segmentId, minioHdl, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Test reading all data
+		result, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, len(testData), len(result.Entries))
+
+		// continue read next NonExistentEntry with advOpt
+		result2, err2 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    6,
+			MaxBatchEntries: 10,
+		}, result.LastReadState)
+		assert.Error(t, err2)
+		assert.True(t, werr.ErrFileReaderEndOfFile.Is(err2))
+		assert.Nil(t, result2)
 	})
 }
 
