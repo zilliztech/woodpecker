@@ -24,11 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/tests/utils"
@@ -530,16 +530,25 @@ func TestWriteThroughput(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    "/tmp/TestWriteReadPerf",
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Use default storage type minio-compatible
 			rootPath:    "", // No need to specify path when using default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    "/tmp/TestWriteReadPerf_service",
+			needCluster: true,
 		},
 	}
 
@@ -557,10 +566,41 @@ func TestWriteThroughput(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			if err != nil {
-				t.Logf("%v", err)
+			var client woodpecker.Client
+
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(context.TODO(), cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(context.TODO())
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(context.TODO(), cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
 			}
+			defer client.Close(context.TODO())
 
 			// ###  CreateLog if not exists
 			logName := fmt.Sprintf("test_log_%s", tc.name)
@@ -691,10 +731,6 @@ func TestWriteThroughput(t *testing.T) {
 				panic(closeErr)
 			}
 
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
-
 			t.Logf("TestWriteThroughput finished with exactly %d successful entries (target: %d)\n", finalSuccess, writeCount)
 		})
 	}
@@ -708,16 +744,25 @@ func TestReadThroughput(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    "/tmp/TestWriteReadPerf",
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Use default storage type minio-compatible
 			rootPath:    "", // No need to specify path when using default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    "/tmp/TestWriteReadPerf_service",
+			needCluster: true,
 		},
 	}
 
@@ -734,10 +779,41 @@ func TestReadThroughput(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			if err != nil {
-				fmt.Println(err)
+			var client woodpecker.Client
+
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(context.TODO(), cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(context.TODO())
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(context.TODO(), cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
 			}
+			defer client.Close(context.TODO())
 
 			// ###  CreateLog if not exists
 			logName := fmt.Sprintf("test_log_%s", tc.name)

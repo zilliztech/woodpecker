@@ -701,7 +701,7 @@ func TestSegmentCleanupAfterTruncation(t *testing.T) {
 			// Set small segment rolling policy to force multiple segments
 			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 1024 * 2 // 2KB
 			// Set short cleanup check interval for tests
-			cfg.Woodpecker.Client.Auditor.MaxInterval = 2 // 2 seconds
+			cfg.Woodpecker.Client.Auditor.MaxInterval = config.NewDurationSecondsFromInt(2) // 2 seconds
 
 			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
