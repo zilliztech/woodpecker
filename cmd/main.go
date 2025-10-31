@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"log"
 	"net"
 	"os"
@@ -141,6 +142,12 @@ func main() {
 
 	// init logger
 	logger.InitLogger(cfg)
+
+	// init trace
+	err = tracer.InitTracer(cfg, *nodeName, 0)
+	if err != nil {
+		log.Printf("WARN: Failed to init tracer: %v", err)
+	}
 
 	// Override data directory in config if specified
 	if *dataDir != "" {
