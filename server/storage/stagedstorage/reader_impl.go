@@ -1312,6 +1312,15 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		}
 	}
 
+	if entriesCollected == 0 {
+		// No desired data found in current segment and the entire segment has been scanned.
+		// Return EOF to let client proceed to next segment.
+		logger.Ctx(ctx).Debug("no more entries to read",
+			zap.String("filePath", r.filePath),
+			zap.Int64("startEntryId", opt.StartEntryID))
+		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
+	}
+
 	// Create last read state from last block info
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
