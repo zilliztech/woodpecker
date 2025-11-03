@@ -17,7 +17,7 @@
 package http
 
 // HealthRouterPath is default path for check health state.
-const HealthRouterPath = "/health"
+const HealthRouterPath = "/healthz"
 
 // MetricsRouterPath is path for Prometheus metrics.
 const MetricsRouterPath = "/metrics"

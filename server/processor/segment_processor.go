@@ -118,7 +118,7 @@ func (s *segmentProcessor) Fence(ctx context.Context) (int64, error) {
 	// open a writer in recover mode if necessary
 	writer, err := s.getOrCreateSegmentWriter(ctx, true)
 	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to get segment reader for recovery",
+		logger.Ctx(ctx).Warn("Failed to get segment writer for recovery",
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segId),
 			zap.Error(err))
@@ -269,8 +269,8 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
 		s.currentSegmentImpl = stagedstorage.NewStagedSegmentImpl(
 			ctx,
-			s.getInstanceBucket(), // bucketName
-			s.getLogBaseDir(),     // rootPath
+			s.getInstanceBucket(),                                                                  // bucketName
+			s.getLogBaseDir(),                                                                      // rootPath
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()), // local file baseDir
 			s.logId,
 			s.segId,
@@ -403,7 +403,7 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 
 	// Initialize writer
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
-		writerFile, err := stagedstorage.NewStagedFileWriterWithMode(
+		writerFile, getWriterErr := stagedstorage.NewStagedFileWriterWithMode(
 			ctx,
 			s.getInstanceBucket(), // user instance bucket
 			s.getLogBaseDir(),     // user instance rootPath
@@ -413,9 +413,12 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.storageClient,
 			s.cfg,
 			recoverMode)
+		if getWriterErr != nil {
+			return nil, getWriterErr
+		}
 		s.currentSegmentWriter = writerFile
 		logger.Ctx(ctx).Info("create segment writer", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.String("logBaseDir", s.getLogBaseDir()), zap.String("inst", fmt.Sprintf("%p", writerFile)))
-		return s.currentSegmentWriter, err
+		return s.currentSegmentWriter, nil
 	} else if s.cfg.Woodpecker.Storage.IsStorageLocal() {
 		// use local FileSystem or local FileSystem + minio-compatible
 		writerFile, getWriterErr := disk.NewLocalFileWriterWithMode(
