@@ -93,17 +93,18 @@ func resolveAdvertiseAddr(addr string) string {
 
 func main() {
 	var (
-		servicePort          = flag.Int("service-port", 18080, "service port")
-		gossipPort           = flag.Int("gossip-port", 17946, "Gossip communication port")
-		nodeName             = flag.String("node-name", "", "Node name (defaults to hostname)")
-		dataDir              = flag.String("data-dir", "/woodpecker/data", "Data directory")
-		configFile           = flag.String("config", "/woodpecker/configs/woodpecker.yaml", "Configuration file path")
-		seeds                = flag.String("seeds", "", "Comma-separated list of seed nodes for gossip (host:port)")
-		advertiseGossipAddr  = flag.String("advertise-gossip-addr", "", "Advertise address:port for gossip (for Docker bridge networking)")
-		advertiseServiceAddr = flag.String("advertise-service-addr", "", "Advertise address:port for service (for client connections)")
-		resourceGroup        = flag.String("resource-group", "default", "Resource group for node placement")
-		availabilityZone     = flag.String("availability-zone", "default", "Availability zone for node placement")
-		externalConfigFile   = flag.String("external-user-config", "/woodpecker/configs/user.yaml", "external user Configuration file path")
+		servicePort               = flag.Int("service-port", 18080, "service port")
+		gossipPort                = flag.Int("gossip-port", 17946, "Gossip communication port")
+		nodeName                  = flag.String("node-name", "", "Node name (defaults to hostname)")
+		dataDir                   = flag.String("data-dir", "/woodpecker/data", "Data directory")
+		configFile                = flag.String("config", "/woodpecker/configs/woodpecker.yaml", "Configuration file path")
+		seeds                     = flag.String("seeds", "", "Comma-separated list of seed nodes for gossip (host:port)")
+		advertiseGossipAddr       = flag.String("advertise-gossip-addr", "", "Advertise address:port for gossip (for Docker bridge networking)")
+		advertiseServiceAddr      = flag.String("advertise-service-addr", "", "Advertise address:port for service (for client connections)")
+		resourceGroup             = flag.String("resource-group", "default", "Resource group for node placement")
+		availabilityZone          = flag.String("availability-zone", "default", "Availability zone for node placement")
+		externalDefaultConfigFile = flag.String("external-default-config", "/woodpecker/configs/default.yaml", "external default Configuration file path")
+		externalUserConfigFile    = flag.String("external-user-config", "/woodpecker/configs/user.yaml", "external user Configuration file path")
 	)
 
 	// First argument should be command
@@ -131,9 +132,9 @@ func main() {
 		log.Fatalf("Failed to load configuration from %s: %v", *configFile, err)
 	}
 
-	externalCfg, err := external.LoadUserConfig(*externalConfigFile)
+	externalCfg, err := external.LoadUserConfig(*externalDefaultConfigFile, *externalUserConfigFile)
 	if err != nil {
-		log.Fatalf("Failed to load external user configuration from %s: %v", *externalConfigFile, err)
+		log.Fatalf("Failed to load external user configuration from default[%s],user[%s}: %v ", *externalDefaultConfigFile, *externalUserConfigFile, err)
 	}
 
 	if err := externalCfg.ApplyToConfig(cfg); err != nil {

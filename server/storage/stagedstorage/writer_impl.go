@@ -1037,13 +1037,13 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
 
 	// Get target block size for compaction
-	targetBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
-	if targetBlockSize <= 0 {
-		targetBlockSize = 2 * 1024 * 1024 // Default 2MB
+	maxCompactedBlockSize := w.compactPolicyConfig.MaxBytes.Int64()
+	if maxCompactedBlockSize <= 0 {
+		maxCompactedBlockSize = 2 * 1024 * 1024 // Default 2MB
 	}
 
 	// Read and merge blocks from local file, then upload to minio
-	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, targetBlockSize)
+	newBlockIndexes, fileSizeAfterCompact, err := w.readLocalFileAndUploadToMinio(ctx, maxCompactedBlockSize)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to read local file and upload to minio",
 			zap.String("segmentFilePath", w.segmentFilePath),
@@ -1077,6 +1077,7 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("totalSizeAfterCompact", totalSize),
+		zap.Int64("maxCompactedBlockSize", maxCompactedBlockSize),
 		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 
 	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "compact", "success").Inc()

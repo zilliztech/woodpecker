@@ -27,6 +27,7 @@ CONFIG_FILE=${CONFIG_FILE:-/woodpecker/configs/woodpecker.yaml}
 CLUSTER=${CLUSTER:-woodpecker-cluster}
 STORAGE_TYPE=${STORAGE_TYPE:-service}
 LOG_LEVEL=${LOG_LEVEL:-info}
+EXTERNAL_DEFAULT_CONFIG_FILE=${EXTERNAL_DEFAULT_CONFIG_FILE:-/woodpecker/configs/default.yaml}
 EXTERNAL_USER_CONFIG_FILE=${EXTERNAL_USER_CONFIG_FILE:-/woodpecker/configs/user.yaml}
 
 # Node metadata configuration
@@ -136,8 +137,22 @@ woodpecker:
         - name: default-region-pool
           seeds: [$SERVICE_SEEDS]
   logstore:
+    segmentSyncPolicy:
+      maxInterval: 200
+      maxIntervalForLocalStorage: 10
+      maxEntries: 10000
+      maxBytes: 256000000
+      maxFlushRetries: 5
+      retryInterval: 1000
+      maxFlushSize: 2000000
+      maxFlushThreads: 32
+    segmentCompactionPolicy:
+      maxBytes: 2000000
+      maxParallelUploads: 4
+      maxParallelReads: 8
     segmentReadPolicy:
       maxBatchSize: 2000000
+      maxFetchThreads: 32
 log:
   level: $LOG_LEVEL
   stdout: true
@@ -192,6 +207,7 @@ CMD_ARGS=(
     "--config" "$CONFIG_FILE"
     "--resource-group" "$RESOURCE_GROUP"
     "--availability-zone" "$AVAILABILITY_ZONE"
+    "--external-default-config" "$EXTERNAL_DEFAULT_CONFIG_FILE"
     "--external-user-config" "$EXTERNAL_USER_CONFIG_FILE"
 )
 
