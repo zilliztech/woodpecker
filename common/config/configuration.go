@@ -104,6 +104,34 @@ func (q *QuorumConfig) GetAckQuorumSize() int {
 	return (q.GetWriteQuorumSize() / 2) + 1
 }
 
+// GRPCConfig stores the gRPC configuration for logstore.
+type GRPCConfig struct {
+	ServerMaxSendSize ByteSize `yaml:"serverMaxSendSize"` // Maximum size of each RPC request that the server can send
+	ServerMaxRecvSize ByteSize `yaml:"serverMaxRecvSize"` // Maximum size of each RPC request that the server can receive
+	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"` // Maximum size of each RPC request that the client can send
+	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"` // Maximum size of each RPC request that the client can receive
+}
+
+// GetServerMaxSendSize returns the server max send size in bytes as int.
+func (g *GRPCConfig) GetServerMaxSendSize() int {
+	return int(g.ServerMaxSendSize)
+}
+
+// GetServerMaxRecvSize returns the server max receive size in bytes as int.
+func (g *GRPCConfig) GetServerMaxRecvSize() int {
+	return int(g.ServerMaxRecvSize)
+}
+
+// GetClientMaxSendSize returns the client max send size in bytes as int.
+func (g *GRPCConfig) GetClientMaxSendSize() int {
+	return int(g.ClientMaxSendSize)
+}
+
+// GetClientMaxRecvSize returns the client max receive size in bytes as int.
+func (g *GRPCConfig) GetClientMaxRecvSize() int {
+	return int(g.ClientMaxRecvSize)
+}
+
 // SegmentReadPolicyConfig stores the segment read policy configuration.
 type SegmentReadPolicyConfig struct {
 	MaxBatchSize    ByteSize `yaml:"maxBatchSize"`
@@ -279,6 +307,7 @@ type LogstoreConfig struct {
 	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
 	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
 	FencePolicy             FencePolicyConfig       `yaml:"fencePolicy"`
+	GRPCConfig              GRPCConfig              `yaml:"grpc"`
 }
 
 type StorageConfig struct {
@@ -682,6 +711,12 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 			FencePolicy: FencePolicyConfig{
 				ConditionWrite: "auto",
+			},
+			GRPCConfig: GRPCConfig{
+				ServerMaxSendSize: ByteSize(512 * 1024 * 1024), // 512 MB
+				ServerMaxRecvSize: ByteSize(256 * 1024 * 1024), // 256 MB
+				ClientMaxSendSize: ByteSize(256 * 1024 * 1024), // 256 MB
+				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
 			},
 		},
 		Storage: StorageConfig{

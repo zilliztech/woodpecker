@@ -96,6 +96,11 @@ woodpecker:
       # Enable conditional write for embedded mode, default is auto, which will automatically detect whether the storage supports conditional write.
       # Valid values: [auto, enable, disable]
       conditionWrite: auto
+    grpc:
+      serverMaxSendSize: 536870912 # The maximum size of each RPC request that the logStore can send, unit: byte
+      serverMaxRecvSize: 268435456 # The maximum size of each RPC request that the logStore can receive, unit: byte
+      clientMaxSendSize: 268435456 # The maximum size of each RPC request that the clients on logStore can send, unit: byte
+      clientMaxRecvSize: 536870912 # The maximum size of each RPC request that the clients on logStore can receive, unit: byte
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

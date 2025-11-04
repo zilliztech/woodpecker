@@ -85,7 +85,7 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
 	}
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
 	c := &woodpeckerClient{
 		cfg:        cfg,
 		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout.Milliseconds()),

@@ -62,7 +62,7 @@ func TestQuorumDiscoveryIntegration_RandomStrategy(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)
@@ -133,7 +133,7 @@ func TestQuorumDiscoveryIntegration_SingleAZSingleRGStrategy(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)
@@ -205,7 +205,7 @@ func TestQuorumDiscoveryIntegration_CrossRegionStrategy(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)
@@ -304,7 +304,7 @@ func TestQuorumDiscoveryIntegration_CustomPlacementStrategy(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)
@@ -379,7 +379,7 @@ func TestQuorumDiscoveryIntegration_InsufficientNodes(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)
@@ -437,7 +437,7 @@ func TestQuorumDiscoveryIntegration_NodeFailureRecovery(t *testing.T) {
 		},
 	}
 
-	clientPool := client.NewLogStoreClientPool()
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 	defer clientPool.Close(ctx)
 
 	discovery, err := quorum.NewQuorumDiscovery(ctx, quorumConfig, clientPool)

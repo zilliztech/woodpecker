@@ -108,7 +108,7 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 			target := fmt.Sprintf("localhost:%d", servicePort)
 
 			// Create remote client pool
-			clientPool := client.NewLogStoreClientPool()
+			clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 			defer clientPool.Close(ctx)
 
 			remoteClient, err := clientPool.GetLogStoreClient(ctx, target)
@@ -231,7 +231,7 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 			target := fmt.Sprintf("localhost:%d", servicePort)
 
 			// Create remote client pool
-			clientPool := client.NewLogStoreClientPool()
+			clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 			defer clientPool.Close(ctx)
 
 			remoteClient, err := clientPool.GetLogStoreClient(ctx, target)
@@ -360,7 +360,7 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 			target := fmt.Sprintf("localhost:%d", servicePort)
 
 			// Create remote client pool
-			clientPool := client.NewLogStoreClientPool()
+			clientPool := client.NewLogStoreClientPool(268435456, 536870912)
 			defer clientPool.Close(ctx)
 
 			remoteClient, err := clientPool.GetLogStoreClient(ctx, target)

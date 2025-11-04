@@ -33,14 +33,18 @@ var _ LogStoreClientPool = (*logStoreClientPool)(nil)
 
 type logStoreClientPool struct {
 	sync.RWMutex
-	connections map[string]*grpc.ClientConn
-	clients     map[string]LogStoreClient
+	maxSendMsgSize int
+	maxRecvMsgSize int
+	connections    map[string]*grpc.ClientConn
+	clients        map[string]LogStoreClient
 }
 
-func NewLogStoreClientPool() LogStoreClientPool {
+func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClientPool {
 	return &logStoreClientPool{
-		connections: make(map[string]*grpc.ClientConn),
-		clients:     make(map[string]LogStoreClient),
+		maxSendMsgSize: maxSendMsgSize,
+		maxRecvMsgSize: maxRecvMsgSize,
+		connections:    make(map[string]*grpc.ClientConn),
+		clients:        make(map[string]LogStoreClient),
 	}
 }
 
@@ -91,6 +95,10 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 	// TODO make more options configurable
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(p.maxRecvMsgSize),
+			grpc.MaxCallSendMsgSize(p.maxSendMsgSize),
+		),
 		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	}

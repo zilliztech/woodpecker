@@ -38,6 +38,7 @@ import (
 )
 
 type Server struct {
+	cfg          *config.Configuration
 	serverNode   *membership.ServerNode
 	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
 	seeds        []string                 // Seeds for cluster joining
@@ -77,6 +78,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		}
 	}
 	s := &Server{
+		cfg:         configuration,
 		ctx:         ctx,
 		cancel:      cancel,
 		grpcErrChan: make(chan error),
@@ -144,6 +146,8 @@ func (s *Server) startGrpcLoop() {
 	_, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	grpcOpts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize()),
+		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
 		grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(otelgrpc.StreamServerInterceptor()),
 	}
