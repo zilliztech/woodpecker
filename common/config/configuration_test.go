@@ -55,6 +55,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, int64(16000000), config.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
+	assert.Equal(t, 259200, config.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
 	assert.Equal(t, "minio", config.Woodpecker.Storage.Type)
 	assert.Equal(t, "/var/lib/woodpecker", config.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", config.Log.Level)
@@ -125,6 +126,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize)
 	assert.Equal(t, 32, defaultConfig.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads)
+	assert.Equal(t, 259200, defaultConfig.Woodpecker.Logstore.RetentionPolicy.TTL) // 72h = 259200s
 	assert.Equal(t, "default", defaultConfig.Woodpecker.Storage.Type)
 	assert.Equal(t, "/tmp/woodpecker", defaultConfig.Woodpecker.Storage.RootPath)
 	assert.Equal(t, "info", defaultConfig.Log.Level)

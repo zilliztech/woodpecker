@@ -478,6 +478,23 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 			continue
 		}
 
+		// Skip segments that are still within ttl protection
+		lastActiveTime := segMeta.Metadata.CreateTime
+		if segMeta.Metadata.CompletionTime > lastActiveTime {
+			lastActiveTime = segMeta.Metadata.CompletionTime
+		}
+		if segMeta.Metadata.SealedTime > lastActiveTime {
+			lastActiveTime = segMeta.Metadata.SealedTime
+		}
+		if lastActiveTime+int64(l.cfg.Woodpecker.Logstore.RetentionPolicy.TTL*1000) > time.Now().UnixMilli() {
+			logger.Ctx(ctx).Debug("Skipping truncated segment still within ttl protection",
+				zap.String("logName", logName),
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", segId))
+			protectedSegmentCount++
+			continue
+		}
+
 		// This segment is eligible for cleanup
 		segmentIdsToClean = append(segmentIdsToClean, segId)
 		logger.Ctx(ctx).Info("Found truncated segment eligible for cleanup",

@@ -17,10 +17,9 @@
 package config
 
 import (
+	"gopkg.in/yaml.v3"
 	"os"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // MetaConfig stores the metadata storage configuration.
@@ -74,6 +73,11 @@ type SegmentCompactionPolicy struct {
 	MaxBytes           int64 `yaml:"maxBytes"`
 	MaxParallelUploads int   `yaml:"maxParallelUploads"`
 	MaxParallelReads   int   `yaml:"maxParallelReads"`
+}
+
+// RetentionPolicyConfig stores the data retention policy configuration.
+type RetentionPolicyConfig struct {
+	TTL int `yaml:"ttl"` // Time to live for truncated segments before eligible for GC
 }
 
 // LogFileConfig stores the log file configuration.
@@ -198,6 +202,7 @@ type LogstoreConfig struct {
 	SegmentSyncPolicy       SegmentSyncPolicyConfig `yaml:"segmentSyncPolicy"`
 	SegmentCompactionPolicy SegmentCompactionPolicy `yaml:"segmentCompactionPolicy"`
 	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
+	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
 }
 
 type StorageConfig struct {
@@ -307,6 +312,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SegmentReadPolicy: SegmentReadPolicyConfig{
 				MaxBatchSize:    16000000,
 				MaxFetchThreads: 32,
+			},
+			RetentionPolicy: RetentionPolicyConfig{
+				TTL: 259200, // 72 hours
 			},
 		},
 		Storage: StorageConfig{

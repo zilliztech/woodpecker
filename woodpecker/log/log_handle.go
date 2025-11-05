@@ -785,8 +785,8 @@ func (l *logHandleImpl) adjustPendingReadPointIfTruncated(ctx context.Context, r
 			zap.Int64("pendingReadEntryId", from.EntryId),
 			zap.Error(err))
 	} else if truncatedId != nil {
-		// If trying to read from before truncation point, adjust to next valid position
-		if l.isBeforeTruncationPoint(from, truncatedId) {
+		// Adjust read position to truncation point if reading from earliest and truncation exists
+		if l.shouldMoveToTruncationPoint(from, truncatedId) {
 			newPoint := &LogMessageId{
 				SegmentId: from.SegmentId,
 				EntryId:   from.EntryId,
@@ -821,13 +821,11 @@ func (l *logHandleImpl) adjustPendingReadPointIfTruncated(ctx context.Context, r
 	return from
 }
 
-// isBeforeTruncationPoint checks if reading position is before the truncation point
-func (l *logHandleImpl) isBeforeTruncationPoint(from *LogMessageId, truncatedId *LogMessageId) bool {
-	if from.SegmentId < truncatedId.SegmentId {
-		return true
-	}
-
-	if from.SegmentId == truncatedId.SegmentId && from.EntryId <= truncatedId.EntryId {
+// shouldMoveToTruncationPoint checks if reading position should move to truncated point
+// Note: Only when specifying earliest and truncated segId != -1 will the position be moved to the truncated point to start reading.
+// Otherwise, it allows reading directly from the provided specific position, even if the data at that position has been marked as truncated.
+func (l *logHandleImpl) shouldMoveToTruncationPoint(from *LogMessageId, truncatedId *LogMessageId) bool {
+	if from.SegmentId == EarliestLogMessageID().SegmentId && from.EntryId == EarliestLogMessageID().EntryId && truncatedId.SegmentId >= 0 {
 		return true
 	}
 	return false
