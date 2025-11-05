@@ -884,7 +884,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 
 	// get current lac
 	currentLAC := r.lastAddConfirmed.Load()
-	lastReadEntryID := opt.StartEntryID
+	lastReadEntryID := int64(-1) // The last entry id that has been read
 	// read stats
 	startOffset := startBlockOffset
 	entriesCollected := int64(0)
@@ -1045,16 +1045,16 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Int64("lastReadEntryID", lastReadEntryID),
 			zap.Int("entriesReturned", len(entries)))
 		if !hasDataReadError {
+			if lastReadEntryID < currentLAC {
+				// means maybe some data not LAC, should retry to read other nodes
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than LAC but can't read here now, retry later or try to read from other nodes")
+			}
 			// only read without dataReadError, determine whether it is an EOF
 			if !r.isIncompleteFile.Load() || r.footer != nil {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
 			if r.isFooterExistsUnsafe(ctx) {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-			}
-			if lastReadEntryID < currentLAC {
-				// means maybe some data not LAC, should retry to read other nodes
-				return nil, werr.ErrInvalidLACAlignment.WithCauseErrMsg("some data not LAC,try to read other nodes")
 			}
 		}
 		// return entryNotFound to let read caller retry later
