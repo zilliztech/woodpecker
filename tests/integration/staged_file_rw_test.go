@@ -488,6 +488,134 @@ func TestStagedFileReader_ErrorHandling(t *testing.T) {
 	})
 }
 
+// TestStagedFileWriter_RecoveryModeAutoDetection tests that writer automatically enters recovery mode
+// when a segment file with data already exists, regardless of the recoveryMode parameter.
+// This is critical for node restart scenarios to prevent data loss.
+func TestStagedFileWriter_RecoveryModeAutoDetection(t *testing.T) {
+	rootDir := fmt.Sprintf("test-staged-recovery-auto-detect-%d", time.Now().Unix())
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	ctx := context.Background()
+
+	logId := int64(10)
+	segmentId := int64(1000)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
+
+	// Step 1: Create initial data using a writer
+	t.Run("CreateInitialData", func(t *testing.T) {
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+
+		// Write some initial data (entries 0-4)
+		for i := 0; i < 5; i++ {
+			data := []byte(fmt.Sprintf("Initial entry %d", i))
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-initial-%d", i))
+			_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		// Verify initial state
+		assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+		assert.Equal(t, int64(4), writer.GetLastEntryId(ctx))
+
+		// Close writer to flush data to disk
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+	})
+
+	// Step 2: Test opening with recoveryMode=false (simulating node restart with normal AddEntry request)
+	// Without auto-detection, this would truncate the file and cause data loss
+	t.Run("ReopenWithRecoveryModeFalse", func(t *testing.T) {
+		// Try to create writer with recoveryMode=false
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		defer writer.Close(ctx)
+
+		// Check if it recovered the previous state
+		// If auto-detection works: firstEntryId=0, lastEntryId=4
+		// If auto-detection doesn't work: firstEntryId=-1, lastEntryId=-1 (data was truncated)
+		firstEntryId := writer.GetFirstEntryId(ctx)
+		lastEntryId := writer.GetLastEntryId(ctx)
+		t.Logf("After reopening with recoveryMode=false: firstEntryId=%d, lastEntryId=%d", firstEntryId, lastEntryId)
+		assert.Equal(t, int64(0), firstEntryId, "Should have recovered firstEntryId")
+		assert.Equal(t, int64(4), lastEntryId, "Should have recovered lastEntryId")
+
+		// Try to write continuation data (entries 5-9)
+		// This should work correctly if recovery mode was triggered
+		for i := 5; i < 10; i++ {
+			data := []byte(fmt.Sprintf("Continuation entry %d", i))
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-continue-%d", i))
+			_, writeErr := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			assert.Error(t, writeErr)
+			assert.True(t, werr.ErrFileWriterInRecoveryMode.Is(writeErr))
+		}
+
+		// Verify final state
+		assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+		assert.Equal(t, int64(4), writer.GetLastEntryId(ctx))
+	})
+
+	// Step 3: Clean up and recreate initial data for second test
+	t.Run("RecreateInitialData", func(t *testing.T) {
+		// Remove existing files
+		segmentDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
+		os.RemoveAll(segmentDir)
+
+		// Recreate with fresh data
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		require.NoError(t, err)
+
+		for i := 0; i < 5; i++ {
+			data := []byte(fmt.Sprintf("Initial entry %d", i))
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-recreate-%d", i))
+			_, err := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			require.NoError(t, err)
+
+			result, err := resultCh.ReadResult(ctx)
+			require.NoError(t, err)
+			require.NoError(t, result.Err)
+		}
+
+		err = writer.Close(ctx)
+		require.NoError(t, err)
+	})
+
+	// Step 4: Test opening with recoveryMode=true (should always work correctly)
+	t.Run("ReopenWithRecoveryModeTrue", func(t *testing.T) {
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		defer writer.Close(ctx)
+
+		// With explicit recoveryMode=true, it should always recover correctly
+		firstEntryId := writer.GetFirstEntryId(ctx)
+		lastEntryId := writer.GetLastEntryId(ctx)
+
+		t.Logf("After reopening with recoveryMode=true: firstEntryId=%d, lastEntryId=%d", firstEntryId, lastEntryId)
+
+		assert.Equal(t, int64(0), firstEntryId, "Should have recovered firstEntryId with explicit recovery mode")
+		assert.Equal(t, int64(4), lastEntryId, "Should have recovered lastEntryId with explicit recovery mode")
+
+		// Write continuation data
+		for i := 5; i < 10; i++ {
+			data := []byte(fmt.Sprintf("Continuation entry %d", i))
+			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-recovery-true-%d", i))
+			_, writeErr := writer.WriteDataAsync(ctx, int64(i), data, resultCh)
+			assert.Error(t, writeErr)
+			assert.True(t, werr.ErrFileWriterInRecoveryMode.Is(writeErr))
+		}
+
+		// Verify final state
+		assert.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+		assert.Equal(t, int64(4), writer.GetLastEntryId(ctx))
+	})
+}
+
 func TestStagedFileRW_DataIntegrityAcrossStates(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-integrity-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)

@@ -96,12 +96,13 @@ type StagedFileWriter struct {
 	recoveredFooter    *codec.FooterRecord // Footer recovered during initialization (only for finalized segments)
 
 	// written state
-	firstEntryID  atomic.Int64 // The first entryId written to disk
-	lastEntryID   atomic.Int64 // The last entryId written to disk
-	headerWritten atomic.Bool  // Ensures header is written before data
-	finalized     atomic.Bool
-	fenced        atomic.Bool
-	recovered     atomic.Bool
+	firstEntryID   atomic.Int64 // The first entryId written to disk
+	lastEntryID    atomic.Int64 // The last entryId written to disk
+	headerWritten  atomic.Bool  // Ensures header is written before data
+	finalized      atomic.Bool
+	fenced         atomic.Bool
+	inRecoveryMode atomic.Bool
+	recovered      atomic.Bool
 
 	// Async flush management
 	flushTaskChan                chan *blockFlushTask
@@ -213,7 +214,10 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	var file *os.File
 	var err error
 
-	if recoveryMode {
+	shouldInRecoveryMode := writer.determineIfNeedRecoveryMode(recoveryMode)
+	writer.inRecoveryMode.Store(shouldInRecoveryMode)
+
+	if shouldInRecoveryMode {
 		logger.Ctx(ctx).Debug("recovery mode enabled, attempting to recover from existing file")
 		// Try to recover from existing file
 		if err := writer.recoverFromExistingFileUnsafe(ctx); err != nil {
@@ -707,6 +711,11 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	if !w.storageWritable.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
 		return entryId, werr.ErrStorageNotWritable
+	}
+
+	if w.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
+		return entryId, werr.ErrFileWriterInRecoveryMode
 	}
 
 	// Validate empty payload
@@ -1798,4 +1807,39 @@ func (w *StagedFileWriter) validateLACAlignment(ctx context.Context) (int64, err
 		zap.Int64("maxBlockLastEntryID", maxBlockLastEntryID))
 
 	return lac, nil
+}
+
+// determineIfNeedRecoveryMode determines if the writer should enter recovery mode
+// by checking if the segment file already exists with data.
+// This is critical for node restart scenarios to prevent data loss.
+func (w *StagedFileWriter) determineIfNeedRecoveryMode(forceRecoveryMode bool) bool {
+	if forceRecoveryMode {
+		return true
+	}
+
+	// Check if segment file exists and has data
+	stat, err := os.Stat(w.segmentFilePath)
+	if err != nil {
+		// File doesn't exist or other error - no recovery needed
+		if !os.IsNotExist(err) {
+			// Log unexpected errors (but don't fail the writer creation)
+			logger.Ctx(context.Background()).Debug("Failed to stat segment file, assuming no recovery needed",
+				zap.String("filePath", w.segmentFilePath),
+				zap.Error(err))
+		}
+		return false
+	}
+
+	// File exists - check if it has data
+	if stat.Size() > 0 {
+		logger.Ctx(context.Background()).Info("Auto-detected existing segment file with data, entering recovery mode",
+			zap.String("filePath", w.segmentFilePath),
+			zap.Int64("fileSize", stat.Size()),
+			zap.Int64("logId", w.logId),
+			zap.Int64("segmentId", w.segmentId))
+		return true
+	}
+
+	// File exists but is empty - no recovery needed
+	return false
 }

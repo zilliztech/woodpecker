@@ -125,6 +125,7 @@ var (
 	ErrFileWriterInvalidEntryId       = newWoodpeckerError("invalid entry id", 2215, false)
 	ErrFileWriterFinalized            = newWoodpeckerError("writer finalized", 2216, false)
 	ErrFileWriterAlreadyClosed        = newWoodpeckerError("writer already closed", 2217, false)
+	ErrFileWriterInRecoveryMode       = newWoodpeckerError("writer in recovery mode", 2218, false)
 
 	// file reader errors (2300-2399)
 	ErrFileReaderNotFound                 = newWoodpeckerError("reader file not found", 2300, false)
