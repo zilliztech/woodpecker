@@ -581,11 +581,15 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 			startBlockID = int64(foundStartBlock.BlockNumber)
 			startBlockOffset = foundStartBlock.StartOffset
 		}
+
 		// No block found for entryId in this completed file
 		if foundStartBlock == nil {
-			logger.Ctx(ctx).Debug("no more entries to read",
-				zap.String("filePath", r.filePath),
-				zap.Int64("startEntryId", opt.StartEntryID))
+			if opt.StartEntryID <= r.footer.LAC {
+				logger.Ctx(ctx).Debug("some data less than footer's LAC but can't read here now, try to read from other nodes",
+					zap.Int64("lac", r.footer.LAC), zap.String("filePath", r.filePath), zap.Int64("startEntryId", opt.StartEntryID))
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than footer's LAC but can't read here now, try to read from other nodes")
+			}
+			logger.Ctx(ctx).Debug("no more entries to read", zap.String("filePath", r.filePath), zap.Int64("startEntryId", opt.StartEntryID))
 			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 		}
 	}
@@ -894,6 +898,9 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
 		currentLAC = r.lastAddConfirmed.Load() // Obtain the lac before each block starts reading, more aggressive realtime read
+		if r.footer != nil && r.footer.LAC > currentLAC {
+			currentLAC = r.footer.LAC
+		}
 		currentBlockID := i
 
 		headersLen := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
@@ -1045,9 +1052,14 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Int64("lastReadEntryID", lastReadEntryID),
 			zap.Int("entriesReturned", len(entries)))
 		if !hasDataReadError {
-			if lastReadEntryID < currentLAC {
-				// means maybe some data not LAC, should retry to read other nodes
+			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
+				// when node restart or no lac received ever, currentLAC == -1, means can't read here, should retry to read other nodes
+				// when lac received, currentLAC > -1, and startEntryId < currentLAC, means maybe some data not LAC, should retry to read other nodes
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than LAC but can't read here now, retry later or try to read from other nodes")
+			}
+			if r.footer != nil && opt.StartEntryID <= r.footer.LAC {
+				// means maybe some data not LAC, should retry to read other nodes
+				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than footer's LAC but can't read here now, retry later or try to read from other nodes")
 			}
 			// only read without dataReadError, determine whether it is an EOF
 			if !r.isIncompleteFile.Load() || r.footer != nil {

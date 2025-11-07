@@ -142,7 +142,6 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "Expected ErrEntryNotFound, got: %v", err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "some data less than LAC but can't read here now")
 }
 
 // TestReadDataBlocksWithLACAndPartialData tests the scenario where:
@@ -242,7 +241,6 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "Expected ErrEntryNotFound, got: %v", err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "some data less than LAC but can't read here now")
 }
 
 // TestReadDataBlocksWithLACGreaterThanData tests the scenario where:

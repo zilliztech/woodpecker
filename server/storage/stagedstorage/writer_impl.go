@@ -1485,10 +1485,13 @@ func (w *StagedFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fi
 		zap.Uint32("indexLength", footerRecord.IndexLength),
 		zap.Int32("totalBlocks", footerRecord.TotalBlocks))
 
-	// Validate footer record
-	if footerRecord.IndexOffset == 0 || footerRecord.IndexLength == 0 {
-		return fmt.Errorf("invalid footer record: IndexOffset=%d, IndexLength=%d",
-			footerRecord.IndexOffset, footerRecord.IndexLength)
+	if footerRecord.IndexLength == 0 {
+		// empty index length, no data blocks at all, fast return
+		w.blockIndexes = make([]*codec.IndexRecord, 0, footerRecord.TotalBlocks)
+		w.recoveredFooter = footerRecord
+		w.recovered.Store(true)
+		logger.Ctx(ctx).Info("Recovered no blocks from footer")
+		return nil
 	}
 
 	// Read index section from file
@@ -1842,4 +1845,9 @@ func (w *StagedFileWriter) determineIfNeedRecoveryMode(forceRecoveryMode bool) b
 
 	// File exists but is empty - no recovery needed
 	return false
+}
+
+// GetRecoveredFooter Test Only
+func (w *StagedFileWriter) GetRecoveredFooter() *codec.FooterRecord {
+	return w.recoveredFooter
 }
