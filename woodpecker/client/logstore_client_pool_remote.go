@@ -98,7 +98,9 @@ func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, err
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(p.maxRecvMsgSize),
 			grpc.MaxCallSendMsgSize(p.maxSendMsgSize),
+			grpc.WaitForReady(true),
 		),
+		grpc.WithBlock(),
 		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	}
