@@ -50,6 +50,8 @@ woodpecker:
     segmentReadPolicy:
       maxBatchSize: 16000000 # Maximum size of a batch in bytes, default is 16MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32
+    retentionPolicy:
+      ttl: 259200 # Time to live for truncated segments in seconds, default is 259200s (72 hours)
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

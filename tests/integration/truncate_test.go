@@ -1151,6 +1151,7 @@ func TestTruncateAndReopenClient(t *testing.T) {
 
 			// Set small segment rolling policy to force multiple segments
 			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 1024 * 2 // 2KB
+			cfg.Woodpecker.Logstore.RetentionPolicy.TTL = 5               // 5 seconds, This means that as long as the waiting time exceeds this period and the auditor clearance time, truncated segment should be cleared
 
 			// First client instance
 			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
@@ -1246,6 +1247,238 @@ func TestTruncateAndReopenClient(t *testing.T) {
 				}
 			}
 			assert.Equal(t, len(segmentsAfterTruncation), len(segmentMap)-2, "Expected cleanup 2 segments, which 0,1")
+
+			// Identify the maximum segment ID
+			maxSegId := int64(0)
+			for segId := range segmentMap {
+				if segId > maxSegId {
+					maxSegId = segId
+				}
+			}
+			t.Logf("Maximum segment ID before shutdown: %d", maxSegId)
+
+			// 3. Close writer and logHandle
+			err = logWriter.Close(context.Background())
+			assert.NoError(t, err)
+			t.Log("Closed writer")
+
+			// 4. Shutdown client entirely
+			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+			t.Log("Shutdown first client")
+
+			// 5. Create a new client instance
+			newClient, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+			t.Log("Created new client")
+
+			// Open the same log again
+			newLogHandle, err := newClient.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+			t.Log("Reopened log with new client")
+
+			// Get segments after reopening - verify they match what we had before
+			reopenedSegments, err := newLogHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+
+			// Verify reopened segments are consistent with segments after truncation
+			assert.Equal(t, len(segmentsAfterTruncation), len(reopenedSegments),
+				"Number of segments should be the same after reopening client")
+
+			// Check that truncated segments are still marked as truncated
+			for segId, segMeta := range reopenedSegments {
+				if segId <= truncatePoint.SegmentId && segId != truncatePoint.SegmentId {
+					assert.Equal(t, proto.SegmentState_Truncated, segMeta.Metadata.State,
+						"Segment %d should still be marked as truncated after client restart", segId)
+				}
+			}
+
+			// 6. Open a new writer with the new logHandle
+			newLogWriter, err := newLogHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+			t.Log("Opened new writer after client restart and truncation")
+
+			// 7. Write a new message to force a new segment
+			newPayload := make([]byte, msgSize)
+			for j := 0; j < msgSize; j++ {
+				newPayload[j] = byte(totalMsgs % 256) // Use a different pattern
+			}
+
+			result := newLogWriter.Write(context.Background(), &log.WriteMessage{
+				Payload:    newPayload,
+				Properties: map[string]string{"index": fmt.Sprintf("%d", totalMsgs)},
+			})
+			assert.NoError(t, result.Err)
+			t.Logf("Written new message after client restart and truncation: segmentId=%d, entryId=%d",
+				result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+
+			// 8. Verify the new segment ID is as expected (should be max segment ID + 1)
+			t.Logf("New segment ID: %d", result.LogMessageId.SegmentId)
+
+			// The new segment ID should be consecutive to the highest previous segment ID
+			assert.Equal(t, maxSegId+1, result.LogMessageId.SegmentId,
+				"New segment ID should be consecutive to previous max segment ID")
+
+			// 9. Get all segments again to verify the new segment was created
+			finalSegments, err := newLogHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+
+			var finalSegmentIds []int64
+			for segId := range finalSegments {
+				finalSegmentIds = append(finalSegmentIds, segId)
+			}
+			sort.Slice(finalSegmentIds, func(i, j int) bool {
+				return finalSegmentIds[i] < finalSegmentIds[j]
+			})
+
+			t.Logf("Final segments: %v", finalSegmentIds)
+			assert.Contains(t, finalSegmentIds, result.LogMessageId.SegmentId,
+				"New segment should be in the final segment list")
+			assert.Equal(t, finalSegmentIds[len(finalSegmentIds)-1], result.LogMessageId.SegmentId,
+				"New segment should be in the last segment")
+
+			// 10. Close everything
+			err = newLogWriter.Close(context.Background())
+			assert.NoError(t, err)
+
+			// Stop embed LogStore singleton
+			stopEmbedLogStoreErr = woodpecker.StopEmbedLogStore()
+			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+		})
+	}
+}
+
+func TestTruncateAndReopenClientWithinTTLProtected(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestTruncateAndReopenClient")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Use default storage type minio-compatible
+			rootPath:    "", // No need to specify path when using default storage
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Initialize client with small segment size to force multiple segments
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			// Set small segment rolling policy to force multiple segments
+			cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 1024 * 2 // 2KB
+			cfg.Woodpecker.Logstore.RetentionPolicy.TTL = 3600            // 1h, indicates that the truncated segment has not been cleared due to TTL protection
+
+			// First client instance
+			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
+			assert.NoError(t, err)
+
+			// Create log
+			logName := "truncate_reopen_client_test_" + t.Name() + "_" + time.Now().Format("20060102150405")
+			err = client.CreateLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Open log
+			logHandle, err := client.OpenLog(context.Background(), logName)
+			assert.NoError(t, err)
+
+			// Write enough messages to create multiple segments
+			logWriter, err := logHandle.OpenLogWriter(context.Background())
+			assert.NoError(t, err)
+
+			// Write messages with enough data to force segment rotation
+			const totalMsgs = 30
+			const msgSize = 1024 // 1KB per message
+			writtenIds := make([]*log.LogMessageId, totalMsgs)
+
+			// Track segments seen
+			segmentMap := make(map[int64]bool)
+
+			for i := 0; i < totalMsgs; i++ {
+				// Create large payload to force segment rotation
+				payload := make([]byte, msgSize)
+				for j := 0; j < msgSize; j++ {
+					payload[j] = byte(i % 256)
+				}
+
+				result := logWriter.Write(context.Background(), &log.WriteMessage{
+					Payload:    payload,
+					Properties: map[string]string{"index": fmt.Sprintf("%d", i)},
+				})
+				assert.NoError(t, result.Err)
+				writtenIds[i] = result.LogMessageId
+				segmentMap[result.LogMessageId.SegmentId] = true
+			}
+
+			// Get all segments and verify we have multiple
+			segments, err := logHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+
+			// Sort segment IDs for better readability in test output
+			var segmentIds []int64
+			for segId := range segments {
+				segmentIds = append(segmentIds, segId)
+			}
+			sort.Slice(segmentIds, func(i, j int) bool {
+				return segmentIds[i] < segmentIds[j]
+			})
+
+			t.Logf("Created %d segments: %v", len(segmentIds), segmentIds)
+			assert.GreaterOrEqual(t, len(segmentIds), 5, "Expected at least 5 segments to be created")
+
+			// Find the truncation point - we want to truncate the first two three segments
+			truncatePoint := writtenIds[0]
+			for _, id := range writtenIds {
+				if id.SegmentId == segmentIds[2] { // Get an entry in the third segment
+					truncatePoint = id
+					break
+				}
+			}
+
+			t.Logf("Truncating at segmentId=%d, entryId=%d", truncatePoint.SegmentId, truncatePoint.EntryId)
+
+			// 2. Truncate at the selected point which should include the first two segments
+			err = logHandle.Truncate(context.Background(), truncatePoint)
+			assert.NoError(t, err)
+
+			// Verify truncation
+			truncatedId, err := logHandle.GetTruncatedRecordId(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
+			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
+
+			// wait auditor to mark segment as truncated and cleanup
+			time.Sleep(20 * time.Second)
+
+			// Get segments after truncation
+			segmentsAfterTruncation, err := logHandle.GetSegments(context.Background())
+			assert.NoError(t, err)
+
+			// Check which segments are marked as truncated
+			for segId, segMeta := range segmentsAfterTruncation {
+				if segMeta.Metadata.State == proto.SegmentState_Truncated {
+					t.Logf("Segment %d is now marked as truncated", segId)
+				} else {
+					t.Logf("Segment %d is now %v", segId, segMeta.Metadata.State)
+				}
+			}
+			assert.Equal(t, len(segmentsAfterTruncation), len(segmentMap), "Expected cleanup no truncated segment has been cleared")
 
 			// Identify the maximum segment ID
 			maxSegId := int64(0)
