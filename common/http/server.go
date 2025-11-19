@@ -102,9 +102,17 @@ func registerDefaults(cfg *config.Configuration) {
 }
 
 // Start initializes and starts the HTTP server
-func Start(cfg *config.Configuration) error {
+func Start(cfg *config.Configuration, GetServerNodeMemberlistStatus func() string) error {
 	// Register default handlers
 	registerDefaults(cfg)
+
+	// Register admin handler for memberlist status
+	Register(&Handler{
+		Path: AdminMemberlistPath,
+		HandlerFunc: func(writer http.ResponseWriter, request *http.Request) {
+			fmt.Fprintf(writer, GetServerNodeMemberlistStatus())
+		},
+	})
 
 	// Get listen port from environment or use default
 	port := os.Getenv(ListenPortEnvKey)

@@ -487,7 +487,7 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 	}
 
 	if len(selectedNodes) < int(d.wq) {
-		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), seed))
+		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), seed))
 	}
 
 	// Convert to endpoint addresses

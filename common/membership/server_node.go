@@ -189,3 +189,22 @@ func (n *ServerNode) GetServerCfg() *ServerConfig {
 func (n *ServerNode) GetMeta() *proto.NodeMeta {
 	return n.meta
 }
+
+// GetMemberlistStatus returns a formatted string of all memberlist members and their addresses
+func (n *ServerNode) GetMemberlistStatus() string {
+	members := n.memberlist.Members()
+	if len(members) == 0 {
+		return "No members in memberlist"
+	}
+
+	result := fmt.Sprintf("Total Members: %d\n\n", len(members))
+	for i, member := range members {
+		result += fmt.Sprintf("[%d] Name: %s\n", i+1, member.Name)
+		result += fmt.Sprintf("    Addr: %s:%d\n", member.Addr.String(), member.Port)
+		result += fmt.Sprintf("    State: %d\n", member.State)
+		if i < len(members)-1 {
+			result += "\n"
+		}
+	}
+	return result
+}

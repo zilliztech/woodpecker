@@ -25,6 +25,9 @@ const MetricsRouterPath = "/metrics"
 // LogLevelRouterPath is path for Get and Update log level at runtime.
 const LogLevelRouterPath = "/log/level"
 
+// AdminMemberlistPath is path for memberlist status.
+const AdminMemberlistPath = "/admin/memberlist"
+
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:
 // - /debug/pprof/

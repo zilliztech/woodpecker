@@ -32,6 +32,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
+	wpNet "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
@@ -99,21 +100,9 @@ func (s *Server) Prepare() error {
 	s.listener = l
 	s.logStore.SetAddress(s.listener.Addr().String())
 
-	// Set the NodeID from the listener address if not already set
-	if s.serverConfig.NodeID == "" {
-		s.serverConfig.NodeID = l.Addr().String()
-	}
-
-	// Create server node directly using the stored config
-	node, err := membership.NewServerNode(s.serverConfig)
-	if err != nil {
-		return err
-	}
-	s.serverNode = node
-
 	// Start async join if seeds are provided
 	if len(s.seeds) > 0 {
-		go asyncJoinSeeds(context.TODO(), node, s.seeds, s.serverConfig.NodeID, s.serverNode.GetMeta().Endpoint)
+		go s.asyncStartAndJoinSeeds(s.ctx, s.seeds)
 	}
 
 	return nil
@@ -163,14 +152,16 @@ func (s *Server) start() error {
 	if err := s.logStore.Start(); err != nil {
 		return err
 	}
-	logger.Ctx(s.ctx).Info("log store started", zap.String("node", s.serverNode.GetMemberlist().LocalNode().Name), zap.String("address", s.logStore.GetAddress()))
+	logger.Ctx(s.ctx).Info("log store started", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 	return nil
 }
 
 func (s *Server) Stop() error {
-	leaveErr := s.serverNode.Leave()
-	if leaveErr != nil {
-		logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
+	if s.serverNode != nil {
+		leaveErr := s.serverNode.Leave()
+		if leaveErr != nil {
+			logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
+		}
 	}
 	stopErr := s.logStore.Stop()
 	if stopErr != nil {
@@ -178,7 +169,7 @@ func (s *Server) Stop() error {
 	}
 	s.grpcServer.GracefulStop()
 	s.cancel()
-	logger.Ctx(s.ctx).Info("server stopped", zap.String("node", s.serverNode.GetMemberlist().LocalNode().Name), zap.String("address", s.logStore.GetAddress()))
+	logger.Ctx(s.ctx).Info("server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 	return nil
 }
 
@@ -306,6 +297,9 @@ func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.Upda
 }
 
 func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequest) (*proto.SelectNodesResponse, error) {
+	if s.serverNode == nil {
+		return &proto.SelectNodesResponse{Status: werr.Status(werr.ErrServiceInsufficientQuorum.WithCauseErrMsg("node not ready yet"))}, nil
+	}
 	discovery := s.serverNode.GetDiscovery()
 
 	// Use the new protobuf-based approach
@@ -359,14 +353,28 @@ func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequ
 	}, nil
 }
 
+// GetServerNodeMemberlistStatus returns the server's ServerNode memberlist status
+func (s *Server) GetServerNodeMemberlistStatus() string {
+	if s.serverNode != nil {
+		return s.serverNode.GetMemberlistStatus()
+	}
+	return "member not ready yet"
+}
+
 // GetServiceAdvertiseAddrPort use for test only
 func (s *Server) GetServiceAdvertiseAddrPort(ctx context.Context) string {
+	if s.serverNode == nil {
+		return ""
+	}
 	// Get the actual service endpoint from the node metadata (which contains the resolved address)
 	return s.serverNode.GetMeta().Endpoint
 }
 
 // GetAdvertiseAddrPort Use for test only
 func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
+	if s.serverNode == nil {
+		return ""
+	}
 	// Get the actual gossip advertise address from the memberlist configuration
 	ml := s.serverNode.GetMemberlist()
 	config := ml.LocalNode()
@@ -376,65 +384,152 @@ func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
 	return fmt.Sprintf("%s:%d", addr, port)
 }
 
-// asyncJoinSeeds attempts to join seed nodes with retry mechanism in its own method [[memory:3527742]]
-func asyncJoinSeeds(ctx context.Context, node *membership.ServerNode, seeds []string, name, adv string) {
-	// TODO panic or always retry if join failed?
-	maxRetries := 30                     // Maximum number of retry attempts
-	retryInterval := 2 * time.Second     // Initial retry interval
-	maxRetryInterval := 30 * time.Second // Maximum retry interval
+// asyncJoinSeeds continuously monitors and joins missing seed nodes with adaptive backoff [[memory:3527742]]
+// It maintains a list of seed nodes and periodically checks which ones are not in memberlist
+func (s *Server) asyncStartAndJoinSeeds(ctx context.Context, seeds []string) {
+	// 1. Create server node directly using the stored config
+	s.waitAndStartCurrentNode(ctx)
 
-	logger.Ctx(ctx).Info("Starting async seed joining",
-		zap.String("node", name),
-		zap.String("advertise", adv),
+	// 2. Join the cluster seeds nodes
+	s.monitorAndJoinSeeds(ctx, seeds)
+}
+
+func (s *Server) waitAndStartCurrentNode(ctx context.Context) {
+	// 1. Create server node directly using the stored config
+	var node *membership.ServerNode
+	var err error
+	currentNodeID := s.serverConfig.NodeID
+	retryInterval := 1 * time.Second
+
+	// 1.1 wait for hostname resolvable
+	for {
+		resolvedIP := wpNet.ResolveAdvertiseAddr(s.serverConfig.AdvertiseAddr)
+		if resolvedIP != nil {
+			break
+		}
+		time.Sleep(retryInterval)
+		logger.Ctx(ctx).Info("Waiting for hostname resolvable", zap.String("nodeID", currentNodeID), zap.String("hostname", s.serverConfig.AdvertiseAddr))
+	}
+
+	// 1.2 start currentNode
+	attemptCount := 0
+	for {
+		attemptCount++
+		logger.Ctx(ctx).Info("Attempting to create server node",
+			zap.String("currentNodeID", currentNodeID),
+			zap.Int("attempt", attemptCount),
+			zap.Int("gossipPort", s.serverConfig.BindPort))
+		node, err = membership.NewServerNode(s.serverConfig)
+		if err != nil {
+			logger.Ctx(ctx).Warn("server node create failed",
+				zap.String("currentNodeID", currentNodeID),
+				zap.Int("attempt", attemptCount),
+				zap.Error(err))
+
+			time.Sleep(retryInterval)
+			continue
+		} else {
+			logger.Ctx(ctx).Info("server node create success",
+				zap.String("currentNodeID", currentNodeID),
+				zap.Int("attempt", attemptCount),
+				zap.String("initMemberlist", node.GetMemberlistStatus()))
+			break
+		}
+	}
+	s.serverNode = node
+}
+
+func (s *Server) monitorAndJoinSeeds(ctx context.Context, seeds []string) {
+	currentNodeID := s.serverConfig.NodeID
+	node := s.serverNode
+	const (
+		minBackoff     = 500 * time.Millisecond // Fastest check interval when issues detected
+		normalBackoff  = 5 * time.Second        // Normal check interval when all healthy
+		maxBackoff     = 10 * time.Second       // Maximum check interval
+		initialBackoff = 2 * time.Second        // Initial backoff before first check
+	)
+	backoff := initialBackoff
+	logger.Ctx(ctx).Info("Starting async seed joining loop",
+		zap.String("currentNodeID", currentNodeID),
 		zap.Strings("seeds", seeds))
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			logger.Ctx(ctx).Info("Async seed joining cancelled due to context cancellation",
-				zap.String("node", name))
-			return
-		default:
-		}
-
-		err := node.Join(seeds)
+	// Build seed hostname map for quick lookup
+	seedHostnames := make(map[string]string) // hostname -> full_address
+	for _, seed := range seeds {
+		host, _, err := net.SplitHostPort(seed)
 		if err == nil {
-			logger.Ctx(ctx).Info("Successfully joined cluster",
-				zap.String("node", name),
-				zap.String("advertise", adv),
-				zap.Strings("seeds", seeds),
-				zap.Int("attempt", attempt))
-			return
-		}
-
-		logger.Ctx(ctx).Warn("Failed to join cluster, will retry",
-			zap.Error(err),
-			zap.String("node", name),
-			zap.String("advertise", adv),
-			zap.Strings("seeds", seeds),
-			zap.Int("attempt", attempt),
-			zap.Int("maxRetries", maxRetries),
-			zap.Duration("nextRetry", retryInterval))
-
-		// Wait before next retry with exponential backoff
-		select {
-		case <-ctx.Done():
-			logger.Ctx(ctx).Info("Async seed joining cancelled during retry wait",
-				zap.String("node", name))
-			return
-		case <-time.After(retryInterval):
-		}
-
-		// Exponential backoff, capped at maxRetryInterval
-		retryInterval = retryInterval * 2
-		if retryInterval > maxRetryInterval {
-			retryInterval = maxRetryInterval
+			seedHostnames[host] = seed
 		}
 	}
 
-	logger.Ctx(ctx).Error("Failed to join cluster after maximum retries",
-		zap.String("node", name),
-		zap.String("advertise", adv),
-		zap.Strings("seeds", seeds),
-		zap.Int("maxRetries", maxRetries))
+	// TODO use seed node leave event trigger
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Async seed joining loop stopped",
+				zap.String("currentNodeID", currentNodeID))
+			return
+		case <-time.After(backoff):
+		}
+
+		// Get current memberlist members
+		members := node.GetMemberlist().Members()
+
+		// Build map of current member names (hostnames)
+		currentMembers := make(map[string]bool)
+		for _, m := range members {
+			currentMembers[m.Name] = true
+		}
+
+		// Find missing seed nodes
+		var missingSeedAddrs []string
+		for hostname, addr := range seedHostnames {
+			if !currentMembers[hostname] {
+				missingSeedAddrs = append(missingSeedAddrs, addr)
+			}
+		}
+
+		// If all seeds are present, use longer backoff (normal mode)
+		if len(missingSeedAddrs) == 0 {
+			if backoff < normalBackoff {
+				backoff = normalBackoff
+				logger.Ctx(ctx).Debug("All seeds present, switching to normal backoff",
+					zap.String("currentNodeID", currentNodeID),
+					zap.Duration("backoff", backoff))
+			}
+			continue
+		}
+
+		// Some seeds are missing, try to join them
+		logger.Ctx(ctx).Debug("Detected missing seed nodes, attempting to join",
+			zap.String("currentNodeID", currentNodeID),
+			zap.Strings("missingSeeds", missingSeedAddrs),
+			zap.Int("totalMembers", len(members)))
+
+		// Try to join missing seeds
+		// Memberlist handles hostname resolution internally
+		err := node.Join(missingSeedAddrs)
+		if err != nil {
+			// Join failed, use shorter backoff for faster retry
+			backoff = minBackoff
+			logger.Ctx(ctx).Debug("Failed to join missing seeds, will retry soon",
+				zap.String("currentNodeID", currentNodeID),
+				zap.Strings("missingSeeds", missingSeedAddrs),
+				zap.Error(err),
+				zap.Duration("nextRetry", backoff))
+		} else {
+			// Join succeeded, gradually increase backoff
+			if backoff < maxBackoff {
+				backoff = backoff * 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			logger.Ctx(ctx).Info("Successfully joined missing seeds",
+				zap.String("currentNodeID", currentNodeID),
+				zap.Strings("joinedSeeds", missingSeedAddrs),
+				zap.Int("newMemberCount", len(node.GetMemberlist().Members())),
+				zap.Duration("nextCheck", backoff))
+		}
+	}
 }

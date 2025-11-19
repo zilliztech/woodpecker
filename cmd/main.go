@@ -20,8 +20,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/common/tracer"
 	"log"
 	"net"
 	"os"
@@ -32,7 +30,9 @@ import (
 	"github.com/zilliztech/woodpecker/cmd/external"
 	"github.com/zilliztech/woodpecker/common/config"
 	commonhttp "github.com/zilliztech/woodpecker/common/http"
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
 )
 
@@ -54,43 +54,6 @@ func parseAdvertiseAddr(addrPort string) (string, int, error) {
 
 	return host, port, nil
 }
-
-// resolveAdvertiseAddr resolves hostname to IP address if needed
-func resolveAdvertiseAddr(addr string) string {
-	if addr == "" {
-		return ""
-	}
-
-	// Check if it's already an IP address
-	if ip := net.ParseIP(addr); ip != nil {
-		return addr
-	}
-
-	// Try to resolve hostname to IP
-	ips, err := net.LookupIP(addr)
-	if err != nil {
-		log.Printf("Warning: Failed to resolve hostname '%s' to IP: %v. Using as-is.", addr, err)
-		return addr
-	}
-
-	// Prefer IPv4 address
-	for _, ip := range ips {
-		if ipv4 := ip.To4(); ipv4 != nil {
-			log.Printf("Resolved hostname '%s' to IPv4: %s", addr, ipv4.String())
-			return ipv4.String()
-		}
-	}
-
-	// Fallback to first IP (could be IPv6)
-	if len(ips) > 0 {
-		log.Printf("Resolved hostname '%s' to IP: %s", addr, ips[0].String())
-		return ips[0].String()
-	}
-
-	log.Printf("Warning: No IP found for hostname '%s'. Using as-is.", addr)
-	return addr
-}
-
 func main() {
 	var (
 		servicePort               = flag.Int("service-port", 18080, "service port")
@@ -180,7 +143,6 @@ func main() {
 	} else {
 		advertisePort = *gossipPort
 	}
-	resourceAdvertiseGossipAddrStr := resolveAdvertiseAddr(advertiseAddrStr)
 
 	if *advertiseServiceAddr != "" {
 		addr, port, err := parseAdvertiseAddr(*advertiseServiceAddr)
@@ -198,10 +160,10 @@ func main() {
 		NodeID:               *nodeName,
 		BindPort:             *gossipPort,
 		ServicePort:          *servicePort,
-		AdvertiseAddr:        resourceAdvertiseGossipAddrStr, // Gossip advertise address (IP only)
-		AdvertisePort:        advertisePort,                  // Gossip advertise port
-		AdvertiseServiceAddr: advertiseServiceAddrStr,        // Service advertise address (hostname only)
-		AdvertiseServicePort: advertiseServicePort,           // Service advertise port
+		AdvertiseAddr:        advertiseAddrStr,        // Gossip advertise address (IP only)
+		AdvertisePort:        advertisePort,           // Gossip advertise port
+		AdvertiseServiceAddr: advertiseServiceAddrStr, // Service advertise address (hostname only)
+		AdvertiseServicePort: advertiseServicePort,    // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
 		Tags:                 map[string]string{"role": "logstore"},
@@ -217,10 +179,10 @@ func main() {
 	}
 
 	// Start HTTP server for metrics, health check, and pprof
-	if err := commonhttp.Start(cfg); err != nil {
+	if err := commonhttp.Start(cfg, srv.GetServerNodeMemberlistStatus); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
-	log.Printf("HTTP server started on port %s (metrics, health, pprof)", commonhttp.DefaultListenPort)
+	log.Printf("HTTP server started on port %s (metrics, health, pprof, admin)", commonhttp.DefaultListenPort)
 
 	log.Printf("Starting Woodpecker Server:")
 	log.Printf("  Node Name: %s", *nodeName)
