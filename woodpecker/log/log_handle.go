@@ -44,10 +44,8 @@ type LogHandle interface {
 	GetId() int64
 	// GetSegments retrieves the segment metadata for the log.
 	GetSegments(ctx context.Context) (map[int64]*meta.SegmentMeta, error)
-	// OpenLogWriter opens a writer for the log.
+	// OpenLogWriter opens an appropriate log writer based on fence policy configuration.
 	OpenLogWriter(ctx context.Context) (LogWriter, error)
-	// OpenInternalLogWriter opens an internal writer for the log.
-	OpenInternalLogWriter(ctx context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
 	OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
@@ -169,14 +167,39 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*meta.Segmen
 	return result, err
 }
 
+// OpenLogWriter opens an appropriate log writer based on fence policy configuration.
+// Uses distributed lock writer when condition write is disabled, otherwise uses internal writer with condition write.
 func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
+	fencePolicy := l.cfg.Woodpecker.Logstore.FencePolicy
+
+	// Use distributed lock writer when condition write is disabled
+	if l.cfg.Woodpecker.Storage.IsStorageMinio() && fencePolicy.IsConditionWriteDisabled() {
+		logger.Ctx(ctx).Info("opening log writer with distributed locks (condition write disabled)",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id))
+		return l.openLogWriterWithDistributedLocks(ctx)
+	}
+
+	// Use internal writer with condition write support
+	logger.Ctx(ctx).Info("opening internal log writer with condition write support",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+		zap.String("fencePolicy", fencePolicy.ConditionWrite))
+	return l.openInternalLogWriter(ctx)
+}
+
+// OpenLogWriter opens a log writer with distributed locks for the log.
+// Used in two scenarios:
+// 1. Applications without dedicated exclusive service (multi-instance deployments)
+// 2. Embed mode when object storage doesn't support condition write
+func (l *logHandleImpl) openLogWriterWithDistributedLocks(ctx context.Context) (LogWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogWriter")
 	defer sp.End()
 	start := time.Now()
 	logIdStr := fmt.Sprintf("%d", l.Id)
 	logger.Ctx(ctx).Info("open log writer start", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 
-	se, acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
+	sessionLock, acquireLockErr := l.Metadata.AcquireLogWriterLock(ctx, l.Name)
 	if acquireLockErr != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "lock_error").Inc()
 		metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "lock_error").Observe(float64(time.Since(start).Milliseconds()))
@@ -204,10 +227,10 @@ func (l *logHandleImpl) OpenLogWriter(ctx context.Context) (LogWriter, error) {
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_writer", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
 	logger.Ctx(ctx).Info("open log writer success", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
-	return NewLogWriter(ctx, l, l.cfg, se), nil
+	return NewLogWriter(ctx, l, l.cfg, sessionLock), nil
 }
 
-func (l *logHandleImpl) OpenInternalLogWriter(ctx context.Context) (LogWriter, error) {
+func (l *logHandleImpl) openInternalLogWriter(ctx context.Context) (LogWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenInternalLogWriter")
 	defer sp.End()
 	start := time.Now()

@@ -17,9 +17,10 @@
 package config
 
 import (
-	"gopkg.in/yaml.v3"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // MetaConfig stores the metadata storage configuration.
@@ -78,6 +79,31 @@ type SegmentCompactionPolicy struct {
 // RetentionPolicyConfig stores the data retention policy configuration.
 type RetentionPolicyConfig struct {
 	TTL int `yaml:"ttl"` // Time to live for truncated segments before eligible for GC
+}
+
+// FencePolicyConfig stores the fence policy configuration.
+type FencePolicyConfig struct {
+	ConditionWrite string `yaml:"conditionWrite"`
+}
+
+func (f *FencePolicyConfig) IsConditionWriteEnabled() bool {
+	return strings.EqualFold(f.ConditionWrite, "enable")
+}
+
+func (f *FencePolicyConfig) IsConditionWriteDisabled() bool {
+	return strings.EqualFold(f.ConditionWrite, "disable")
+}
+
+func (f *FencePolicyConfig) IsConditionWriteAuto() bool {
+	return strings.EqualFold(f.ConditionWrite, "auto")
+}
+
+func (f *FencePolicyConfig) SetConditionWriteEnableOrNot(enable bool) {
+	if enable {
+		f.ConditionWrite = "enable"
+	} else {
+		f.ConditionWrite = "disable"
+	}
 }
 
 // LogFileConfig stores the log file configuration.
@@ -203,6 +229,7 @@ type LogstoreConfig struct {
 	SegmentCompactionPolicy SegmentCompactionPolicy `yaml:"segmentCompactionPolicy"`
 	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
 	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
+	FencePolicy             FencePolicyConfig       `yaml:"fencePolicy"`
 }
 
 type StorageConfig struct {
@@ -315,6 +342,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 			RetentionPolicy: RetentionPolicyConfig{
 				TTL: 259200, // 72 hours
+			},
+			FencePolicy: FencePolicyConfig{
+				ConditionWrite: "auto",
 			},
 		},
 		Storage: StorageConfig{

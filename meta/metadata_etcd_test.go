@@ -62,6 +62,8 @@ func TestAll(t *testing.T) {
 	t.Run("test empty list for non existent log", testEmptyListForNonExistentLog)
 	t.Run("test update log meta with wrong revision", testUpdateLogMetaWithWrongRevision)
 	t.Run("test update segment meta with wrong revision", testUpdateSegmentMetaWithWrongRevision)
+	t.Run("test store or get condition write result", testStoreOrGetConditionWriteResult)
+	t.Run("test get condition write result", testGetConditionWriteResult)
 }
 
 func testInitIfNecessary(t *testing.T) {
@@ -1337,4 +1339,110 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 	updatedSegmentMeta, err := provider.GetSegmentMetadata(context.Background(), logName, 1)
 	assert.NoError(t, err)
 	assert.Equal(t, proto.SegmentState_Sealed, updatedSegmentMeta.Metadata.State)
+}
+
+func testStoreOrGetConditionWriteResult(t *testing.T) {
+	// get etcd client
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
+
+	// Clear the condition write key first
+	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	require.NoError(t, err)
+
+	// Test Case 1: First node stores true, should get true back
+	result1, err := provider.StoreOrGetConditionWriteResult(context.Background(), true)
+	assert.NoError(t, err)
+	assert.True(t, result1, "First node should get its own detection result (true)")
+
+	// Test Case 2: Second node tries to store false, but should get true (from first node)
+	result2, err := provider.StoreOrGetConditionWriteResult(context.Background(), false)
+	assert.NoError(t, err)
+	assert.True(t, result2, "Second node should get the first node's result (true), not its own (false)")
+
+	// Test Case 3: Third node tries to store true, should still get true (consistent)
+	result3, err := provider.StoreOrGetConditionWriteResult(context.Background(), true)
+	assert.NoError(t, err)
+	assert.True(t, result3, "Third node should get the first node's result (true)")
+
+	// Verify the value is actually stored in etcd
+	resp, err := etcdCli.Get(context.Background(), ConditionWriteKey)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(resp.Kvs))
+	assert.Equal(t, "true", string(resp.Kvs[0].Value))
+
+	// Test Case 4: Clear and test with false as first value
+	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	require.NoError(t, err)
+
+	// First node stores false
+	result4, err := provider.StoreOrGetConditionWriteResult(context.Background(), false)
+	assert.NoError(t, err)
+	assert.False(t, result4, "First node should get its own detection result (false)")
+
+	// Second node tries to store true, but should get false (from first node)
+	result5, err := provider.StoreOrGetConditionWriteResult(context.Background(), true)
+	assert.NoError(t, err)
+	assert.False(t, result5, "Second node should get the first node's result (false), not its own (true)")
+
+	// Verify the value is false in etcd
+	resp, err = etcdCli.Get(context.Background(), ConditionWriteKey)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(resp.Kvs))
+	assert.Equal(t, "false", string(resp.Kvs[0].Value))
+}
+
+func testGetConditionWriteResult(t *testing.T) {
+	// get etcd client
+	etcdCli, err := etcd.GetEtcdClient(true, false, []string{}, "", "", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, etcdCli)
+
+	// create metadata provider
+	provider := NewMetadataProvider(context.Background(), etcdCli, 10000)
+
+	// Test Case 1: Key doesn't exist, should return error
+	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	require.NoError(t, err)
+
+	result, err := provider.GetConditionWriteResult(context.Background())
+	assert.Error(t, err)
+	assert.False(t, result)
+	assert.ErrorIs(t, err, werr.ErrMetadataKeyNotExists, "Error should be ErrMetadataKeyNotExists")
+
+	// Test Case 2: Store true and retrieve it
+	_, err = etcdCli.Put(context.Background(), ConditionWriteKey, "true")
+	require.NoError(t, err)
+
+	result, err = provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, result, "Should retrieve true value")
+
+	// Test Case 3: Store false and retrieve it
+	_, err = etcdCli.Put(context.Background(), ConditionWriteKey, "false")
+	require.NoError(t, err)
+
+	result, err = provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.False(t, result, "Should retrieve false value")
+
+	// Test Case 4: Integration with StoreOrGetConditionWriteResult
+	// Clear the key first
+	_, err = etcdCli.Delete(context.Background(), ConditionWriteKey)
+	require.NoError(t, err)
+
+	// Use StoreOrGetConditionWriteResult to store a value
+	stored, err := provider.StoreOrGetConditionWriteResult(context.Background(), true)
+	assert.NoError(t, err)
+	assert.True(t, stored)
+
+	// Now use GetConditionWriteResult to retrieve it
+	retrieved, err := provider.GetConditionWriteResult(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, retrieved, "Should retrieve the same value that was stored")
+	assert.Equal(t, stored, retrieved, "Stored and retrieved values should match")
 }

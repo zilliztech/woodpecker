@@ -99,7 +99,7 @@ func (wm *WriterManager) TriggerReopen(failedWriter log.LogWriter, index int64) 
 
 		// 2. open new writer
 		//newWriter, err := wm.logHandle.OpenLogWriter(context.Background())
-		newWriter, err := newLogHandle.OpenInternalLogWriter(context.Background())
+		newWriter, err := newLogHandle.OpenLogWriter(context.Background())
 		if err != nil {
 			// Log error and retry after a brief pause
 			time.Sleep(1000 * time.Millisecond)
@@ -575,7 +575,7 @@ func TestWriteThroughput(t *testing.T) {
 
 			//	### OpenWriter
 			//logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-			logWriter, openWriterErr := logHandle.OpenInternalLogWriter(context.Background())
+			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 			if openWriterErr != nil {
 				t.Logf("Open writer failed, err:%v\n", openWriterErr)
 				panic(openWriterErr)

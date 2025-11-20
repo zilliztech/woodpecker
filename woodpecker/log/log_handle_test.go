@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"go.etcd.io/etcd/client/v3/concurrency"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -47,6 +48,7 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 			},
 		},
 	}
+	cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 	segments := map[int64]*meta.SegmentMeta{}
 	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg).(*logHandleImpl)
@@ -1023,4 +1025,317 @@ func TestLogHandle_BackgroundCleanup_DataRaceProtection(t *testing.T) {
 	// Verify expectations
 	mockSegment1.AssertExpectations(t)
 	mockSegment2.AssertExpectations(t)
+}
+
+// createMockLogHandleWithConfig creates a mock log handle with specific storage and fence policy configuration
+func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWrite string) (*logHandleImpl, *mocks_meta.MetadataProvider) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
+					MaxInterval: 10,
+					MaxSize:     64 * 1024 * 1024,
+					MaxBlocks:   1000,
+				},
+				Auditor: config.AuditorConfig{
+					MaxInterval: 5,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: storageType,
+			},
+			Logstore: config.LogstoreConfig{
+				FencePolicy: config.FencePolicyConfig{
+					ConditionWrite: conditionWrite,
+				},
+			},
+		},
+	}
+
+	segments := map[int64]*meta.SegmentMeta{}
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg).(*logHandleImpl)
+
+	return logHandle, mockMeta
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteDisabled tests OpenLogWriter with MinIO storage and condition write disabled
+// Should use distributed lock writer
+func TestOpenLogWriter_MinioWithConditionWriteDisabled(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "disable")
+	ctx := context.Background()
+
+	// Mock successful lock acquisition
+	mockSessionLock := meta.NewSessionLockForTest(&concurrency.Session{})
+	mockMeta.EXPECT().AcquireLogWriterLock(mock.Anything, "test-log").Return(mockSessionLock, nil)
+
+	// Mock successful fencing (no active segments)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's a logWriterImpl (with distributed locks)
+	// Check by type assertion - logWriterImpl has GetWriterSessionForTest method
+	_, ok := writer.(*logWriterImpl)
+	assert.True(t, ok, "Expected logWriterImpl (with distributed locks)")
+
+	// Mock lock release for cleanup
+	mockMeta.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteDisabled_LockFailure tests OpenLogWriter with MinIO storage
+// and condition write disabled when lock acquisition fails
+func TestOpenLogWriter_MinioWithConditionWriteDisabled_LockFailure(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "disable")
+	ctx := context.Background()
+
+	// Mock failed lock acquisition
+	mockMeta.EXPECT().AcquireLogWriterLock(mock.Anything, "test-log").Return(nil, errors.New("lock acquisition failed"))
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.Error(t, err)
+	assert.Nil(t, writer)
+	assert.Contains(t, err.Error(), "lock acquisition failed")
+
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteDisabled_FenceFailure tests OpenLogWriter with MinIO storage
+// and condition write disabled when fencing fails
+func TestOpenLogWriter_MinioWithConditionWriteDisabled_FenceFailure(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "disable")
+	ctx := context.Background()
+
+	// Mock successful lock acquisition
+	mockSessionLock := meta.NewSessionLockForTest(&concurrency.Session{})
+	mockMeta.EXPECT().AcquireLogWriterLock(mock.Anything, "test-log").Return(mockSessionLock, nil)
+
+	// Mock fencing failure
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, errors.New("fence error"))
+
+	// Mock lock release after fence failure
+	mockMeta.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.Error(t, err)
+	assert.Nil(t, writer)
+
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteEnabled tests OpenLogWriter with MinIO storage and condition write enabled
+// Should use internal writer with condition write
+func TestOpenLogWriter_MinioWithConditionWriteEnabled(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "enable")
+	ctx := context.Background()
+
+	// Mock successful fencing (no active segments)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's an internalLogWriterImpl (with condition write)
+	// Check by type assertion - internalLogWriterImpl doesn't have GetWriterSessionForTest
+	_, ok := writer.(*internalLogWriterImpl)
+	assert.True(t, ok, "Expected internalLogWriterImpl (with condition write)")
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	// Verify AcquireLogWriterLock was NOT called (should use internal writer)
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteAuto tests OpenLogWriter with MinIO storage and condition write auto
+// Should use internal writer with condition write
+func TestOpenLogWriter_MinioWithConditionWriteAuto(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "auto")
+	ctx := context.Background()
+
+	// Mock successful fencing (no active segments)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's an internalLogWriterImpl (with condition write)
+	// Check by type assertion - internalLogWriterImpl doesn't have GetWriterSessionForTest
+	_, ok := writer.(*internalLogWriterImpl)
+	assert.True(t, ok, "Expected internalLogWriterImpl (with condition write)")
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	// Verify AcquireLogWriterLock was NOT called (should use internal writer)
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_NonMinioStorage tests OpenLogWriter with non-MinIO storage
+// Should use internal writer regardless of fence policy
+func TestOpenLogWriter_NonMinioStorage(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "local", "disable")
+	ctx := context.Background()
+
+	// Mock successful fencing (no active segments)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's an internalLogWriterImpl (with condition write)
+	// Check by type assertion - internalLogWriterImpl doesn't have GetWriterSessionForTest
+	_, ok := writer.(*internalLogWriterImpl)
+	assert.True(t, ok, "Expected internalLogWriterImpl (with condition write)")
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	// Verify AcquireLogWriterLock was NOT called (should use internal writer)
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_DefaultStorageType tests OpenLogWriter with default storage type (empty string)
+// Should be treated as MinIO
+func TestOpenLogWriter_DefaultStorageType(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "", "disable")
+	ctx := context.Background()
+
+	// Mock successful lock acquisition
+	mockSessionLock := meta.NewSessionLockForTest(&concurrency.Session{})
+	mockMeta.EXPECT().AcquireLogWriterLock(mock.Anything, "test-log").Return(mockSessionLock, nil)
+
+	// Mock successful fencing (no active segments)
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's a logWriterImpl (with distributed locks)
+	_, ok := writer.(*logWriterImpl)
+	assert.True(t, ok, "Expected logWriterImpl (with distributed locks)")
+
+	// Mock lock release for cleanup
+	mockMeta.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_InternalWriter_FenceFailure tests OpenLogWriter with internal writer when fencing fails
+func TestOpenLogWriter_InternalWriter_FenceFailure(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "enable")
+	ctx := context.Background()
+
+	// Mock fencing failure
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, errors.New("fence error"))
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.Error(t, err)
+	assert.Nil(t, writer)
+
+	mockMeta.AssertExpectations(t)
+}
+
+// TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments tests OpenLogWriter with MinIO storage,
+// condition write disabled, and active segments that need fencing
+func TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandleWithConfig(t, "minio", "disable")
+	ctx := context.Background()
+
+	// Create mock segment handles
+	mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
+
+	// Mock successful lock acquisition
+	mockSessionLock := meta.NewSessionLockForTest(&concurrency.Session{})
+	mockMeta.EXPECT().AcquireLogWriterLock(mock.Anything, "test-log").Return(mockSessionLock, nil)
+
+	// Mock segments with active segment
+	segments := map[int64]*meta.SegmentMeta{
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
+	}
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
+
+	// Set up segment handle in cache
+	logHandle.SegmentHandles[1] = mockSegment1
+
+	// Mock successful fencing
+	mockSegment1.EXPECT().Fence(mock.Anything).Return(int64(100), nil)
+
+	// Mock metadata update after fencing
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
+	})).Return(nil)
+
+	// Call OpenLogWriter
+	writer, err := logHandle.OpenLogWriter(ctx)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	// Verify it's a logWriterImpl (with distributed locks)
+	_, ok := writer.(*logWriterImpl)
+	assert.True(t, ok, "Expected logWriterImpl (with distributed locks)")
+
+	// Mock segment handle cleanup for writer close
+	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Maybe()
+
+	// Mock lock release for cleanup
+	mockMeta.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
+
+	// Clean up: close writer to avoid resource leaks
+	if writer != nil {
+		_ = writer.Close(ctx)
+	}
+
+	mockSegment1.AssertExpectations(t)
+	mockMeta.AssertExpectations(t)
 }

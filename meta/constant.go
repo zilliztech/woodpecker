@@ -41,6 +41,8 @@ const (
 	ReaderTempInfoPrefix = ServicePrefix + "/readers"
 	// SegmentCleanupStatusPrefix is the prefix for segment cleanup status.
 	SegmentCleanupStatusPrefix = ServicePrefix + "/cleaning"
+	// ConditionWriteKey is the key for conditional write configuration
+	ConditionWriteKey = ServicePrefix + "/conditionwrite"
 )
 
 // BuildLogKey builds the key for a log.

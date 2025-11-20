@@ -18,10 +18,12 @@ package objectstorage
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -69,22 +71,18 @@ func NewObjectStorage(ctx context.Context, c *config.Configuration) (ObjectStora
 	return client, nil
 }
 
-// checkOnce ensures the conditional write support check is only run once
-var checkOnce sync.Once
-
 // CheckIfConditionWriteSupport checks if ObjectStorage supports conditional writes
-func CheckIfConditionWriteSupport(ctx context.Context, objectStorage ObjectStorage, bucketName string, basePath string) {
-	checkOnce.Do(func() {
-		doCheckIfConditionWriteSupport(ctx, objectStorage, bucketName, basePath)
-	})
+func CheckIfConditionWriteSupport(ctx context.Context, objectStorage ObjectStorage, bucketName string, basePath string) (bool, error) {
+	return doCheckIfConditionWriteSupport(ctx, objectStorage, bucketName, basePath)
 }
 
 // doCheckIfConditionWriteSupport checks if ObjectStorage supports PutObjectIfNoneMatch and PutFencedObject
 // This function will panic if the ObjectStorage does not support conditional write features
-func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient ObjectStorage, bucketName string, basePath string) {
+func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient ObjectStorage, bucketName string, basePath string) (bool, error) {
 	// Test object keys
-	testObjectKey := fmt.Sprintf("%s/conditional_write_test_object", basePath)
-	fencedObjectKey := fmt.Sprintf("%s/conditional_write_test_fenced_object", basePath)
+	checkID := generateUniqueTestID()
+	testObjectKey := fmt.Sprintf("%s/conditional_write_%s", basePath, checkID)
+	fencedObjectKey := fmt.Sprintf("%s/conditional_write_fenced_%s", basePath, checkID)
 
 	defer func() {
 		// Clean up test objects
@@ -97,48 +95,84 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 	testReader := strings.NewReader(testData)
 	err := objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader, int64(len(testData)))
 	if err != nil {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch not supported or failed. "+
-			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, testObjectKey, err))
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch not supported or failed. "+
+			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, testObjectKey, err)
 	}
 
 	// Test 2: PutObjectIfNoneMatch should fail for existing object
 	testReader2 := strings.NewReader(testData)
 	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader2, int64(len(testData)))
 	if err == nil {
-		panic("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for existing object, " +
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for existing object, " +
 			"but it succeeded unexpectedly")
 	}
 
 	if !werr.ErrObjectAlreadyExists.Is(err) {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrObjectAlreadyExists "+
-			"for existing object, but got: %v", err))
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrObjectAlreadyExists "+
+			"for existing object, but got: %v", err)
+	}
+
+	// Test: put fence block with the same objectName should fail
+	err = objectStorageClient.PutFencedObject(ctx, bucketName, testObjectKey)
+	if err == nil {
+		panic("CheckIfConditionWriteSupport failed: PutFencedObject should return error for existing object, " +
+			"but it succeeded. This indicates fenced object detection is not working properly.")
+	}
+
+	if !werr.ErrObjectAlreadyExists.Is(err) {
+		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutFencedObject should return ErrObjectAlreadyExists "+
+			"for existing object, but got: %v. This indicates the error handling for fenced object is incorrect.", err))
 	}
 
 	// Test 3: PutFencedObject should succeed
 	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey)
 	if err != nil {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutFencedObject not supported or failed. "+
-			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, fencedObjectKey, err))
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutFencedObject not supported or failed. "+
+			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, fencedObjectKey, err)
 	}
 
 	// Test 4: PutObjectIfNoneMatch should fail for fenced object
 	testReader3 := strings.NewReader(testData)
 	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, fencedObjectKey, testReader3, int64(len(testData)))
 	if err == nil {
-		panic("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for fenced object, " +
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for fenced object, " +
 			"but it succeeded unexpectedly")
 	}
 	if !werr.ErrSegmentFenced.Is(err) {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrSegmentFenced "+
-			"for fenced object, but got: %v", err))
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return ErrSegmentFenced "+
+			"for fenced object, but got: %v", err)
 	}
 
 	// Test 5: PutFencedObject should be idempotent
 	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey)
 	if err != nil {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutFencedObject should be idempotent "+
-			"for existing fenced object, but got error: %v", err))
+		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutFencedObject should be idempotent "+
+			"for existing fenced object, but got error: %v", err)
 	}
 
 	logger.Ctx(ctx).Info("Conditional write support check passed successfully")
+
+	return true, nil
+}
+
+// generateUniqueTestID generates a unique identifier for test objects
+// combining timestamp, process ID and random bytes to avoid conflicts
+func generateUniqueTestID() string {
+	// Get current timestamp in nanoseconds
+	timestamp := time.Now().UnixNano()
+
+	// Get process ID
+	pid := os.Getpid()
+
+	// Generate 8 random bytes
+	randomBytes := make([]byte, 8)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		// Fallback to timestamp-based randomness if crypto/rand fails
+		randomBytes = []byte(fmt.Sprintf("%08x", timestamp&0xffffffff))
+	}
+	randomHex := hex.EncodeToString(randomBytes)
+
+	// Combine all components: timestamp-pid-random
+	return fmt.Sprintf("test-%d-%d-%s", timestamp, pid, randomHex)
 }
