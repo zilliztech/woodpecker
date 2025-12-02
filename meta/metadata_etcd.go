@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,13 +46,56 @@ const (
 
 var _ MetadataProvider = (*metadataProviderEtcd)(nil)
 
+// SessionLock encapsulates a mutex and its associated session for distributed locking
+// It provides a way to track the validity of the lock and session
+type SessionLock struct {
+	mutex   *concurrency.Mutex
+	session *concurrency.Session
+	valid   atomic.Bool
+}
+
+// IsValid returns whether the session lock is still valid
+func (sl *SessionLock) IsValid() bool {
+	return sl.valid.Load()
+}
+
+// MarkInvalid marks the session lock as invalid
+// This allows logWriter to proactively invalidate the lock when it detects issues
+func (sl *SessionLock) MarkInvalid() {
+	sl.valid.Store(false)
+}
+
+// SetValid marks the session lock as valid
+// This is mainly used for testing purposes
+func (sl *SessionLock) SetValid() {
+	sl.valid.Store(true)
+}
+
+// NewSessionLockForTest creates a SessionLock for testing purposes
+// This allows tests to create a SessionLock with a mock session
+func NewSessionLockForTest(session *concurrency.Session) *SessionLock {
+	sl := &SessionLock{
+		session: session,
+	}
+	sl.valid.Store(true)
+	return sl
+}
+
+// GetSession returns the underlying etcd session
+func (sl *SessionLock) GetSession() *concurrency.Session {
+	return sl.session
+}
+
 type metadataProviderEtcd struct {
 	sync.Mutex
 	client         *clientv3.Client
 	requestTimeout time.Duration
 
-	logWriterLocks map[string]*concurrency.Mutex
-	lockSessions   map[string]*concurrency.Session
+	// Distributed locks for embed mode, used as fallback when object storage doesn't support condition write
+	// Most mainstream cloud storage backends support condition write: MinIO, AWS S3, Azure Blob, GCP Cloud Storage, Aliyun OSS, Tencent COS
+	// But some open-source or self-hosted object storage may not support it, requiring distributed locks as fallback
+	// Using sync.Map for fine-grained locking: each logName has its own lock, avoiding blocking other metadata operations
+	logWriterLocks sync.Map // map[string]*SessionLock
 }
 
 func NewMetadataProvider(ctx context.Context, client *clientv3.Client, requestTimeoutMs int) MetadataProvider {
@@ -62,8 +106,7 @@ func NewMetadataProvider(ctx context.Context, client *clientv3.Client, requestTi
 	return &metadataProviderEtcd{
 		client:         client,
 		requestTimeout: timeoutDuration,
-		logWriterLocks: make(map[string]*concurrency.Mutex),
-		lockSessions:   make(map[string]*concurrency.Session),
+		// logWriterLocks is a sync.Map, no initialization needed
 	}
 }
 
@@ -504,44 +547,46 @@ func extractLogName(path string) (string, error) {
 	return parts[2], nil
 }
 
-func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error) {
+func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName string) (*SessionLock, error) {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "AcquireLogWriterLock")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
 
 	ctx1, cancel := e.getContextWithTimeout()
 	defer cancel()
-	// Check if lock already exists for this log
-	if l, exists := e.logWriterLocks[logName]; exists {
-		// We can't directly check session status through mutex, so try lock
-		// If it fails with a lease-related error, we'll create a new one
-		err := l.TryLock(ctx1)
-		if err == nil {
-			// Find the associated session and return its keepAlive channel
-			if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
+
+	// Check if lock already exists for this log using sync.Map
+	if existingLockValue, exists := e.logWriterLocks.Load(logName); exists {
+		existingLock := existingLockValue.(*SessionLock)
+		// Check if the lock is still valid
+		if existingLock.IsValid() {
+			// We can't directly check session status through mutex, so try lock
+			// If it fails with a lease-related error, we'll create a new one
+			err := existingLock.mutex.TryLock(ctx1)
+			if err == nil {
+				// Lock is still valid and can be acquired, return it
 				metrics.WpEtcdMetaOperationsTotal.WithLabelValues("acquire_log_writer_lock", "success").Inc()
 				metrics.WpEtcdMetaOperationLatency.WithLabelValues("acquire_log_writer_lock", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-				return session, nil
+				return existingLock, nil
 			}
+			// TryLock failed, mark as invalid and create new
+			existingLock.MarkInvalid()
 		}
 
-		// Assume session might be invalid, clean up and create new
-		logger.Ctx(ctx).Warn("Failed to acquire existing lock, creating new lock",
-			zap.String("logName", logName),
-			zap.Error(err))
-		delete(e.logWriterLocks, logName)
+		// Lock is invalid, clean up and create new
+		logger.Ctx(ctx).Warn("Existing lock is invalid, creating new lock",
+			zap.String("logName", logName))
 
 		// Close the old session if it exists
-		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
-			_ = session.Close()
-			delete(e.lockSessions, logName)
+		if existingLock.session != nil {
+			_ = existingLock.session.Close()
 		}
+		// Remove from map
+		e.logWriterLocks.Delete(logName)
 	}
 
 	// Create a new session specifically for this lock with TTL
-	newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(10))
+	newSession, err := concurrency.NewSession(e.client, concurrency.WithTTL(15))
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("acquire_log_writer_lock", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("acquire_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -562,49 +607,55 @@ func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName
 		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
-	// Store the lock and session for future reference
-	e.logWriterLocks[logName] = lock
-	e.lockSessions[logName] = newSession
+	// Store the lock and session together in sync.Map
+	sessionLock := &SessionLock{
+		mutex:   lock,
+		session: newSession,
+	}
+	sessionLock.valid.Store(true)
+	e.logWriterLocks.Store(logName, sessionLock)
+
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("acquire_log_writer_lock", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("acquire_log_writer_lock", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return newSession, nil
+	return sessionLock, nil
 }
 
 func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName string) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ReleaseLogWriterLock")
 	defer sp.End()
 	startTime := time.Now()
-	e.Lock()
-	defer e.Unlock()
+
 	ctx1, cancel := e.getContextWithTimeout()
 	defer cancel()
-	if l, exists := e.logWriterLocks[logName]; exists {
-		// First unlock the mutex
-		err := l.Unlock(ctx1)
-		if err != nil {
-			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
-			metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-			logger.Ctx(ctx).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
-		}
 
-		// Close the associated session
-		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
-			// Orphan session
-			closeErr := session.Close()
-			if closeErr != nil {
-				metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
-				metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-				logger.Ctx(ctx).Warn("Failed to close lock session", zap.String("logName", logName), zap.Error(closeErr))
-			}
-		}
-
-		// Remove the lock and session from our maps
-		delete(e.logWriterLocks, logName)
-		delete(e.lockSessions, logName)
+	// Load and delete atomically using sync.Map
+	lockValue, exists := e.logWriterLocks.LoadAndDelete(logName)
+	if !exists {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "success").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil
 	}
+
+	sessionLock := lockValue.(*SessionLock)
+
+	// First unlock the mutex
+	err := sessionLock.mutex.Unlock(ctx1)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("Failed to unlock writer lock", zap.String("logName", logName), zap.Error(err))
+	}
+
+	// Close the associated session
+	if sessionLock.session != nil {
+		closeErr := sessionLock.session.Close()
+		if closeErr != nil {
+			metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "error").Inc()
+			metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+			logger.Ctx(ctx).Warn("Failed to close lock session", zap.String("logName", logName), zap.Error(closeErr))
+		}
+	}
+
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("release_log_writer_lock", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("release_log_writer_lock", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
@@ -1187,39 +1238,63 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 	return nil
 }
 
+func (e *metadataProviderEtcd) CheckSessionLockAlive(ctx context.Context, sessionLock *SessionLock) (bool, error) {
+	if sessionLock == nil || sessionLock.session == nil {
+		return false, fmt.Errorf("session lock is not properly initialized")
+	}
+
+	leaseID := sessionLock.session.Lease()
+	ttlResp, err := e.client.KeepAliveOnce(ctx, leaseID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check lease TTL: %w", err)
+	}
+
+	return ttlResp.TTL > 0, nil
+}
+
 func (e *metadataProviderEtcd) Close() error {
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
 
 	// Close all individual writer locks and their sessions
-	for logName, lock := range e.logWriterLocks {
-		if lock == nil {
-			continue
+	e.logWriterLocks.Range(func(key, value interface{}) bool {
+		logName := key.(string)
+		sessionLock := value.(*SessionLock)
+
+		if sessionLock == nil {
+			return true
 		}
 
+		// Mark as invalid first
+		sessionLock.MarkInvalid()
+
 		// First unlock the mutex
-		err := lock.Unlock(context.Background())
-		if err != nil {
-			logger.Ctx(context.Background()).Warn("Failed to unlock writer lock during close",
-				zap.String("logName", logName),
-				zap.Error(err))
+		if sessionLock.mutex != nil {
+			err := sessionLock.mutex.Unlock(context.Background())
+			if err != nil {
+				logger.Ctx(context.Background()).Warn("Failed to unlock writer lock during close",
+					zap.String("logName", logName),
+					zap.Error(err))
+			}
 		}
 
 		// Close the associated session
-		if session, hasSession := e.lockSessions[logName]; hasSession && session != nil {
-			closeErr := session.Close()
+		if sessionLock.session != nil {
+			closeErr := sessionLock.session.Close()
 			if closeErr != nil {
 				logger.Ctx(context.Background()).Warn("Failed to close lock session during close",
 					zap.String("logName", logName),
 					zap.Error(closeErr))
 			}
 		}
-	}
 
-	// Clear the maps
-	e.logWriterLocks = make(map[string]*concurrency.Mutex)
-	e.lockSessions = make(map[string]*concurrency.Session)
+		logger.Ctx(context.Background()).Warn("Closed writer lock for log", zap.String("logName", logName), zap.Int64("leaseID", int64(sessionLock.session.Lease())))
+
+		// Remove from map
+		e.logWriterLocks.Delete(logName)
+		return true
+	})
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("close", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1411,6 +1486,112 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("list_segment_cleanup_status", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_segment_cleanup_status", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return statuses, nil
+}
+
+// StoreOrGetConditionWriteResult attempts to store the condition write detection result.
+// If the key doesn't exist, it stores the value and returns it.
+// If the key already exists, it retrieves and returns the existing value.
+func (e *metadataProviderEtcd) StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreOrGetConditionWriteResult")
+	defer sp.End()
+	startTime := time.Now()
+
+	// Convert bool to string for storage
+	valueToStore := "false"
+	if detected {
+		valueToStore = "true"
+	}
+
+	ctx1, cancel := e.getContextWithTimeout()
+	defer cancel()
+
+	// Start a transaction with CAS logic
+	txn := e.client.Txn(ctx1)
+
+	// Try to create the key if it doesn't exist, otherwise get the existing value
+	txnResp, err := txn.If(
+		// Check if key doesn't exist
+		clientv3.Compare(clientv3.CreateRevision(ConditionWriteKey), "=", 0),
+	).Then(
+		// Key doesn't exist, store our detected value
+		clientv3.OpPut(ConditionWriteKey, valueToStore),
+	).Else(
+		// Key exists, read the existing value
+		clientv3.OpGet(ConditionWriteKey),
+	).Commit()
+
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_or_get_condition_write", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_or_get_condition_write", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("store or get condition write result failed", zap.Error(err))
+		return false, werr.ErrMetadataWrite.WithCauseErr(err)
+	}
+
+	if txnResp.Succeeded {
+		// We successfully stored our value, return it
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_or_get_condition_write", "success").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_or_get_condition_write", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Info("stored condition write result as first node", zap.Bool("detected", detected))
+		return detected, nil
+	}
+
+	// Key already exists, parse the existing value from Else operation
+	if len(txnResp.Responses) == 0 || len(txnResp.Responses[0].GetResponseRange().Kvs) == 0 {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_or_get_condition_write", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_or_get_condition_write", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("condition write key exists but failed to retrieve value")
+		return false, werr.ErrMetadataRead.WithCauseErrMsg("condition write key exists but no value retrieved")
+	}
+
+	existingValue := string(txnResp.Responses[0].GetResponseRange().Kvs[0].Value)
+	result := existingValue == "true"
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_or_get_condition_write", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_or_get_condition_write", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	logger.Ctx(ctx).Info("retrieved existing condition write result from another node",
+		zap.Bool("ourDetection", detected),
+		zap.Bool("agreedResult", result))
+
+	return result, nil
+}
+
+// GetConditionWriteResult retrieves the condition write detection result.
+// Returns the stored value if the key exists.
+// Returns an error if the key doesn't exist or if there's an etcd operation error.
+func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (bool, error) {
+	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "GetConditionWriteResult")
+	defer sp.End()
+	startTime := time.Now()
+
+	ctx1, cancel := e.getContextWithTimeout()
+	defer cancel()
+
+	// Get the condition write key from etcd
+	resp, err := e.client.Get(ctx1, ConditionWriteKey)
+	if err != nil {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_condition_write", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_condition_write", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("get condition write result failed", zap.Error(err))
+		return false, werr.ErrMetadataRead.WithCauseErr(err)
+	}
+
+	// Check if key exists
+	if len(resp.Kvs) == 0 {
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_condition_write", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_condition_write", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		logger.Ctx(ctx).Warn("condition write key does not exist")
+		return false, werr.ErrMetadataKeyNotExists
+	}
+
+	// Parse the value
+	value := string(resp.Kvs[0].Value)
+	result := value == "true"
+
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_condition_write", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_condition_write", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	logger.Ctx(ctx).Info("retrieved condition write result", zap.Bool("result", result))
+
+	return result, nil
 }
 
 // getContextWithTimeout returns a context with timeout

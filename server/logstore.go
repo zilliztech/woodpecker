@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -75,6 +76,7 @@ type logStore struct {
 	// Background cleanup goroutine management
 	cleanupWg   sync.WaitGroup
 	cleanupDone chan struct{}
+	stopped     atomic.Bool
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *clientv3.Client, storageClient storageclient.ObjectStorage) LogStore {
@@ -89,6 +91,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, etcdCli *client
 		address:           net.GetIP(""),
 		cleanupDone:       make(chan struct{}),
 	}
+	logStore.stopped.Store(true)
 
 	logger.Ctx(ctx).Info("LogStore created successfully",
 		zap.String("address", logStore.address))
@@ -113,6 +116,7 @@ func (l *logStore) Start() error {
 
 	metrics.WpLogStoreRunningTotal.WithLabelValues("default").Inc()
 
+	l.stopped.Store(false)
 	logger.Ctx(l.ctx).Info("LogStore service started successfully",
 		zap.String("address", l.address))
 
@@ -124,6 +128,10 @@ func (l *logStore) Stop() error {
 		zap.String("address", l.address))
 
 	l.cancel()
+
+	if !l.stopped.CompareAndSwap(false, true) {
+		logger.Ctx(l.ctx).Info("LogStore service is already stopped")
+	}
 
 	// Stop background cleanup goroutine and wait for it to finish
 	l.stopBackgroundCleanup()
@@ -184,6 +192,9 @@ func (l *logStore) Register(ctx context.Context) error {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
@@ -255,6 +266,9 @@ func (l *logStore) getExistsSegmentProcessor(logId int64, segmentId int64) proce
 }
 
 func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	if l.stopped.Load() {
+		return nil, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
 	defer sp.End()
 	start := time.Now()
@@ -282,6 +296,9 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, logId int64, segmentI
 }
 
 func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
 	defer sp.End()
 	start := time.Now()
@@ -297,6 +314,9 @@ func (l *logStore) CompleteSegment(ctx context.Context, logId int64, segmentId i
 }
 
 func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
 	defer sp.End()
 	start := time.Now()
@@ -320,6 +340,9 @@ func (l *logStore) FenceSegment(ctx context.Context, logId int64, segmentId int6
 }
 
 func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
 	start := time.Now()
@@ -345,6 +368,9 @@ func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, logId int64, 
 }
 
 func (l *logStore) GetSegmentBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
+	if l.stopped.Load() {
+		return -1, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentBlockCount")
 	defer sp.End()
 	start := time.Now()
@@ -377,6 +403,9 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, logId int64, segmen
 
 // CompactSegment merge all files in a segment into bigger files
 func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	if l.stopped.Load() {
+		return nil, werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompactSegment")
 	defer sp.End()
 	start := time.Now()
@@ -403,6 +432,9 @@ func (l *logStore) CompactSegment(ctx context.Context, logId int64, segmentId in
 }
 
 func (l *logStore) CleanSegment(ctx context.Context, logId int64, segmentId int64, flag int) error {
+	if l.stopped.Load() {
+		return werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CleanSegment")
 	defer sp.End()
 	start := time.Now()
@@ -538,6 +570,7 @@ func (l *logStore) getTotalProcessorCountUnsafe() int {
 }
 
 // RemoveSegmentProcessor removes a specific segment processor (e.g., after segment cleanup)
+// Test Only
 func (l *logStore) RemoveSegmentProcessor(ctx context.Context, logId int64, segmentId int64) {
 	logger.Ctx(ctx).Info("Removing segment processor",
 		zap.Int64("logId", logId),

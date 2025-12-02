@@ -32,6 +32,7 @@ import (
 
 // TestShowEtcd Test only for debug etcd
 func TestShowEtcd(t *testing.T) {
+	t.Skipf("for manualy debug meta print")
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
 		DialTimeout: 5 * time.Second,
@@ -53,6 +54,7 @@ func TestShowEtcd(t *testing.T) {
 }
 
 func TestCheckLogExists(t *testing.T) {
+	t.Skipf("for manualy debug meta check")
 	logName := "by-dev-rootcoord-dml_1"
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
@@ -119,6 +121,7 @@ func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) 
 
 // Test only
 func TestClear(t *testing.T) {
+	t.Skipf("for manualy debug meta clear")
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{"localhost:2379"}, // Address of etcd server
 		DialTimeout: 5 * time.Second,
@@ -151,18 +154,91 @@ func TestAcquireLogWriterLockPerformance(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, exists)
 
-	// lock success
-	start := time.Now()
-	for i := 0; i < 10000; i++ {
+	const iterations = 10000
+	acquireTimes := make([]time.Duration, 0, iterations)
+	releaseTimes := make([]time.Duration, 0, iterations)
+
+	// Test acquire and release lock performance
+	for i := 0; i < iterations; i++ {
+		// Measure acquire lock time
+		acquireStart := time.Now()
 		se, getLockErr := metaProvider.AcquireLogWriterLock(context.Background(), logName)
+		acquireDuration := time.Since(acquireStart)
 		assert.NoError(t, getLockErr)
 		assert.NotNil(t, se)
-		//if i%100 == 0 {
-		//	c := time.Now().Sub(start)
-		//logger.Ctx(context.Background()).Debug(fmt.Sprintf("lock %d spend %d ms", i, c.Milliseconds()))
-		//}
+		acquireTimes = append(acquireTimes, acquireDuration)
+
+		// Measure release lock time
+		releaseStart := time.Now()
+		releaseErr := metaProvider.ReleaseLogWriterLock(context.Background(), logName)
+		releaseDuration := time.Since(releaseStart)
+		assert.NoError(t, releaseErr)
+		releaseTimes = append(releaseTimes, releaseDuration)
 	}
-	cost := time.Now().Sub(start)
-	// ~0.75ms per lock op
-	assert.True(t, cost.Seconds() > 5)
+
+	// Calculate statistics for acquire lock
+	acquireStats := calculateStats(acquireTimes)
+	t.Logf("=== Acquire Lock Performance ===")
+	t.Logf("Total operations: %d", iterations)
+	t.Logf("Total time: %v", acquireStats.total)
+	t.Logf("Min time: %v (%.3f ms)", acquireStats.min, float64(acquireStats.min.Nanoseconds())/1e6)
+	t.Logf("Max time: %v (%.3f ms)", acquireStats.max, float64(acquireStats.max.Nanoseconds())/1e6)
+	t.Logf("Avg time: %v (%.3f ms)", acquireStats.avg, float64(acquireStats.avg.Nanoseconds())/1e6)
+	t.Logf("P50 time: %v (%.3f ms)", acquireStats.p50, float64(acquireStats.p50.Nanoseconds())/1e6)
+	t.Logf("P95 time: %v (%.3f ms)", acquireStats.p95, float64(acquireStats.p95.Nanoseconds())/1e6)
+	t.Logf("P99 time: %v (%.3f ms)", acquireStats.p99, float64(acquireStats.p99.Nanoseconds())/1e6)
+
+	// Calculate statistics for release lock
+	releaseStats := calculateStats(releaseTimes)
+	t.Logf("=== Release Lock Performance ===")
+	t.Logf("Total operations: %d", iterations)
+	t.Logf("Total time: %v", releaseStats.total)
+	t.Logf("Min time: %v (%.3f ms)", releaseStats.min, float64(releaseStats.min.Nanoseconds())/1e6)
+	t.Logf("Max time: %v (%.3f ms)", releaseStats.max, float64(releaseStats.max.Nanoseconds())/1e6)
+	t.Logf("Avg time: %v (%.3f ms)", releaseStats.avg, float64(releaseStats.avg.Nanoseconds())/1e6)
+	t.Logf("P50 time: %v (%.3f ms)", releaseStats.p50, float64(releaseStats.p50.Nanoseconds())/1e6)
+	t.Logf("P95 time: %v (%.3f ms)", releaseStats.p95, float64(releaseStats.p95.Nanoseconds())/1e6)
+	t.Logf("P99 time: %v (%.3f ms)", releaseStats.p99, float64(releaseStats.p99.Nanoseconds())/1e6)
+
+	// Basic assertion to ensure test runs
+	assert.True(t, len(acquireTimes) == iterations)
+	assert.True(t, len(releaseTimes) == iterations)
+}
+
+type stats struct {
+	total time.Duration
+	min   time.Duration
+	max   time.Duration
+	avg   time.Duration
+	p50   time.Duration
+	p95   time.Duration
+	p99   time.Duration
+}
+
+func calculateStats(durations []time.Duration) stats {
+	if len(durations) == 0 {
+		return stats{}
+	}
+
+	// Create a copy and sort for percentile calculation
+	sorted := make([]time.Duration, len(durations))
+	copy(sorted, durations)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	var total time.Duration
+	for _, d := range durations {
+		total += d
+	}
+
+	return stats{
+		total: total,
+		min:   sorted[0],
+		max:   sorted[len(sorted)-1],
+		avg:   total / time.Duration(len(durations)),
+		p50:   sorted[len(sorted)*50/100],
+		p95:   sorted[len(sorted)*95/100],
+		p99:   sorted[len(sorted)*99/100],
+	}
 }

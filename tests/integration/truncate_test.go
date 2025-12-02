@@ -1463,7 +1463,7 @@ func TestTruncateAndReopenClientWithinTTLProtected(t *testing.T) {
 			assert.Equal(t, truncatePoint.SegmentId, truncatedId.SegmentId)
 			assert.Equal(t, truncatePoint.EntryId, truncatedId.EntryId)
 
-			// wait auditor to mark segment as truncated and cleanup
+			// wait auditor to mark segment as truncated, but no cleanup cause ttl protection
 			time.Sleep(20 * time.Second)
 
 			// Get segments after truncation

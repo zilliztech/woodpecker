@@ -153,6 +153,7 @@ const (
 	MetadataUpdateQuorumError
 	MetadataCreateReaderError
 	MetadataRevisionInvalidError
+	MetadataKeyNotExistsError
 
 	// ---------------------------------------------
 	// Common/Utility Error Codes
@@ -313,6 +314,7 @@ var (
 	ErrMetadataUpdateQuorum    = newWoodpeckerError("failed to update quorum metadata", MetadataUpdateQuorumError, true)
 	ErrMetadataCreateReader    = newWoodpeckerError("failed to create reader temp info", MetadataCreateReaderError, true)
 	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", MetadataRevisionInvalidError, false)
+	ErrMetadataKeyNotExists    = newWoodpeckerError("metadata key not exists", MetadataKeyNotExistsError, false)
 
 	// ---------------------------------------------
 	// Common/Utility Errors

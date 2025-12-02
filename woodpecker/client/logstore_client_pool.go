@@ -17,12 +17,15 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server"
@@ -36,9 +39,11 @@ type LogStoreClientPool interface {
 }
 
 func NewLogStoreClientPoolLocal(logStore server.LogStore) LogStoreClientPool {
-	return &logStoreClientPoolLocal{
+	p := &logStoreClientPoolLocal{
 		innerLogStore: logStore,
 	}
+	p.closed.Store(false)
+	return p
 }
 
 var _ LogStoreClientPool = (*logStoreClientPoolLocal)(nil)
@@ -46,9 +51,13 @@ var _ LogStoreClientPool = (*logStoreClientPoolLocal)(nil)
 type logStoreClientPoolLocal struct {
 	sync.RWMutex
 	innerLogStore server.LogStore
+	closed        atomic.Bool
 }
 
 func (p *logStoreClientPoolLocal) GetLogStoreClient(target string) (LogStoreClient, error) {
+	if p.closed.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
+	}
 	return &logStoreClientLocal{
 		store: p.innerLogStore,
 	}, nil
@@ -58,6 +67,9 @@ func (p *logStoreClientPoolLocal) Clear(target string) {
 }
 
 func (p *logStoreClientPoolLocal) Close() error {
+	if !p.closed.CompareAndSwap(false, true) {
+		logger.Ctx(context.TODO()).Warn("LogStoreClientPool already closed")
+	}
 	return nil
 }
 

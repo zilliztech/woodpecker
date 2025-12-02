@@ -74,6 +74,7 @@ type MinioFileWriter struct {
 	maxIntervalMs       int   // Max interval to sync buffer to object storage
 	syncPolicyConfig    *config.SegmentSyncPolicyConfig
 	compactPolicyConfig *config.SegmentCompactionPolicy
+	fencePolicyConfig   *config.FencePolicyConfig
 
 	// write buffer
 	buffer            atomic.Pointer[cache.SequentialBuffer] // Write buffer
@@ -134,6 +135,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		maxIntervalMs:       syncPolicyConfig.MaxInterval,
 		syncPolicyConfig:    syncPolicyConfig,
 		compactPolicyConfig: &cfg.Woodpecker.Logstore.SegmentCompactionPolicy,
+		fencePolicyConfig:   &cfg.Woodpecker.Logstore.FencePolicy,
 		fileClose:           make(chan struct{}, 1),
 
 		fastSyncTriggerSize: syncPolicyConfig.MaxFlushSize, // set sync trigger size equal to maxFlushSize(single block max size) to make pipeline flush soon
@@ -1406,6 +1408,14 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 		return f.lastEntryID.Load(), nil
 	}
 
+	if f.fencePolicyConfig.IsConditionWriteDisabled() {
+		// if fallback policy is enabled, wait for a while if segment is locked, which means other process is quit unexpectedly
+		checkLockErr := f.waitIfSegmentLockedWhenConditionWriteDisabled(ctx)
+		if checkLockErr != nil {
+			return -1, checkLockErr
+		}
+	}
+
 	var fenceBlockKey string
 	firstFenceAttempt := true
 
@@ -1488,6 +1498,22 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "fence", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return f.lastEntryID.Load(), nil
+}
+
+func (f *MinioFileWriter) waitIfSegmentLockedWhenConditionWriteDisabled(ctx context.Context) error {
+	// if fallback policy is enabled, wait for a while if segment is locked, which means other process is quit unexpectedly
+	isLocked, checkLockErr := f.isSegmentLocked(ctx)
+	if checkLockErr != nil {
+		logger.Ctx(ctx).Warn("Failed to check if segment is locked",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Error(checkLockErr))
+		return fmt.Errorf("failed to check if segment is locked: %w", checkLockErr)
+	}
+	if isLocked {
+		logger.Ctx(ctx).Info("segment is locked which means other process is quit unexpectedly, wait for a while", zap.String("segmentFileKey", f.segmentFileKey))
+		time.Sleep(time.Second * 30)
+	}
+	return nil
 }
 
 func (f *MinioFileWriter) prepareMultiBlockDataIfNecessary(toFlushData []*cache.BufferEntry, toFlushDataFirstEntryId int64) ([][]*cache.BufferEntry, []int64, []int64) {
@@ -1609,6 +1635,23 @@ func (f *MinioFileWriter) releaseSegmentLock(ctx context.Context) error {
 
 	f.lockObjectKey = ""
 	return nil
+}
+
+func (f *MinioFileWriter) isSegmentLocked(ctx context.Context) (bool, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "isSegmentLocked")
+	defer sp.End()
+
+	lockKey := getSegmentLockKey(f.segmentFileKey)
+
+	_, _, err := f.client.StatObject(ctx, f.bucket, lockKey)
+	if err != nil {
+		if f.client.IsObjectNotExistsError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
 }
 
 // serialize serializes entries with optional HeaderRecord for the first block

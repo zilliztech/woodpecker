@@ -64,6 +64,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -78,7 +79,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 			lh, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w1, err := lh.OpenInternalLogWriter(ctx)
+			w1, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 
 			res := w1.Write(ctx, &log.WriteMessage{Payload: []byte("m1")})
@@ -88,7 +89,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 
 			assert.NoError(t, w1.Close(ctx))
 
-			w2, err := lh.OpenInternalLogWriter(ctx)
+			w2, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
@@ -145,6 +146,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -159,7 +161,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			lh, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w1, err := lh.OpenInternalLogWriter(ctx)
+			w1, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			res := w1.Write(ctx, &log.WriteMessage{Payload: []byte("a1")})
 			assert.NoError(t, res.Err)
@@ -167,7 +169,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			lh2, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w2, err := lh2.OpenInternalLogWriter(ctx)
+			w2, err := lh2.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
@@ -231,6 +233,7 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -245,7 +248,7 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 			lh, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w, err := lh.OpenInternalLogWriter(ctx)
+			w, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			defer w.Close(ctx)
 
@@ -302,6 +305,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client1, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -316,7 +320,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 			lh1, err := client1.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w1, err := lh1.OpenInternalLogWriter(ctx)
+			w1, err := lh1.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {
@@ -344,7 +348,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 			lh2, err := client2.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w2, err := lh2.OpenInternalLogWriter(ctx)
+			w2, err := lh2.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
@@ -394,6 +398,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client1, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -408,7 +413,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 			lh1, err := client1.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w1, err := lh1.OpenInternalLogWriter(ctx)
+			w1, err := lh1.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {
@@ -432,7 +437,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 			lh2, err := client2.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w2, err := lh2.OpenInternalLogWriter(ctx)
+			w2, err := lh2.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 			defer w2.Close(ctx)
 
@@ -478,6 +483,7 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -491,7 +497,7 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 			lh, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w, err := lh.OpenInternalLogWriter(ctx)
+			w, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 
 			r := w.Write(ctx, &log.WriteMessage{Payload: []byte("y1")})
@@ -556,6 +562,7 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
 
 			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 			assert.NoError(t, err)
@@ -569,7 +576,7 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 			lh, err := client.OpenLog(ctx, logName)
 			assert.NoError(t, err)
 
-			w, err := lh.OpenInternalLogWriter(ctx)
+			w, err := lh.OpenLogWriter(ctx)
 			assert.NoError(t, err)
 
 			for i := 0; i < 2; i++ {

@@ -49,27 +49,7 @@ func InitEtcdServer(
 	if useEmbedEtcd {
 		var initError error
 		initOnce.Do(func() {
-			path := configPath
-			var cfg *embed.Config
-			if len(path) > 0 {
-				cfgFromFile, err := embed.ConfigFromFile(path)
-				if err != nil {
-					initError = err
-				}
-				cfg = cfgFromFile
-			} else {
-				cfg = embed.NewConfig()
-			}
-			cfg.Dir = dataDir
-			cfg.LogOutputs = []string{logPath}
-			cfg.LogLevel = logLevel
-			e, err := embed.StartEtcd(cfg)
-			if err != nil {
-				log.Printf("failed to init embedded Etcd server %v", err)
-				initError = err
-			}
-			etcdServer = e
-			log.Printf("finish init Etcd config path:%s, dataDir:%s", path, dataDir)
+			initError = StartEtcdServerUnsafe(useEmbedEtcd, configPath, dataDir, logPath, logLevel)
 		})
 		return initError
 	}
@@ -87,4 +67,38 @@ func StopEtcdServer() {
 			etcdServer.Close()
 		})
 	}
+}
+
+func StartEtcdServerUnsafe(useEmbedEtcd bool,
+	configPath string,
+	dataDir string,
+	logPath string,
+	logLevel string) error {
+	var initError error
+	path := configPath
+	var cfg *embed.Config
+	if len(path) > 0 {
+		cfgFromFile, err := embed.ConfigFromFile(path)
+		if err != nil {
+			initError = err
+		}
+		cfg = cfgFromFile
+	} else {
+		cfg = embed.NewConfig()
+	}
+	cfg.Dir = dataDir
+	cfg.LogOutputs = []string{logPath}
+	cfg.LogLevel = logLevel
+	e, err := embed.StartEtcd(cfg)
+	if err != nil {
+		log.Printf("failed to init embedded Etcd server %v", err)
+		initError = err
+	}
+	etcdServer = e
+	log.Printf("finish init Etcd config path:%s, dataDir:%s", path, dataDir)
+	return initError
+}
+
+func ShutdownEtcdServerUnsafe() {
+	etcdServer.Close()
 }

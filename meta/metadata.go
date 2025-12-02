@@ -20,8 +20,6 @@ import (
 	"context"
 	"io"
 
-	"go.etcd.io/etcd/client/v3/concurrency"
-
 	"github.com/zilliztech/woodpecker/proto"
 )
 
@@ -48,9 +46,12 @@ type MetadataProvider interface {
 	// UpdateLogMeta updates the metadata for a specific log.
 	UpdateLogMeta(ctx context.Context, logName string, logMeta *LogMeta) error
 	// AcquireLogWriterLock acquires a lock for writing to a specific log.
-	AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error)
+	// Returns a SessionLock that encapsulates the mutex and session, with validity tracking.
+	AcquireLogWriterLock(ctx context.Context, logName string) (*SessionLock, error)
 	// ReleaseLogWriterLock releases a lock for writing to a specific log.
 	ReleaseLogWriterLock(ctx context.Context, logName string) error
+	// CheckSessionLockAlive checks if a session lock is still alive.
+	CheckSessionLockAlive(ctx context.Context, sessionLock *SessionLock) (bool, error)
 
 	// StoreSegmentMetadata stores the metadata for a specific segment.
 	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
@@ -91,6 +92,17 @@ type MetadataProvider interface {
 	DeleteSegmentCleanupStatus(ctx context.Context, logId, segmentId int64) error
 	// ListSegmentCleanupStatus lists all cleanup statuses for a log
 	ListSegmentCleanupStatus(ctx context.Context, logId int64) ([]*proto.SegmentCleanupStatus, error)
+
+	// StoreOrGetConditionWriteResult attempts to store the condition write detection result.
+	// If the key doesn't exist, it stores the value and returns it.
+	// If the key already exists, it retrieves and returns the existing value.
+	// This ensures all nodes agree on the same condition write capability.
+	StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error)
+
+	// GetConditionWriteResult retrieves the condition write detection result.
+	// Returns the stored value if the key exists.
+	// Returns an error if the key doesn't exist or if there's an etcd operation error.
+	GetConditionWriteResult(ctx context.Context) (bool, error)
 }
 
 // LogMeta is a wrapper of proto.LogMeta with revision.
