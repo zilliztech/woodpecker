@@ -52,6 +52,10 @@ woodpecker:
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32
     retentionPolicy:
       ttl: 259200 # Time to live for truncated segments in seconds, default is 259200s (72 hours)
+    fencePolicy:
+      # Enable conditional write for embedded mode, default is auto, which will automatically detect whether the storage supports conditional write.
+      # Valid values: [auto, enable, disable]
+      conditionWrite: auto
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.

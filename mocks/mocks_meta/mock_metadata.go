@@ -5,11 +5,8 @@ package mocks_meta
 import (
 	context "context"
 
-	concurrency "go.etcd.io/etcd/client/v3/concurrency"
-
-	meta "github.com/zilliztech/woodpecker/meta"
-
 	mock "github.com/stretchr/testify/mock"
+	meta "github.com/zilliztech/woodpecker/meta"
 
 	proto "github.com/zilliztech/woodpecker/proto"
 )
@@ -28,23 +25,23 @@ func (_m *MetadataProvider) EXPECT() *MetadataProvider_Expecter {
 }
 
 // AcquireLogWriterLock provides a mock function with given fields: ctx, logName
-func (_m *MetadataProvider) AcquireLogWriterLock(ctx context.Context, logName string) (*concurrency.Session, error) {
+func (_m *MetadataProvider) AcquireLogWriterLock(ctx context.Context, logName string) (*meta.SessionLock, error) {
 	ret := _m.Called(ctx, logName)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AcquireLogWriterLock")
 	}
 
-	var r0 *concurrency.Session
+	var r0 *meta.SessionLock
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (*concurrency.Session, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string) (*meta.SessionLock, error)); ok {
 		return rf(ctx, logName)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) *concurrency.Session); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string) *meta.SessionLock); ok {
 		r0 = rf(ctx, logName)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*concurrency.Session)
+			r0 = ret.Get(0).(*meta.SessionLock)
 		}
 	}
 
@@ -76,12 +73,12 @@ func (_c *MetadataProvider_AcquireLogWriterLock_Call) Run(run func(ctx context.C
 	return _c
 }
 
-func (_c *MetadataProvider_AcquireLogWriterLock_Call) Return(_a0 *concurrency.Session, _a1 error) *MetadataProvider_AcquireLogWriterLock_Call {
+func (_c *MetadataProvider_AcquireLogWriterLock_Call) Return(_a0 *meta.SessionLock, _a1 error) *MetadataProvider_AcquireLogWriterLock_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MetadataProvider_AcquireLogWriterLock_Call) RunAndReturn(run func(context.Context, string) (*concurrency.Session, error)) *MetadataProvider_AcquireLogWriterLock_Call {
+func (_c *MetadataProvider_AcquireLogWriterLock_Call) RunAndReturn(run func(context.Context, string) (*meta.SessionLock, error)) *MetadataProvider_AcquireLogWriterLock_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -197,6 +194,63 @@ func (_c *MetadataProvider_CheckSegmentExists_Call) Return(_a0 bool, _a1 error) 
 }
 
 func (_c *MetadataProvider_CheckSegmentExists_Call) RunAndReturn(run func(context.Context, string, int64) (bool, error)) *MetadataProvider_CheckSegmentExists_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CheckSessionLockAlive provides a mock function with given fields: ctx, sessionLock
+func (_m *MetadataProvider) CheckSessionLockAlive(ctx context.Context, sessionLock *meta.SessionLock) (bool, error) {
+	ret := _m.Called(ctx, sessionLock)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CheckSessionLockAlive")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *meta.SessionLock) (bool, error)); ok {
+		return rf(ctx, sessionLock)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *meta.SessionLock) bool); ok {
+		r0 = rf(ctx, sessionLock)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *meta.SessionLock) error); ok {
+		r1 = rf(ctx, sessionLock)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_CheckSessionLockAlive_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CheckSessionLockAlive'
+type MetadataProvider_CheckSessionLockAlive_Call struct {
+	*mock.Call
+}
+
+// CheckSessionLockAlive is a helper method to define mock.On call
+//   - ctx context.Context
+//   - sessionLock *meta.SessionLock
+func (_e *MetadataProvider_Expecter) CheckSessionLockAlive(ctx interface{}, sessionLock interface{}) *MetadataProvider_CheckSessionLockAlive_Call {
+	return &MetadataProvider_CheckSessionLockAlive_Call{Call: _e.mock.On("CheckSessionLockAlive", ctx, sessionLock)}
+}
+
+func (_c *MetadataProvider_CheckSessionLockAlive_Call) Run(run func(ctx context.Context, sessionLock *meta.SessionLock)) *MetadataProvider_CheckSessionLockAlive_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*meta.SessionLock))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_CheckSessionLockAlive_Call) Return(_a0 bool, _a1 error) *MetadataProvider_CheckSessionLockAlive_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_CheckSessionLockAlive_Call) RunAndReturn(run func(context.Context, *meta.SessionLock) (bool, error)) *MetadataProvider_CheckSessionLockAlive_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -648,6 +702,62 @@ func (_c *MetadataProvider_GetAllSegmentMetadata_Call) Return(_a0 map[int64]*met
 }
 
 func (_c *MetadataProvider_GetAllSegmentMetadata_Call) RunAndReturn(run func(context.Context, string) (map[int64]*meta.SegmentMeta, error)) *MetadataProvider_GetAllSegmentMetadata_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetConditionWriteResult provides a mock function with given fields: ctx
+func (_m *MetadataProvider) GetConditionWriteResult(ctx context.Context) (bool, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetConditionWriteResult")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (bool, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) bool); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_GetConditionWriteResult_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetConditionWriteResult'
+type MetadataProvider_GetConditionWriteResult_Call struct {
+	*mock.Call
+}
+
+// GetConditionWriteResult is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MetadataProvider_Expecter) GetConditionWriteResult(ctx interface{}) *MetadataProvider_GetConditionWriteResult_Call {
+	return &MetadataProvider_GetConditionWriteResult_Call{Call: _e.mock.On("GetConditionWriteResult", ctx)}
+}
+
+func (_c *MetadataProvider_GetConditionWriteResult_Call) Run(run func(ctx context.Context)) *MetadataProvider_GetConditionWriteResult_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_GetConditionWriteResult_Call) Return(_a0 bool, _a1 error) *MetadataProvider_GetConditionWriteResult_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_GetConditionWriteResult_Call) RunAndReturn(run func(context.Context) (bool, error)) *MetadataProvider_GetConditionWriteResult_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1341,6 +1451,63 @@ func (_c *MetadataProvider_ReleaseLogWriterLock_Call) Return(_a0 error) *Metadat
 }
 
 func (_c *MetadataProvider_ReleaseLogWriterLock_Call) RunAndReturn(run func(context.Context, string) error) *MetadataProvider_ReleaseLogWriterLock_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StoreOrGetConditionWriteResult provides a mock function with given fields: ctx, detected
+func (_m *MetadataProvider) StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error) {
+	ret := _m.Called(ctx, detected)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StoreOrGetConditionWriteResult")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, bool) (bool, error)); ok {
+		return rf(ctx, detected)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, bool) bool); ok {
+		r0 = rf(ctx, detected)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, bool) error); ok {
+		r1 = rf(ctx, detected)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MetadataProvider_StoreOrGetConditionWriteResult_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StoreOrGetConditionWriteResult'
+type MetadataProvider_StoreOrGetConditionWriteResult_Call struct {
+	*mock.Call
+}
+
+// StoreOrGetConditionWriteResult is a helper method to define mock.On call
+//   - ctx context.Context
+//   - detected bool
+func (_e *MetadataProvider_Expecter) StoreOrGetConditionWriteResult(ctx interface{}, detected interface{}) *MetadataProvider_StoreOrGetConditionWriteResult_Call {
+	return &MetadataProvider_StoreOrGetConditionWriteResult_Call{Call: _e.mock.On("StoreOrGetConditionWriteResult", ctx, detected)}
+}
+
+func (_c *MetadataProvider_StoreOrGetConditionWriteResult_Call) Run(run func(ctx context.Context, detected bool)) *MetadataProvider_StoreOrGetConditionWriteResult_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(bool))
+	})
+	return _c
+}
+
+func (_c *MetadataProvider_StoreOrGetConditionWriteResult_Call) Return(_a0 bool, _a1 error) *MetadataProvider_StoreOrGetConditionWriteResult_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MetadataProvider_StoreOrGetConditionWriteResult_Call) RunAndReturn(run func(context.Context, bool) (bool, error)) *MetadataProvider_StoreOrGetConditionWriteResult_Call {
 	_c.Call.Return(run)
 	return _c
 }

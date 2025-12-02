@@ -120,6 +120,8 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			if tc.rootPath != "" {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "disable"
+
 			client1, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
 			client2, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
@@ -140,9 +142,12 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			logWriter1, openWriterErr1 := logHandle1.OpenLogWriter(context.Background())
 			assert.NoError(t, openWriterErr1)
 			assert.NotNil(t, logWriter1)
-			logWriter2, openWriterErr2 := logHandle2.OpenLogWriter(context.Background())
-			assert.Error(t, openWriterErr2)
-			assert.Nil(t, logWriter2)
+			if cfg.Woodpecker.Storage.IsStorageMinio() {
+				// only test for fallback distributed lock writer
+				logWriter2, openWriterErr2 := logHandle2.OpenLogWriter(context.Background())
+				assert.Error(t, openWriterErr2)
+				assert.Nil(t, logWriter2)
+			}
 
 			// client1 release, client 2 get writer
 			releaseErr := logWriter1.Close(context.Background())

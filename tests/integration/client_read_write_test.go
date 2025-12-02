@@ -789,7 +789,8 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			}
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000 // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000                // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 60 * 1000 // 60s
 
 			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
 			assert.NoError(t, err)
@@ -848,6 +849,8 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			// Wait a bit to let some writes start, then close the writer
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing writer while writes are in progress...")
+			// Closing the logWriter will trigger all active segments flush and finalize,
+			// which will cause all pending writes callback channels to receive responses and complete promptly.
 			closeErr := logWriter.Close(context.Background())
 			assert.NoError(t, closeErr)
 			fmt.Println("Writer closed")
@@ -964,19 +967,46 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
 	testCases := []struct {
-		name        string
-		storageType string
-		rootPath    string
+		name         string
+		storageType  string
+		rootPath     string
+		syncInterval int
+		writtenCnt   int
+		readCnt      int
 	}{
 		{
-			name:        "LocalFsStorage",
+			name:        "LocalFsStorage1",
 			storageType: "local",
 			rootPath:    rootPath,
+			// sync interval(35s) greater than appendOp timeout(30s), may cause data written but not trigger write callback, simulating client and server network failure scenario
+			syncInterval: 35 * 1000,
+			writtenCnt:   0, // Client timeout, but retry is allowed
+			readCnt:      4,
 		},
 		{
-			name:        "ObjectStorage",
-			storageType: "", // Using default storage type minio-compatible
-			rootPath:    "", // No need to specify path for default storage
+			name:        "LocalFsStorage2",
+			storageType: "local",
+			rootPath:    rootPath,
+			// sync interval(10s) less than appendOp timeout(30s), should trigger write callback before timeout
+			syncInterval: 10 * 1000,
+			writtenCnt:   4,
+			readCnt:      4,
+		},
+		{
+			name:         "ObjectStorage1",
+			storageType:  "", // Using default storage type minio-compatible
+			rootPath:     "", // No need to specify path for default storage
+			syncInterval: 35 * 1000,
+			writtenCnt:   0,
+			readCnt:      4,
+		},
+		{
+			name:         "ObjectStorage2",
+			storageType:  "", // Using default storage type minio-compatible
+			rootPath:     "", // No need to specify path for default storage
+			syncInterval: 10 * 1000,
+			writtenCnt:   4,
+			readCnt:      4,
 		},
 	}
 
@@ -988,8 +1018,8 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 30 * 1000                // 30s
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 30 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = tc.syncInterval
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = tc.syncInterval
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1058,6 +1088,7 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Wait a bit to let some writes start, then close the entire client
 			time.Sleep(100 * time.Millisecond)
 			fmt.Println("Closing client while writes are in progress...")
+			// Client connection closure does not terminate ongoing asynchronous operations; whether a write operation receives an ack depends on the op timeout duration and sync interval time
 			closeErr := client.Close(context.TODO())
 			assert.NoError(t, closeErr)
 			fmt.Println("Client closed")
@@ -1094,8 +1125,16 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 				newClient.Close(context.TODO())
 			}()
 
+			// verify written count
+			assert.Equal(t, successfulWrites, tc.writtenCnt, "Written count mismatch")
+
 			// Now read all messages and verify
-			if successfulWrites > 0 {
+			if tc.readCnt > 0 {
+				// sleep for flush if sync interval is more than 30s
+				if tc.syncInterval > 30000 {
+					time.Sleep(time.Duration(tc.syncInterval-30000+5000) * time.Millisecond)
+				}
+
 				// Open the log with the new client
 				newLogHandle, err := newClient.OpenLog(context.Background(), logName)
 				assert.NoError(t, err)
@@ -1107,8 +1146,8 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 				defer logReader.Close(context.Background())
 
 				// Read all the messages that were actually written
-				readMessages := make([]*log.LogMessage, 0, successfulWrites)
-				for i := 0; i < successfulWrites; i++ {
+				readMessages := make([]*log.LogMessage, 0, tc.readCnt)
+				for i := 0; i < tc.readCnt; i++ {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					msg, err := logReader.ReadNext(ctx)
 					cancel()
@@ -1129,46 +1168,57 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 				cancel()
 
 				// Verify that all successfully written messages were read back
-				if len(readMessages) != successfulWrites {
-					t.Logf("Warning: Number of read messages (%d) does not match reported successful writes (%d)",
-						len(readMessages), successfulWrites)
-					// Adjust successfulIds to match actually read messages
-					if len(readMessages) < len(successfulIds) {
-						successfulIds = successfulIds[:len(readMessages)]
+				assert.Equal(t, len(readMessages), tc.readCnt, fmt.Sprintf("Warning: Number of read messages (%d) does not match reported successful writes (%d)", len(readMessages), tc.readCnt))
+
+				if tc.writtenCnt > 0 { // IF written >0 , then written Msgs should equal to read Msgs
+					// Compare the message IDs between what was reported as written and what was read
+					// First sort both lists by segmentId and entryId
+					sort.Slice(successfulIds, func(i, j int) bool {
+						if successfulIds[i].SegmentId == successfulIds[j].SegmentId {
+							return successfulIds[i].EntryId < successfulIds[j].EntryId
+						}
+						return successfulIds[i].SegmentId < successfulIds[j].SegmentId
+					})
+
+					sort.Slice(readMessages, func(i, j int) bool {
+						if readMessages[i].Id.SegmentId == readMessages[j].Id.SegmentId {
+							return readMessages[i].Id.EntryId < readMessages[j].Id.EntryId
+						}
+						return readMessages[i].Id.SegmentId < readMessages[j].Id.SegmentId
+					})
+
+					// Now compare message IDs
+					compareCount := minInt(len(readMessages), len(successfulIds))
+					for i := 0; i < compareCount; i++ {
+						readMsg := readMessages[i]
+						assert.Equal(t, successfulIds[i].SegmentId, readMsg.Id.SegmentId,
+							"Segment ID mismatch at index %d", i)
+						assert.Equal(t, successfulIds[i].EntryId, readMsg.Id.EntryId,
+							"Entry ID mismatch at index %d", i)
+					}
+
+					// Make sure we have the right number of messages
+					if compareCount > 0 {
+						assert.Equal(t, len(successfulIds), len(readMessages),
+							"Number of read messages should match number of successful write IDs")
 					}
 				}
+			} else {
+				// Open the log with the new client
+				newLogHandle, err := newClient.OpenLog(context.Background(), logName)
+				assert.NoError(t, err)
 
-				// Compare the message IDs between what was reported as written and what was read
-				// First sort both lists by segmentId and entryId
-				sort.Slice(successfulIds, func(i, j int) bool {
-					if successfulIds[i].SegmentId == successfulIds[j].SegmentId {
-						return successfulIds[i].EntryId < successfulIds[j].EntryId
-					}
-					return successfulIds[i].SegmentId < successfulIds[j].SegmentId
-				})
+				// Open a reader from the beginning
+				earliest := log.EarliestLogMessageID()
+				logReader, err := newLogHandle.OpenLogReader(context.Background(), &earliest, "client-close-reader")
+				assert.NoError(t, err)
+				defer logReader.Close(context.Background())
 
-				sort.Slice(readMessages, func(i, j int) bool {
-					if readMessages[i].Id.SegmentId == readMessages[j].Id.SegmentId {
-						return readMessages[i].Id.EntryId < readMessages[j].Id.EntryId
-					}
-					return readMessages[i].Id.SegmentId < readMessages[j].Id.SegmentId
-				})
-
-				// Now compare message IDs
-				compareCount := minInt(len(readMessages), len(successfulIds))
-				for i := 0; i < compareCount; i++ {
-					readMsg := readMessages[i]
-					assert.Equal(t, successfulIds[i].SegmentId, readMsg.Id.SegmentId,
-						"Segment ID mismatch at index %d", i)
-					assert.Equal(t, successfulIds[i].EntryId, readMsg.Id.EntryId,
-						"Entry ID mismatch at index %d", i)
-				}
-
-				// Make sure we have the right number of messages
-				if compareCount > 0 {
-					assert.Equal(t, len(successfulIds), len(readMessages),
-						"Number of read messages should match number of successful write IDs")
-				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				msgMore, err := logReader.ReadNext(ctx)
+				assert.Error(t, err, "Expected error or timeout when trying to read more than written")
+				assert.Nil(t, msgMore, fmt.Sprintf("%v", msgMore))
+				cancel()
 			}
 
 			// stop embed LogStore singleton
@@ -1281,12 +1331,14 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			fmt.Println("Client closed")
 
 			fmt.Println("Shutdown embedded LogStore...")
-			stopErr := woodpecker.StopEmbedLogStore()
+			// Closing the logstore will trigger all active segments flush and finalize,
+			// which will cause all pending writes callback channels to receive responses and complete promptly.
+			stopErr := woodpecker.StopEmbedLogStore() // Stop the logstore service, no further requests can be accepted.
 			assert.NoError(t, stopErr)
 			fmt.Println("Embedded LogStore stop")
 
 			// Wait for all write operations to complete
-			wg.Wait()
+			wg.Wait() // When timeout occurs, a callback response is triggered to decide to close the segment, but at this point the logStore has already been cleaned up when sending to logStore
 			fmt.Println("All writes have completed")
 
 			// Count successful and failed writes

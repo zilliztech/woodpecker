@@ -53,6 +53,7 @@ var _ MinioHandler = (*minioHandlerImpl)(nil)
 
 type minioHandlerImpl struct {
 	client *minio.Client
+	cfg    *config.Configuration
 }
 
 func NewMinioHandler(ctx context.Context, cfg *config.Configuration) (MinioHandler, error) {
@@ -62,12 +63,14 @@ func NewMinioHandler(ctx context.Context, cfg *config.Configuration) (MinioHandl
 	}
 	return &minioHandlerImpl{
 		client: minioCli,
+		cfg:    cfg,
 	}, nil
 }
 
-func NewMinioHandlerWithClient(ctx context.Context, minioCli *minio.Client) (MinioHandler, error) {
+func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, minioCli *minio.Client) (MinioHandler, error) {
 	return &minioHandlerImpl{
 		client: minioCli,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -129,6 +132,10 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObjectIfNoneMatch")
 	defer sp.End()
+	// if condition write disable, fallback to put object directly, if put error,check obj state to see the reason
+	if m.cfg.Woodpecker.Logstore.FencePolicy.IsConditionWriteDisabled() {
+		return m.putObjectIfNoneMatchWhenConditionWriteDisabled(ctx, bucketName, objectName, reader, objectSize)
+	}
 	start := time.Now()
 	opts := minio.PutObjectOptions{}
 	opts.SetMatchETagExcept("*")
@@ -161,16 +168,50 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 	return info, nil
 }
 
+func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
+	info, err := m.PutObject(ctx, bucketName, objectName, reader, objectSize, minio.PutObjectOptions{})
+	if err != nil {
+		// check if object exists, some backend not support overwrite originally
+		// if exists, but object is fence object, return ErrSegmentFenced
+		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
+		if stateErr != nil {
+			// return normal err, let task retry
+			return info, stateErr
+		}
+		if IsFencedObject(objInfo) {
+			logger.Ctx(ctx).Info("object already exists and it is a fence object", zap.String("objectName", objectName))
+			return info, werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
+		}
+		// if exists, and object is not fence, and size == current size, return Idempotent success
+		if objInfo.Size == objectSize {
+			logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
+			return info, werr.ErrObjectAlreadyExists
+		}
+
+		// other err, just return err to let client retry
+		return info, err
+	}
+	// if put success, return
+	return info, nil
+}
+
 func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutFencedObject")
 	defer sp.End()
-	start := time.Now()
+	// construct fence object&opt
 	opts := minio.PutObjectOptions{}
 	opts.SetMatchETagExcept("*")
 	opts.UserMetadata = map[string]string{
 		FencedObjectMetaKey: "true",
 	}
 	fencedObjectReader := bytes.NewReader([]byte("F"))
+	// put object directly if condition write disabled
+	// check the result to see the operation success or not
+	if m.cfg.Woodpecker.Logstore.FencePolicy.IsConditionWriteDisabled() {
+		return m.putFencedObjectWhenConditionWriteDisabled(ctx, bucketName, objectName, 1, fencedObjectReader, opts)
+	}
+	// put fence object using condition write
+	start := time.Now()
 	info, err := m.client.PutObject(ctx, bucketName, objectName, fencedObjectReader, 1, opts)
 	if err != nil && IsPreconditionFailed(err) {
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
@@ -194,6 +235,25 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("put_fenced_object").Add(float64(info.Size))
+	return info, nil
+}
+
+func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, size int64, fencedObjectReader io.Reader, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	info, err := m.client.PutObject(ctx, bucketName, objectName, fencedObjectReader, size, opts)
+	if err != nil {
+		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
+		if stateErr != nil {
+			// return normal err
+			return info, stateErr
+		}
+		// if fence object already exists, just return Idempotently success
+		if IsFencedObject(objInfo) {
+			return info, nil
+		}
+		// return normal err
+		return info, werr.ErrObjectAlreadyExists
+	}
+	// if put success, just return
 	return info, nil
 }
 

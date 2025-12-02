@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -31,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
@@ -54,7 +54,7 @@ type LogWriter interface {
 	Close(ctx context.Context) error
 }
 
-func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, session *concurrency.Session) LogWriter {
+func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration, sessionLock *meta.SessionLock) LogWriter {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewLogWriter")
 	defer sp.End()
 	w := &logWriterImpl{
@@ -64,17 +64,17 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 		cfg:                cfg,
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
-		session:            session,
+		sessionLock:        sessionLock,
 	}
-	// Set sessionValid to true
-	w.sessionValid.Store(true)
-
 	// Set trigger expired
 	onWriterInvalidated := func(ctx context.Context, reason string) {
-		w.sessionValid.Store(false)
-		if session != nil {
-			if closeSessionErr := w.session.Close(); closeSessionErr != nil {
-				logger.Ctx(ctx).Warn("failed to close session", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Error(closeSessionErr))
+		// Mark the sessionLock as invalid so next AcquireLogWriterLock will create a new one
+		if sessionLock != nil {
+			sessionLock.MarkInvalid()
+			if sessionLock.GetSession() != nil {
+				if closeSessionErr := sessionLock.GetSession().Close(); closeSessionErr != nil {
+					logger.Ctx(ctx).Warn("failed to close session", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Error(closeSessionErr))
+				}
 			}
 		}
 		logger.Ctx(ctx).Warn("trigger writer lock session expired", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.String("reason", reason))
@@ -84,7 +84,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	// Monitor keepAlive channel
 	go w.monitorSession()
 	go w.runAuditor()
-	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
+	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
 
@@ -101,8 +101,7 @@ type logWriterImpl struct {
 	cleanupManager     segment.SegmentCleanupManager
 
 	// Session related fields
-	session             *concurrency.Session
-	sessionValid        atomic.Bool
+	sessionLock         *meta.SessionLock
 	onWriterInvalidated func(ctx context.Context, reason string)
 
 	// Mutex to ensure only one truncation cleanup task is running at a time
@@ -111,19 +110,55 @@ type logWriterImpl struct {
 }
 
 func (l *logWriterImpl) monitorSession() {
+	session := l.sessionLock.GetSession()
+	// Track consecutive failures to detect persistent etcd connectivity issues
+	// After 5 consecutive failures (about 15 seconds), we consider the session invalid
+	maxConsecutiveFailures := 5
+	checkInterval := 3 * time.Second
+	checkTicker := time.NewTicker(checkInterval)
+	defer checkTicker.Stop()
+	consecutiveFailures := 0
+
 	for {
 		select {
-		case <-l.session.Done():
+		case <-session.Done():
 			// Channel is closed, session is invalid
-			l.sessionValid.Store(false)
+			// Mark sessionLock as invalid so next AcquireLogWriterLock will create a new one
+			l.sessionLock.MarkInvalid()
 			logger.Ctx(context.Background()).Warn("Writer lock session has expired",
-				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
 			return
 		case <-l.writerClose:
-			l.sessionValid.Store(false)
+			// Mark sessionLock as invalid when writer closes
+			l.sessionLock.MarkInvalid()
 			logger.Ctx(context.Background()).Debug("Monitor session end due to writer close",
-				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+				zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())))
 			return
+		case <-checkTicker.C:
+			// Periodically check if lease is still valid
+			// This helps detect etcd connectivity issues even when session.Done() hasn't closed
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			isAlive, err := l.logHandle.GetMetadataProvider().CheckSessionLockAlive(ctx, l.sessionLock)
+			cancel()
+			if err != nil {
+				// Failed to check TTL (etcd unreachable or other error)
+				consecutiveFailures++
+				if consecutiveFailures >= maxConsecutiveFailures {
+					// Too many consecutive failures, mark session as invalid
+					l.sessionLock.MarkInvalid()
+					logger.Ctx(context.Background()).Info("Writer lock session marked as invalid due to persistent etcd connectivity issues", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Int("consecutiveFailures", consecutiveFailures), zap.Error(err))
+					return
+				}
+			} else {
+				// Reset failure counter on success
+				consecutiveFailures = 0
+				if !isAlive {
+					// Lease is expired
+					l.sessionLock.MarkInvalid()
+					logger.Ctx(context.Background()).Info("Writer lock session lease has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Bool("alive", isAlive))
+					return
+				}
+			}
 		}
 	}
 }
@@ -133,10 +168,10 @@ func (l *logWriterImpl) Write(ctx context.Context, msg *WriteMessage) *WriteResu
 	defer sp.End()
 	start := time.Now()
 
-	// Check if session is valid
-	if !l.sessionValid.Load() {
+	// Check if session lock is valid
+	if l.sessionLock == nil || !l.sessionLock.IsValid() {
 		logger.Ctx(ctx).Warn("Writer lock session has expired",
-			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return &WriteResult{
 			LogMessageId: nil,
@@ -202,15 +237,15 @@ func (l *logWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessage) <-cha
 	start := time.Now()
 	ch := make(chan *WriteResult, 1)
 
-	// Check if session is valid
-	if !l.sessionValid.Load() {
+	// Check if session lock is valid
+	if l.sessionLock == nil || !l.sessionLock.IsValid() {
 		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		ch <- &WriteResult{
 			LogMessageId: nil,
 			Err:          werr.ErrLogWriterLockLost.WithCauseErrMsg("writer lock session has expired"),
 		}
 		close(ch)
-		logger.Ctx(ctx).Warn("Writer lock session has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(l.session.Lease())))
+		logger.Ctx(ctx).Warn("Writer lock session has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 		return ch
 	}
 
@@ -603,7 +638,7 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 
 // GetWriterSessionForTest For Test only
 func (l *logWriterImpl) GetWriterSessionForTest() *concurrency.Session {
-	return l.session
+	return l.sessionLock.GetSession()
 }
 
 type WriteResult struct {

@@ -105,7 +105,7 @@ func (op *AppendOp) Execute() {
 	quorumInfo, err := op.handle.GetQuorumInfo(ctx)
 	if err != nil {
 		op.err = err
-		op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
+		go op.handle.SendAppendErrorCallbacks(ctx, op.entryId, err)
 		return
 	}
 
@@ -121,8 +121,9 @@ func (op *AppendOp) Execute() {
 		// get client from clientPool according node addr
 		cli, clientErr := op.clientPool.GetLogStoreClient(quorumInfo.Nodes[i])
 		if clientErr != nil {
+			logger.Ctx(ctx).Warn("get client failed for node", zap.String("nodeAddr", quorumInfo.Nodes[i]), zap.Int64("logId", op.logId), zap.Int64("segmentId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(clientErr))
 			op.err = clientErr
-			op.handle.SendAppendErrorCallbacks(ctx, op.entryId, clientErr)
+			go op.handle.SendAppendErrorCallbacks(ctx, op.entryId, clientErr)
 			return
 		}
 		// send request to the node
@@ -218,6 +219,9 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail called for log:%d seg:%d entry:%d, processing %d channels", op.logId, op.segmentId, op.entryId, len(op.resultChannels)), zap.Error(err))
 
 	for index, ch := range op.resultChannels {
+		if ch == nil {
+			continue
+		}
 		sendErr := ch.SendResult(ctx, &channel.AppendResult{
 			SyncedId: -1,
 			Err:      err,
