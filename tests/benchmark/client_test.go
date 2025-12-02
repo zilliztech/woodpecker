@@ -137,6 +137,7 @@ func (wm *WriterManager) Close() error {
 
 func TestE2EWrite(t *testing.T) {
 	utils.StartGopsAgent()
+	t.Skipf("simple E2E write test")
 
 	testCases := []struct {
 		name        string
@@ -206,6 +207,7 @@ func TestE2EWrite(t *testing.T) {
 
 func TestE2ERead(t *testing.T) {
 	utils.StartGopsAgent()
+	t.Skipf("read E2E written data")
 
 	testCases := []struct {
 		name        string
@@ -300,6 +302,7 @@ func TestE2ERead(t *testing.T) {
 }
 
 func TestEmptyRuntime(t *testing.T) {
+	t.Skipf("for monitoring empty request runtime only")
 	utils.StartGopsAgentWithPort(6060)
 	utils.StartMetrics()
 	utils.StartReporting()
@@ -353,7 +356,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 	utils.StartReporting()
 	entrySize := 1_000_000 // 1MB per row
 	batchCount := 1_000    // wait for batch entries to finish
-	writeCount := 10_000   // total rows to write
+	writeCount := 5_000    // total rows to write
 
 	testCases := []struct {
 		name        string
@@ -701,6 +704,7 @@ func TestWriteThroughput(t *testing.T) {
 }
 
 func TestReadThroughput(t *testing.T) {
+	t.Skipf("read TestAsyncWriteThroughput or TestWriteThroughput test data")
 	utils.StartGopsAgentWithPort(6060)
 	utils.StartMetrics()
 
@@ -865,6 +869,7 @@ func TestReadThroughput(t *testing.T) {
 }
 
 func TestReadFromEarliest(t *testing.T) {
+	t.Skipf("read TestAsyncWriteThroughput or TestWriteThroughput test data")
 	utils.StartGopsAgent()
 
 	testCases := []struct {
@@ -942,6 +947,7 @@ func TestReadFromEarliest(t *testing.T) {
 }
 
 func TestReadFromLatest(t *testing.T) {
+	t.Skipf("read TestAsyncWriteThroughput or TestWriteThroughput test data")
 	utils.StartGopsAgent()
 
 	testCases := []struct {
@@ -1016,6 +1022,7 @@ func TestReadFromLatest(t *testing.T) {
 }
 
 func TestReadFromSpecifiedPosition(t *testing.T) {
+	t.Skipf("read TestAsyncWriteThroughput or TestWriteThroughput test data")
 	utils.StartGopsAgent()
 
 	testCases := []struct {

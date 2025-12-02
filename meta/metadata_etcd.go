@@ -1289,6 +1289,8 @@ func (e *metadataProviderEtcd) Close() error {
 			}
 		}
 
+		logger.Ctx(context.Background()).Warn("Closed writer lock for log", zap.String("logName", logName), zap.Int64("leaseID", int64(sessionLock.session.Lease())))
+
 		// Remove from map
 		e.logWriterLocks.Delete(logName)
 		return true

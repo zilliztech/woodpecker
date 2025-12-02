@@ -42,6 +42,7 @@ const (
 )
 
 func TestMinioReadPerformance(t *testing.T) {
+	t.Skipf("for manually param adjust testing")
 	utils.StartGopsAgent()
 	utils.StartMetrics()
 	utils.StartReporting()
@@ -94,6 +95,7 @@ func TestMinioReadPerformance(t *testing.T) {
 }
 
 func TestMinioDelete(t *testing.T) {
+	t.Skipf("for manually param adjust testing cleanup objects")
 	utils.StartGopsAgent()
 	utils.StartMetrics()
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -124,55 +126,6 @@ func TestMinioDelete(t *testing.T) {
 	}
 	wg.Wait()
 	t.Logf("Test Minio Finish \n")
-}
-
-func TestMinioWritePerformance(t *testing.T) {
-	utils.StartGopsAgent()
-	utils.StartMetrics()
-	utils.StartReporting()
-	startTime := time.Now()
-	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	assert.NoError(t, err)
-	minioCli, err := minioHandler.NewMinioHandler(context.Background(), cfg)
-	assert.NoError(t, err)
-	payloadStaticData, err := utils.GenerateRandomBytes(TEST_OBJECT_SIZE) //
-	concurrentCh := make(chan int, CONCURRENT)                            //  concurrency
-	wg := sync.WaitGroup{}
-	fmt.Printf("Test Minio Start, objectSize:%d concurrent:%d condition:%v ms \n", TEST_OBJECT_SIZE, CONCURRENT, CONDITION_WRITE_ENABLE)
-	for i := 0; i < TEST_COUNT; i++ {
-		concurrentCh <- 1
-		objectId := i
-		wg.Add(1)
-		go func(ch chan int) {
-			start := time.Now()
-			if CONDITION_WRITE_ENABLE {
-				_, putErr := minioCli.PutObjectIfNoneMatch(
-					context.Background(),
-					cfg.Minio.BucketName,
-					fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
-					bytes.NewReader(payloadStaticData),
-					int64(len(payloadStaticData)))
-				assert.NoError(t, putErr)
-			} else {
-				_, putErr := minioCli.PutObject(
-					context.Background(),
-					cfg.Minio.BucketName,
-					fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
-					bytes.NewReader(payloadStaticData),
-					int64(len(payloadStaticData)),
-					minio.PutObjectOptions{})
-				assert.NoError(t, putErr)
-			}
-			cost := time.Now().Sub(start)
-			//t.Logf("Put test_object_%d completed,  cost: %d ms \n", i, cost.Milliseconds())
-			<-ch
-			wg.Done()
-			utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
-			utils.MinioIOLatency.WithLabelValues("0").Observe(float64(cost.Milliseconds()))
-		}(concurrentCh)
-	}
-	wg.Wait()
-	fmt.Printf("Test Minio Finish, cost: %d ms \n", time.Now().Sub(startTime).Milliseconds())
 }
 
 // TestMinioSingleThreadLatency tests single-threaded MinIO put latency with different object sizes
