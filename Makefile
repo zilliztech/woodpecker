@@ -127,6 +127,8 @@ integration-test-components: ## Run component integration tests (non-e2e)
 
 clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*
+	rm -rf $(PWD)/cmake_build
+	rm -rf $(PWD)/external/output
 
 # Docker targets (using new build system)
 docker: ## Build Docker image (auto-detect architecture)
@@ -166,3 +168,37 @@ cluster-status: ## Check cluster status
 
 cluster-test: ## Test cluster connectivity
 	cd deployments && ./deploy.sh test
+
+# ==================== CPP BUILD ========
+INSTALL_PATH := $(PWD)/bin
+LIBRARY_PATH := $(PWD)/lib
+OS := $(shell uname -s)
+mode = Release
+use_asan = OFF
+ifeq ($(USE_ASAN), ON)
+	use_asan = ${USE_ASAN}
+	CGO_LDFLAGS := $(shell go env CGO_LDFLAGS) -fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address
+	CGO_CFLAGS := $(shell go env CGO_CFLAGS) -fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address
+	MILVUS_GO_BUILD_TAGS := $(MILVUS_GO_BUILD_TAGS),use_asan
+endif
+
+use_opendal = OFF
+ifdef USE_OPENDAL
+	use_opendal = ${USE_OPENDAL}
+endif
+
+# default git branch is dev
+export GIT_BRANCH=dev
+
+ifeq (${ENABLE_AZURE}, false)
+	AZURE_OPTION := -Z
+endif
+
+
+build-3rdparty:
+	@echo "Build thirdparty using conanfile.py ..."
+	@(env bash $(PWD)/scripts/3rdparty_build.sh -o ${use_opendal} -t ${mode})
+
+build-external: build-3rdparty
+	@echo "Building Milvus external cpp library ..."
+	@(env bash $(PWD)/scripts/external_build.sh -t ${mode} -a ${use_asan} ${AZURE_OPTION} -o ${use_opendal} )
