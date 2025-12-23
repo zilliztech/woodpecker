@@ -287,7 +287,7 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	}
 	var storageCli storageclient.ObjectStorage
 	if config.Woodpecker.Storage.IsStorageMinio() {
-		storageCli, err = storageclient.NewObjectStorage(ctx, config)
+		storageCli, err = storageclient.NewExternalObjectStorageIfNecessary(ctx, config, true)
 		if err != nil {
 			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErr(err)
 		}
