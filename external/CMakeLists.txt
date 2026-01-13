@@ -91,7 +91,7 @@ set( CMAKE_CXX_STANDARD_REQUIRED on )
 
 set( MILVUS_SOURCE_DIR      ${PROJECT_SOURCE_DIR} )
 set( MILVUS_BINARY_DIR      ${PROJECT_BINARY_DIR} )
-set( MILVUS_ENGINE_SRC      ${PROJECT_SOURCE_DIR}/src )
+#set( MILVUS_ENGINE_SRC      ${PROJECT_SOURCE_DIR}/src )
 set( MILVUS_THIRDPARTY_SRC  ${PROJECT_SOURCE_DIR}/thirdparty )
 
 # This will set RPATH to all excutable TARGET
@@ -280,7 +280,7 @@ ADD_DEFINITIONS(-DBOOST_GEOMETRY_INDEX_DETAIL_EXPERIMENTAL)
 # Warning: add_subdirectory(src) must be after append_flags("-ftest-coverage"),
 # otherwise cpp code coverage tool will miss src folder
 add_subdirectory( thirdparty )
-add_subdirectory( src )
+#add_subdirectory( src )
 
 # Unittest lib
 if ( BUILD_UNIT_TEST STREQUAL "ON" )
@@ -293,16 +293,16 @@ add_custom_target( Clean-All COMMAND ${CMAKE_BUILD_TOOL} clean )
 # **************************** Install ****************************
 
 # Install storage
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/storage/
-        DESTINATION include/storage
-        FILES_MATCHING PATTERN "*_c.h"
-)
+#install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/storage/
+#        DESTINATION include/storage
+#        FILES_MATCHING PATTERN "*_c.h"
+#)
 
 # Install segcore
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/segcore/
-        DESTINATION include/segcore
-        FILES_MATCHING PATTERN "*_c.h"
-)
+#install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/segcore/
+#        DESTINATION include/segcore
+#        FILES_MATCHING PATTERN "*_c.h"
+#)
 
 ## Install exec/expression/function
 #install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/exec/expression/function/
@@ -323,10 +323,10 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/segcore/
 #)
 #
 # Install common
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/common/
-        DESTINATION include/common
-        FILES_MATCHING PATTERN "*_c.h"
-)
+#install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/common/
+#        DESTINATION include/common
+#        FILES_MATCHING PATTERN "*_c.h"
+#)
 
 ## Install monitor
 #install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/monitor/

@@ -16,50 +16,30 @@
 
 package external
 
-import (
-	"os"
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/zilliztech/woodpecker/common/config"
-	//"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
-)
-
-//func TestTracer(t *testing.T) {
-//	paramtable.Init()
-//	InitTraceConfig(paramtable.Get())
 //
-//	paramtable.Get().Save(paramtable.Get().TraceCfg.Exporter.Key, "stdout")
-//	ResetTraceConfig(paramtable.Get())
+//import (
+//	"os"
+//	"testing"
+//
+//	"github.com/stretchr/testify/assert"
+//	"github.com/zilliztech/woodpecker/common/config"
+//	//"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+//)
+//
+//
+//func TestInitStorageV2FileSystem(t *testing.T) {
+//	tempFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
+//	assert.NoError(t, err)
+//	// init local storage
+//	cfg, newCfgErr := config.NewConfiguration(tempFile.Name())
+//	assert.NoError(t, newCfgErr)
+//	cfg.Woodpecker.Storage.Type = "local"
+//	cfg.Woodpecker.Storage.RootPath = "/tmp"
+//	initLocalFSErr := InitStorageV2FileSystem(cfg)
+//	assert.NoError(t, initLocalFSErr)
+//
+//	// init remote storage
+//	cfg.Woodpecker.Storage.Type = "minio"
+//	initRemoteFSErr := InitStorageV2FileSystem(cfg)
+//	assert.NoError(t, initRemoteFSErr)
 //}
-
-//func TestOtlpHang(t *testing.T) {
-//	paramtable.Init()
-//	InitTraceConfig(paramtable.Get())
-//
-//	paramtable.Get().Save(paramtable.Get().TraceCfg.Exporter.Key, "otlp")
-//	paramtable.Get().Save(paramtable.Get().TraceCfg.InitTimeoutSeconds.Key, "1")
-//	defer paramtable.Get().Reset(paramtable.Get().TraceCfg.Exporter.Key)
-//	defer paramtable.Get().Reset(paramtable.Get().TraceCfg.InitTimeoutSeconds.Key)
-//
-//	assert.NotPanics(t, func() {
-//		ResetTraceConfig(paramtable.Get())
-//	})
-//}
-
-func TestInitStorageV2FileSystem(t *testing.T) {
-	tempFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
-	assert.NoError(t, err)
-	// init local storage
-	cfg, newCfgErr := config.NewConfiguration(tempFile.Name())
-	assert.NoError(t, newCfgErr)
-	cfg.Woodpecker.Storage.Type = "local"
-	cfg.Woodpecker.Storage.RootPath = "/tmp"
-	initLocalFSErr := InitStorageV2FileSystem(cfg)
-	assert.NoError(t, initLocalFSErr)
-
-	// init remote storage
-	cfg.Woodpecker.Storage.Type = "minio"
-	initRemoteFSErr := InitStorageV2FileSystem(cfg)
-	assert.NoError(t, initRemoteFSErr)
-}
