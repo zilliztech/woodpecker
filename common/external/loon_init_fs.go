@@ -17,12 +17,12 @@
 package external
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../external/output/include -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
-#cgo LDFLAGS: -L${SRCDIR}/../../external/output/lib -lmilvus-storage
+#cgo pkg-config: milvus-storage
+// TODO to be removed, abi.h should be refactor in milvus-storage
+#cgo CFLAGS: -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
 
 #include <stdlib.h>
 #include <stdint.h>
-#include "milvus-storage/ffi_c.h"
 #include "milvus-storage/ffi_filesystem_c.h"
 */
 import "C"
@@ -30,11 +30,34 @@ import "C"
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/zilliztech/woodpecker/common/config"
+)
+
+// Property key accessors using loon_property_fs_*() functions from ffi_filesystem_c.h
+// These variables are initialized at package load time by calling the C functions,
+// ensuring they always match the C-side definitions.
+var (
+	PropertyFsStorageType       = C.GoString(C.loon_property_fs_storage_type())
+	PropertyFsRootPath          = C.GoString(C.loon_property_fs_root_path())
+	PropertyFsAddress           = C.GoString(C.loon_property_fs_address())
+	PropertyFsBucketName        = C.GoString(C.loon_property_fs_bucket_name())
+	PropertyFsRegion            = C.GoString(C.loon_property_fs_region())
+	PropertyFsAccessKeyID       = C.GoString(C.loon_property_fs_access_key_id())
+	PropertyFsAccessKeyValue    = C.GoString(C.loon_property_fs_access_key_value())
+	PropertyFsUseIAM            = C.GoString(C.loon_property_fs_use_iam())
+	PropertyFsIamEndpoint       = C.GoString(C.loon_property_fs_iam_endpoint())
+	PropertyFsGcpCredentialJSON = C.GoString(C.loon_property_fs_gcp_credential_json())
+	PropertyFsUseSSL            = C.GoString(C.loon_property_fs_use_ssl())
+	PropertyFsSSLCACert         = C.GoString(C.loon_property_fs_ssl_ca_cert())
+	PropertyFsUseVirtualHost    = C.GoString(C.loon_property_fs_use_virtual_host())
+	PropertyFsRequestTimeoutMs  = C.GoString(C.loon_property_fs_request_timeout_ms())
+	PropertyFsLogLevel          = C.GoString(C.loon_property_fs_log_level())
+	PropertyFsCloudProvider     = C.GoString(C.loon_property_fs_cloud_provider())
 )
 
 // InitStorageV2FileSystem initializes the filesystem singleton based on configuration
@@ -70,8 +93,43 @@ func CleanLoonFileSystem() {
 }
 
 // buildLocalProperties creates LoonProperties for local filesystem
+// normalizeLogLevel converts log level string to the format required by milvus-storage
+// Valid values: "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "Off"
+func normalizeLogLevel(level string) string {
+	if level == "" {
+		return "Info" // default
+	}
+
+	// Convert to lowercase first, then capitalize first letter
+	level = strings.ToLower(level)
+
+	// Map common variants
+	switch level {
+	case "fatal":
+		return "Fatal"
+	case "error":
+		return "Error"
+	case "warn", "warning":
+		return "Warn"
+	case "info":
+		return "Info"
+	case "debug":
+		return "Debug"
+	case "trace":
+		return "Trace"
+	case "off":
+		return "Off"
+	default:
+		// If unknown, default to Info
+		return "Info"
+	}
+}
+
 func buildLocalProperties(rootPath string) *C.LoonProperties {
-	keys := []string{"storage.type", "storage.root_path"}
+	keys := []string{
+		PropertyFsStorageType,
+		PropertyFsRootPath,
+	}
 	values := []string{"local", rootPath}
 	return buildLoonProperties(keys, values)
 }
@@ -79,22 +137,22 @@ func buildLocalProperties(rootPath string) *C.LoonProperties {
 // buildRemoteProperties creates LoonProperties for remote filesystem (S3/MinIO)
 func buildRemoteProperties(cfg *config.Configuration) *C.LoonProperties {
 	keys := []string{
-		"storage.type",
-		"storage.address",
-		"storage.bucket_name",
-		"storage.access_key_id",
-		"storage.access_key_value",
-		"storage.root_path",
-		"storage.cloud_provider",
-		"storage.iam_endpoint",
-		"storage.use_ssl",
-		"storage.ssl_ca_cert",
-		"storage.use_iam",
-		"storage.log_level",
-		"storage.region",
-		"storage.use_virtual_host",
-		"storage.request_timeout_ms",
-		"storage.gcp_credential_json",
+		PropertyFsStorageType,
+		PropertyFsAddress,
+		PropertyFsBucketName,
+		PropertyFsAccessKeyID,
+		PropertyFsAccessKeyValue,
+		PropertyFsRootPath,
+		PropertyFsCloudProvider,
+		PropertyFsIamEndpoint,
+		PropertyFsUseSSL,
+		PropertyFsSSLCACert,
+		PropertyFsUseIAM,
+		PropertyFsLogLevel,
+		PropertyFsRegion,
+		PropertyFsUseVirtualHost,
+		PropertyFsRequestTimeoutMs,
+		PropertyFsGcpCredentialJSON,
 	}
 
 	values := []string{
@@ -109,7 +167,7 @@ func buildRemoteProperties(cfg *config.Configuration) *C.LoonProperties {
 		strconv.FormatBool(cfg.Minio.UseSSL),
 		cfg.Minio.Ssl.TlsCACert,
 		strconv.FormatBool(cfg.Minio.UseIAM),
-		cfg.Minio.LogLevel,
+		normalizeLogLevel(cfg.Minio.LogLevel),
 		cfg.Minio.Region,
 		strconv.FormatBool(cfg.Minio.UseVirtualHost),
 		strconv.Itoa(cfg.Minio.RequestTimeoutMs),
@@ -147,6 +205,26 @@ func buildLoonProperties(keys, values []string) *C.LoonProperties {
 		properties: (*C.LoonProperty)(properties),
 		count:      C.size_t(count),
 	}
+}
+
+// parseLoonPropertiesToMap converts C LoonProperties to a Go map
+// This is useful for testing and debugging
+func parseLoonPropertiesToMap(props *C.LoonProperties) map[string]string {
+	if props == nil || props.properties == nil || props.count == 0 {
+		return make(map[string]string)
+	}
+
+	result := make(map[string]string)
+	count := int(props.count)
+	propertiesArray := (*[1 << 30]C.LoonProperty)(unsafe.Pointer(props.properties))[:count:count]
+
+	for i := 0; i < count; i++ {
+		key := C.GoString(propertiesArray[i].key)
+		value := C.GoString(propertiesArray[i].value)
+		result[key] = value
+	}
+
+	return result
 }
 
 // freeLoonProperties frees the memory allocated for LoonProperties

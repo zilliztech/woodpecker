@@ -47,10 +47,11 @@ proto_clean:
 
 .PHONY: build
 build:
-	go build -v -o bin/woodpecker./cmd
+	@bash -c 'source $(PWD)/scripts/setenv.sh && go build -v -o bin/woodpecker ./cmd'
 
-test: build
-	go test -cover -race ./...
+.PHONY: test
+test:
+	@bash -c 'source $(PWD)/scripts/setenv.sh && go test -cover -race ./...'
 
 clean:
 	rm -f $(BIN_DIR)/*

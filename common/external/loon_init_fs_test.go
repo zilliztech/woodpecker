@@ -59,10 +59,7 @@ func TestInitRemoteLoonFileSystem(t *testing.T) {
 
 	// Try to initialize remote filesystem
 	err = InitRemoteLoonFileSystem(cfg)
-	if err != nil {
-		t.Skipf("Failed to initialize remote Loon filesystem (MinIO might not be running): %v", err)
-		return
-	}
+	assert.NoError(t, err, "Failed to initialize remote Loon filesystem")
 
 	// Verify we can get the singleton handle
 	handle, err := GetFileSystemSingletonHandle()
@@ -106,10 +103,7 @@ func TestInitStorageV2FileSystem(t *testing.T) {
 		cfg.Minio.BucketName = "a-bucket"
 
 		err := InitStorageV2FileSystem(cfg)
-		if err != nil {
-			t.Skipf("Failed to initialize remote storage (MinIO might not be running): %v", err)
-			return
-		}
+		assert.NoError(t, err, "Failed to initialize remote storage")
 
 		// Verify handle
 		handle, err := GetFileSystemSingletonHandle()
@@ -183,9 +177,142 @@ func TestBuildRemoteProperties(t *testing.T) {
 	freeLoonProperties(props)
 }
 
-func TestHandleLoonFFIResult(t *testing.T) {
-	// Note: This test is limited because we can't easily create LoonFFIResult
-	// structures from Go without calling actual C functions
-	// The actual error handling is tested implicitly through other tests
-	t.Skip("LoonFFIResult testing requires actual C function calls")
+func TestPropertyKeys(t *testing.T) {
+	// Test that our Go variables (initialized from C functions at package load time)
+	// match the expected property key format defined in the C library.
+	// These values are dynamically fetched from loon_property_fs_*() functions.
+	tests := []struct {
+		name     string
+		key      string
+		expected string
+	}{
+		{"StorageType", PropertyFsStorageType, "fs.storage_type"},
+		{"RootPath", PropertyFsRootPath, "fs.root_path"},
+		{"Address", PropertyFsAddress, "fs.address"},
+		{"BucketName", PropertyFsBucketName, "fs.bucket_name"},
+		{"Region", PropertyFsRegion, "fs.region"},
+		{"AccessKeyID", PropertyFsAccessKeyID, "fs.access_key_id"},
+		{"AccessKeyValue", PropertyFsAccessKeyValue, "fs.access_key_value"},
+		{"UseIAM", PropertyFsUseIAM, "fs.use_iam"},
+		{"IamEndpoint", PropertyFsIamEndpoint, "fs.iam_endpoint"},
+		{"GcpCredentialJSON", PropertyFsGcpCredentialJSON, "fs.gcp_credential_json"},
+		{"UseSSL", PropertyFsUseSSL, "fs.use_ssl"},
+		{"SSLCACert", PropertyFsSSLCACert, "fs.ssl_ca_cert"},
+		{"UseVirtualHost", PropertyFsUseVirtualHost, "fs.use_virtual_host"},
+		{"RequestTimeoutMs", PropertyFsRequestTimeoutMs, "fs.request_timeout_ms"},
+		{"LogLevel", PropertyFsLogLevel, "fs.log_level"},
+		{"CloudProvider", PropertyFsCloudProvider, "fs.cloud_provider"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NotEmpty(t, tt.key, "Property key %s should not be empty", tt.name)
+			assert.Equal(t, tt.expected, tt.key,
+				"Property key %s should match expected value from C library", tt.name)
+		})
+	}
+}
+
+func TestPropertyKeysUsedInBuildFunctions(t *testing.T) {
+	t.Run("LocalProperties", func(t *testing.T) {
+		testPath := "/tmp/test"
+		props := buildLocalProperties(testPath)
+		require.NotNil(t, props, "Should return non-nil properties")
+		defer freeLoonProperties(props)
+
+		// We should have at least storage_type and root_path
+		assert.GreaterOrEqual(t, int(props.count), 2, "Should have at least 2 properties")
+
+		// Parse properties into a map for easier verification
+		propsMap := parseLoonPropertiesToMap(props)
+
+		// Verify key-value pairs
+		assert.Equal(t, "local", propsMap[PropertyFsStorageType], "Storage type should be 'local'")
+		assert.Equal(t, testPath, propsMap[PropertyFsRootPath], "Root path should match input")
+	})
+
+	t.Run("RemoteProperties", func(t *testing.T) {
+		cfg := &config.Configuration{
+			Minio: config.MinioConfig{
+				Address:           "localhost",
+				Port:              9000,
+				AccessKeyID:       "minioadmin",
+				SecretAccessKey:   "minioadmin",
+				BucketName:        "test-bucket",
+				RootPath:          "test-root",
+				UseSSL:            false,
+				CloudProvider:     "aws",
+				LogLevel:          "info",
+				Region:            "us-east-1",
+				UseVirtualHost:    false,
+				RequestTimeoutMs:  1000,
+				IamEndpoint:       "iam.aws.com",
+				GcpCredentialJSON: "",
+				Ssl: config.MinioSslConfig{
+					TlsCACert: "/path/to/cert",
+				},
+				UseIAM: true,
+			},
+		}
+
+		props := buildRemoteProperties(cfg)
+		require.NotNil(t, props, "Should return non-nil properties")
+		defer freeLoonProperties(props)
+
+		// Remote properties should have many more fields
+		assert.GreaterOrEqual(t, int(props.count), 10, "Should have at least 10 properties")
+
+		// Parse properties into a map for easier verification
+		propsMap := parseLoonPropertiesToMap(props)
+
+		// Verify key-value pairs match the configuration
+		assert.Equal(t, "remote", propsMap[PropertyFsStorageType], "Storage type should be 'remote'")
+		assert.Equal(t, "localhost:9000", propsMap[PropertyFsAddress], "Address should match host:port")
+		assert.Equal(t, cfg.Minio.BucketName, propsMap[PropertyFsBucketName], "Bucket name should match")
+		assert.Equal(t, cfg.Minio.AccessKeyID, propsMap[PropertyFsAccessKeyID], "Access key ID should match")
+		assert.Equal(t, cfg.Minio.SecretAccessKey, propsMap[PropertyFsAccessKeyValue], "Secret key should match")
+		assert.Equal(t, cfg.Minio.RootPath, propsMap[PropertyFsRootPath], "Root path should match")
+		assert.Equal(t, cfg.Minio.CloudProvider, propsMap[PropertyFsCloudProvider], "Cloud provider should match")
+		assert.Equal(t, cfg.Minio.IamEndpoint, propsMap[PropertyFsIamEndpoint], "IAM endpoint should match")
+		assert.Equal(t, "false", propsMap[PropertyFsUseSSL], "UseSSL should match")
+		assert.Equal(t, cfg.Minio.Ssl.TlsCACert, propsMap[PropertyFsSSLCACert], "SSL CA cert should match")
+		assert.Equal(t, "true", propsMap[PropertyFsUseIAM], "UseIAM should match")
+		assert.Equal(t, normalizeLogLevel(cfg.Minio.LogLevel), propsMap[PropertyFsLogLevel], "Log level should match (normalized)")
+		assert.Equal(t, cfg.Minio.Region, propsMap[PropertyFsRegion], "Region should match")
+		assert.Equal(t, "false", propsMap[PropertyFsUseVirtualHost], "UseVirtualHost should match")
+		assert.Equal(t, "1000", propsMap[PropertyFsRequestTimeoutMs], "Request timeout should match")
+		assert.Equal(t, "", propsMap[PropertyFsGcpCredentialJSON], "GCP credential should match")
+
+		t.Logf("Parsed properties: %+v", propsMap)
+	})
+}
+
+func TestNormalizeLogLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"Empty", "", "Info"},
+		{"Fatal lowercase", "fatal", "Fatal"},
+		{"Error lowercase", "error", "Error"},
+		{"Warn lowercase", "warn", "Warn"},
+		{"Warning", "warning", "Warn"},
+		{"Info lowercase", "info", "Info"},
+		{"Debug lowercase", "debug", "Debug"},
+		{"Trace lowercase", "trace", "Trace"},
+		{"Off lowercase", "off", "Off"},
+		{"Fatal uppercase", "FATAL", "Fatal"},
+		{"Error mixed case", "ErRoR", "Error"},
+		{"Unknown value", "unknown", "Info"},
+		{"Invalid value", "xyz", "Info"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeLogLevel(tt.input)
+			assert.Equal(t, tt.expected, result,
+				"normalizeLogLevel(%q) should return %q", tt.input, tt.expected)
+		})
+	}
 }
