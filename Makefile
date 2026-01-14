@@ -94,5 +94,3 @@ build-3rdparty:
 build-external: build-3rdparty
 	@echo "Building Milvus external cpp library ..."
 	@(env bash $(PWD)/scripts/external_build.sh -t ${mode} -a ${use_asan} ${AZURE_OPTION} -o ${use_opendal} )
-	@echo "Fixing milvus-storage.pc ..."
-	@bash $(PWD)/scripts/fix_milvus_storage_pc.sh
