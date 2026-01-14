@@ -329,14 +329,10 @@ func TestLoonRemoteFileOperations(t *testing.T) {
 
 	// Initialize remote filesystem
 	err = InitStorageV2FileSystem(cfg)
-	if err != nil {
-		t.Skipf("Failed to initialize remote filesystem (MinIO might not be running): %v", err)
-		return
-	}
+	assert.NoError(t, err, "Failed to initialize remote filesystem")
 
 	// Test data
-	testFileName := fmt.Sprintf("%s/%s/loon_remote_test_%d.txt",
-		cfg.Minio.BucketName, cfg.Minio.RootPath, time.Now().Unix())
+	testFileName := fmt.Sprintf("%s/loon_remote_test_%d.txt", cfg.Minio.RootPath, time.Now().Unix())
 	testData := []byte("Hello, Loon! This is a test file for remote MinIO storage.")
 	testMetadata := map[string]string{
 		"storage": "minio",
@@ -409,8 +405,7 @@ func TestLoonRemoteFileOperations(t *testing.T) {
 	})
 
 	t.Run("LargeRemoteFile", func(t *testing.T) {
-		largeFileName := fmt.Sprintf("%s/%s/loon_large_file_%d.bin",
-			cfg.Minio.BucketName, cfg.Minio.RootPath, time.Now().Unix())
+		largeFileName := fmt.Sprintf("%s/loon_large_file_%d.bin", cfg.Minio.RootPath, time.Now().Unix())
 
 		// Create a 1MB file
 		largeData := make([]byte, 1024*1024)

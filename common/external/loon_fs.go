@@ -17,12 +17,12 @@
 package external
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../external/output/include -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
-#cgo LDFLAGS: -L${SRCDIR}/../../external/output/lib -lmilvus-storage
+#cgo pkg-config: milvus-storage
+// TODO to be removed, abi.h should be refactor in milvus-storage
+#cgo CFLAGS: -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
 
 #include <stdlib.h>
 #include <stdint.h>
-#include "milvus-storage/ffi_c.h"
 #include "milvus-storage/ffi_filesystem_c.h"
 */
 import "C"

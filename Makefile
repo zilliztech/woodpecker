@@ -62,11 +62,12 @@ proto_clean:
 	rm -f */*.pb.go
 
 .PHONY: build
-build: ## Build binary for current platform
-	go build -v -o bin/woodpecker ./cmd
+build:
+	@bash -c 'source $(PWD)/scripts/setenv.sh && go build -v -o bin/woodpecker ./cmd'
 
-test: build ## Run all tests
-	go test -cover -race ./...
+.PHONY: test
+test:
+	@bash -c 'source $(PWD)/scripts/setenv.sh && go test -cover -race ./...'
 
 .PHONY: lint
 lint: ## Run golangci-lint
