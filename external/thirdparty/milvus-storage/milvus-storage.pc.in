@@ -1,9 +1,10 @@
 libdir=@CMAKE_INSTALL_FULL_LIBDIR@
 includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
+arrow_c_includedir=@CMAKE_CURRENT_SOURCE_DIR@/milvus-storage-src/rust
 
 Name: Milvus Storage
 Description: Storage modules for Milvus
 Version: @MILVUS_VERSION@
 
 Libs: -L${libdir} -lmilvus-storage
-Cflags: -I${includedir}
+Cflags: -I${includedir} -I${arrow_c_includedir}

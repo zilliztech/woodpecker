@@ -18,8 +18,6 @@ package external
 
 /*
 #cgo pkg-config: milvus-storage
-// TODO to be removed, abi.h should be refactor in milvus-storage
-#cgo CFLAGS: -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
 
 #include <stdlib.h>
 #include <stdint.h>
