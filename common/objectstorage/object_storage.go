@@ -55,6 +55,16 @@ type ObjectStorage interface {
 }
 
 func NewObjectStorage(ctx context.Context, c *config.Configuration) (ObjectStorage, error) {
+	return NewExternalObjectStorageIfNecessary(ctx, c, false)
+}
+
+func NewExternalObjectStorageIfNecessary(ctx context.Context, c *config.Configuration, forceUseExternal bool) (ObjectStorage, error) {
+	// external ObjectStorage impl
+	if forceUseExternal {
+		return newExternalObjectStorage(ctx, c)
+	}
+
+	// builtin ObjectStorage impl
 	var client ObjectStorage
 	var err error
 	if c.Minio.CloudProvider == minioHandler.CloudProviderAzure {
