@@ -26,10 +26,11 @@ var _ memberlist.EventDelegate = (*EventDelegate)(nil)
 type EventDelegate struct {
 	discovery *ServiceDiscovery
 	role      NodeRole
+	addrPort  string // only used for logging
 }
 
-func NewEventDelegate(discovery *ServiceDiscovery, role NodeRole) *EventDelegate {
-	return &EventDelegate{discovery: discovery, role: role}
+func NewEventDelegate(discovery *ServiceDiscovery, role NodeRole, addrPort string) *EventDelegate {
+	return &EventDelegate{discovery: discovery, role: role, addrPort: addrPort}
 }
 
 // NotifyJoin node joins
@@ -39,9 +40,9 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 		if err := pb.Unmarshal(node.Meta, &meta); err == nil {
 			e.discovery.UpdateServer(node.Name, &meta)
 			if e.role == RoleClient {
-				log.Printf("[CLIENT-WATCH] Server joined: %s (RG: %s, AZ: %s, Endpoint: %s)", node.Name, meta.ResourceGroup, meta.Az, meta.Endpoint)
+				log.Printf("[CLIENT-WATCH] Server[%s] joined: %s (RG: %s, AZ: %s, Endpoint: %s)", e.addrPort, node.Name, meta.ResourceGroup, meta.Az, meta.Endpoint)
 			} else {
-				log.Printf("[SERVER-EVENT] Server joined: %s (RG: %s, AZ: %s)", node.Name, meta.ResourceGroup, meta.Az)
+				log.Printf("[SERVER-EVENT] Server[%s] joined: %s (RG: %s, AZ: %s)", e.addrPort, node.Name, meta.ResourceGroup, meta.Az)
 			}
 		}
 	} else { // no meta, indicating a client role joining

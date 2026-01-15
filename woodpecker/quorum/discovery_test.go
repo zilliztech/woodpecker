@@ -220,7 +220,9 @@ func TestQuorumDiscovery_StrategyTypeMapping(t *testing.T) {
 			ctx := context.Background()
 			cfg := &config.QuorumConfig{
 				BufferPools: []config.QuorumBufferPool{
-					{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+					{Name: "region-a", Seeds: []string{"seed-a-0:8080", "seed-a-1:8080", "seed-a-2:8080"}},
+					{Name: "region-b", Seeds: []string{"seed-b-0:8080", "seed-b-1:8080"}},
+					{Name: "region-c", Seeds: []string{"seed-c-0:8080"}},
 				},
 				SelectStrategy: config.QuorumSelectStrategy{
 					Strategy:     tt.strategy,
@@ -232,10 +234,13 @@ func TestQuorumDiscovery_StrategyTypeMapping(t *testing.T) {
 			mockClient := mocks_logstore_client.NewLogStoreClient(t)
 			mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
-			mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed-a:8080").Return(mockClient, nil)
-			mockClient.EXPECT().SelectNodes(ctx, tt.expectedStrategy, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
-				{Endpoint: "node:8080"},
-			}, nil)
+			mockClientPool.EXPECT().GetLogStoreClient(ctx, mock.Anything).Return(mockClient, nil)
+			mockClient.EXPECT().SelectNodes(ctx, tt.expectedStrategy, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return(
+				[]*proto.NodeMeta{
+					{Endpoint: "node-1:8080"},
+					{Endpoint: "node-2:8080"},
+					{Endpoint: "node-3:8080"},
+				}, nil)
 
 			discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
 			assert.NoError(t, err)

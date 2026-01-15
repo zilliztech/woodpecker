@@ -88,7 +88,7 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 	}
 	discovery := NewServiceDiscovery()
 	delegate := NewServerDelegate(meta)
-	eventDel := NewEventDelegate(discovery, RoleServer)
+	eventDel := NewEventDelegate(discovery, RoleServer, fmt.Sprintf("%s:%d", endpointAddr, endpointPort))
 
 	mlConfig := ml.DefaultLocalConfig()
 	mlConfig.Name = config.NodeID // unique identifier name for a node

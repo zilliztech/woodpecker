@@ -230,6 +230,7 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 
 	for index, ch := range op.resultChannels {
 		if ch == nil {
+			logger.Ctx(ctx).Info(fmt.Sprintf("FastFail channel is nil for log:%d seg:%d entry:%d, skipping", op.logId, op.segmentId, op.entryId))
 			continue
 		}
 		sendErr := ch.SendResult(ctx, &channel.AppendResult{

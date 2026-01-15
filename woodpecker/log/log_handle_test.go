@@ -1042,12 +1042,12 @@ func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWr
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
 				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
-					MaxInterval: 10,
+					MaxInterval: config.NewDurationSecondsFromInt(10),
 					MaxSize:     64 * 1024 * 1024,
 					MaxBlocks:   1000,
 				},
 				Auditor: config.AuditorConfig{
-					MaxInterval: 5,
+					MaxInterval: config.NewDurationSecondsFromInt(5),
 				},
 			},
 			Storage: config.StorageConfig{
@@ -1062,7 +1062,7 @@ func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWr
 	}
 
 	segments := map[int64]*meta.SegmentMeta{}
-	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg).(*logHandleImpl)
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, nil).(*logHandleImpl)
 
 	return logHandle, mockMeta
 }
@@ -1315,11 +1315,11 @@ func TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments(t *testing
 	logHandle.SegmentHandles[1] = mockSegment1
 
 	// Mock successful fencing
-	mockSegment1.EXPECT().Fence(mock.Anything).Return(int64(100), nil)
+	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
 
 	// Mock metadata update after fencing
 	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Sealed && meta.Metadata.LastEntryId == 100
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
 	})).Return(nil)
 
 	// Call OpenLogWriter

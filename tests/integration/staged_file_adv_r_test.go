@@ -19,7 +19,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"github.com/zilliztech/woodpecker/common/werr"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,6 +31,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"

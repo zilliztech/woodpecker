@@ -150,7 +150,7 @@ func TestMiniCluster_LastScale(t *testing.T) {
 
 	// Verify active nodes count
 	activeNodes := clientNode.GetDiscovery().GetAllServers()
-	assert.Equal(t, 0, len(activeNodes), "All nodes should be stopped")
+	assert.Equal(t, 0, len(activeNodes), "All nodes should be stopped", activeNodes)
 
 	t.Logf("TestMiniCluster_Basic completed successfully")
 }
@@ -747,12 +747,12 @@ func TestMiniCluster_AddressBasedOperations(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Get initial addresses
-	seedList := cluster.GetSeedList()
-	assert.Equal(t, 3, len(seedList), "Should have 3 seed addresses")
-	t.Logf("Initial seed list: %v", seedList)
+	gossipSeedList := cluster.GetSeedList()
+	assert.Equal(t, 3, len(gossipSeedList), "Should have 3 seed addresses")
+	t.Logf("Initial seed list: %v", gossipSeedList)
 
 	// Pick one address to leave
-	targetAddress := seedList[1] // Choose the second node
+	targetAddress := gossipSeedList[1] // Choose the second node
 	t.Logf("Target address to leave: %s", targetAddress)
 
 	// Get nodeIndex for this address (for verification)

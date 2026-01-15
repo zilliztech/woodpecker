@@ -240,7 +240,7 @@ func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.
 		return nil, fmt.Errorf("expected 1 filter for single-region strategy, got %d", len(d.filters))
 	}
 
-	return d.requestNodesFromSeed(ctx, selectedSeed, d.filters[0])
+	return d.requestNodesFromSeed(ctx, selectedSeed, d.filters[0], int(d.wq))
 }
 
 func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
@@ -286,7 +286,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 		}
 
 		// Request nodes from this region
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, regionFilter)
+		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, regionFilter, 0)
 		if err != nil {
 			if d.affinityMode == proto.AffinityMode_HARD {
 				return nil, err
@@ -371,7 +371,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 		selectedSeed := targetPool.Seeds[rand.Intn(len(targetPool.Seeds))]
 
 		// Use pre-built filter for this placement
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, d.filters[i])
+		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, d.filters[i], int(d.filters[i].Limit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to select node for custom placement rule %d (region: %s, az: %s, rg: %s): %w",
 				i, placement.Region, placement.Az, placement.ResourceGroup, err)
@@ -441,7 +441,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 		}
 
 		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
-		fillResult, err := d.requestNodesFromSeed(ctx, selectedSeed, fillFilter)
+		fillResult, err := d.requestNodesFromSeed(ctx, selectedSeed, fillFilter, 0)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get remaining nodes from pool, continuing with soft affinity",
 				zap.String("poolName", pool.Name),
@@ -452,6 +452,11 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			currentNodes = append(currentNodes, fillResult.Nodes...)
 			break
 		}
+	}
+
+	// Still not enough nodes, return error
+	if len(currentNodes) < requiredNodes {
+		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient quorum: expected %d nodes, got %d nodes", requiredNodes, len(currentNodes)))
 	}
 
 	result := &proto.QuorumInfo{
@@ -465,7 +470,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 	return result, nil
 }
 
-func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string, filter *proto.NodeFilter) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string, filter *proto.NodeFilter, expectedAtLeast int) (*proto.QuorumInfo, error) {
 	logger.Ctx(ctx).Debug("Requesting nodes from seed via gRPC",
 		zap.String("seed", seed),
 		zap.Int32("nodeCount", filter.Limit),
@@ -486,8 +491,8 @@ func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string,
 		return nil, fmt.Errorf("gRPC SelectNodes call failed for seed %s: %w", seed, err)
 	}
 
-	if len(selectedNodes) < int(d.wq) {
-		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), seed))
+	if len(selectedNodes) < expectedAtLeast {
+		return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes (%d/%d) satisfy the current selection strategy, returned by seed: %s", len(selectedNodes), expectedAtLeast, seed))
 	}
 
 	// Convert to endpoint addresses

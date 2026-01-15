@@ -30,6 +30,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/funcutil"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
 	wpNet "github.com/zilliztech/woodpecker/common/net"
@@ -42,7 +43,7 @@ type Server struct {
 	cfg          *config.Configuration
 	serverNode   *membership.ServerNode
 	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
-	seeds        []string                 // Seeds for cluster joining
+	gossipSeeds  []string                 // Seeds for cluster joining
 	logStore     LogStore
 	grpcWG       sync.WaitGroup
 	grpcErrChan  chan error
@@ -54,7 +55,7 @@ type Server struct {
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
-func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, seeds []string) *Server {
+func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) *Server {
 	return NewServerWithConfig(ctx, configuration, &membership.ServerConfig{
 		NodeID:               "", // Will be set in Prepare()
 		BindPort:             bindPort,
@@ -64,11 +65,11 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 		ResourceGroup:        "default",   // Default resource group
 		AZ:                   "default",   // Default availability zone
 		Tags:                 map[string]string{"role": "logstore"},
-	}, seeds)
+	}, gossipSeeds)
 }
 
 // NewServerWithConfig creates a new server instance with custom configuration
-func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, seeds []string) *Server {
+func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
@@ -87,7 +88,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
-	s.seeds = seeds
+	s.gossipSeeds = gossipSeeds
 	return s
 }
 
@@ -101,8 +102,8 @@ func (s *Server) Prepare() error {
 	s.logStore.SetAddress(s.listener.Addr().String())
 
 	// Start async join if seeds are provided
-	if len(s.seeds) > 0 {
-		go s.asyncStartAndJoinSeeds(s.ctx, s.seeds)
+	if len(s.gossipSeeds) > 0 {
+		go s.asyncStartAndJoinSeeds(s.ctx, s.gossipSeeds)
 	}
 
 	return nil
@@ -142,9 +143,13 @@ func (s *Server) startGrpcLoop() {
 	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
+	funcutil.CheckGrpcReady(s.ctx, s.grpcErrChan)
+	logger.Ctx(s.ctx).Info("start grpc server", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.listener.Addr().String()))
 	if err := s.grpcServer.Serve(s.listener); err != nil {
+		logger.Ctx(s.ctx).Error("grpc server failed", zap.Error(err))
 		s.grpcErrChan <- err
 	}
+	logger.Ctx(s.ctx).Info("grpc server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 }
 
 func (s *Server) start() error {
@@ -157,18 +162,39 @@ func (s *Server) start() error {
 }
 
 func (s *Server) Stop() error {
+	// First, stop accepting new connections by closing the listener
+	if s.listener != nil {
+		if err := s.listener.Close(); err != nil {
+			logger.Ctx(s.ctx).Warn("failed to close listener", zap.Error(err))
+		}
+	}
+
+	// Leave and shutdown the gossip cluster
 	if s.serverNode != nil {
+		// First, notify other nodes we're leaving
 		leaveErr := s.serverNode.Leave()
 		if leaveErr != nil {
 			logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
 		}
+		// Then shutdown the memberlist to release ports immediately
+		shutdownErr := s.serverNode.Shutdown()
+		if shutdownErr != nil {
+			logger.Ctx(s.ctx).Error("server node shutdown failed", zap.Error(shutdownErr))
+		}
 	}
+
+	// Stop the log store
 	stopErr := s.logStore.Stop()
 	if stopErr != nil {
 		logger.Ctx(s.ctx).Error("log store stop failed", zap.Error(stopErr))
 	}
+
+	// Gracefully stop the gRPC server (wait for in-flight requests)
 	s.grpcServer.GracefulStop()
+
+	// Cancel the context
 	s.cancel()
+
 	logger.Ctx(s.ctx).Info("server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 	return nil
 }
@@ -190,7 +216,8 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 		sendErr := serverStream.Send(&proto.AddEntryResponse{
 			State:   proto.AddEntryState_Failed,
 			EntryId: bufferedId,
-			Status:  werr.Status(err)},
+			Status:  werr.Status(err),
+		},
 		)
 		if sendErr != nil {
 			logger.Ctx(streamCtx).Warn("failed to send error response", zap.Error(sendErr))
@@ -202,7 +229,8 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 	sendErr := serverStream.Send(&proto.AddEntryResponse{
 		State:   proto.AddEntryState_Buffered,
 		EntryId: bufferedId,
-		Status:  werr.Success()},
+		Status:  werr.Success(),
+	},
 	)
 	if sendErr != nil {
 		logger.Ctx(streamCtx).Warn("failed to send buffered response", zap.Error(sendErr))
@@ -218,7 +246,8 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 		sendErr = serverStream.Send(&proto.AddEntryResponse{
 			State:   proto.AddEntryState_Failed,
 			EntryId: id,
-			Status:  werr.Status(err)},
+			Status:  werr.Status(err),
+		},
 		)
 		return sendErr
 	}
@@ -226,7 +255,8 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 	sendErr = serverStream.Send(&proto.AddEntryResponse{
 		State:   proto.AddEntryState_Synced,
 		EntryId: result.SyncedId,
-		Status:  werr.Success()},
+		Status:  werr.Success(),
+	},
 	)
 	return sendErr // Return nil for normal closure, not the context error
 }
@@ -372,16 +402,7 @@ func (s *Server) GetServiceAdvertiseAddrPort(ctx context.Context) string {
 
 // GetAdvertiseAddrPort Use for test only
 func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
-	if s.serverNode == nil {
-		return ""
-	}
-	// Get the actual gossip advertise address from the memberlist configuration
-	ml := s.serverNode.GetMemberlist()
-	config := ml.LocalNode()
-	// Use the actual advertise address from memberlist, fall back to bind address if not set
-	addr := config.Addr
-	port := config.Port
-	return fmt.Sprintf("%s:%d", addr, port)
+	return fmt.Sprintf("%s:%d", s.serverConfig.AdvertiseAddr, s.serverConfig.AdvertisePort)
 }
 
 // asyncJoinSeeds continuously monitors and joins missing seed nodes with adaptive backoff [[memory:3527742]]

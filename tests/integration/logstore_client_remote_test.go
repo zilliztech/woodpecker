@@ -38,6 +38,28 @@ func generateUniqueLogId() int64 {
 	return time.Now().UnixNano() / 1000000 // Use milliseconds to ensure uniqueness
 }
 
+// waitForServerReady waits for the gRPC server to be ready by attempting to connect
+func waitForServerReady(ctx context.Context, target string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	clientPool := client.NewLogStoreClientPool(268435456, 536870912)
+	defer clientPool.Close(ctx)
+
+	for time.Now().Before(deadline) {
+		// Try to get a client connection
+		testClient, err := clientPool.GetLogStoreClient(ctx, target)
+		if err == nil && testClient != nil {
+			// Connection successful, server is ready
+			_ = testClient.Close(ctx)
+			return true
+		}
+
+		// Wait a bit before retrying
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return false
+}
+
 func TestRemoteClient_BasicAppend(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestRemoteClient_BasicAppend")
@@ -101,11 +123,13 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 				}
 			}()
 
-			// Wait a bit for server to start
-			time.Sleep(500 * time.Millisecond)
-
 			// Use the known service port
 			target := fmt.Sprintf("localhost:%d", servicePort)
+
+			// Wait for server to be ready with health check
+			if !waitForServerReady(ctx, target, 10*time.Second) {
+				t.Fatal("Server failed to start within timeout")
+			}
 
 			// Create remote client pool
 			clientPool := client.NewLogStoreClientPool(268435456, 536870912)
@@ -224,11 +248,13 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 				}
 			}()
 
-			// Wait a bit for server to start
-			time.Sleep(500 * time.Millisecond)
-
 			// Use the known service port
 			target := fmt.Sprintf("localhost:%d", servicePort)
+
+			// Wait for server to be ready with health check
+			if !waitForServerReady(ctx, target, 10*time.Second) {
+				t.Fatal("Server failed to start within timeout")
+			}
 
 			// Create remote client pool
 			clientPool := client.NewLogStoreClientPool(268435456, 536870912)
@@ -353,11 +379,13 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 				}
 			}()
 
-			// Wait a bit for server to start
-			time.Sleep(500 * time.Millisecond)
-
 			// Use the known service port
 			target := fmt.Sprintf("localhost:%d", servicePort)
+
+			// Wait for server to be ready with health check
+			if !waitForServerReady(ctx, target, 10*time.Second) {
+				t.Fatal("Server failed to start within timeout")
+			}
 
 			// Create remote client pool
 			clientPool := client.NewLogStoreClientPool(268435456, 536870912)

@@ -41,7 +41,7 @@ type ClientConfig struct {
 func NewClientNode(config *ClientConfig) (*ClientNode, error) {
 	discovery := NewServiceDiscovery()
 	delegate := NewClientDelegate()
-	eventDel := NewEventDelegate(discovery, RoleClient)
+	eventDel := NewEventDelegate(discovery, RoleClient, fmt.Sprintf("%s:%d", config.BindAddr, config.BindPort))
 
 	mlConfig := ml.DefaultLocalConfig()
 	mlConfig.Name = config.NodeID       // client as the unique name identifier for gossip protocol node
@@ -65,7 +65,7 @@ func (n *ClientNode) Join(existing []string) error {
 	if len(existing) > 0 {
 		count, err := n.memberlist.Join(existing)
 		if err != nil {
-			return fmt.Errorf("failed to join cluster: %w", err)
+			return fmt.Errorf("failed to join cluster %+v: %w", existing, err)
 		}
 		log.Printf("[CLIENT] Successfully connected to %d nodes", count)
 	}

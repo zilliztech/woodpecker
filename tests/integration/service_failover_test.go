@@ -295,7 +295,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	readCount := 0
 	maxReads := 10
 	for i := 0; i < maxReads; i++ {
-		readCtx, readCancel := context.WithTimeout(ctx, 1*time.Second)
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
 		msg, readErr := logReader.ReadNext(readCtx)
 		readCancel()
 

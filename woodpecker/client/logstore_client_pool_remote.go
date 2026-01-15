@@ -22,9 +22,11 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -49,6 +51,7 @@ func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClien
 }
 
 func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
+	logger.Ctx(ctx).Debug("logstore_client_pool", zap.String("target", target), zap.Any("clients", p.clients), zap.Any("conns", p.connections))
 	p.RLock()
 	client, ok := p.clients[target]
 	p.RUnlock()
@@ -92,15 +95,15 @@ func (p *logStoreClientPool) getConnectionFromPoolUnsafe(target string) (grpc.Cl
 }
 
 func (p *logStoreClientPool) newConnection(target string) (*grpc.ClientConn, error) {
-	// TODO make more options configurable
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(p.maxRecvMsgSize),
 			grpc.MaxCallSendMsgSize(p.maxSendMsgSize),
-			grpc.WaitForReady(true),
+			// NOTE: grpc.WaitForReady(true) is not used here because it will block the connection
+			grpc.WaitForReady(false),
 		),
-		grpc.WithBlock(),
+		// NOTE: grpc.WithBlock() is not used here because it will block the connection
 		grpc.WithChainUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(otelgrpc.StreamClientInterceptor()),
 	}

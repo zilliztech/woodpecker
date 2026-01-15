@@ -374,7 +374,7 @@ func TestQuorumDiscoveryIntegration_InsufficientNodes(t *testing.T) {
 		},
 		SelectStrategy: config.QuorumSelectStrategy{
 			Strategy:     "random",
-			AffinityMode: "soft", // Should still work with fewer nodes in soft mode
+			AffinityMode: "soft", // Should still err with fewer nodes in soft mode, soft mode only used to restrict location, not for replicas
 			Replicas:     5,      // Request more nodes than available
 		},
 	}
@@ -388,22 +388,12 @@ func TestQuorumDiscoveryIntegration_InsufficientNodes(t *testing.T) {
 	defer discovery.Close(ctx)
 
 	// Test the selection - should succeed in soft mode
-	result, err := discovery.SelectQuorum(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-
-	// Verify we get available nodes (may be less than requested)
-	assert.True(t, len(result.Nodes) <= len(serviceSeeds), "Should not return more nodes than available")
-	assert.Greater(t, len(result.Nodes), 0, "Should return at least some nodes")
-
-	// Verify all returned nodes have valid ports
-	servicePorts := extractPorts(serviceSeeds)
-	for j, node := range result.Nodes {
-		selectedPort := extractPort(node)
-		assert.Contains(t, servicePorts, selectedPort, "Selected node %d port should match one of the service ports", j)
-	}
-
-	t.Logf("Requested 5 nodes, got %d nodes: %v", len(result.Nodes), result.Nodes)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result, err := discovery.SelectQuorum(timeoutCtx)
+	assert.Error(t, err, "Should fail in soft mode with insufficient nodes")
+	assert.True(t, strings.Contains(err.Error(), "insufficient nodes"), "should return last retry error when timeout, which msg contains 'insufficient nodes'")
+	assert.Nil(t, result)
 }
 
 func TestQuorumDiscoveryIntegration_NodeFailureRecovery(t *testing.T) {

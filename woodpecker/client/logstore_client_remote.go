@@ -53,6 +53,7 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName s
 }
 
 func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId))
 	l.mu.RLock()
 	if l.closed {
 		l.mu.RUnlock()
@@ -65,6 +66,7 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 
 	// Send unary append request first to get the actual entryId
 	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Entry: entry})
+	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry called", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId))
 	if err != nil {
 		streamCancel() // Cancel context on error
 		return -1, err
