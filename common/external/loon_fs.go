@@ -47,11 +47,10 @@ func GetFileStats(path string) (*FileInfo, error) {
 	defer C.free(unsafe.Pointer(cPath))
 
 	var size C.uint64_t
-	var keys **C.char
-	var values **C.char
-	var count C.uint32_t
+	var metaArray *C.LoonFileSystemMeta
+	var metaCount C.uint32_t
 
-	result := C.loon_filesystem_get_file_stats(handle, cPath, pathLen, &size, &keys, &values, &count)
+	result := C.loon_filesystem_get_file_stats(handle, cPath, pathLen, &size, &metaArray, &metaCount)
 	if err := HandleLoonFFIResult(&result, "GetFileStats failed"); err != nil {
 		return nil, err
 	}
@@ -62,24 +61,21 @@ func GetFileStats(path string) (*FileInfo, error) {
 	}
 
 	// Parse metadata if available
-	if count > 0 && keys != nil && values != nil {
+	if metaCount > 0 && metaArray != nil {
 		defer func() {
-			// Free the metadata arrays
-			keysSlice := unsafe.Slice(keys, int(count))
-			valuesSlice := unsafe.Slice(values, int(count))
-			for i := 0; i < int(count); i++ {
-				C.free(unsafe.Pointer(keysSlice[i]))
-				C.free(unsafe.Pointer(valuesSlice[i]))
+			// Free the metadata array
+			metaSlice := unsafe.Slice(metaArray, int(metaCount))
+			for i := 0; i < int(metaCount); i++ {
+				C.free(unsafe.Pointer(metaSlice[i].key))
+				C.free(unsafe.Pointer(metaSlice[i].value))
 			}
-			C.free(unsafe.Pointer(keys))
-			C.free(unsafe.Pointer(values))
+			C.free(unsafe.Pointer(metaArray))
 		}()
 
-		keysSlice := unsafe.Slice(keys, int(count))
-		valuesSlice := unsafe.Slice(values, int(count))
-		for i := 0; i < int(count); i++ {
-			key := C.GoString(keysSlice[i])
-			value := C.GoString(valuesSlice[i])
+		metaSlice := unsafe.Slice(metaArray, int(metaCount))
+		for i := 0; i < int(metaCount); i++ {
+			key := C.GoString(metaSlice[i].key)
+			value := C.GoString(metaSlice[i].value)
 			info.Metadata[key] = value
 		}
 	}
@@ -173,38 +169,33 @@ func WriteFile(path string, data []byte, metadata map[string]string) error {
 	}
 
 	// Prepare metadata if provided
-	var cKeys **C.char
-	var cValues **C.char
-	var metadataCount C.uint32_t
+	var metaArray *C.LoonFileSystemMeta
+	var metaCount C.uint32_t
 
 	if len(metadata) > 0 {
-		metadataCount = C.uint32_t(len(metadata))
+		metaCount = C.uint32_t(len(metadata))
 
-		// Allocate arrays for keys and values
-		keysArray := make([]*C.char, len(metadata))
-		valuesArray := make([]*C.char, len(metadata))
+		// Allocate array of LoonFileSystemMeta
+		metaArray = (*C.LoonFileSystemMeta)(C.malloc(C.size_t(metaCount) * C.size_t(unsafe.Sizeof(C.LoonFileSystemMeta{}))))
+		metaSlice := unsafe.Slice(metaArray, int(metaCount))
 
 		i := 0
 		for k, v := range metadata {
-			keysArray[i] = C.CString(k)
-			valuesArray[i] = C.CString(v)
+			metaSlice[i].key = C.CString(k)
+			metaSlice[i].value = C.CString(v)
 			i++
 		}
 
 		defer func() {
 			for i := 0; i < len(metadata); i++ {
-				C.free(unsafe.Pointer(keysArray[i]))
-				C.free(unsafe.Pointer(valuesArray[i]))
+				C.free(unsafe.Pointer(metaSlice[i].key))
+				C.free(unsafe.Pointer(metaSlice[i].value))
 			}
+			C.free(unsafe.Pointer(metaArray))
 		}()
-
-		if len(keysArray) > 0 {
-			cKeys = &keysArray[0]
-			cValues = &valuesArray[0]
-		}
 	}
 
-	result := C.loon_filesystem_write_file(handle, cPath, pathLen, cData, dataSize, cKeys, cValues, metadataCount)
+	result := C.loon_filesystem_write_file(handle, cPath, pathLen, cData, dataSize, metaArray, metaCount)
 	return HandleLoonFFIResult(&result, "WriteFile failed")
 }
 
