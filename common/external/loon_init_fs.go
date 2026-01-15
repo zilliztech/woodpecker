@@ -18,6 +18,7 @@ package external
 
 /*
 #cgo pkg-config: milvus-storage
+#cgo CFLAGS: -I${SRCDIR}/../../cmake_build/thirdparty/milvus-storage/milvus-storage-src/rust
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -93,6 +94,7 @@ func CleanLoonFileSystem() {
 // buildLocalProperties creates LoonProperties for local filesystem
 // normalizeLogLevel converts log level string to the format required by milvus-storage
 // Valid values: "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "Off"
+// TODO should be remove after storage v2 support case-insensitive
 func normalizeLogLevel(level string) string {
 	if level == "" {
 		return "Info" // default
