@@ -22,6 +22,8 @@ package external
 
 #include <stdlib.h>
 #include <stdint.h>
+
+#include "milvus-storage/ffi_c.h"
 #include "milvus-storage/ffi_filesystem_c.h"
 */
 import "C"
@@ -41,22 +43,22 @@ import (
 // These variables are initialized at package load time by calling the C functions,
 // ensuring they always match the C-side definitions.
 var (
-	PropertyFsStorageType       = C.GoString(C.loon_property_fs_storage_type())
-	PropertyFsRootPath          = C.GoString(C.loon_property_fs_root_path())
-	PropertyFsAddress           = C.GoString(C.loon_property_fs_address())
-	PropertyFsBucketName        = C.GoString(C.loon_property_fs_bucket_name())
-	PropertyFsRegion            = C.GoString(C.loon_property_fs_region())
-	PropertyFsAccessKeyID       = C.GoString(C.loon_property_fs_access_key_id())
-	PropertyFsAccessKeyValue    = C.GoString(C.loon_property_fs_access_key_value())
-	PropertyFsUseIAM            = C.GoString(C.loon_property_fs_use_iam())
-	PropertyFsIamEndpoint       = C.GoString(C.loon_property_fs_iam_endpoint())
-	PropertyFsGcpCredentialJSON = C.GoString(C.loon_property_fs_gcp_credential_json())
-	PropertyFsUseSSL            = C.GoString(C.loon_property_fs_use_ssl())
-	PropertyFsSSLCACert         = C.GoString(C.loon_property_fs_ssl_ca_cert())
-	PropertyFsUseVirtualHost    = C.GoString(C.loon_property_fs_use_virtual_host())
-	PropertyFsRequestTimeoutMs  = C.GoString(C.loon_property_fs_request_timeout_ms())
-	PropertyFsLogLevel          = C.GoString(C.loon_property_fs_log_level())
-	PropertyFsCloudProvider     = C.GoString(C.loon_property_fs_cloud_provider())
+	PropertyFsStorageType       = C.GoString(C.loon_properties_fs_storage_type)
+	PropertyFsRootPath          = C.GoString(C.loon_properties_fs_root_path)
+	PropertyFsAddress           = C.GoString(C.loon_properties_fs_address)
+	PropertyFsBucketName        = C.GoString(C.loon_properties_fs_bucket_name)
+	PropertyFsRegion            = C.GoString(C.loon_properties_fs_region)
+	PropertyFsAccessKeyID       = C.GoString(C.loon_properties_fs_access_key_id)
+	PropertyFsAccessKeyValue    = C.GoString(C.loon_properties_fs_access_key_value)
+	PropertyFsUseIAM            = C.GoString(C.loon_properties_fs_use_iam)
+	PropertyFsIamEndpoint       = C.GoString(C.loon_properties_fs_iam_endpoint)
+	PropertyFsGcpCredentialJSON = C.GoString(C.loon_properties_fs_gcp_credential_json)
+	PropertyFsUseSSL            = C.GoString(C.loon_properties_fs_use_ssl)
+	PropertyFsSSLCACert         = C.GoString(C.loon_properties_fs_ssl_ca_cert)
+	PropertyFsUseVirtualHost    = C.GoString(C.loon_properties_fs_use_virtual_host)
+	PropertyFsRequestTimeoutMs  = C.GoString(C.loon_properties_fs_request_timeout_ms)
+	PropertyFsLogLevel          = C.GoString(C.loon_properties_fs_log_level)
+	PropertyFsCloudProvider     = C.GoString(C.loon_properties_fs_cloud_provider)
 )
 
 // InitStorageV2FileSystem initializes the filesystem singleton based on configuration

@@ -17,7 +17,7 @@ set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES 
 # TODO Use official repository version instead of private fork
 #set( milvus-storage_VERSION 839a8e5)
 #set( GIT_REPOSITORY  "https://github.com/milvus-io/milvus-storage.git")
-set( milvus-storage_VERSION 4368a27)
+set( milvus-storage_VERSION 28056ac)
 set( GIT_REPOSITORY  "https://github.com/tinswzy/milvus-storage.git")
 message(STATUS "milvus-storage repo: ${GIT_REPOSITORY}")
 message(STATUS "milvus-storage version: ${milvus-storage_VERSION}")
