@@ -62,15 +62,7 @@ func GetFileStats(path string) (*FileInfo, error) {
 
 	// Parse metadata if available
 	if metaCount > 0 && metaArray != nil {
-		defer func() {
-			// Free the metadata array
-			metaSlice := unsafe.Slice(metaArray, int(metaCount))
-			for i := 0; i < int(metaCount); i++ {
-				C.free(unsafe.Pointer(metaSlice[i].key))
-				C.free(unsafe.Pointer(metaSlice[i].value))
-			}
-			C.free(unsafe.Pointer(metaArray))
-		}()
+		defer C.loon_filesystem_free_meta_array(metaArray, metaCount)
 
 		metaSlice := unsafe.Slice(metaArray, int(metaCount))
 		for i := 0; i < int(metaCount); i++ {
