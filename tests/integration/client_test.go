@@ -130,32 +130,17 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 	}
 }
 
+// Open logWriter multiple times across different clients to test the fallback distributed lock mechanism.
 func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
-	tmpDir := t.TempDir()
-	rootPath := filepath.Join(tmpDir, "TestOpenWriterMultiTimesInMultiClient")
 	testCases := []struct {
 		name        string
 		storageType string
 		rootPath    string
-		needCluster bool // Whether to start cluster for service mode
 	}{
-		{
-			name:        "LocalFsStorage",
-			storageType: "local",
-			rootPath:    rootPath,
-			needCluster: false,
-		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
-			needCluster: false,
-		},
-		{
-			name:        "ServiceStorage",
-			storageType: "service",
-			rootPath:    rootPath + "_service",
-			needCluster: true,
 		},
 	}
 
@@ -164,6 +149,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
+			cfg.Woodpecker.Logstore.FencePolicy.SetConditionWriteEnableOrNot(false) // mark disable to use fallback distribute lock logWriter
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
 			}
@@ -172,38 +158,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			}
 
 			var client1, client2 woodpecker.Client
-
-			if tc.needCluster {
-				// Start cluster for service mode
-				const nodeCount = 3
-				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
-				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
-				defer func() {
-					cluster.StopMultiNodeCluster(t)
-				}()
-
-				// Setup etcd client for service mode
-				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
-				assert.NoError(t, err)
-				defer etcdCli.Close()
-
-				// Create service mode clients
-				client1, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
-				assert.NoError(t, err)
-				defer func() {
-					if client1 != nil {
-						_ = client1.Close(ctx)
-					}
-				}()
-
-				client2, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
-				assert.NoError(t, err)
-				defer func() {
-					if client2 != nil {
-						_ = client2.Close(ctx)
-					}
-				}()
-			} else {
+			{
 				// Use embed clients for local and object storage
 				client1, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
 				assert.NoError(t, err)
@@ -241,6 +196,175 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			logWriter3, openWriterErr3 := logHandle2.OpenLogWriter(ctx)
 			assert.NoError(t, openWriterErr3)
 			assert.NotNil(t, logWriter3)
+		})
+	}
+}
+
+// NOTE: The internal logWriter should be exclusively managed by the external application to ensure that only one logWriter is active at any given time.
+// This test simulates different clients sequentially attempting to open the internal logWriter, expecting that the new owner can correctly preempt and replace the previous one.
+func TestOpenInternalWriterMultiTimesInMultiClient(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestOpenInternalWriterMultiTimesInMultiClient")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
+	}{
+		{
+			name:        "LocalFsStorage",
+			storageType: "local",
+			rootPath:    rootPath,
+			needCluster: false,
+		},
+		{
+			name:        "ObjectStorage",
+			storageType: "", // Using default storage type minio-compatible
+			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			assert.NoError(t, err)
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+				cfg.Woodpecker.Logstore.FencePolicy.SetConditionWriteEnableOrNot(true) // mark enable to use internal logWriter
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+
+			var client1, client2, client3 woodpecker.Client
+
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, seeds := utils.StartMiniCluster(t, nodeCount, tc.rootPath)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode clients
+				client1, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client1 != nil {
+						_ = client1.Close(ctx)
+					}
+				}()
+
+				client2, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client2 != nil {
+						_ = client2.Close(ctx)
+					}
+				}()
+
+				client3, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client3 != nil {
+						_ = client3.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed clients for local and object storage
+				client1, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				client2, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				client3, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
+			}
+
+			logName := "test_log_multi_" + tc.name + time.Now().Format("20060102150405")
+			createErr := client1.CreateLog(ctx, logName)
+			if createErr != nil {
+				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+			}
+
+			// ==== STEP1: open internal logWriter1 ===
+			logHandle1, openErr := client1.OpenLog(ctx, logName)
+			assert.NoError(t, openErr)
+			// client1 open writer first
+			logWriter1, openWriterErr1 := logHandle1.OpenLogWriter(ctx)
+			assert.NoError(t, openWriterErr1)
+			assert.NotNil(t, logWriter1)
+
+			// ==== STEP2: open internal logWriter2 ===
+			logHandle2, openErr := client2.OpenLog(ctx, logName)
+			assert.NoError(t, openErr)
+			// client2 open writer success because no segment exists before
+			logWriter2, openWriterErr2 := logHandle2.OpenLogWriter(ctx)
+			assert.NoError(t, openWriterErr2)
+			assert.NotNil(t, logWriter2)
+			// logWriter2 write some data to make one segment
+			for i := 0; i < 5; i++ {
+				result := logWriter2.Write(ctx, &log.WriteMessage{
+					Payload: []byte(fmt.Sprintf("message %d", i)),
+					Properties: map[string]string{
+						"index": fmt.Sprintf("%d", i),
+					},
+				})
+				assert.NoError(t, result.Err)
+			}
+			time.Sleep(100 * time.Millisecond)
+
+			// ==== STEP3: open internal logWriter3 ===
+			logHandle3, openErr := client3.OpenLog(ctx, logName)
+			assert.NoError(t, openErr)
+			// open logWriter3 which will fence out logWriter2
+			logWriter3, openWriterErr3 := logHandle3.OpenLogWriter(ctx)
+			assert.NoError(t, openWriterErr3)
+			assert.NotNil(t, logWriter3)
+
+			// test logWriter2 write should fail
+			result := logWriter2.Write(ctx, &log.WriteMessage{
+				Payload: []byte("message should fail"),
+				Properties: map[string]string{
+					"index": "should fail",
+				},
+			})
+			assert.Error(t, result.Err)
+
+			// test logWriter3 write should succeed
+			result = logWriter3.Write(ctx, &log.WriteMessage{
+				Payload: []byte("message should succeed"),
+				Properties: map[string]string{
+					"index": "should succeed",
+				},
+			})
+			assert.NoError(t, result.Err)
+
+			// after test: release all logWriters
+			releaseErr1 := logWriter1.Close(ctx)
+			assert.NoError(t, releaseErr1)
+			releaseErr2 := logWriter2.Close(ctx)
+			assert.NoError(t, releaseErr2)
+			releaseErr3 := logWriter3.Close(ctx)
+			assert.NoError(t, releaseErr3)
 		})
 	}
 }
@@ -462,7 +586,6 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			err = client.Close(context.TODO())
 			assert.NoError(t, err)
 			t.Log("Client closed successfully")
-
 		})
 	}
 }
@@ -925,7 +1048,6 @@ func TestClientRecreation(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestClientRecreationWithManagedCli(t *testing.T) {
