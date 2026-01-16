@@ -127,7 +127,8 @@ func (op *AppendOp) sendWriteRequestRetry(ctx context.Context, serverIndex int) 
 	cli, clientErr := op.clientPool.GetLogStoreClient(ctx, serverAddr)
 	if clientErr != nil {
 		op.channelErrors[serverIndex] = clientErr
-		op.handle.HandleAppendRequestFailure(ctx, op.entryId, clientErr, serverIndex, serverAddr)
+		// segHandle failure async
+		go op.handle.HandleAppendRequestFailure(ctx, op.entryId, clientErr, serverIndex, serverAddr)
 		return
 	}
 	// send request to the node
@@ -218,6 +219,7 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 }
 
 func (op *AppendOp) FastFail(ctx context.Context, err error) {
+	logger.Ctx(ctx).Debug(fmt.Sprintf("FastFail start calling for log:%d seg:%d entry:%d", op.logId, op.segmentId, op.entryId), zap.Error(err))
 	op.mu.Lock()
 	defer op.mu.Unlock()
 	// Use atomic operation to ensure it is executed only once

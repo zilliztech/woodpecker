@@ -429,11 +429,11 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 	case <-ctx.Done():
 		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, ctx.Err())
+		w.notifyFlushError(ctx, flushTask.entries, ctx.Err())
 	case <-w.runCtx.Done():
 		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
+		w.notifyFlushError(ctx, flushTask.entries, werr.ErrFileWriterAlreadyClosed)
 	}
 
 	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "rollBuffer", "success").Inc()
@@ -455,19 +455,19 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 
 	if w.fenced.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
-		w.notifyFlushError(task.entries, werr.ErrSegmentFenced)
+		w.notifyFlushError(ctx, task.entries, werr.ErrSegmentFenced)
 		return
 	}
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
-		w.notifyFlushError(task.entries, werr.ErrFileWriterFinalized)
+		w.notifyFlushError(ctx, task.entries, werr.ErrFileWriterFinalized)
 		return
 	}
 
 	if !w.storageWritable.Load() {
 		logger.Ctx(ctx).Warn("process flush task: storage not writable", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable)
+		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable)
 		return
 	}
 
@@ -476,7 +476,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		if err := w.writeHeader(ctx); err != nil {
 			logger.Ctx(ctx).Warn("write header error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId), zap.Error(err))
 			w.storageWritable.Store(false)
-			w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+			w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 			return
 		}
 		w.headerWritten.Store(true)
@@ -527,7 +527,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	if err := w.writeRecord(ctx, blockHeaderRecord); err != nil {
 		logger.Ctx(ctx).Warn("write block header record error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 
@@ -542,13 +542,13 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	if err != nil {
 		logger.Ctx(ctx).Warn("write block data error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Error(err))
 		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 	if n != len(blockDataBuffer) {
 		logger.Ctx(ctx).Warn("incomplete block data write", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockNumber", task.blockNumber), zap.Int("expected", len(blockDataBuffer)), zap.Int("actual", n))
 		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(fmt.Errorf("incomplete write: wrote %d of %d bytes", n, len(blockDataBuffer))))
+		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(fmt.Errorf("incomplete write: wrote %d of %d bytes", n, len(blockDataBuffer))))
 		return
 	}
 	w.writtenBytes += int64(n)
@@ -566,7 +566,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	if err := w.file.Sync(); err != nil {
 		logger.Ctx(ctx).Warn("sync file error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(err))
 		w.storageWritable.Store(false)
-		w.notifyFlushError(task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
+		w.notifyFlushError(ctx, task.entries, werr.ErrStorageNotWritable.WithCauseErr(err))
 		return
 	}
 
@@ -610,7 +610,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	metrics.WpFileFlushLatency.WithLabelValues(w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Notify success - notify each entry channel with success
-	w.notifyFlushSuccess(task.entries)
+	w.notifyFlushSuccess(ctx, task.entries)
 }
 
 func (f *LocalFileWriter) awaitAllFlushTasks(ctx context.Context) error {
@@ -663,21 +663,21 @@ func (f *LocalFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 }
 
 // notifyFlushError notifies all result channels of flush error
-func (w *LocalFileWriter) notifyFlushError(entries []*cache.BufferEntry, err error) {
+func (w *LocalFileWriter) notifyFlushError(ctx context.Context, entries []*cache.BufferEntry, err error) {
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, err)
+			cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, err)
 		}
 	}
 }
 
 // notifyFlushSuccess notifies all result channels of flush success
-func (w *LocalFileWriter) notifyFlushSuccess(entries []*cache.BufferEntry) {
+func (w *LocalFileWriter) notifyFlushSuccess(ctx context.Context, entries []*cache.BufferEntry) {
 	// Notify all pending entries result channels in sequential order
 	for _, entry := range entries {
 		if entry.NotifyChan != nil {
-			cache.NotifyPendingEntryDirectly(context.TODO(), w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, nil)
+			cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entry.EntryId, entry.NotifyChan, entry.EntryId, nil)
 		}
 	}
 }

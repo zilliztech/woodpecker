@@ -19,7 +19,9 @@ package client
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server"
 )
 
@@ -28,15 +30,21 @@ var _ LogStoreClientPool = (*logStoreClientPoolLocal)(nil)
 type logStoreClientPoolLocal struct {
 	sync.RWMutex
 	innerLogStore server.LogStore
+	clientClosed  atomic.Bool
 }
 
 func NewLogStoreClientPoolLocal(logStore server.LogStore) LogStoreClientPool {
-	return &logStoreClientPoolLocal{
+	p := &logStoreClientPoolLocal{
 		innerLogStore: logStore,
 	}
+	p.clientClosed.Store(false)
+	return p
 }
 
 func (p *logStoreClientPoolLocal) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
+	if p.clientClosed.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
+	}
 	return &logStoreClientLocal{
 		store: p.innerLogStore,
 	}, nil
@@ -46,5 +54,9 @@ func (p *logStoreClientPoolLocal) Clear(ctx context.Context, target string) {
 }
 
 func (p *logStoreClientPoolLocal) Close(ctx context.Context) error {
+	if p.clientClosed.Load() {
+		return nil
+	}
+	p.clientClosed.Store(true)
 	return nil
 }

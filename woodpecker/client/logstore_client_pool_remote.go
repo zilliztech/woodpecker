@@ -20,13 +20,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -39,20 +38,25 @@ type logStoreClientPool struct {
 	maxRecvMsgSize int
 	connections    map[string]*grpc.ClientConn
 	clients        map[string]LogStoreClient
+	clientClosed   atomic.Bool
 }
 
 func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClientPool {
-	return &logStoreClientPool{
+	p := &logStoreClientPool{
 		maxSendMsgSize: maxSendMsgSize,
 		maxRecvMsgSize: maxRecvMsgSize,
 		connections:    make(map[string]*grpc.ClientConn),
 		clients:        make(map[string]LogStoreClient),
 	}
+	p.clientClosed.Store(false)
+	return p
 }
 
 func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
-	logger.Ctx(ctx).Debug("logstore_client_pool", zap.String("target", target), zap.Any("clients", p.clients), zap.Any("conns", p.connections))
 	p.RLock()
+	if p.clientClosed.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
+	}
 	client, ok := p.clients[target]
 	p.RUnlock()
 	if ok {
@@ -61,6 +65,9 @@ func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target strin
 
 	p.Lock()
 	defer p.Unlock()
+	if p.clientClosed.Load() {
+		return nil, werr.ErrWoodpeckerClientClosed
+	}
 
 	client, ok = p.clients[target]
 	if ok {
@@ -132,6 +139,11 @@ func (p *logStoreClientPool) Clear(ctx context.Context, target string) {
 func (p *logStoreClientPool) Close(ctx context.Context) error {
 	p.Lock()
 	defer p.Unlock()
+	if p.clientClosed.Load() {
+		// already closed
+		return nil
+	}
+	p.clientClosed.Store(true)
 
 	// Close all clients first
 	for target, client := range p.clients {

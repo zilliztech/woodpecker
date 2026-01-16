@@ -123,6 +123,8 @@ func TestAppendOp_Execute_GetClientError(t *testing.T) {
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
 
 	op.Execute()
+	// Wait for async handleAppendRequestFailure to be processed
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, expectedErr, op.channelErrors[0])
 }

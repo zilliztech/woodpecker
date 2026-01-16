@@ -108,7 +108,7 @@ func IsSegmentNotWritableErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	return ErrSegmentHandleSegmentClosed.Is(err) || ErrSegmentFenced.Is(err) || ErrStorageNotWritable.Is(err) || ErrFileWriterFinalized.Is(err)
+	return ErrSegmentHandleSegmentClosed.Is(err) || ErrSegmentFenced.Is(err) || ErrStorageNotWritable.Is(err) || ErrFileWriterFinalized.Is(err) || ErrWoodpeckerClientClosed.Is(err)
 }
 
 // ---------------------------------------------

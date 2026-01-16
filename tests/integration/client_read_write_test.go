@@ -559,7 +559,7 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 					Properties: map[string]string{"key": fmt.Sprintf("value%d", i)},
 				},
 			)
-			//resultList = append(resultList, writeResult)
+			// resultList = append(resultList, writeResult)
 			resultList[no] = writeResult
 			if writeResult.Err != nil {
 				t.Logf("write failed %v \n", writeResult.Err)
@@ -945,11 +945,11 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
 			fmt.Println("Test completed successfully")
-
 		})
 	}
 }
 
+// Test that closing the logWriter immediately handles both already written data and any subsequent data correctly.
 func TestConcurrentWriteWithClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClose")
@@ -1197,6 +1197,8 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 	}
 }
 
+// Test that immediately closing the client interrupts subsequent logWriter writes,
+// and ensures all previously written data is properly handled as expected.
 func TestConcurrentWriteWithClientClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
@@ -1252,8 +1254,8 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(30 * 1000)                // 30s
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(30 * 1000) // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(tc.syncInterval)
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(tc.syncInterval)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1288,7 +1290,9 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Use a WaitGroup to track when all writes have been attempted
 			wg.Add(numWriters)
 
-			// Start the 10 concurrent write operations
+			// Start the 10 concurrent write operations, will close at 100ms
+			// request: 0,		30ms,	  60ms,    90ms,	120ms,150ms,180ms,210ms,240ms,270ms
+			// persist: success, success, success, success, fail, fail, fail, fail, fail, fail
 			for i := 0; i < numWriters; i++ {
 				entryId := i
 				go func(idx int) {
