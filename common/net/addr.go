@@ -77,3 +77,35 @@ func GetValidLocalIP(addrs []net.Addr) string {
 	}
 	return ""
 }
+
+// ResolveAdvertiseAddr resolves hostname to IP address if needed
+func ResolveAdvertiseAddr(addr string) net.IP {
+	if addr == "" {
+		return nil
+	}
+
+	// Check if it's already an IP address
+	if ip := net.ParseIP(addr); ip != nil {
+		return ip
+	}
+
+	// Try to resolve hostname to IP
+	ips, err := net.LookupIP(addr)
+	if err != nil {
+		return nil
+	}
+
+	// Prefer IPv4 address
+	for _, ip := range ips {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			return ipv4
+		}
+	}
+
+	// Fallback to first IP (could be IPv6)
+	if len(ips) > 0 {
+		return ips[0]
+	}
+
+	return nil
+}

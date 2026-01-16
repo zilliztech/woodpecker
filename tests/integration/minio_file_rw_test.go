@@ -303,7 +303,7 @@ func TestMinioFileWriter_Finalize(t *testing.T) {
 	}
 
 	// Test finalize
-	lastEntryId, err := writer.Finalize(ctx)
+	lastEntryId, err := writer.Finalize(ctx, -1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testData)-1), lastEntryId)
 
@@ -885,7 +885,7 @@ func BenchmarkMinioFileReader_ThroughputTest(b *testing.B) {
 		}
 	}
 
-	_, err = writer.Finalize(ctx)
+	_, err = writer.Finalize(ctx, -1)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1232,7 +1232,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		}
 
 		// Finalize to complete writing
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(len(testData)-1), lastEntryId)
 
@@ -1331,7 +1331,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, result.Err)
 		}
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -1401,7 +1401,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			require.NoError(t, result.Err)
 		}
 
-		_, err = writer.Finalize(ctx)
+		_, err = writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		err = writer.Close(ctx)
 		require.NoError(t, err)
@@ -1498,7 +1498,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 		}
 
 		// Finalize the writer
-		lastEntryId, err := writer.Finalize(ctx)
+		lastEntryId, err := writer.Finalize(ctx, -1)
 		require.NoError(t, err)
 		assert.Equal(t, int64(entryCount-1), lastEntryId)
 
@@ -1681,7 +1681,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			}
 
 			if finalizeSegment {
-				_, err = writer.Finalize(ctx)
+				_, err = writer.Finalize(ctx, -1)
 				require.NoError(t, err)
 			}
 
@@ -1764,7 +1764,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now finalize the segment (Active → Completed)
 			writerToFinalize, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToFinalize.Finalize(ctx)
+			_, err = writerToFinalize.Finalize(ctx, -1)
 			require.NoError(t, err)
 			err = writerToFinalize.Close(ctx)
 			require.NoError(t, err)
@@ -1800,7 +1800,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now finalize and compact the segment (Active → Compacted)
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Finalize(ctx)
+			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
 			_, err = writerToCompact.Compact(ctx)
 			require.NoError(t, err)
@@ -1976,7 +1976,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			// Now finalize and compact the segment
 			writerToCompact, err := objectstorage.NewMinioFileWriterWithMode(ctx, testBucket, baseDir, logId, segId, minioHdl, cfg, true)
 			require.NoError(t, err)
-			_, err = writerToCompact.Finalize(ctx)
+			_, err = writerToCompact.Finalize(ctx, -1)
 			require.NoError(t, err)
 			_, err = writerToCompact.Compact(ctx)
 			require.NoError(t, err)
@@ -2022,7 +2022,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			}
 
 			// Finalize the segment (Active -> Completed)
-			_, err = writer.Finalize(ctx)
+			_, err = writer.Finalize(ctx, -1)
 			require.NoError(t, err)
 			err = writer.Close(ctx)
 			require.NoError(t, err)

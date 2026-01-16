@@ -22,8 +22,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	LogStore_AddEntry_FullMethodName  = "/woodpecker.proto.logstore.LogStore/AddEntry"
-	LogStore_ReadEntry_FullMethodName = "/woodpecker.proto.logstore.LogStore/ReadEntry"
+	LogStore_AddEntry_FullMethodName                   = "/woodpecker.proto.logstore.LogStore/AddEntry"
+	LogStore_GetBatchEntriesAdv_FullMethodName         = "/woodpecker.proto.logstore.LogStore/GetBatchEntriesAdv"
+	LogStore_FenceSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/FenceSegment"
+	LogStore_CompleteSegment_FullMethodName            = "/woodpecker.proto.logstore.LogStore/CompleteSegment"
+	LogStore_CompactSegment_FullMethodName             = "/woodpecker.proto.logstore.LogStore/CompactSegment"
+	LogStore_GetSegmentLastAddConfirmed_FullMethodName = "/woodpecker.proto.logstore.LogStore/GetSegmentLastAddConfirmed"
+	LogStore_GetSegmentBlockCount_FullMethodName       = "/woodpecker.proto.logstore.LogStore/GetSegmentBlockCount"
+	LogStore_UpdateLastAddConfirmed_FullMethodName     = "/woodpecker.proto.logstore.LogStore/UpdateLastAddConfirmed"
+	LogStore_CleanSegment_FullMethodName               = "/woodpecker.proto.logstore.LogStore/CleanSegment"
+	LogStore_SelectNodes_FullMethodName                = "/woodpecker.proto.logstore.LogStore/SelectNodes"
 )
 
 // LogStoreClient is the client API for LogStore service.
@@ -32,13 +40,25 @@ const (
 //
 // *
 // LogStore service.
+//
+// The following RPCs wrap externally callable data-plane operations.
 type LogStoreClient interface {
-	// *
-	// Add a new entry to the log store
-	AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (*AddEntryResponse, error)
-	// *
-	// Read an entry from the log store
-	ReadEntry(ctx context.Context, in *ReadEntryRequest, opts ...grpc.CallOption) (*ReadEntryResponse, error)
+	// Write APIs
+	AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntryResponse], error)
+	// Read APIs
+	GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error)
+	// Segment state transitions
+	FenceSegment(ctx context.Context, in *FenceSegmentRequest, opts ...grpc.CallOption) (*FenceSegmentResponse, error)
+	CompleteSegment(ctx context.Context, in *CompleteSegmentRequest, opts ...grpc.CallOption) (*CompleteSegmentResponse, error)
+	CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error)
+	// Segment introspection
+	GetSegmentLastAddConfirmed(ctx context.Context, in *GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*GetSegmentLastAddConfirmedResponse, error)
+	GetSegmentBlockCount(ctx context.Context, in *GetSegmentBlockCountRequest, opts ...grpc.CallOption) (*GetSegmentBlockCountResponse, error)
+	UpdateLastAddConfirmed(ctx context.Context, in *UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*UpdateLastAddConfirmedResponse, error)
+	// Maintenance
+	CleanSegment(ctx context.Context, in *CleanSegmentRequest, opts ...grpc.CallOption) (*CleanSegmentResponse, error)
+	// Node management
+	SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error)
 }
 
 type logStoreClient struct {
@@ -49,20 +69,109 @@ func NewLogStoreClient(cc grpc.ClientConnInterface) LogStoreClient {
 	return &logStoreClient{cc}
 }
 
-func (c *logStoreClient) AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (*AddEntryResponse, error) {
+func (c *logStoreClient) AddEntry(ctx context.Context, in *AddEntryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[AddEntryResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddEntryResponse)
-	err := c.cc.Invoke(ctx, LogStore_AddEntry_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &LogStore_ServiceDesc.Streams[0], LogStore_AddEntry_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AddEntryRequest, AddEntryResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntryClient = grpc.ServerStreamingClient[AddEntryResponse]
+
+func (c *logStoreClient) GetBatchEntriesAdv(ctx context.Context, in *GetBatchEntriesAdvRequest, opts ...grpc.CallOption) (*GetBatchEntriesAdvResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBatchEntriesAdvResponse)
+	err := c.cc.Invoke(ctx, LogStore_GetBatchEntriesAdv_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *logStoreClient) ReadEntry(ctx context.Context, in *ReadEntryRequest, opts ...grpc.CallOption) (*ReadEntryResponse, error) {
+func (c *logStoreClient) FenceSegment(ctx context.Context, in *FenceSegmentRequest, opts ...grpc.CallOption) (*FenceSegmentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReadEntryResponse)
-	err := c.cc.Invoke(ctx, LogStore_ReadEntry_FullMethodName, in, out, cOpts...)
+	out := new(FenceSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_FenceSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) CompleteSegment(ctx context.Context, in *CompleteSegmentRequest, opts ...grpc.CallOption) (*CompleteSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_CompleteSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) CompactSegment(ctx context.Context, in *CompactSegmentRequest, opts ...grpc.CallOption) (*CompactSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompactSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_CompactSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) GetSegmentLastAddConfirmed(ctx context.Context, in *GetSegmentLastAddConfirmedRequest, opts ...grpc.CallOption) (*GetSegmentLastAddConfirmedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSegmentLastAddConfirmedResponse)
+	err := c.cc.Invoke(ctx, LogStore_GetSegmentLastAddConfirmed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) GetSegmentBlockCount(ctx context.Context, in *GetSegmentBlockCountRequest, opts ...grpc.CallOption) (*GetSegmentBlockCountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSegmentBlockCountResponse)
+	err := c.cc.Invoke(ctx, LogStore_GetSegmentBlockCount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) UpdateLastAddConfirmed(ctx context.Context, in *UpdateLastAddConfirmedRequest, opts ...grpc.CallOption) (*UpdateLastAddConfirmedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateLastAddConfirmedResponse)
+	err := c.cc.Invoke(ctx, LogStore_UpdateLastAddConfirmed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) CleanSegment(ctx context.Context, in *CleanSegmentRequest, opts ...grpc.CallOption) (*CleanSegmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CleanSegmentResponse)
+	err := c.cc.Invoke(ctx, LogStore_CleanSegment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *logStoreClient) SelectNodes(ctx context.Context, in *SelectNodesRequest, opts ...grpc.CallOption) (*SelectNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SelectNodesResponse)
+	err := c.cc.Invoke(ctx, LogStore_SelectNodes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,13 +184,25 @@ func (c *logStoreClient) ReadEntry(ctx context.Context, in *ReadEntryRequest, op
 //
 // *
 // LogStore service.
+//
+// The following RPCs wrap externally callable data-plane operations.
 type LogStoreServer interface {
-	// *
-	// Add a new entry to the log store
-	AddEntry(context.Context, *AddEntryRequest) (*AddEntryResponse, error)
-	// *
-	// Read an entry from the log store
-	ReadEntry(context.Context, *ReadEntryRequest) (*ReadEntryResponse, error)
+	// Write APIs
+	AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error
+	// Read APIs
+	GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error)
+	// Segment state transitions
+	FenceSegment(context.Context, *FenceSegmentRequest) (*FenceSegmentResponse, error)
+	CompleteSegment(context.Context, *CompleteSegmentRequest) (*CompleteSegmentResponse, error)
+	CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error)
+	// Segment introspection
+	GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error)
+	GetSegmentBlockCount(context.Context, *GetSegmentBlockCountRequest) (*GetSegmentBlockCountResponse, error)
+	UpdateLastAddConfirmed(context.Context, *UpdateLastAddConfirmedRequest) (*UpdateLastAddConfirmedResponse, error)
+	// Maintenance
+	CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error)
+	// Node management
+	SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error)
 }
 
 // UnimplementedLogStoreServer should be embedded to have
@@ -91,11 +212,35 @@ type LogStoreServer interface {
 // pointer dereference when methods are called.
 type UnimplementedLogStoreServer struct{}
 
-func (UnimplementedLogStoreServer) AddEntry(context.Context, *AddEntryRequest) (*AddEntryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AddEntry not implemented")
+func (UnimplementedLogStoreServer) AddEntry(*AddEntryRequest, grpc.ServerStreamingServer[AddEntryResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method AddEntry not implemented")
 }
-func (UnimplementedLogStoreServer) ReadEntry(context.Context, *ReadEntryRequest) (*ReadEntryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReadEntry not implemented")
+func (UnimplementedLogStoreServer) GetBatchEntriesAdv(context.Context, *GetBatchEntriesAdvRequest) (*GetBatchEntriesAdvResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBatchEntriesAdv not implemented")
+}
+func (UnimplementedLogStoreServer) FenceSegment(context.Context, *FenceSegmentRequest) (*FenceSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FenceSegment not implemented")
+}
+func (UnimplementedLogStoreServer) CompleteSegment(context.Context, *CompleteSegmentRequest) (*CompleteSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteSegment not implemented")
+}
+func (UnimplementedLogStoreServer) CompactSegment(context.Context, *CompactSegmentRequest) (*CompactSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompactSegment not implemented")
+}
+func (UnimplementedLogStoreServer) GetSegmentLastAddConfirmed(context.Context, *GetSegmentLastAddConfirmedRequest) (*GetSegmentLastAddConfirmedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSegmentLastAddConfirmed not implemented")
+}
+func (UnimplementedLogStoreServer) GetSegmentBlockCount(context.Context, *GetSegmentBlockCountRequest) (*GetSegmentBlockCountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSegmentBlockCount not implemented")
+}
+func (UnimplementedLogStoreServer) UpdateLastAddConfirmed(context.Context, *UpdateLastAddConfirmedRequest) (*UpdateLastAddConfirmedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateLastAddConfirmed not implemented")
+}
+func (UnimplementedLogStoreServer) CleanSegment(context.Context, *CleanSegmentRequest) (*CleanSegmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CleanSegment not implemented")
+}
+func (UnimplementedLogStoreServer) SelectNodes(context.Context, *SelectNodesRequest) (*SelectNodesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SelectNodes not implemented")
 }
 func (UnimplementedLogStoreServer) testEmbeddedByValue() {}
 
@@ -117,38 +262,175 @@ func RegisterLogStoreServer(s grpc.ServiceRegistrar, srv LogStoreServer) {
 	s.RegisterService(&LogStore_ServiceDesc, srv)
 }
 
-func _LogStore_AddEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddEntryRequest)
+func _LogStore_AddEntry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(AddEntryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LogStoreServer).AddEntry(m, &grpc.GenericServerStream[AddEntryRequest, AddEntryResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogStore_AddEntryServer = grpc.ServerStreamingServer[AddEntryResponse]
+
+func _LogStore_GetBatchEntriesAdv_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBatchEntriesAdvRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LogStoreServer).AddEntry(ctx, in)
+		return srv.(LogStoreServer).GetBatchEntriesAdv(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: LogStore_AddEntry_FullMethodName,
+		FullMethod: LogStore_GetBatchEntriesAdv_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LogStoreServer).AddEntry(ctx, req.(*AddEntryRequest))
+		return srv.(LogStoreServer).GetBatchEntriesAdv(ctx, req.(*GetBatchEntriesAdvRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _LogStore_ReadEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReadEntryRequest)
+func _LogStore_FenceSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FenceSegmentRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LogStoreServer).ReadEntry(ctx, in)
+		return srv.(LogStoreServer).FenceSegment(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: LogStore_ReadEntry_FullMethodName,
+		FullMethod: LogStore_FenceSegment_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LogStoreServer).ReadEntry(ctx, req.(*ReadEntryRequest))
+		return srv.(LogStoreServer).FenceSegment(ctx, req.(*FenceSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_CompleteSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteSegmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).CompleteSegment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_CompleteSegment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).CompleteSegment(ctx, req.(*CompleteSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_CompactSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompactSegmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).CompactSegment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_CompactSegment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).CompactSegment(ctx, req.(*CompactSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_GetSegmentLastAddConfirmed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSegmentLastAddConfirmedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).GetSegmentLastAddConfirmed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_GetSegmentLastAddConfirmed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).GetSegmentLastAddConfirmed(ctx, req.(*GetSegmentLastAddConfirmedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_GetSegmentBlockCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSegmentBlockCountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).GetSegmentBlockCount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_GetSegmentBlockCount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).GetSegmentBlockCount(ctx, req.(*GetSegmentBlockCountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_UpdateLastAddConfirmed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateLastAddConfirmedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).UpdateLastAddConfirmed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_UpdateLastAddConfirmed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).UpdateLastAddConfirmed(ctx, req.(*UpdateLastAddConfirmedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_CleanSegment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CleanSegmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).CleanSegment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_CleanSegment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).CleanSegment(ctx, req.(*CleanSegmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _LogStore_SelectNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SelectNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LogStoreServer).SelectNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: LogStore_SelectNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LogStoreServer).SelectNodes(ctx, req.(*SelectNodesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -161,14 +443,48 @@ var LogStore_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*LogStoreServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "AddEntry",
-			Handler:    _LogStore_AddEntry_Handler,
+			MethodName: "GetBatchEntriesAdv",
+			Handler:    _LogStore_GetBatchEntriesAdv_Handler,
 		},
 		{
-			MethodName: "ReadEntry",
-			Handler:    _LogStore_ReadEntry_Handler,
+			MethodName: "FenceSegment",
+			Handler:    _LogStore_FenceSegment_Handler,
+		},
+		{
+			MethodName: "CompleteSegment",
+			Handler:    _LogStore_CompleteSegment_Handler,
+		},
+		{
+			MethodName: "CompactSegment",
+			Handler:    _LogStore_CompactSegment_Handler,
+		},
+		{
+			MethodName: "GetSegmentLastAddConfirmed",
+			Handler:    _LogStore_GetSegmentLastAddConfirmed_Handler,
+		},
+		{
+			MethodName: "GetSegmentBlockCount",
+			Handler:    _LogStore_GetSegmentBlockCount_Handler,
+		},
+		{
+			MethodName: "UpdateLastAddConfirmed",
+			Handler:    _LogStore_UpdateLastAddConfirmed_Handler,
+		},
+		{
+			MethodName: "CleanSegment",
+			Handler:    _LogStore_CleanSegment_Handler,
+		},
+		{
+			MethodName: "SelectNodes",
+			Handler:    _LogStore_SelectNodes_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "AddEntry",
+			Handler:       _LogStore_AddEntry_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "logstore.proto",
 }

@@ -21,15 +21,15 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/tests/utils"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
@@ -51,21 +51,31 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
@@ -77,10 +87,41 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			if err != nil {
-				fmt.Println(err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
 			}
+			defer client.Close(context.TODO())
 
 			// CreateLog if not exists
 			logName := "TestReadTheWrittenDataSequentially_" + t.Name() + "_" + time.Now().Format("20060102150405")
@@ -215,10 +256,6 @@ func TestReadTheWrittenDataSequentially(t *testing.T) {
 				assert.NoError(t, closeReaderErr)
 			}
 
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
-
 			fmt.Println("Test Read finished")
 		})
 	}
@@ -231,21 +268,31 @@ func TestReadWriteLoop(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
@@ -256,10 +303,42 @@ func TestReadWriteLoop(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			if err != nil {
-				fmt.Println(err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
 			}
+			defer client.Close(context.TODO())
+
 			// CreateLog if not exists
 			logName := "TestReadWriteLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
@@ -271,10 +350,6 @@ func TestReadWriteLoop(t *testing.T) {
 				// test read
 				testRead(t, client, logName, writtenIds, 1000)
 			}
-
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
 			fmt.Println("Test Read finished")
 		})
@@ -373,21 +448,31 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
@@ -398,10 +483,42 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			if err != nil {
-				fmt.Println(err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
 			}
+			defer client.Close(context.TODO())
+
 			// CreateLog if not exists
 			logName := "TestMultiAppendSyncLoop_" + t.Name() + "_" + time.Now().Format("20060102150405")
 			client.CreateLog(context.Background(), logName)
@@ -413,10 +530,6 @@ func TestMultiAppendSyncLoop(t *testing.T) {
 				writtenIds := testMultiAppendSync(t, client, logName, count)
 				assert.Equal(t, count, len(writtenIds))
 			}
-
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 
 			fmt.Println("Test write finished")
 		})
@@ -446,7 +559,7 @@ func testMultiAppendSync(t *testing.T, client woodpecker.Client, logName string,
 					Properties: map[string]string{"key": fmt.Sprintf("value%d", i)},
 				},
 			)
-			//resultList = append(resultList, writeResult)
+			// resultList = append(resultList, writeResult)
 			resultList[no] = writeResult
 			if writeResult.Err != nil {
 				t.Logf("write failed %v \n", writeResult.Err)
@@ -518,21 +631,31 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
@@ -543,8 +666,41 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			assert.NoError(t, err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
+			}
+			defer client.Close(context.TODO())
 
 			// CreateLog if not exists
 			logName := "TestTailReadBlockingBehavior_" + t.Name() + "_" + time.Now().Format("20060102150405")
@@ -632,7 +788,10 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, errors.IsAny(newErr, context.Canceled, context.DeadlineExceeded))
+			if newErr != nil && !werr.IsTimeoutError(newErr) {
+				t.Logf("ReadNext returned unexpected error: %v", newErr)
+			}
+			assert.Truef(t, werr.IsTimeoutError(newErr), "Expected timeout error, got: %v", newErr.Error())
 			assert.Nil(t, newMessage)
 
 			// Verify the messages we read match what we wrote
@@ -650,10 +809,6 @@ func TestTailReadBlockingBehavior(t *testing.T) {
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
 
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
-
 			fmt.Println("Test completed successfully")
 		})
 	}
@@ -666,21 +821,31 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 
@@ -691,8 +856,41 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 				cfg.Woodpecker.Storage.RootPath = tc.rootPath
 			}
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			assert.NoError(t, err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
+			}
+			defer client.Close(context.TODO())
 
 			// CreateLog if not exists
 			logName := "TestTailReadBlockingAfterWriting_" + t.Name() + "_" + time.Now().Format("20060102150405")
@@ -738,7 +936,7 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			newMessage, newErr := logReader.ReadNext(ctx)
 			cancel()
 			assert.Error(t, newErr)
-			assert.True(t, strings.Contains(newErr.Error(), context.DeadlineExceeded.Error()))
+			assert.True(t, werr.IsTimeoutError(newErr), "Expected timeout error, got: %v", newErr.Error())
 			assert.Nil(t, newMessage)
 
 			// Clean up
@@ -747,14 +945,11 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			err = logWriter.Close(context.Background())
 			assert.NoError(t, err)
 			fmt.Println("Test completed successfully")
-
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
 		})
 	}
 }
 
+// Test that closing the logWriter immediately handles both already written data and any subsequent data correctly.
 func TestConcurrentWriteWithClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClose")
@@ -762,21 +957,31 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 		name        string
 		storageType string
 		rootPath    string
+		needCluster bool // Whether to start cluster for service mode
 	}{
 		{
 			name:        "LocalFsStorage",
 			storageType: "local",
 			rootPath:    rootPath,
+			needCluster: false,
 		},
 		{
 			name:        "ObjectStorage",
 			storageType: "", // Using default storage type minio-compatible
 			rootPath:    "", // No need to specify path for default storage
+			needCluster: false,
+		},
+		{
+			name:        "ServiceStorage",
+			storageType: "service",
+			rootPath:    rootPath + "_service",
+			needCluster: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
 			cfg.Log.Level = "debug"
@@ -789,11 +994,44 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 			}
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 60 * 1000                // 60s
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 60 * 1000 // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(60 * 1000)                // 60s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(60 * 1000) // 60s
 
-			client, err := woodpecker.NewEmbedClientFromConfig(context.Background(), cfg)
-			assert.NoError(t, err)
+			// Setup cluster if needed
+			var client woodpecker.Client
+			if tc.needCluster {
+				// Start cluster for service mode
+				const nodeCount = 3
+				cluster, cfg, _, serviceSeeds := utils.StartMiniClusterWithCfg(t, nodeCount, tc.rootPath, cfg)
+				cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = serviceSeeds
+				defer func() {
+					cluster.StopMultiNodeCluster(t)
+				}()
+
+				// Setup etcd client for service mode
+				etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+				assert.NoError(t, err)
+				defer etcdCli.Close()
+
+				// Create service mode client
+				client, err = woodpecker.NewClient(ctx, cfg, etcdCli, true)
+				assert.NoError(t, err)
+				defer func() {
+					if client != nil {
+						_ = client.Close(ctx)
+					}
+				}()
+			} else {
+				// Use embed client for local and object storage
+				client, err = woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+				assert.NoError(t, err)
+				defer func() {
+					// stop embed LogStore singleton only for non-service mode
+					stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
+					assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
+				}()
+			}
+			defer client.Close(context.TODO())
 
 			// CreateLog if not exists
 			logName := "TestConcurrentWriteWithClose_" + t.Name() + "_" + time.Now().Format("20060102150405")
@@ -954,15 +1192,13 @@ func TestConcurrentWriteWithClose(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			// stop embed LogStore singleton
-			stopEmbedLogStoreErr := woodpecker.StopEmbedLogStore()
-			assert.NoError(t, stopEmbedLogStoreErr, "close embed LogStore instance error")
-
 			fmt.Println("Test completed successfully")
 		})
 	}
 }
 
+// Test that immediately closing the client interrupts subsequent logWriter writes,
+// and ensures all previously written data is properly handled as expected.
 func TestConcurrentWriteWithClientClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestConcurrentWriteWithClientClose")
@@ -1018,8 +1254,8 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = tc.syncInterval
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = tc.syncInterval
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(tc.syncInterval)
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(tc.syncInterval)
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1054,7 +1290,9 @@ func TestConcurrentWriteWithClientClose(t *testing.T) {
 			// Use a WaitGroup to track when all writes have been attempted
 			wg.Add(numWriters)
 
-			// Start the 10 concurrent write operations
+			// Start the 10 concurrent write operations, will close at 100ms
+			// request: 0,		30ms,	  60ms,    90ms,	120ms,150ms,180ms,210ms,240ms,270ms
+			// persist: success, success, success, success, fail, fail, fail, fail, fail, fail
 			for i := 0; i < numWriters; i++ {
 				entryId := i
 				go func(idx int) {
@@ -1258,8 +1496,8 @@ func TestConcurrentWriteWithAllCloseAndEmbeddedLogStoreShutdown(t *testing.T) {
 			cfg.Log.Level = "debug"
 
 			// Setting a larger value to turn off auto sync during the test period
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = 30 * 1000                // 30s
-			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = 30 * 1000 // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = config.NewDurationMillisecondsFromInt(30 * 1000)                // 30s
+			cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(30 * 1000) // 30s
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType

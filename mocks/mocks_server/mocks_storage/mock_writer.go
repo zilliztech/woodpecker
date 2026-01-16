@@ -181,9 +181,9 @@ func (_c *Writer_Fence_Call) RunAndReturn(run func(context.Context) (int64, erro
 	return _c
 }
 
-// Finalize provides a mock function with given fields: ctx
-func (_m *Writer) Finalize(ctx context.Context) (int64, error) {
-	ret := _m.Called(ctx)
+// Finalize provides a mock function with given fields: ctx, lac
+func (_m *Writer) Finalize(ctx context.Context, lac int64) (int64, error) {
+	ret := _m.Called(ctx, lac)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Finalize")
@@ -191,17 +191,17 @@ func (_m *Writer) Finalize(ctx context.Context) (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) (int64, error)); ok {
+		return rf(ctx, lac)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) int64); ok {
+		r0 = rf(ctx, lac)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, lac)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -216,13 +216,14 @@ type Writer_Finalize_Call struct {
 
 // Finalize is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *Writer_Expecter) Finalize(ctx interface{}) *Writer_Finalize_Call {
-	return &Writer_Finalize_Call{Call: _e.mock.On("Finalize", ctx)}
+//   - lac int64
+func (_e *Writer_Expecter) Finalize(ctx interface{}, lac interface{}) *Writer_Finalize_Call {
+	return &Writer_Finalize_Call{Call: _e.mock.On("Finalize", ctx, lac)}
 }
 
-func (_c *Writer_Finalize_Call) Run(run func(ctx context.Context)) *Writer_Finalize_Call {
+func (_c *Writer_Finalize_Call) Run(run func(ctx context.Context, lac int64)) *Writer_Finalize_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -232,7 +233,7 @@ func (_c *Writer_Finalize_Call) Return(_a0 int64, _a1 error) *Writer_Finalize_Ca
 	return _c
 }
 
-func (_c *Writer_Finalize_Call) RunAndReturn(run func(context.Context) (int64, error)) *Writer_Finalize_Call {
+func (_c *Writer_Finalize_Call) RunAndReturn(run func(context.Context, int64) (int64, error)) *Writer_Finalize_Call {
 	_c.Call.Return(run)
 	return _c
 }

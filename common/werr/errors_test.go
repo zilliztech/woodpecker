@@ -65,8 +65,8 @@ func TestWoodpeckerError_ErrorChaining(t *testing.T) {
 	if !errors.As(wrappedErr, &wpErr) {
 		t.Error("Expected errors.As to return true for woodpeckerError")
 	}
-	if wpErr.Code() != WoodpeckerClientConnectionFailed {
-		t.Errorf("Expected error code %d, got %d", WoodpeckerClientConnectionFailed, wpErr.Code())
+	if wpErr.Code() != 1000 {
+		t.Errorf("Expected error code %d, got %d", 1000, wpErr.Code())
 	}
 }
 
@@ -84,8 +84,8 @@ func TestWoodpeckerError_WithContext(t *testing.T) {
 	if !errors.As(contextErr, &wpErr) {
 		t.Error("Expected errors.As to return true for woodpeckerError")
 	}
-	if wpErr.Code() != LogWriterClosed {
-		t.Errorf("Expected error code %d, got %d", LogWriterClosed, wpErr.Code())
+	if wpErr.Code() != 1400 {
+		t.Errorf("Expected error code %d, got %d", 1400, wpErr.Code())
 	}
 }
 
@@ -162,8 +162,8 @@ func TestWoodpeckerError_WithCauseErrMsg(t *testing.T) {
 	if !errors.As(msgErr, &wpErr) {
 		t.Error("Expected errors.As to return true for woodpeckerError")
 	}
-	if wpErr.Code() != InternalError {
-		t.Errorf("Expected error code %d, got %d", InternalError, wpErr.Code())
+	if wpErr.Code() != 8000 {
+		t.Errorf("Expected error code %d, got %d", 8000, wpErr.Code())
 	}
 }
 

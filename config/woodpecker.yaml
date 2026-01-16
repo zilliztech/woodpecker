@@ -32,6 +32,46 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+    # Advanced Quorum Configuration for Service storage backend mode
+    # This configuration supports complex node selection strategies and buffer pools
+    quorum:
+      # Quorum Buffer Pools: Define groups of nodes for different purposes
+      quorumBufferPools:
+        - name: default-region-pool # Name of the default region pool
+          seeds: [ ] # List of node addresses that can be used for quorum operations
+      # Quorum Selection Strategy: How to select nodes for quorum operations
+      quorumSelectStrategy:
+        # Affinity Mode: How strictly to apply node selection rules
+        # - soft: Prefer rules but allow fallback if requirements can't be met
+        # - hard: Strictly enforce rules, fail if requirements can't be met
+        affinityMode: soft
+        # Number of replicas in the quorum ensemble
+        # This determines the total number of nodes in a write operation
+        # Valid values: [3,5]
+        replicas: 3
+        # Node selection strategy
+        # - random: nodes are selected randomly
+        # - single-az-single-rg: All nodes in same availability zone and resource group
+        # - single-az-multi-rg: Same availability zone, multiple resource groups
+        # - multi-az-single-rg: Multiple availability zones, single resource group
+        # - multi-az-multi-rg: Multiple availability zones and resource groups
+        # - cross-region: Nodes across different regions for maximum durability
+        # - custom: Use custom expressions defined below
+        strategy: random
+        # Custom expressions for node selection (only used when strategy is 'custom')
+        customPlacement:
+        #  - name: replica-1
+        #    region: "default-region-pool"
+        #    az: "az-1"
+        #    resourceGroup: "rg.*"
+        #  - name: replica-2
+        #    region: "default-region-pool"
+        #    az: "az-2"
+        #    resourceGroup: "rg.*"
+        #  - name: replica-3
+        #    region: "default-region-pool"
+        #    az: "az.*"
+        #    resourceGroup: "rg.*"
   # Configuration of Woodpecker LogStore Server.
   logstore:
     segmentSyncPolicy:
@@ -48,7 +88,7 @@ woodpecker:
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4
       maxParallelReads: 8 # Maximum number of parallel read threads for compaction, default is 8
     segmentReadPolicy:
-      maxBatchSize: 16000000 # Maximum size of a batch in bytes, default is 16MB
+      maxBatchSize: 2000000 # Maximum size of a batch in bytes, default is 2MB
       maxFetchThreads: 32 # Maximum number of threads to fetch data, default is 32
     retentionPolicy:
       ttl: 259200 # Time to live for truncated segments in seconds, default is 259200s (72 hours)
@@ -56,6 +96,11 @@ woodpecker:
       # Enable conditional write for embedded mode, default is auto, which will automatically detect whether the storage supports conditional write.
       # Valid values: [auto, enable, disable]
       conditionWrite: auto
+    grpc:
+      serverMaxSendSize: 536870912 # The maximum size of each RPC request that the logStore can send, unit: byte
+      serverMaxRecvSize: 268435456 # The maximum size of each RPC request that the logStore can receive, unit: byte
+      clientMaxSendSize: 268435456 # The maximum size of each RPC request that the clients on logStore can send, unit: byte
+      clientMaxRecvSize: 536870912 # The maximum size of each RPC request that the clients on logStore can receive, unit: byte
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.
@@ -100,7 +145,8 @@ trace:
 # Related configuration of etcd, used to store Woodpecker metadata & service discovery.
 etcd:
   # Endpoints used to access etcd service. You can change this parameter as the endpoints of your own etcd cluster.
-  endpoints: localhost:2379
+  endpoints:
+    - localhost:2379
   # Root prefix of the key to where Woodpecker stores data in etcd.
   # It is recommended to change this parameter before starting Woodpecker for the first time.
   # To share an etcd instance among multiple Woodpecker instances, consider changing this to a different value for each Woodpecker instance before you start them.
