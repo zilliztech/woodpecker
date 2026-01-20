@@ -34,12 +34,13 @@ import (
 
 // MiniCluster represents a cluster of woodpecker servers
 type MiniCluster struct {
-	Servers       map[int]*server.Server // Map of nodeIndex -> server
-	Config        *config.Configuration
-	BaseDir       string
-	UsedPorts     map[int]int    // Map of nodeIndex -> port for consistent restart, service gRPC ports
-	UsedAddresses map[int]string // Map of nodeIndex -> last known address, gossip advertiseAddr
-	MaxNodeIndex  int            // Track the highest nodeIndex used
+	Servers        map[int]*server.Server // Map of nodeIndex -> server
+	Config         *config.Configuration
+	BaseDir        string
+	UsedPorts      map[int]int    // Map of nodeIndex -> port for consistent restart, service gRPC ports
+	UsedAddresses  map[int]string // Map of nodeIndex -> last known address, gossip advertiseAddr
+	MaxNodeIndex   int            // Track the highest nodeIndex used
+	allocatedPorts map[int]bool   // Track all allocated ports in this test to avoid competitive reuse
 }
 
 // NodeConfig represents configuration for a single node in the cluster
@@ -47,6 +48,27 @@ type NodeConfig struct {
 	Index         int
 	ResourceGroup string
 	AZ            string
+}
+
+// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster
+func (cluster *MiniCluster) allocateUniquePort() (int, error) {
+	maxRetries := 50 // Try up to 50 times to find a unique port
+	for i := 0; i < maxRetries; i++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			continue
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		listener.Close()
+
+		// Check if this port is already allocated in this cluster
+		if !cluster.allocatedPorts[port] {
+			cluster.allocatedPorts[port] = true
+			return port, nil
+		}
+		// Port already used in this cluster, try again
+	}
+	return 0, fmt.Errorf("failed to allocate unique port after %d retries", maxRetries)
 }
 
 // StartMiniCluster starts a test mini cluster of woodpecker servers
@@ -88,12 +110,13 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	cfg.Log.Level = "debug"
 
 	cluster := &MiniCluster{
-		Servers:       make(map[int]*server.Server),
-		Config:        cfg,
-		BaseDir:       baseDir,
-		UsedPorts:     make(map[int]int),
-		UsedAddresses: make(map[int]string),
-		MaxNodeIndex:  -1,
+		Servers:        make(map[int]*server.Server),
+		Config:         cfg,
+		BaseDir:        baseDir,
+		UsedPorts:      make(map[int]int),
+		UsedAddresses:  make(map[int]string),
+		MaxNodeIndex:   -1,
+		allocatedPorts: make(map[int]bool),
 	}
 
 	ctx := context.Background()
@@ -108,17 +131,13 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	portAllocations := make([]portAllocation, len(nodeConfigs))
 
 	for i, nodeConfig := range nodeConfigs {
-		// Find a free port for service
-		listener, err := net.Listen("tcp", "localhost:0")
-		assert.NoError(t, err)
-		servicePort := listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		// Allocate unique service port
+		servicePort, err := cluster.allocateUniquePort()
+		assert.NoError(t, err, "Failed to allocate service port for node %d", nodeConfig.Index)
 
-		// Find a free port for gossip
-		gossipListener, err := net.Listen("tcp", "localhost:0")
-		assert.NoError(t, err)
-		gossipPort := gossipListener.Addr().(*net.TCPAddr).Port
-		gossipListener.Close()
+		// Allocate unique gossip port
+		gossipPort, err := cluster.allocateUniquePort()
+		assert.NoError(t, err, "Failed to allocate gossip port for node %d", nodeConfig.Index)
 
 		portAllocations[i] = portAllocation{
 			nodeIndex:   nodeConfig.Index,
@@ -224,17 +243,17 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 	nodeCfg := *cluster.Config // Copy the base config
 	nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeIndex))
 
-	// Find a free port for service
-	listener, err := net.Listen("tcp", "localhost:0")
-	assert.NoError(t, err)
-	servicePort := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
+	// Allocate unique service port
+	servicePort, err := cluster.allocateUniquePort()
+	if err != nil {
+		return -1, "", fmt.Errorf("failed to allocate service port: %w", err)
+	}
 
-	// Find a free port for gossip
-	gossipListener, err := net.Listen("tcp", "localhost:0")
-	assert.NoError(t, err)
-	gossipPort := gossipListener.Addr().(*net.TCPAddr).Port
-	gossipListener.Close()
+	// Allocate unique gossip port
+	gossipPort, err := cluster.allocateUniquePort()
+	if err != nil {
+		return -1, "", fmt.Errorf("failed to allocate gossip port: %w", err)
+	}
 
 	ctx := context.Background()
 	// Create server with default AZ/RG
@@ -368,21 +387,9 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 		return "", fmt.Errorf("node %d is still running", nodeIndex)
 	}
 
-	// Use previous gossip address&port
-	//gossipAddrPort, gossipAddrPortExists := cluster.UsedAddresses[nodeIndex]
-	//if !gossipAddrPortExists {
-	//	return "", fmt.Errorf("node %d was never started before", nodeIndex)
-	//}
-	//gossipPortStr := strings.Split(gossipAddrPort, ":")[1]
-	//gossipPort, err := strconv.Atoi(gossipPortStr)
-	//assert.NoError(t, err, "Failed to convert gossip port to int")
-
-	// TODO use a new port
-	//Find a free port for gossip
-	gossipListener, err := net.Listen("tcp", "localhost:0")
-	assert.NoError(t, err)
-	gossipPort := gossipListener.Addr().(*net.TCPAddr).Port
-	gossipListener.Close()
+	// Allocate unique gossip port for restart (we'll use the same service port)
+	gossipPort, err := cluster.allocateUniquePort()
+	assert.NoError(t, err, "Failed to allocate gossip port for node %d", nodeIndex)
 
 	// Create server configuration for this node
 	nodeCfg := *cluster.Config // Copy the base config
