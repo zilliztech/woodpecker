@@ -234,9 +234,9 @@ func (_c *SegmentProcessor_Compact_Call) RunAndReturn(run func(context.Context) 
 	return _c
 }
 
-// Complete provides a mock function with given fields: ctx
-func (_m *SegmentProcessor) Complete(ctx context.Context) (int64, error) {
-	ret := _m.Called(ctx)
+// Complete provides a mock function with given fields: ctx, lac
+func (_m *SegmentProcessor) Complete(ctx context.Context, lac int64) (int64, error) {
+	ret := _m.Called(ctx, lac)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Complete")
@@ -244,17 +244,17 @@ func (_m *SegmentProcessor) Complete(ctx context.Context) (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
-		return rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) (int64, error)); ok {
+		return rf(ctx, lac)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
-		r0 = rf(ctx)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) int64); ok {
+		r0 = rf(ctx, lac)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
+	if rf, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = rf(ctx, lac)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -269,13 +269,14 @@ type SegmentProcessor_Complete_Call struct {
 
 // Complete is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *SegmentProcessor_Expecter) Complete(ctx interface{}) *SegmentProcessor_Complete_Call {
-	return &SegmentProcessor_Complete_Call{Call: _e.mock.On("Complete", ctx)}
+//   - lac int64
+func (_e *SegmentProcessor_Expecter) Complete(ctx interface{}, lac interface{}) *SegmentProcessor_Complete_Call {
+	return &SegmentProcessor_Complete_Call{Call: _e.mock.On("Complete", ctx, lac)}
 }
 
-func (_c *SegmentProcessor_Complete_Call) Run(run func(ctx context.Context)) *SegmentProcessor_Complete_Call {
+func (_c *SegmentProcessor_Complete_Call) Run(run func(ctx context.Context, lac int64)) *SegmentProcessor_Complete_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -285,7 +286,7 @@ func (_c *SegmentProcessor_Complete_Call) Return(_a0 int64, _a1 error) *SegmentP
 	return _c
 }
 
-func (_c *SegmentProcessor_Complete_Call) RunAndReturn(run func(context.Context) (int64, error)) *SegmentProcessor_Complete_Call {
+func (_c *SegmentProcessor_Complete_Call) RunAndReturn(run func(context.Context, int64) (int64, error)) *SegmentProcessor_Complete_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -650,6 +651,53 @@ func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) Return(_a0 *proto.BatchRead
 }
 
 func (_c *SegmentProcessor_ReadBatchEntriesAdv_Call) RunAndReturn(run func(context.Context, int64, int64, *proto.LastReadState) (*proto.BatchReadResult, error)) *SegmentProcessor_ReadBatchEntriesAdv_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateSegmentLastAddConfirmed provides a mock function with given fields: ctx, lac
+func (_m *SegmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error {
+	ret := _m.Called(ctx, lac)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateSegmentLastAddConfirmed")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(ctx, lac)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// SegmentProcessor_UpdateSegmentLastAddConfirmed_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateSegmentLastAddConfirmed'
+type SegmentProcessor_UpdateSegmentLastAddConfirmed_Call struct {
+	*mock.Call
+}
+
+// UpdateSegmentLastAddConfirmed is a helper method to define mock.On call
+//   - ctx context.Context
+//   - lac int64
+func (_e *SegmentProcessor_Expecter) UpdateSegmentLastAddConfirmed(ctx interface{}, lac interface{}) *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call {
+	return &SegmentProcessor_UpdateSegmentLastAddConfirmed_Call{Call: _e.mock.On("UpdateSegmentLastAddConfirmed", ctx, lac)}
+}
+
+func (_c *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call) Run(run func(ctx context.Context, lac int64)) *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call) Return(_a0 error) *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call) RunAndReturn(run func(context.Context, int64) error) *SegmentProcessor_UpdateSegmentLastAddConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }

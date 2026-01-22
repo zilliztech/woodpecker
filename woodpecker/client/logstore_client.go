@@ -21,119 +21,30 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/proto"
-	"github.com/zilliztech/woodpecker/server"
 )
 
 //go:generate mockery --dir=./woodpecker/client --name=LogStoreClient --structname=LogStoreClient --output=mocks/mocks_woodpecker/mocks_logstore_client --filename=mock_client.go --with-expecter=true  --outpkg=mocks_logstore_client
 type LogStoreClient interface {
 	// AppendEntry appends an entry to the specified log segment and returns the entry ID, a channel for synchronization, and an error if any.
-	AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
 	// ReadEntriesBatchAdv reads a batch of entries from the specified log segment and returns the entries and an error if any.
-	ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
+	ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
 	// CompleteSegment finalize the specified log segment and returns an error if any.
-	CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error)
 	// FenceSegment fences the specified log segment to prevent further writes and returns an error if any.
-	FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// SegmentCompact compacts the specified log segment and returns the updated metadata and an error if any.
-	SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
 	// SegmentClean cleans up the specified log segment and returns an error if any.
-	SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error
+	SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
 	// GetLastAddConfirmed gets the lastAddConfirmed entryID of the specified log segment and returns it and an error if any.
-	GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error)
+	GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	// GetBlockCount gets the block count of the specified log segment and returns it and an error if any.
-	GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error)
-}
-
-var _ LogStoreClient = (*logStoreClientLocal)(nil)
-
-// logStoreClientLocal is a local implementation of LogStoreClient,
-// which will directly interact with the local LogStore instance.
-type logStoreClientLocal struct {
-	store server.LogStore
-}
-
-func (l *logStoreClientLocal) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.CompleteSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	return l.store.AddEntry(ctx, logId, entry, syncedResultCh)
-}
-
-func (l *logStoreClientLocal) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
-	return l.store.GetBatchEntriesAdv(ctx, logId, segmentId, fromEntryId, maxEntries, lastReadState)
-}
-
-func (l *logStoreClientLocal) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.FenceSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.GetSegmentLastAddConfirmed(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	return l.store.GetSegmentBlockCount(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	return l.store.CompactSegment(ctx, logId, segmentId)
-}
-
-func (l *logStoreClientLocal) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
-	return l.store.CleanSegment(ctx, logId, segmentId, flag)
-}
-
-var _ LogStoreClient = (*logStoreClientRemote)(nil)
-
-// logStoreClientRemote is a remote implementation of LogStoreClient,
-// which will interact with a remote LogStoreClient instance using gRPC.
-type logStoreClientRemote struct {
-	innerClient proto.LogStoreClient
-}
-
-func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-// TODO use ResultChannel abstract instead of chan
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) FenceSegment(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) IsSegmentFenced(ctx context.Context, logId int64, segmentId int64) (bool, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, logId int64, segmentId int64) (int64, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *logStoreClientRemote) SegmentClean(ctx context.Context, logId int64, segmentId int64, flag int) error {
-	//TODO implement me
-	panic("implement me")
+	GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
+	// UpdateLastAddConfirmed updates the lastAddConfirmed entryID of the specified log segment.
+	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
+	// SelectNodes selects nodes based on the specified filter and returns a list of node IDs.
+	SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error)
+	// Close closes the log store client and returns an error if any.
+	Close(ctx context.Context) error
 }

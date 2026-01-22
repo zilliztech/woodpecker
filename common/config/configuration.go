@@ -17,8 +17,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,9 +33,9 @@ type MetaConfig struct {
 
 // SegmentRollingPolicyConfig stores the segment rolling policy configuration.
 type SegmentRollingPolicyConfig struct {
-	MaxSize     int64 `yaml:"maxSize"`
-	MaxInterval int   `yaml:"maxInterval"`
-	MaxBlocks   int64 `yaml:"maxBlocks"`
+	MaxSize     ByteSize        `yaml:"maxSize"`
+	MaxInterval DurationSeconds `yaml:"maxInterval"`
+	MaxBlocks   int64           `yaml:"maxBlocks"`
 }
 
 type SegmentAppendConfig struct {
@@ -46,34 +48,112 @@ type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
+	Quorum               QuorumConfig               `yaml:"quorum"`
 }
 
 type AuditorConfig struct {
-	MaxInterval int `yaml:"maxInterval"`
+	MaxInterval DurationSeconds `yaml:"maxInterval"`
+}
+
+// QuorumBufferPool stores the quorum buffer pool configuration.
+type QuorumBufferPool struct {
+	Name  string   `yaml:"name"`
+	Seeds []string `yaml:"seeds"`
+}
+
+// CustomPlacement stores the custom node placement for a specific replica.
+type CustomPlacement struct {
+	Name          string `yaml:"name"`
+	Region        string `yaml:"region"`
+	Az            string `yaml:"az"`
+	ResourceGroup string `yaml:"resourceGroup"`
+}
+
+// QuorumSelectStrategy stores the quorum selection strategy configuration.
+type QuorumSelectStrategy struct {
+	AffinityMode    string            `yaml:"affinityMode"`
+	Replicas        int               `yaml:"replicas"`
+	Strategy        string            `yaml:"strategy"`
+	CustomPlacement []CustomPlacement `yaml:"customPlacement"`
+}
+
+// QuorumConfig stores the advanced quorum configuration.
+type QuorumConfig struct {
+	BufferPools    []QuorumBufferPool   `yaml:"quorumBufferPools"`
+	SelectStrategy QuorumSelectStrategy `yaml:"quorumSelectStrategy"`
+}
+
+// GetEnsembleSize returns the ensemble size.
+func (q *QuorumConfig) GetEnsembleSize() int {
+	if q.SelectStrategy.Replicas == 3 {
+		return 3
+	}
+	if q.SelectStrategy.Replicas == 5 {
+		return 5
+	}
+	return 3
+}
+
+// GetWriteQuorumSize returns the write quorum size.
+func (q *QuorumConfig) GetWriteQuorumSize() int {
+	return q.GetEnsembleSize()
+}
+
+// GetAckQuorumSize returns the ack quorum size.
+func (q *QuorumConfig) GetAckQuorumSize() int {
+	return (q.GetWriteQuorumSize() / 2) + 1
+}
+
+// GRPCConfig stores the gRPC configuration for logstore.
+type GRPCConfig struct {
+	ServerMaxSendSize ByteSize `yaml:"serverMaxSendSize"` // Maximum size of each RPC request that the server can send
+	ServerMaxRecvSize ByteSize `yaml:"serverMaxRecvSize"` // Maximum size of each RPC request that the server can receive
+	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"` // Maximum size of each RPC request that the client can send
+	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"` // Maximum size of each RPC request that the client can receive
+}
+
+// GetServerMaxSendSize returns the server max send size in bytes as int.
+func (g *GRPCConfig) GetServerMaxSendSize() int {
+	return int(g.ServerMaxSendSize)
+}
+
+// GetServerMaxRecvSize returns the server max receive size in bytes as int.
+func (g *GRPCConfig) GetServerMaxRecvSize() int {
+	return int(g.ServerMaxRecvSize)
+}
+
+// GetClientMaxSendSize returns the client max send size in bytes as int.
+func (g *GRPCConfig) GetClientMaxSendSize() int {
+	return int(g.ClientMaxSendSize)
+}
+
+// GetClientMaxRecvSize returns the client max receive size in bytes as int.
+func (g *GRPCConfig) GetClientMaxRecvSize() int {
+	return int(g.ClientMaxRecvSize)
 }
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
 type SegmentReadPolicyConfig struct {
-	MaxBatchSize    int64 `yaml:"maxBatchSize"`
-	MaxFetchThreads int   `yaml:"maxFetchThreads"`
+	MaxBatchSize    ByteSize `yaml:"maxBatchSize"`
+	MaxFetchThreads int      `yaml:"maxFetchThreads"`
 }
 
 // SegmentSyncPolicyConfig stores the log file sync policy configuration.
 type SegmentSyncPolicyConfig struct {
-	MaxInterval                int   `yaml:"maxInterval"`
-	MaxIntervalForLocalStorage int   `yaml:"maxIntervalForLocalStorage"`
-	MaxEntries                 int   `yaml:"maxEntries"`
-	MaxBytes                   int64 `yaml:"maxBytes"`
-	MaxFlushRetries            int   `yaml:"maxFlushRetries"`
-	RetryInterval              int   `yaml:"retryInterval"`
-	MaxFlushSize               int64 `yaml:"maxFlushSize"`
-	MaxFlushThreads            int   `yaml:"maxFlushThreads"`
+	MaxInterval                DurationMilliseconds `yaml:"maxInterval"`
+	MaxIntervalForLocalStorage DurationMilliseconds `yaml:"maxIntervalForLocalStorage"`
+	MaxEntries                 int                  `yaml:"maxEntries"`
+	MaxBytes                   ByteSize             `yaml:"maxBytes"`
+	MaxFlushRetries            int                  `yaml:"maxFlushRetries"`
+	RetryInterval              DurationMilliseconds `yaml:"retryInterval"`
+	MaxFlushSize               ByteSize             `yaml:"maxFlushSize"`
+	MaxFlushThreads            int                  `yaml:"maxFlushThreads"`
 }
 
 type SegmentCompactionPolicy struct {
-	MaxBytes           int64 `yaml:"maxBytes"`
-	MaxParallelUploads int   `yaml:"maxParallelUploads"`
-	MaxParallelReads   int   `yaml:"maxParallelReads"`
+	MaxBytes           ByteSize `yaml:"maxBytes"`
+	MaxParallelUploads int      `yaml:"maxParallelUploads"`
+	MaxParallelReads   int      `yaml:"maxParallelReads"`
 }
 
 // RetentionPolicyConfig stores the data retention policy configuration.
@@ -136,11 +216,11 @@ type OtlpConfig struct {
 
 // TraceConfig stores the trace configuration.
 type TraceConfig struct {
-	Exporter       string       `yaml:"exporter"`
-	SampleFraction float64      `yaml:"sampleFraction"`
-	Jaeger         JaegerConfig `yaml:"jaeger"`
-	Otlp           OtlpConfig   `yaml:"otlp"`
-	InitTimeout    int          `yaml:"initTimeoutSeconds"`
+	Exporter       string          `yaml:"exporter"`
+	SampleFraction float64         `yaml:"sampleFraction"`
+	Jaeger         JaegerConfig    `yaml:"jaeger"`
+	Otlp           OtlpConfig      `yaml:"otlp"`
+	InitTimeout    DurationSeconds `yaml:"initTimeoutSeconds"`
 }
 
 // EtcdSslConfig stores the ETCD SSL configuration.
@@ -177,23 +257,20 @@ type EtcdLogConfig struct {
 
 // EtcdConfig stores the ETCD configuration.
 type EtcdConfig struct {
-	Endpoints      string         `yaml:"endpoints"`
-	RootPath       string         `yaml:"rootPath"`
-	MetaSubPath    string         `yaml:"metaSubPath"`
-	KvSubPath      string         `yaml:"kvSubPath"`
-	Log            EtcdLogConfig  `yaml:"log"`
-	Ssl            EtcdSslConfig  `yaml:"ssl"`
-	RequestTimeout int            `yaml:"requestTimeout"`
-	Use            EtcdUseConfig  `yaml:"use"`
-	Data           EtcdDataConfig `yaml:"data"`
-	Auth           EtcdAuthConfig `yaml:"auth"`
+	Endpoints      []string             `yaml:"endpoints"`
+	RootPath       string               `yaml:"rootPath"`
+	MetaSubPath    string               `yaml:"metaSubPath"`
+	KvSubPath      string               `yaml:"kvSubPath"`
+	Log            EtcdLogConfig        `yaml:"log"`
+	Ssl            EtcdSslConfig        `yaml:"ssl"`
+	RequestTimeout DurationMilliseconds `yaml:"requestTimeout"`
+	Use            EtcdUseConfig        `yaml:"use"`
+	Data           EtcdDataConfig       `yaml:"data"`
+	Auth           EtcdAuthConfig       `yaml:"auth"`
 }
 
 func (etcdCfg *EtcdConfig) GetEndpoints() []string {
-	if len(etcdCfg.Endpoints) == 0 {
-		return []string{}
-	}
-	return strings.Split(etcdCfg.Endpoints, ",")
+	return etcdCfg.Endpoints
 }
 
 // MinioSslConfig stores the MinIO SSL configuration.
@@ -203,24 +280,24 @@ type MinioSslConfig struct {
 
 // MinioConfig stores the MinIO configuration.
 type MinioConfig struct {
-	Address            string         `yaml:"address"`
-	Port               int            `yaml:"port"`
-	AccessKeyID        string         `yaml:"accessKeyID"`
-	SecretAccessKey    string         `yaml:"secretAccessKey"`
-	UseSSL             bool           `yaml:"useSSL"`
-	Ssl                MinioSslConfig `yaml:"ssl"`
-	BucketName         string         `yaml:"bucketName"`
-	CreateBucket       bool           `yaml:"createBucket"`
-	RootPath           string         `yaml:"rootPath"`
-	UseIAM             bool           `yaml:"useIAM"`
-	CloudProvider      string         `yaml:"cloudProvider"`
-	GcpCredentialJSON  string         `yaml:"gcpCredentialJSON"`
-	IamEndpoint        string         `yaml:"iamEndpoint"`
-	LogLevel           string         `yaml:"logLevel"`
-	Region             string         `yaml:"region"`
-	UseVirtualHost     bool           `yaml:"useVirtualHost"`
-	RequestTimeoutMs   int            `yaml:"requestTimeoutMs"`
-	ListObjectsMaxKeys int            `yaml:"listObjectsMaxKeys"`
+	Address            string               `yaml:"address"`
+	Port               int                  `yaml:"port"`
+	AccessKeyID        string               `yaml:"accessKeyID"`
+	SecretAccessKey    string               `yaml:"secretAccessKey"`
+	UseSSL             bool                 `yaml:"useSSL"`
+	Ssl                MinioSslConfig       `yaml:"ssl"`
+	BucketName         string               `yaml:"bucketName"`
+	CreateBucket       bool                 `yaml:"createBucket"`
+	RootPath           string               `yaml:"rootPath"`
+	UseIAM             bool                 `yaml:"useIAM"`
+	CloudProvider      string               `yaml:"cloudProvider"`
+	GcpCredentialJSON  string               `yaml:"gcpCredentialJSON"`
+	IamEndpoint        string               `yaml:"iamEndpoint"`
+	LogLevel           string               `yaml:"logLevel"`
+	Region             string               `yaml:"region"`
+	UseVirtualHost     bool                 `yaml:"useVirtualHost"`
+	RequestTimeoutMs   DurationMilliseconds `yaml:"requestTimeoutMs"`
+	ListObjectsMaxKeys int                  `yaml:"listObjectsMaxKeys"`
 }
 
 // LogstoreConfig stores the logstore configuration.
@@ -230,6 +307,7 @@ type LogstoreConfig struct {
 	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
 	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
 	FencePolicy             FencePolicyConfig       `yaml:"fencePolicy"`
+	GRPCConfig              GRPCConfig              `yaml:"grpc"`
 }
 
 type StorageConfig struct {
@@ -297,7 +375,281 @@ func NewConfiguration(files ...string) (*Configuration, error) {
 			return nil, err
 		}
 	}
+
+	err := config.Validate()
+	if err != nil {
+		return nil, err
+	}
 	return config, nil
+}
+
+func (c *Configuration) Validate() error {
+	// Validate Woodpecker configuration
+	if err := c.validateWoodpeckerConfig(); err != nil {
+		return fmt.Errorf("woodpecker config validation failed: %w", err)
+	}
+
+	// Validate other configurations if needed
+	// TODO: Add validation for dependent configurations, such as trace config, etcd config, minio config, etc.
+
+	return nil
+}
+
+func (c *Configuration) validateWoodpeckerConfig() error {
+	// Validate Meta configuration
+	if err := c.validateMetaConfig(); err != nil {
+		return fmt.Errorf("meta config validation failed: %w", err)
+	}
+
+	// Validate Client configuration
+	if err := c.validateClientConfig(); err != nil {
+		return fmt.Errorf("client config validation failed: %w", err)
+	}
+
+	// Validate Logstore configuration
+	if err := c.validateLogstoreConfig(); err != nil {
+		return fmt.Errorf("logstore config validation failed: %w", err)
+	}
+
+	// Validate Storage configuration
+	if err := c.validateStorageConfig(); err != nil {
+		return fmt.Errorf("storage config validation failed: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateMetaConfig() error {
+	meta := &c.Woodpecker.Meta
+
+	// Validate meta type
+	validMetaTypes := map[string]bool{"etcd": true}
+	if !validMetaTypes[meta.Type] {
+		return fmt.Errorf("invalid meta type '%s', must be 'etcd'", meta.Type)
+	}
+
+	// Validate prefix
+	if len(meta.Prefix) == 0 {
+		return fmt.Errorf("meta prefix cannot be empty")
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateClientConfig() error {
+	client := &c.Woodpecker.Client
+
+	// Validate SegmentAppend configuration
+	if client.SegmentAppend.QueueSize <= 0 {
+		return fmt.Errorf("segment append queue size must be positive, got %d", client.SegmentAppend.QueueSize)
+	}
+	if client.SegmentAppend.MaxRetries < 0 {
+		return fmt.Errorf("segment append max retries cannot be negative, got %d", client.SegmentAppend.MaxRetries)
+	}
+
+	// Validate SegmentRollingPolicy configuration
+	if client.SegmentRollingPolicy.MaxSize <= 0 {
+		return fmt.Errorf("segment rolling policy max size must be positive, got %d", client.SegmentRollingPolicy.MaxSize.Int64())
+	}
+	if client.SegmentRollingPolicy.MaxInterval.Seconds() <= 0 {
+		return fmt.Errorf("segment rolling policy max interval must be positive, got %d", client.SegmentRollingPolicy.MaxInterval.Seconds())
+	}
+	if client.SegmentRollingPolicy.MaxBlocks <= 0 {
+		return fmt.Errorf("segment rolling policy max blocks must be positive, got %d", client.SegmentRollingPolicy.MaxBlocks)
+	}
+
+	// Validate Auditor configuration
+	if client.Auditor.MaxInterval.Seconds() <= 0 {
+		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
+	}
+
+	// Validate Quorum configuration only when storage type is "service"
+	if c.Woodpecker.Storage.IsStorageService() {
+		if err := c.validateQuorumConfig(); err != nil {
+			return fmt.Errorf("quorum config validation failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateQuorumConfig() error {
+	q := &c.Woodpecker.Client.Quorum
+
+	// Basic quorum size validation
+	ensembleSize := q.GetEnsembleSize()
+	writeQuorumSize := q.GetWriteQuorumSize()
+	ackQuorumSize := q.GetAckQuorumSize()
+
+	if ensembleSize <= 0 {
+		return fmt.Errorf("ensemble size must be positive, got %d", ensembleSize)
+	}
+	if writeQuorumSize <= 0 {
+		return fmt.Errorf("write quorum size must be positive, got %d", writeQuorumSize)
+	}
+	if ackQuorumSize <= 0 {
+		return fmt.Errorf("ack quorum size must be positive, got %d", ackQuorumSize)
+	}
+	if writeQuorumSize > ensembleSize {
+		return fmt.Errorf("write quorum size (%d) cannot be larger than ensemble size (%d)", writeQuorumSize, ensembleSize)
+	}
+	if ackQuorumSize > writeQuorumSize {
+		return fmt.Errorf("ack quorum size (%d) cannot be larger than write quorum size (%d)", ackQuorumSize, writeQuorumSize)
+	}
+
+	// Validate affinity mode (allow empty for backward compatibility)
+	validAffinityModes := map[string]bool{"soft": true, "hard": true, "": true}
+	if !validAffinityModes[q.SelectStrategy.AffinityMode] {
+		return fmt.Errorf("invalid affinity mode '%s', must be 'soft' or 'hard'", q.SelectStrategy.AffinityMode)
+	}
+
+	// Validate strategy (allow unknown strategies for backward compatibility - they'll default to random)
+	validStrategies := map[string]bool{
+		"single-az-single-rg": true,
+		"single-az-multi-rg":  true,
+		"multi-az-single-rg":  true,
+		"multi-az-multi-rg":   true,
+		"cross-region":        true,
+		"custom":              true,
+		"random":              true,
+		"":                    true, // Allow empty for backward compatibility
+	}
+	if !validStrategies[q.SelectStrategy.Strategy] {
+		// Log warning but don't fail for unknown strategies (backward compatibility)
+		fmt.Printf("Warning: unknown strategy '%s', will default to 'random'\n", q.SelectStrategy.Strategy)
+	}
+
+	// Validate BufferPools
+	if len(q.BufferPools) == 0 {
+		return fmt.Errorf("at least one buffer pool must be configured")
+	}
+
+	for i, pool := range q.BufferPools {
+		if len(pool.Name) == 0 {
+			return fmt.Errorf("buffer pool %d name cannot be empty", i)
+		}
+		if len(pool.Seeds) == 0 {
+			return fmt.Errorf("buffer pool '%s' must have at least one seed", pool.Name)
+		}
+		for j, seed := range pool.Seeds {
+			if len(seed) == 0 {
+				return fmt.Errorf("buffer pool '%s' seed %d cannot be empty", pool.Name, j)
+			}
+		}
+	}
+
+	// Validate custom placement if strategy is custom
+	if q.SelectStrategy.Strategy == "custom" {
+		if len(q.SelectStrategy.CustomPlacement) == 0 {
+			return fmt.Errorf("custom strategy requires at least one custom placement rule")
+		}
+		if len(q.SelectStrategy.CustomPlacement) != ensembleSize {
+			return fmt.Errorf("custom placement rules count (%d) must equal ensemble size (%d)",
+				len(q.SelectStrategy.CustomPlacement), ensembleSize)
+		}
+
+		// Validate each custom placement
+		for i, placement := range q.SelectStrategy.CustomPlacement {
+			if len(placement.Region) == 0 {
+				return fmt.Errorf("custom placement rule %d region cannot be empty", i)
+			}
+			if len(placement.Az) == 0 {
+				return fmt.Errorf("custom placement rule %d az cannot be empty", i)
+			}
+			if len(placement.ResourceGroup) == 0 {
+				return fmt.Errorf("custom placement rule %d resource group cannot be empty", i)
+			}
+
+			// Verify that the region exists in buffer pools
+			found := false
+			for _, pool := range q.BufferPools {
+				if pool.Name == placement.Region {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("custom placement rule %d references unknown region '%s'", i, placement.Region)
+			}
+		}
+	}
+
+	// Validate cross-region strategy requirements
+	if q.SelectStrategy.Strategy == "cross-region" {
+		if len(q.BufferPools) < 2 {
+			return fmt.Errorf("cross-region strategy requires at least 2 buffer pools, got %d", len(q.BufferPools))
+		}
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateLogstoreConfig() error {
+	logstore := &c.Woodpecker.Logstore
+
+	// Validate SegmentSyncPolicy
+	if logstore.SegmentSyncPolicy.MaxInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy max interval must be positive, got %d", logstore.SegmentSyncPolicy.MaxInterval.Milliseconds())
+	}
+	if logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy max interval for local storage must be positive, got %d", logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds())
+	}
+	if logstore.SegmentSyncPolicy.MaxEntries <= 0 {
+		return fmt.Errorf("segment sync policy max entries must be positive, got %d", logstore.SegmentSyncPolicy.MaxEntries)
+	}
+	if logstore.SegmentSyncPolicy.MaxBytes <= 0 {
+		return fmt.Errorf("segment sync policy max bytes must be positive, got %d", logstore.SegmentSyncPolicy.MaxBytes.Int64())
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushRetries < 0 {
+		return fmt.Errorf("segment sync policy max flush retries cannot be negative, got %d", logstore.SegmentSyncPolicy.MaxFlushRetries)
+	}
+	if logstore.SegmentSyncPolicy.RetryInterval.Milliseconds() <= 0 {
+		return fmt.Errorf("segment sync policy retry interval must be positive, got %d", logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushSize <= 0 {
+		return fmt.Errorf("segment sync policy max flush size must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
+	}
+	if logstore.SegmentSyncPolicy.MaxFlushThreads <= 0 {
+		return fmt.Errorf("segment sync policy max flush threads must be positive, got %d", logstore.SegmentSyncPolicy.MaxFlushThreads)
+	}
+
+	// Validate SegmentCompactionPolicy
+	if logstore.SegmentCompactionPolicy.MaxBytes <= 0 {
+		return fmt.Errorf("segment compaction policy max bytes must be positive, got %d", logstore.SegmentCompactionPolicy.MaxBytes.Int64())
+	}
+	if logstore.SegmentCompactionPolicy.MaxParallelUploads <= 0 {
+		return fmt.Errorf("segment compaction policy max parallel uploads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelUploads)
+	}
+	if logstore.SegmentCompactionPolicy.MaxParallelReads <= 0 {
+		return fmt.Errorf("segment compaction policy max parallel reads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelReads)
+	}
+
+	// Validate SegmentReadPolicy
+	if logstore.SegmentReadPolicy.MaxBatchSize <= 0 {
+		return fmt.Errorf("segment read policy max batch size must be positive, got %d", logstore.SegmentReadPolicy.MaxBatchSize.Int64())
+	}
+	if logstore.SegmentReadPolicy.MaxFetchThreads <= 0 {
+		return fmt.Errorf("segment read policy max fetch threads must be positive, got %d", logstore.SegmentReadPolicy.MaxFetchThreads)
+	}
+
+	return nil
+}
+
+func (c *Configuration) validateStorageConfig() error {
+	storage := &c.Woodpecker.Storage
+
+	// Validate storage type
+	validStorageTypes := map[string]bool{"local": true, "minio": true, "default": true, "service": true, "": true}
+	if !validStorageTypes[storage.Type] {
+		return fmt.Errorf("invalid storage type '%s', must be one of: local, minio, default, service", storage.Type)
+	}
+
+	// Validate root path
+	if len(storage.RootPath) == 0 {
+		return fmt.Errorf("storage root path cannot be empty")
+	}
+
+	return nil
 }
 
 func getDefaultWoodpeckerConfig() WoodpeckerConfig {
@@ -312,32 +664,46 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxRetries: 2,
 			},
 			SegmentRollingPolicy: SegmentRollingPolicyConfig{
-				MaxSize:     100000000,
-				MaxInterval: 800,
+				MaxSize:     ByteSize(100000000),
+				MaxInterval: DurationSeconds{Duration: Duration{duration: 800 * 1000000000}}, // 800s
 				MaxBlocks:   1000,
 			},
 			Auditor: AuditorConfig{
-				MaxInterval: 5,
+				MaxInterval: DurationSeconds{Duration: Duration{duration: 5 * 1000000000}}, // 5s
+			},
+			Quorum: QuorumConfig{
+				BufferPools: []QuorumBufferPool{
+					{
+						Name:  "default-pool",
+						Seeds: []string{},
+					},
+				},
+				SelectStrategy: QuorumSelectStrategy{
+					AffinityMode:    "soft",
+					Replicas:        3,
+					Strategy:        "random",
+					CustomPlacement: []CustomPlacement{},
+				},
 			},
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
-				MaxInterval:                1000,
-				MaxIntervalForLocalStorage: 5,
+				MaxInterval:                DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
+				MaxIntervalForLocalStorage: DurationMilliseconds{Duration: Duration{duration: 5 * 1000000}},    // 5ms
 				MaxEntries:                 2000,
-				MaxBytes:                   100000000,
+				MaxBytes:                   ByteSize(100000000),
 				MaxFlushRetries:            3,
-				RetryInterval:              2000,
-				MaxFlushSize:               16000000,
+				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
+				MaxFlushSize:               ByteSize(16000000),
 				MaxFlushThreads:            8,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
-				MaxBytes:           32000000,
+				MaxBytes:           ByteSize(32000000),
 				MaxParallelUploads: 4,
 				MaxParallelReads:   8,
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
-				MaxBatchSize:    16000000,
+				MaxBatchSize:    ByteSize(16000000),
 				MaxFetchThreads: 32,
 			},
 			RetentionPolicy: RetentionPolicyConfig{
@@ -345,6 +711,12 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			},
 			FencePolicy: FencePolicyConfig{
 				ConditionWrite: "auto",
+			},
+			GRPCConfig: GRPCConfig{
+				ServerMaxSendSize: ByteSize(512 * 1024 * 1024), // 512 MB
+				ServerMaxRecvSize: ByteSize(256 * 1024 * 1024), // 256 MB
+				ClientMaxSendSize: ByteSize(256 * 1024 * 1024), // 256 MB
+				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
 			},
 		},
 		Storage: StorageConfig{
@@ -380,19 +752,19 @@ func getDefaultTraceConfig() TraceConfig {
 			Secure:   false,
 		},
 		SampleFraction: 1.0,
-		InitTimeout:    10,
+		InitTimeout:    DurationSeconds{Duration: Duration{duration: 10 * 1000000000}}, // 10s
 	}
 }
 
 func getDefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		Endpoints:      "localhost:2379",
+		Endpoints:      []string{"localhost:2379"},
 		RootPath:       "woodpecker",
 		MetaSubPath:    "meta",
 		KvSubPath:      "kv",
 		Log:            EtcdLogConfig{Level: "info", Path: "./logs"},
 		Ssl:            EtcdSslConfig{Enabled: false},
-		RequestTimeout: 10000,
+		RequestTimeout: DurationMilliseconds{Duration: Duration{duration: 10000 * time.Millisecond}}, // 10000ms
 		Use:            EtcdUseConfig{Embed: false},
 	}
 }
@@ -417,7 +789,7 @@ func getDefaultMinioConfig() MinioConfig {
 		LogLevel:           "fatal",
 		Region:             "",
 		UseVirtualHost:     false,
-		RequestTimeoutMs:   1000,
+		RequestTimeoutMs:   DurationMilliseconds{Duration: Duration{duration: 1000 * 1000000}}, // 1000ms
 		ListObjectsMaxKeys: 0,
 	}
 }

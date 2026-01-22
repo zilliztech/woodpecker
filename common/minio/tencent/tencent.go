@@ -148,7 +148,6 @@ func (t *WrapHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	reqCopy := req.Clone(req.Context())
 
 	// For MinIO "If-None-Match:*" (object must not exist), add "x-cos-forbid-overwrite: true" for Tencent COS.
-	// We keep both headers to ensure compatibility
 	if ifNoneMatch := reqCopy.Header.Get("If-None-Match"); ifNoneMatch == "*" {
 		reqCopy.Header.Set("x-cos-forbid-overwrite", "true")
 		reqCopy.Header.Del("If-None-Match")

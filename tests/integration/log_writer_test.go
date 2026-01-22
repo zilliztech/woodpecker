@@ -104,7 +104,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	assert.NotNil(t, result.LogMessageId, "Successful write should return a valid LogMessageId")
 
 	// wait for sync before read
-	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	// 6. Verify data integrity with a reader
@@ -328,7 +328,7 @@ func TestClientLogWriterEtcdFailure(t *testing.T) {
 
 	// 9. Verify data integrity with a reader
 	// Wait for sync before read
-	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	reader, err := logHandle2.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")
@@ -446,7 +446,7 @@ func TestClientLogWriterRealEtcdServiceFailureManually(t *testing.T) {
 
 	// 9. Verify data integrity with a reader
 	// Wait for sync before read
-	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval
+	flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
 	time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
 
 	reader, err := logHandle2.OpenLogReader(context.Background(), &log.LogMessageId{SegmentId: firstMsgID.SegmentId, EntryId: firstMsgID.EntryId}, "test-reader")
