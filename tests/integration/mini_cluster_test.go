@@ -146,7 +146,7 @@ func TestMiniCluster_LastScale(t *testing.T) {
 	cluster.StopMultiNodeCluster(t)
 
 	// Wait for nodes to shutdown
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Verify active nodes count
 	activeNodes := clientNode.GetDiscovery().GetAllServers()

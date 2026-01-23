@@ -24,8 +24,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +40,7 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/serde"
 )
 
 var (
@@ -119,23 +118,28 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	reader.lastAddConfirmed.Store(-1)
 	reader.isIncompleteFile.Store(true)
 
-	// Check for per-block files (local storage)
-	blockFiles, perBlockErr := reader.listBlockFiles(ctx)
-	if perBlockErr == nil && len(blockFiles) > 0 {
-		logger.Ctx(ctx).Debug("detected per-block files", zap.String("segmentDir", segmentDir), zap.Int("blockFileCount", len(blockFiles)))
-
-		// Load block indexes from per-block files
-		if err := reader.loadBlockFilesUnsafe(ctx, blockFiles); err != nil {
-			logger.Ctx(ctx).Warn("failed to load block files", zap.String("segmentDir", segmentDir), zap.Error(err))
-			return nil, fmt.Errorf("load block files: %w", err)
-		}
-
-		logger.Ctx(ctx).Debug("staged file reader created successfully",
-			zap.String("segmentDir", segmentDir), zap.Bool("isIncompleteFile", reader.isIncompleteFile.Load()), zap.Int("blockIndexesCount", len(reader.blockIndexes)))
+	// Priority 1: Try to load footer.blk first
+	// If footer exists, it contains all block indexes and segment metadata (works for both empty and non-empty completed segments)
+	if err := reader.tryLoadLocalFooter(ctx); err == nil {
+		logger.Ctx(ctx).Debug("staged file reader created successfully (footer loaded)",
+			zap.String("segmentDir", segmentDir),
+			zap.Bool("isIncompleteFile", reader.isIncompleteFile.Load()),
+			zap.Int("blockIndexesCount", len(reader.blockIndexes)))
 		return reader, nil
 	}
 
-	// No local block files found, try to check if compacted data exists in minio
+	// Priority 2: If footer doesn't exist, scan block files sequentially (0.blk, 1.blk, 2.blk...)
+	// This is for incomplete segments that are still being written
+	// Stop when: block file doesn't exist, or encounter a directory (fence)
+	if err := reader.scanLocalBlockFiles(ctx); err == nil {
+		logger.Ctx(ctx).Debug("staged file reader created successfully (block scan mode)",
+			zap.String("segmentDir", segmentDir),
+			zap.Bool("isIncompleteFile", reader.isIncompleteFile.Load()),
+			zap.Int("blockIndexesCount", len(reader.blockIndexes)))
+		return reader, nil
+	}
+
+	// Priority 3: No local footer and no local data blocks, try minio for compacted data
 	if err := reader.tryParseMinioFooterUnsafe(ctx); err != nil {
 		logger.Ctx(ctx).Debug("no local or compacted data found", zap.String("segmentDir", segmentDir), zap.Error(err))
 		return nil, werr.ErrEntryNotFound
@@ -146,87 +150,116 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	return reader, nil
 }
 
-// listBlockFiles lists all completed block files in the segment directory
-func (r *StagedFileReaderAdv) listBlockFiles(ctx context.Context) ([]int64, error) {
-	segmentDir := getSegmentDir(r.baseDir, r.logId, r.segId)
-	entries, err := os.ReadDir(segmentDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var blockIds []int64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		// Only consider completed block files (n.blk), not inflight or incomplete ones
-		if len(name) > 4 && name[len(name)-4:] == ".blk" && !strings.Contains(name, ".blk.") && name != "footer.blk" {
-			// Parse block ID from filename
-			blockIdStr := name[:len(name)-4]
-			blockId, err := strconv.ParseInt(blockIdStr, 10, 64)
-			if err != nil {
-				logger.Ctx(ctx).Debug("skipping non-numeric block file", zap.String("filename", name))
-				continue
-			}
-			blockIds = append(blockIds, blockId)
-		}
-	}
-
-	// Sort block IDs
-	sort.Slice(blockIds, func(i, j int) bool {
-		return blockIds[i] < blockIds[j]
-	})
-
-	return blockIds, nil
-}
-
-// loadBlockFilesUnsafe loads block indexes from per-block files
-func (r *StagedFileReaderAdv) loadBlockFilesUnsafe(ctx context.Context, blockIds []int64) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "loadBlockFiles")
+// tryLoadLocalFooter attempts to load footer.blk from local disk
+// If successful, it loads all block indexes from the footer data
+// Returns nil on success, error if footer doesn't exist or can't be parsed
+func (r *StagedFileReaderAdv) tryLoadLocalFooter(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryLoadLocalFooter")
 	defer sp.End()
 
-	// First, try to load footer if exists
-	// Note: Do NOT read footer.blk.inflight - it may be incomplete (crashed during write)
-	// If footer.blk doesn't exist, we fall back to scanning individual block files
 	footerPath := getLocalFooterBlockPath(r.baseDir, r.logId, r.segId)
-	if footerData, err := os.ReadFile(footerPath); err == nil {
-		// Parse footer record
-		footerRecord, err := codec.ParseFooterFromBytes(footerData)
-		if err == nil {
-			r.footer = footerRecord
-			r.isIncompleteFile.Store(false)
-			r.version.Store(uint32(footerRecord.Version))
-			r.flags.Store(uint32(footerRecord.Flags))
-			logger.Ctx(ctx).Debug("loaded footer from footer.blk", zap.Int32("totalBlocks", footerRecord.TotalBlocks))
-		}
+	footerData, err := os.ReadFile(footerPath)
+	if err != nil {
+		return fmt.Errorf("read footer file: %w", err)
 	}
 
-	// Load block indexes by reading block headers from each block file
-	r.blockIndexes = make([]*codec.IndexRecord, 0, len(blockIds))
+	// Parse footer record and block indexes using serde package
+	footerAndIndexes, err := serde.DeserializeFooterAndIndexes(footerData)
+	if err != nil {
+		// Try parsing just footer (for backwards compatibility or empty segments with no indexes)
+		footerRecord, parseErr := codec.ParseFooterFromBytes(footerData)
+		if parseErr != nil {
+			return fmt.Errorf("parse footer: %w", err)
+		}
+		r.footer = footerRecord
+		r.blockIndexes = make([]*codec.IndexRecord, 0)
+	} else {
+		r.footer = footerAndIndexes.Footer
+		r.blockIndexes = footerAndIndexes.Indexes
+	}
 
-	for _, blockId := range blockIds {
+	r.isIncompleteFile.Store(false)
+	r.version.Store(uint32(r.footer.Version))
+	r.flags.Store(uint32(r.footer.Flags))
+
+	logger.Ctx(ctx).Debug("loaded footer from footer.blk",
+		zap.Int32("totalBlocks", r.footer.TotalBlocks),
+		zap.Int64("lac", r.footer.LAC),
+		zap.Int("blockIndexesCount", len(r.blockIndexes)))
+
+	return nil
+}
+
+// scanLocalBlockFiles scans block files sequentially starting from 0.blk
+// It builds block indexes by reading each block file header
+// Scanning stops when: block file doesn't exist, or encounter a directory (fence)
+// Returns nil on success (even if no blocks found - that's valid for minio fallback case)
+// Returns error only if there's a critical failure
+func (r *StagedFileReaderAdv) scanLocalBlockFiles(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanLocalBlockFiles")
+	defer sp.End()
+
+	segmentDir := getSegmentDir(r.baseDir, r.logId, r.segId)
+	r.blockIndexes = make([]*codec.IndexRecord, 0)
+
+	// Scan blocks sequentially starting from 0
+	for blockId := int64(0); ; blockId++ {
 		blockPath := getBlockFilePath(r.baseDir, r.logId, r.segId, blockId)
+
+		// Check if this is a fence directory (directory with .blk suffix)
+		info, err := os.Stat(blockPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Block doesn't exist, we've reached the end of data blocks
+				logger.Ctx(ctx).Debug("block file not found, stopping scan",
+					zap.Int64("blockId", blockId),
+					zap.String("blockPath", blockPath))
+				break
+			}
+			// Other error, log and continue to next block
+			logger.Ctx(ctx).Warn("failed to stat block file",
+				zap.Int64("blockId", blockId),
+				zap.String("blockPath", blockPath),
+				zap.Error(err))
+			break
+		}
+
+		// Check if it's a fence directory
+		if info.IsDir() {
+			// This is a fence directory, no more data blocks after this
+			logger.Ctx(ctx).Debug("encountered fence directory, stopping scan",
+				zap.Int64("blockId", blockId),
+				zap.String("blockPath", blockPath))
+			break
+		}
+
+		// Read and parse block file
 		blockData, err := os.ReadFile(blockPath)
 		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read block file", zap.String("blockPath", blockPath), zap.Error(err))
-			continue
+			logger.Ctx(ctx).Warn("failed to read block file",
+				zap.Int64("blockId", blockId),
+				zap.String("blockPath", blockPath),
+				zap.Error(err))
+			break
 		}
 
 		// Parse block header to get entry range
 		if len(blockData) < codec.RecordHeaderSize+codec.BlockHeaderRecordSize {
-			logger.Ctx(ctx).Warn("block file too small", zap.String("blockPath", blockPath), zap.Int("size", len(blockData)))
-			continue
+			logger.Ctx(ctx).Warn("block file too small",
+				zap.Int64("blockId", blockId),
+				zap.String("blockPath", blockPath),
+				zap.Int("size", len(blockData)))
+			break
 		}
 
 		headerData := blockData[:codec.RecordHeaderSize+codec.BlockHeaderRecordSize]
 		record, err := codec.DecodeRecord(headerData)
 		if err != nil || record.Type() != codec.BlockHeaderRecordType {
-			logger.Ctx(ctx).Warn("failed to decode block header", zap.String("blockPath", blockPath), zap.Error(err))
-			continue
+			logger.Ctx(ctx).Warn("failed to decode block header",
+				zap.Int64("blockId", blockId),
+				zap.String("blockPath", blockPath),
+				zap.Error(err))
+			break
 		}
 
 		blockHeader := record.(*codec.BlockHeaderRecord)
@@ -234,25 +267,30 @@ func (r *StagedFileReaderAdv) loadBlockFilesUnsafe(ctx context.Context, blockIds
 		// Create index record
 		indexRecord := &codec.IndexRecord{
 			BlockNumber:  int32(blockId),
-			StartOffset:  blockId, // Virtual offset
+			StartOffset:  blockId, // Virtual offset for per-block files
 			BlockSize:    uint32(len(blockData)),
 			FirstEntryID: blockHeader.FirstEntryID,
 			LastEntryID:  blockHeader.LastEntryID,
 		}
 		r.blockIndexes = append(r.blockIndexes, indexRecord)
 
-		logger.Ctx(ctx).Debug("loaded block index",
+		logger.Ctx(ctx).Debug("loaded block index from scan",
 			zap.Int64("blockId", blockId),
 			zap.Int64("firstEntryId", blockHeader.FirstEntryID),
 			zap.Int64("lastEntryId", blockHeader.LastEntryID))
 	}
 
-	// Update version if not set from footer
-	if len(r.blockIndexes) > 0 && r.footer == nil {
+	// If we found any blocks, this is a valid incomplete segment
+	if len(r.blockIndexes) > 0 {
 		r.version.Store(codec.FormatVersion)
+		logger.Ctx(ctx).Debug("block scan completed",
+			zap.String("segmentDir", segmentDir),
+			zap.Int("blockCount", len(r.blockIndexes)))
+		return nil
 	}
 
-	return nil
+	// No blocks found - return error to trigger minio fallback
+	return fmt.Errorf("no local block files found")
 }
 
 func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Context) error {
@@ -275,6 +313,14 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 		return nil
 	}
 
+	// Try to read footer from local disk first (footer.blk)
+	if err := r.tryLoadLocalFooterUnsafe(ctx); err == nil {
+		logger.Ctx(ctx).Info("successfully parsed footer from local disk",
+			zap.Bool("isIncomplete", r.isIncompleteFile.Load()),
+			zap.Int("blockIndexesCount", len(r.blockIndexes)))
+		return nil
+	}
+
 	// Try to read footer from minio (compacted data)
 	if err := r.tryParseMinioFooterUnsafe(ctx); err != nil {
 		logger.Ctx(ctx).Debug("failed to parse minio footer", zap.Error(err))
@@ -282,6 +328,36 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 	}
 
 	logger.Ctx(ctx).Info("successfully parsed compacted footer from minio", zap.Bool("isCompacted", r.isCompacted.Load()))
+	return nil
+}
+
+// tryLoadLocalFooterUnsafe attempts to load footer.blk from local disk (unsafe - caller must hold lock)
+func (r *StagedFileReaderAdv) tryLoadLocalFooterUnsafe(ctx context.Context) error {
+	footerPath := getLocalFooterBlockPath(r.baseDir, r.logId, r.segId)
+	footerData, err := os.ReadFile(footerPath)
+	if err != nil {
+		return fmt.Errorf("read footer file: %w", err)
+	}
+
+	// Parse footer record and block indexes using serde package
+	footerAndIndexes, err := serde.DeserializeFooterAndIndexes(footerData)
+	if err != nil {
+		// Try parsing just footer (for backwards compatibility or empty segments with no indexes)
+		footerRecord, parseErr := codec.ParseFooterFromBytes(footerData)
+		if parseErr != nil {
+			return fmt.Errorf("parse footer: %w", err)
+		}
+		r.footer = footerRecord
+		r.blockIndexes = make([]*codec.IndexRecord, 0)
+	} else {
+		r.footer = footerAndIndexes.Footer
+		r.blockIndexes = footerAndIndexes.Indexes
+	}
+
+	r.isIncompleteFile.Store(false)
+	r.version.Store(uint32(r.footer.Version))
+	r.flags.Store(uint32(r.footer.Flags))
+
 	return nil
 }
 
@@ -548,15 +624,8 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 			return lastBlock.LastEntryID, nil
 		}
 
-		// Reload block files to get latest state
-		blockFiles, err := r.listBlockFiles(ctx)
-		if err != nil {
-			return -1, err
-		}
-		if len(blockFiles) == 0 {
-			return -1, werr.ErrFileReaderNoBlockFound
-		}
-		if err := r.loadBlockFilesUnsafe(ctx, blockFiles); err != nil {
+		// Rescan block files to get latest state
+		if err := r.scanLocalBlockFiles(ctx); err != nil {
 			return -1, err
 		}
 
@@ -732,8 +801,22 @@ func (r *StagedFileReaderAdv) readDataBlocksFromPerBlockFilesUnsafe(ctx context.
 			zap.String("baseDir", r.baseDir),
 			zap.Int64("startEntryId", opt.StartEntryID),
 			zap.Int64("lac", currentLAC),
-			zap.Int64("lastReadEntryID", lastReadEntryID))
+			zap.Int64("lastReadEntryID", lastReadEntryID),
+			zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
+			zap.Bool("hasFooter", r.footer != nil))
 		if !hasDataReadError {
+			// If segment is still incomplete, try to check if footer has been written
+			if r.isIncompleteFile.Load() && r.footer == nil {
+				// Try to load footer if it now exists
+				r.mu.Lock()
+				_ = r.tryLoadLocalFooterUnsafe(ctx)
+				r.mu.Unlock()
+
+				logger.Ctx(ctx).Debug("rechecked for footer after no data extracted",
+					zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
+					zap.Bool("hasFooter", r.footer != nil))
+			}
+
 			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than LAC but can't read here now, retry later or try to read from other nodes")
 			}

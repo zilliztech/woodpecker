@@ -99,48 +99,6 @@ func TestDeleteLocalFiles(t *testing.T) {
 		assert.Equal(t, 0, deleteCount)
 	})
 
-	t.Run("WithLegacyLogFiles", func(t *testing.T) {
-		dir := getTempDir(t)
-		logId := int64(1)
-		segmentId := int64(0)
-		cfg, err := config.NewConfiguration()
-		require.NoError(t, err)
-
-		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
-		err = os.MkdirAll(segmentDir, 0755)
-		require.NoError(t, err)
-
-		// Create legacy .log files
-		logFile1 := filepath.Join(segmentDir, "data.log")
-		logFile2 := filepath.Join(segmentDir, "0.log")
-		otherFile := filepath.Join(segmentDir, "other.txt")
-
-		err = os.WriteFile(logFile1, []byte("data"), 0644)
-		require.NoError(t, err)
-		err = os.WriteFile(logFile2, []byte("data"), 0644)
-		require.NoError(t, err)
-		err = os.WriteFile(otherFile, []byte("other"), 0644)
-		require.NoError(t, err)
-
-		segmentImpl := NewStagedSegmentImpl(
-			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
-		).(*StagedSegmentImpl)
-
-		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
-		assert.NoError(t, err)
-		assert.Equal(t, 2, deleteCount, "Should delete 2 .log files")
-
-		// Verify .log files are deleted
-		_, err = os.Stat(logFile1)
-		assert.True(t, os.IsNotExist(err))
-		_, err = os.Stat(logFile2)
-		assert.True(t, os.IsNotExist(err))
-
-		// Verify other file is NOT deleted
-		_, err = os.Stat(otherFile)
-		assert.NoError(t, err)
-	})
-
 	t.Run("WithBlockFiles", func(t *testing.T) {
 		dir := getTempDir(t)
 		logId := int64(2)
@@ -202,7 +160,6 @@ func TestDeleteLocalFiles(t *testing.T) {
 			"footer.blk":          true,  // should delete
 			"footer.blk.inflight": true,  // should delete
 			"write.lock":          true,  // should delete
-			"write.fence":         true,  // should delete
 			"other.txt":           false, // should NOT delete
 		}
 
@@ -348,7 +305,6 @@ func TestDeleteLocalFiles(t *testing.T) {
 			"0.blk",
 			"1.blk",
 			"2.blk.inflight",
-			"data.log",
 		}
 		// Create merged block files
 		mergedFiles := []string{
@@ -380,8 +336,8 @@ func TestDeleteLocalFiles(t *testing.T) {
 
 		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 1)
 		assert.NoError(t, err)
-		// Should delete: 0.blk, 1.blk, 2.blk.inflight, data.log, fence dir (3.blk)
-		assert.Equal(t, 5, deleteCount, "Should delete only original blocks and fence dirs")
+		// Should delete: 0.blk, 1.blk, 2.blk.inflight, fence dir (3.blk)
+		assert.Equal(t, 4, deleteCount, "Should delete only original blocks and fence dirs")
 
 		// Verify original files are deleted
 		for _, f := range originalFiles {
@@ -459,7 +415,7 @@ func TestDeleteLocalFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("MixedLegacyAndNewFormat", func(t *testing.T) {
+	t.Run("MixedBlockTypes", func(t *testing.T) {
 		dir := getTempDir(t)
 		logId := int64(8)
 		segmentId := int64(0)
@@ -470,12 +426,11 @@ func TestDeleteLocalFiles(t *testing.T) {
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
-		// Create mixed files (legacy + new format)
+		// Create mixed block files (original + merged + lock)
 		files := []string{
-			"data.log",   // legacy
-			"0.blk",      // new format
-			"1.blk",      // new format
-			"footer.blk", // new format
+			"0.blk",      // original block
+			"1.blk",      // original block
+			"footer.blk", // footer
 			"m_0.blk",    // merged
 			"write.lock", // lock
 		}
@@ -491,7 +446,7 @@ func TestDeleteLocalFiles(t *testing.T) {
 
 		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
-		assert.Equal(t, 6, deleteCount, "Should delete all segment files")
+		assert.Equal(t, 5, deleteCount, "Should delete all segment files")
 
 		// Verify all files are deleted
 		for _, f := range files {

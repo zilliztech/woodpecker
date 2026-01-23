@@ -1387,8 +1387,6 @@ func getSegmentDir(baseDir string, logId int64, segmentId int64) string {
 	return serde.GetSegmentDir(baseDir, logId, segmentId)
 }
 
-// Note: getSegmentFilePath is now defined in paths_legacy.go as it's for the legacy data.log format.
-
 func getBlockFilePath(baseDir string, logId int64, segmentId int64, blockId int64) string {
 	return serde.GetBlockFilePath(baseDir, logId, segmentId, blockId)
 }

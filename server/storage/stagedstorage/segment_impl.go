@@ -45,12 +45,11 @@ var _ storage.Segment = (*StagedSegmentImpl)(nil)
 // it cleans files like diskSegmentImpl. If it is compacted, it cleans objects like minio SegmentImpl.
 // TODO reuse code with Disk&Minio SegmentImpl
 type StagedSegmentImpl struct {
-	mu              sync.Mutex
-	cfg             *config.Configuration
-	logId           int64
-	segmentId       int64
-	segmentDir      string
-	segmentFilePath string
+	mu         sync.Mutex
+	cfg        *config.Configuration
+	logId      int64
+	segmentId  int64
+	segmentDir string
 	// minio related fields
 	bucket         string
 	rootPath       string
@@ -61,25 +60,23 @@ type StagedSegmentImpl struct {
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
 func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) storage.Segment {
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
 	segmentFileKey := fmt.Sprintf("%d/%d", logId, segId)
 
 	logger.Ctx(ctx).Debug("new StagedSegmentImpl created",
-		zap.String("segmentFilePath", filePath),
+		zap.String("segmentDir", segmentDir),
 		zap.String("segmentFileKey", segmentFileKey),
 		zap.String("bucket", bucket),
 		zap.String("rootPath", rootPath))
 
 	segmentImpl := &StagedSegmentImpl{
-		cfg:             cfg,
-		logId:           logId,
-		segmentId:       segId,
-		segmentDir:      segmentDir,
-		segmentFilePath: filePath,
-		bucket:          bucket,
-		rootPath:        rootPath,
-		segmentFileKey:  segmentFileKey,
-		client:          storageCli,
+		cfg:            cfg,
+		logId:          logId,
+		segmentId:      segId,
+		segmentDir:     segmentDir,
+		bucket:         bucket,
+		rootPath:       rootPath,
+		segmentFileKey: segmentFileKey,
+		client:         storageCli,
 	}
 	return segmentImpl
 }
@@ -334,10 +331,6 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 
 // shouldDeleteFile determines if a file should be deleted (flag=0, delete all)
 func (rs *StagedSegmentImpl) shouldDeleteFile(fileName string) bool {
-	// Legacy single-file format
-	if strings.HasSuffix(fileName, ".log") {
-		return true
-	}
 	// Block files (N.blk, m_N.blk)
 	if strings.HasSuffix(fileName, ".blk") {
 		return true
@@ -354,19 +347,11 @@ func (rs *StagedSegmentImpl) shouldDeleteFile(fileName string) bool {
 	if strings.HasSuffix(fileName, ".lock") {
 		return true
 	}
-	// Fence flag files
-	if strings.HasSuffix(fileName, ".fence") {
-		return true
-	}
 	return false
 }
 
 // shouldDeleteOriginalBlocks determines if a file should be deleted (flag=1, original blocks only)
 func (rs *StagedSegmentImpl) shouldDeleteOriginalBlocks(fileName string) bool {
-	// Legacy single-file format
-	if strings.HasSuffix(fileName, ".log") {
-		return true
-	}
 	// Skip merged blocks (m_N.blk)
 	if strings.HasPrefix(fileName, "m_") {
 		return false

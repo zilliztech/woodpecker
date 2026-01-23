@@ -277,10 +277,22 @@ func TestAdvLocalFileReader_ErrorHandling(t *testing.T) {
 	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(blockSize)
 
 	t.Run("AdvNonExistentFile", func(t *testing.T) {
+		// Opening reader on non-existent file should succeed (empty segment)
+		// Error should only occur when reading
 		nonExistentPath := filepath.Join(tempDir, "non-existent.log")
 		reader, err := disk.NewLocalFileReaderAdv(context.TODO(), nonExistentPath, 1000, 2000, 16_000_000)
-		assert.Error(t, err)
-		assert.Nil(t, reader)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close(ctx)
+
+		// Reading from empty segment should fail with ErrEntryNotFound
+		batch, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
+		}, nil)
+		assert.Error(t, readErr)
+		assert.True(t, werr.ErrEntryNotFound.Is(readErr), "Expected ErrEntryNotFound, got: %v", readErr)
+		assert.Nil(t, batch)
 	})
 
 	t.Run("AdvInvalidEntryId", func(t *testing.T) {

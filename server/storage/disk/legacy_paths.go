@@ -18,7 +18,6 @@
 package disk
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"github.com/zilliztech/woodpecker/server/storage/serde"
@@ -59,15 +58,6 @@ func isLegacyDataFile(filename string) bool {
 // Note: This is a legacy mechanism. New code should use directory-based fencing.
 func getFenceFlagPath(baseDir string, logId int64, segmentId int64) string {
 	return filepath.Join(serde.GetSegmentDir(baseDir, logId, segmentId), FenceFlagFileName)
-}
-
-// getFenceBlockInflightPath returns the path to an inflight fence block file.
-// Format: {baseDir}/{logId}/{segmentId}/{blockId}.blk.fence.inflight
-// Deprecated: Use directory-based fencing (getFenceBlockDirPath) instead.
-// This function is kept for backward compatibility during migration.
-func getFenceBlockInflightPath(baseDir string, logId int64, segmentId int64, blockId int64) string {
-	return filepath.Join(serde.GetSegmentDir(baseDir, logId, segmentId),
-		fmt.Sprintf("%d%s.fence%s", blockId, serde.BlockFileExtension, serde.InflightSuffix))
 }
 
 // getFenceBlockDirPath returns the path to a fence directory.
