@@ -15,7 +15,7 @@
 // See the license texts for specific language governing permissions and
 // limitations under the licenses.
 
-package disk
+package stagedstorage
 
 import (
 	"context"
@@ -26,10 +26,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/server/storage/serde"
 )
 
 func getTempDir(t *testing.T) string {
-	dir, err := os.MkdirTemp("", "disk_log_test_*")
+	dir, err := os.MkdirTemp("", "staged_segment_test_*")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		os.RemoveAll(dir)
@@ -37,38 +38,50 @@ func getTempDir(t *testing.T) string {
 	return dir
 }
 
-// TestNewDiskSegmentImpl tests the NewDiskSegmentImpl function.
-func TestNewDiskSegmentImpl(t *testing.T) {
+// TestNewStagedSegmentImpl tests the NewStagedSegmentImpl function.
+func TestNewStagedSegmentImpl(t *testing.T) {
 	tmpDir := getTempDir(t)
 	cfg, err := config.NewConfiguration()
 	assert.NoError(t, err)
-	segmentImpl := NewDiskSegmentImpl(context.TODO(), tmpDir, 1, 0, cfg).(*DiskSegmentImpl)
-	assert.NoError(t, err)
+
+	segmentImpl := NewStagedSegmentImpl(
+		context.TODO(),
+		"test-bucket",
+		"test-root",
+		tmpDir,
+		1,
+		0,
+		nil, // no object storage client for this test
+		cfg,
+	).(*StagedSegmentImpl)
+
 	assert.Equal(t, int64(1), segmentImpl.logId)
 	assert.Equal(t, int64(0), segmentImpl.segmentId)
 	assert.Equal(t, getSegmentDir(tmpDir, 1, 0), segmentImpl.segmentDir)
-	expectedPath := getSegmentFilePath(tmpDir, 1, 0)
-	assert.Equal(t, expectedPath, segmentImpl.segmentFilePath)
+	assert.Equal(t, "test-bucket", segmentImpl.bucket)
+	assert.Equal(t, "test-root", segmentImpl.rootPath)
 }
 
-// TestDeleteFileData tests the DeleteFileData function focusing on its ability
-// to handle directory and logging operations, rather than actual file operations.
-func TestDeleteFileData(t *testing.T) {
+// TestDeleteLocalFiles tests the deleteLocalFiles function focusing on local file operations.
+// Note: deleteMinioObjects is not tested here as it requires a mock object storage client.
+func TestDeleteLocalFiles(t *testing.T) {
 	t.Run("EmptyDirectory", func(t *testing.T) {
 		testDir := getTempDir(t)
 		logId := int64(1)
+		segmentId := int64(0)
 		cfg, err := config.NewConfiguration()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
-		logDir := testDir
-		err = os.MkdirAll(logDir, 0755)
-		assert.NoError(t, err)
+		segmentDir := serde.GetSegmentDir(testDir, logId, segmentId)
+		err = os.MkdirAll(segmentDir, 0755)
+		require.NoError(t, err)
 
-		roSegmentImpl := NewDiskSegmentImpl(context.TODO(), testDir, logId, 0, cfg).(*DiskSegmentImpl)
-		assert.NotNil(t, roSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", testDir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := roSegmentImpl.DeleteFileData(context.Background(), 0)
-		assert.NoError(t, err, "DeleteFileData should not error with empty directory")
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
+		assert.NoError(t, err, "deleteLocalFiles should not error with empty directory")
 		assert.Equal(t, 0, deleteCount)
 	})
 
@@ -76,10 +89,13 @@ func TestDeleteFileData(t *testing.T) {
 		nonExistDir := getTempDir(t)
 		os.RemoveAll(nonExistDir)
 		cfg, _ := config.NewConfiguration()
-		segmentImpl2 := NewDiskSegmentImpl(context.TODO(), nonExistDir, 1, 0, cfg).(*DiskSegmentImpl)
 
-		deleteCount, err := segmentImpl2.DeleteFileData(context.Background(), 0)
-		assert.NoError(t, err, "DeleteFileData should not error when directory doesn't exist")
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", nonExistDir, 1, 0, nil, cfg,
+		).(*StagedSegmentImpl)
+
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
+		assert.NoError(t, err, "deleteLocalFiles should not error when directory doesn't exist")
 		assert.Equal(t, 0, deleteCount)
 	})
 
@@ -90,7 +106,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -106,9 +122,11 @@ func TestDeleteFileData(t *testing.T) {
 		err = os.WriteFile(otherFile, []byte("other"), 0644)
 		require.NoError(t, err)
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 2, deleteCount, "Should delete 2 .log files")
 
@@ -130,7 +148,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -146,9 +164,11 @@ func TestDeleteFileData(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, deleteCount, "Should delete 4 .blk files")
 
@@ -170,20 +190,20 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
 		// Create various file types
 		files := map[string]bool{
-			"0.blk":              true, // should delete
-			"1.blk.inflight":     true, // should delete
-			"2.blk.completed":    true, // should delete
-			"footer.blk":         true, // should delete
-			"footer.blk.inflight": true, // should delete
-			"write.lock":         true, // should delete
-			"write.fence":        true, // should delete
-			"other.txt":          false, // should NOT delete
+			"0.blk":               true,  // should delete
+			"1.blk.inflight":      true,  // should delete
+			"2.blk.completed":     true,  // should delete
+			"footer.blk":          true,  // should delete
+			"footer.blk.inflight": true,  // should delete
+			"write.lock":          true,  // should delete
+			"write.fence":         true,  // should delete
+			"other.txt":           false, // should NOT delete
 		}
 
 		expectedDeleteCount := 0
@@ -196,9 +216,11 @@ func TestDeleteFileData(t *testing.T) {
 			}
 		}
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedDeleteCount, deleteCount)
 
@@ -221,7 +243,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -238,9 +260,11 @@ func TestDeleteFileData(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, deleteCount, "Should delete all merged block files")
 
@@ -258,7 +282,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -283,9 +307,11 @@ func TestDeleteFileData(t *testing.T) {
 		err = os.MkdirAll(otherDir, 0755)
 		require.NoError(t, err)
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, deleteCount, "Should delete 2 block files and 2 fence directories")
 
@@ -313,7 +339,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -348,9 +374,11 @@ func TestDeleteFileData(t *testing.T) {
 		err = os.MkdirAll(fenceDir, 0755)
 		require.NoError(t, err)
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 1)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 1)
 		assert.NoError(t, err)
 		// Should delete: 0.blk, 1.blk, 2.blk.inflight, data.log, fence dir (3.blk)
 		assert.Equal(t, 5, deleteCount, "Should delete only original blocks and fence dirs")
@@ -383,7 +411,7 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
@@ -410,9 +438,11 @@ func TestDeleteFileData(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 2)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 2)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, deleteCount, "Should delete only merged blocks")
 
@@ -436,18 +466,18 @@ func TestDeleteFileData(t *testing.T) {
 		cfg, err := config.NewConfiguration()
 		require.NoError(t, err)
 
-		segmentDir := getSegmentDir(dir, logId, segmentId)
+		segmentDir := serde.GetSegmentDir(dir, logId, segmentId)
 		err = os.MkdirAll(segmentDir, 0755)
 		require.NoError(t, err)
 
 		// Create mixed files (legacy + new format)
 		files := []string{
-			"data.log",           // legacy
-			"0.blk",              // new format
-			"1.blk",              // new format
-			"footer.blk",         // new format
-			"m_0.blk",            // merged
-			"write.lock",         // lock
+			"data.log",   // legacy
+			"0.blk",      // new format
+			"1.blk",      // new format
+			"footer.blk", // new format
+			"m_0.blk",    // merged
+			"write.lock", // lock
 		}
 
 		for _, f := range files {
@@ -455,9 +485,11 @@ func TestDeleteFileData(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		segmentImpl := NewDiskSegmentImpl(context.TODO(), dir, logId, segmentId, cfg).(*DiskSegmentImpl)
+		segmentImpl := NewStagedSegmentImpl(
+			context.TODO(), "bucket", "root", dir, logId, segmentId, nil, cfg,
+		).(*StagedSegmentImpl)
 
-		deleteCount, err := segmentImpl.DeleteFileData(context.Background(), 0)
+		deleteCount, err := segmentImpl.deleteLocalFiles(context.Background(), 0)
 		assert.NoError(t, err)
 		assert.Equal(t, 6, deleteCount, "Should delete all segment files")
 

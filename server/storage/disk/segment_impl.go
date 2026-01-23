@@ -73,7 +73,7 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 	startTime := time.Now()
 	logId := fmt.Sprintf("%d", rs.logId)
 
-	logger.Ctx(ctx).Info("Starting to delete segment file",
+	logger.Ctx(ctx).Info("Starting to delete segment files",
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("flag", flag))
 
@@ -91,20 +91,61 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 	var deleteErrors []error
 	deletedCount := 0
 
-	// Filter and delete segment files
+	// Delete files and directories based on flag
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
-			segmentFilePath := filepath.Join(rs.segmentDir, entry.Name())
+		fileName := entry.Name()
+		filePath := filepath.Join(rs.segmentDir, fileName)
+		shouldDelete := false
 
-			// Delete file
-			if err := os.Remove(segmentFilePath); err != nil {
-				logger.Ctx(ctx).Warn("Failed to delete segment file",
-					zap.String("segmentFilePath", segmentFilePath),
+		// Handle fence directories (directories named like {blockId}.blk)
+		if entry.IsDir() {
+			// Fence directories are named like "0.blk", "1.blk", etc.
+			if strings.HasSuffix(fileName, ".blk") && !strings.HasPrefix(fileName, "m_") {
+				// This is likely a fence directory
+				switch flag {
+				case 0: // Delete all
+					shouldDelete = true
+				case 1: // Delete only original blocks (not merged)
+					shouldDelete = true
+				}
+			}
+			if shouldDelete {
+				if err := os.RemoveAll(filePath); err != nil {
+					logger.Ctx(ctx).Warn("Failed to delete fence directory",
+						zap.String("path", filePath),
+						zap.Error(err))
+					deleteErrors = append(deleteErrors, err)
+				} else {
+					logger.Ctx(ctx).Debug("Successfully deleted fence directory",
+						zap.String("path", filePath))
+					deletedCount++
+				}
+			}
+			continue
+		}
+
+		// Determine what to delete based on flag and file type
+		switch flag {
+		case 0: // Delete all segment-related files
+			shouldDelete = rs.shouldDeleteFile(fileName)
+		case 1: // Delete only original blocks (not merged)
+			shouldDelete = rs.shouldDeleteOriginalBlocks(fileName)
+		case 2: // Delete only merged blocks
+			shouldDelete = rs.shouldDeleteMergedBlocks(fileName)
+		default:
+			// Delete all segment-related files
+			shouldDelete = rs.shouldDeleteFile(fileName)
+		}
+
+		if shouldDelete {
+			if err := os.Remove(filePath); err != nil {
+				logger.Ctx(ctx).Warn("Failed to delete file",
+					zap.String("filePath", filePath),
 					zap.Error(err))
 				deleteErrors = append(deleteErrors, err)
 			} else {
-				logger.Ctx(ctx).Info("Successfully deleted segment file",
-					zap.String("segmentFilePath", segmentFilePath))
+				logger.Ctx(ctx).Debug("Successfully deleted file",
+					zap.String("filePath", filePath))
 				deletedCount++
 			}
 		}
@@ -119,13 +160,84 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
-	logger.Ctx(ctx).Info("Completed fragment deletion",
+	logger.Ctx(ctx).Info("Completed segment deletion",
 		zap.String("segmentDir", rs.segmentDir),
 		zap.Int("deletedCount", deletedCount),
 		zap.Int("errorCount", len(deleteErrors)))
 
 	if len(deleteErrors) > 0 {
-		return deletedCount, fmt.Errorf("failed to delete %d segment files: ", len(deleteErrors))
+		return deletedCount, fmt.Errorf("failed to delete %d segment files", len(deleteErrors))
 	}
 	return deletedCount, nil
+}
+
+// shouldDeleteFile determines if a file should be deleted (flag=0, delete all)
+func (rs *DiskSegmentImpl) shouldDeleteFile(fileName string) bool {
+	// Legacy single-file format
+	if strings.HasSuffix(fileName, ".log") {
+		return true
+	}
+	// Block files (N.blk, m_N.blk)
+	if strings.HasSuffix(fileName, ".blk") {
+		return true
+	}
+	// Inflight files (N.blk.inflight, m_N.blk.inflight)
+	if strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Completed files (N.blk.completed, m_N.blk.completed)
+	if strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	// Lock files
+	if strings.HasSuffix(fileName, ".lock") {
+		return true
+	}
+	// Fence flag files
+	if strings.HasSuffix(fileName, ".fence") {
+		return true
+	}
+	return false
+}
+
+// shouldDeleteOriginalBlocks determines if a file should be deleted (flag=1, original blocks only)
+func (rs *DiskSegmentImpl) shouldDeleteOriginalBlocks(fileName string) bool {
+	// Legacy single-file format
+	if strings.HasSuffix(fileName, ".log") {
+		return true
+	}
+	// Skip merged blocks (m_N.blk)
+	if strings.HasPrefix(fileName, "m_") {
+		return false
+	}
+	// Original block files (N.blk, but not footer.blk)
+	if strings.HasSuffix(fileName, ".blk") && fileName != "footer.blk" {
+		return true
+	}
+	// Original inflight files (N.blk.inflight, but not m_N.blk.inflight)
+	if strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Original completed files (N.blk.completed, but not m_N.blk.completed)
+	if strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	return false
+}
+
+// shouldDeleteMergedBlocks determines if a file should be deleted (flag=2, merged blocks only)
+func (rs *DiskSegmentImpl) shouldDeleteMergedBlocks(fileName string) bool {
+	// Merged block files (m_N.blk)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk") {
+		return true
+	}
+	// Merged inflight files (m_N.blk.inflight)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Merged completed files (m_N.blk.completed)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	return false
 }

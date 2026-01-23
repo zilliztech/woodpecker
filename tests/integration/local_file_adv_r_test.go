@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -626,12 +627,26 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		err = writer1.Close(ctx)
 		require.NoError(t, err)
 
-		// Verify file exists but is incomplete (no footer)
-		stat, err := os.Stat(filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId)))
+		// Verify block files exist but no footer.blk (incomplete segment)
+		segmentDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
+		entries, err := os.ReadDir(segmentDir)
 		require.NoError(t, err)
-		assert.Greater(t, stat.Size(), int64(0), "File should contain some data")
 
-		t.Logf("Interrupted file size: %d bytes", stat.Size())
+		blockFileCount := 0
+		hasFooter := false
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".blk") && !strings.Contains(name, ".blk.") && name != "footer.blk" {
+				blockFileCount++
+			}
+			if name == "footer.blk" {
+				hasFooter = true
+			}
+		}
+		assert.Greater(t, blockFileCount, 0, "Should have at least one block file")
+		assert.False(t, hasFooter, "Should not have footer.blk (incomplete segment)")
+
+		t.Logf("Interrupted segment has %d block files", blockFileCount)
 	})
 
 	// Phase 2: Recover from the interrupted file and continue writing
@@ -827,7 +842,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		// Create a file with valid data first
 		logId := int64(25)
 		segmentId := int64(2500)
-		corruptedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
+		segmentDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
 
 		writer1, err := disk.NewLocalFileWriter(context.TODO(), tempDir, logId, segmentId, cfg)
 		require.NoError(t, err)
@@ -848,16 +863,17 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		err = writer1.Close(ctx)
 		require.NoError(t, err)
 
-		// Corrupt the file by truncating it in the middle
+		// Corrupt the last block file by truncating it in the middle
+		corruptedFilePath := filepath.Join(segmentDir, "2.blk")
 		stat, err := os.Stat(corruptedFilePath)
 		require.NoError(t, err)
 
-		// Truncate to 80% of original size to simulate corruption
-		truncatedSize := stat.Size() * 8 / 10
+		// Truncate to 50% of original size to simulate corruption
+		truncatedSize := stat.Size() * 5 / 10
 		err = os.Truncate(corruptedFilePath, truncatedSize)
 		require.NoError(t, err)
 
-		t.Logf("Corrupted file by truncating from %d to %d bytes", stat.Size(), truncatedSize)
+		t.Logf("Corrupted block file by truncating from %d to %d bytes", stat.Size(), truncatedSize)
 
 		// Try to recover from corrupted file using the same logId and segmentId
 		writer2, err := disk.NewLocalFileWriterWithMode(context.TODO(), tempDir, logId, segmentId, cfg, true)
@@ -865,6 +881,7 @@ func TestAdvLocalFileRW_WriteInterruptionAndRecovery(t *testing.T) {
 		require.NotNil(t, writer2)
 
 		// Should have recovered some entries (before corruption point)
+		// Since block 2 is corrupted, we should only recover blocks 0 and 1 (entryId 0 and 1)
 		recoveredFirstEntryId := writer2.GetFirstEntryId(ctx)
 		recoveredLastEntryId := writer2.GetLastEntryId(ctx)
 		t.Logf("Recovered from corrupted file: firstEntryId=%d, lastEntryId=%d", recoveredFirstEntryId, recoveredLastEntryId)
@@ -941,13 +958,14 @@ func TestAdvLocalFileReader_ReadIncompleteFile(t *testing.T) {
 		require.NotNil(t, reader)
 		defer reader.Close(ctx)
 
-		// Verify that footer is nil (file is incomplete)
+		// Verify that footer is nil (file is incomplete - no footer.blk)
 		footer := reader.GetFooter()
 		assert.Nil(t, footer, "Footer should be nil for incomplete file")
 
-		// Verify that block indexes were built from full scan
+		// In per-block mode, block indexes are loaded from per-block files directly (not lazy scan)
+		// For incomplete files without footer.blk, we still have block indexes from the .blk files
 		blockIndexes := reader.GetBlockIndexes()
-		assert.Equal(t, len(blockIndexes), 0, "Should have 0 block indexes from due to advReader lazy scan")
+		assert.Greater(t, len(blockIndexes), 0, "Should have block indexes from per-block files")
 
 		// Verify we can get the last entry ID
 		lastEntryId, err := reader.GetLastEntryID(ctx)

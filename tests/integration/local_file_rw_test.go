@@ -122,10 +122,11 @@ func TestLocalFileWriter_BasicWriteAndFinalize(t *testing.T) {
 	err = writer.Close(ctx)
 	require.NoError(t, err)
 
-	// Verify file exists (construct expected file path)
-	expectedFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
-	_, err = os.Stat(expectedFilePath)
-	require.NoError(t, err)
+	// Verify per-block files exist (footer.blk should exist since we finalized)
+	segmentDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
+	footerPath := filepath.Join(segmentDir, "footer.blk")
+	_, err = os.Stat(footerPath)
+	require.NoError(t, err, "footer.blk should exist after finalize")
 }
 
 func TestLocalFileWriter_LargeDataAndMultipleBlocks(t *testing.T) {

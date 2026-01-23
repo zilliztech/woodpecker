@@ -22,7 +22,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,12 +52,12 @@ var _ storage.Reader = (*StagedFileReaderAdv)(nil)
 
 // StagedFileReaderAdv implements staged storage reader for local disk and object storage.
 // Supports LAC-based reading and compacted object access.
-// TODO: refactor to reuse code with MinioFileReaderAdv & LocalFileReaderAdv
+// Uses per-block file format ({blockId}.blk) for local storage.
 type StagedFileReaderAdv struct {
 	logId    int64
 	segId    int64
 	logIdStr string // for metrics only
-	filePath string
+	baseDir  string // base directory for per-block files
 
 	// object access, only used for compacted object access
 	bucket          string
@@ -65,8 +68,7 @@ type StagedFileReaderAdv struct {
 	maxBatchSize    int64
 
 	// file access
-	mu   sync.RWMutex
-	file *os.File
+	mu sync.RWMutex
 
 	// runtime file state
 	flags            atomic.Uint32 // stores uint16 value
@@ -89,12 +91,8 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	maxBatchSize := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize.Int64()
 	maxFetchThreads := cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads
 	logger.Ctx(ctx).Debug("creating new staged file reader",
-		zap.String("localBaseDir", localBaseDir),
-		zap.Int64("logId", logId),
-		zap.Int64("segId", segId),
-		zap.String("rootPath", rootPath),
-		zap.Int("maxFetchThreads", maxFetchThreads),
-		zap.Int64("maxBatchSize", maxBatchSize))
+		zap.String("localBaseDir", localBaseDir), zap.Int64("logId", logId), zap.Int64("segId", segId),
+		zap.String("rootPath", rootPath), zap.Int("maxFetchThreads", maxFetchThreads), zap.Int64("maxBatchSize", maxBatchSize))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
@@ -102,47 +100,13 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-	logger.Ctx(ctx).Debug("attempting to open file for reading",
-		zap.String("filePath", filePath))
-
-	// Open file for reading
-	file, err := os.Open(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist yet, return entry not found
-			logger.Ctx(ctx).Debug("file does not exist, returning ErrEntryNotFound",
-				zap.String("filePath", filePath))
-			return nil, werr.ErrEntryNotFound
-		}
-		logger.Ctx(ctx).Warn("failed to open file for reading",
-			zap.String("filePath", filePath),
-			zap.Error(err))
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-
-	// Get file size
-	stat, err := file.Stat()
-	if err != nil {
-		file.Close()
-		logger.Ctx(ctx).Warn("failed to stat file",
-			zap.String("filePath", filePath),
-			zap.Error(err))
-		return nil, fmt.Errorf("stat file: %w", err)
-	}
-
-	logger.Ctx(ctx).Debug("file opened successfully",
-		zap.String("filePath", filePath),
-		zap.Int64("fileSize", stat.Size()))
-
-	currentSize := stat.Size()
+	// Create base reader
 	reader := &StagedFileReaderAdv{
 		logId:           logId,
 		segId:           segId,
 		logIdStr:        fmt.Sprintf("%d", logId),
-		filePath:        filePath,
+		baseDir:         localBaseDir,
 		maxBatchSize:    maxBatchSize,
-		file:            file,
 		bucket:          bucket,
 		rootPath:        rootPath,
 		maxFetchThreads: maxFetchThreads,
@@ -153,31 +117,148 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	reader.version.Store(codec.FormatVersion)
 	reader.closed.Store(false)
 	reader.lastAddConfirmed.Store(-1)
-
-	// try to check footer when opening
 	reader.isIncompleteFile.Store(true)
-	parseFooterErr := reader.tryParseFooterAndIndexesIfExists(ctx)
-	if parseFooterErr != nil {
-		file.Close()
-		reader.closed.Store(true)
-		logger.Ctx(ctx).Warn("failed to parse footer and indexes",
-			zap.String("filePath", filePath),
-			zap.Error(err))
-		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
+
+	// Check for per-block files (local storage)
+	blockFiles, perBlockErr := reader.listBlockFiles(ctx)
+	if perBlockErr == nil && len(blockFiles) > 0 {
+		logger.Ctx(ctx).Debug("detected per-block files", zap.String("segmentDir", segmentDir), zap.Int("blockFileCount", len(blockFiles)))
+
+		// Load block indexes from per-block files
+		if err := reader.loadBlockFilesUnsafe(ctx, blockFiles); err != nil {
+			logger.Ctx(ctx).Warn("failed to load block files", zap.String("segmentDir", segmentDir), zap.Error(err))
+			return nil, fmt.Errorf("load block files: %w", err)
+		}
+
+		logger.Ctx(ctx).Debug("staged file reader created successfully",
+			zap.String("segmentDir", segmentDir), zap.Bool("isIncompleteFile", reader.isIncompleteFile.Load()), zap.Int("blockIndexesCount", len(reader.blockIndexes)))
+		return reader, nil
 	}
 
-	logger.Ctx(ctx).Debug("staged file reader created successfully",
-		zap.String("filePath", filePath),
-		zap.Int64("currentFileSize", currentSize),
-		zap.Bool("isIncompleteFile", reader.isIncompleteFile.Load()),
-		zap.Int("blockIndexesCount", len(reader.blockIndexes)))
+	// No local block files found, try to check if compacted data exists in minio
+	if err := reader.tryParseMinioFooterUnsafe(ctx); err != nil {
+		logger.Ctx(ctx).Debug("no local or compacted data found", zap.String("segmentDir", segmentDir), zap.Error(err))
+		return nil, werr.ErrEntryNotFound
+	}
+
+	logger.Ctx(ctx).Debug("staged file reader created successfully (compacted mode)",
+		zap.String("segmentDir", segmentDir), zap.Bool("isCompacted", reader.isCompacted.Load()), zap.Int("blockIndexesCount", len(reader.blockIndexes)))
 	return reader, nil
+}
+
+// listBlockFiles lists all completed block files in the segment directory
+func (r *StagedFileReaderAdv) listBlockFiles(ctx context.Context) ([]int64, error) {
+	segmentDir := getSegmentDir(r.baseDir, r.logId, r.segId)
+	entries, err := os.ReadDir(segmentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var blockIds []int64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Only consider completed block files (n.blk), not inflight or incomplete ones
+		if len(name) > 4 && name[len(name)-4:] == ".blk" && !strings.Contains(name, ".blk.") && name != "footer.blk" {
+			// Parse block ID from filename
+			blockIdStr := name[:len(name)-4]
+			blockId, err := strconv.ParseInt(blockIdStr, 10, 64)
+			if err != nil {
+				logger.Ctx(ctx).Debug("skipping non-numeric block file", zap.String("filename", name))
+				continue
+			}
+			blockIds = append(blockIds, blockId)
+		}
+	}
+
+	// Sort block IDs
+	sort.Slice(blockIds, func(i, j int) bool {
+		return blockIds[i] < blockIds[j]
+	})
+
+	return blockIds, nil
+}
+
+// loadBlockFilesUnsafe loads block indexes from per-block files
+func (r *StagedFileReaderAdv) loadBlockFilesUnsafe(ctx context.Context, blockIds []int64) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "loadBlockFiles")
+	defer sp.End()
+
+	// First, try to load footer if exists
+	// Note: Do NOT read footer.blk.inflight - it may be incomplete (crashed during write)
+	// If footer.blk doesn't exist, we fall back to scanning individual block files
+	footerPath := getLocalFooterBlockPath(r.baseDir, r.logId, r.segId)
+	if footerData, err := os.ReadFile(footerPath); err == nil {
+		// Parse footer record
+		footerRecord, err := codec.ParseFooterFromBytes(footerData)
+		if err == nil {
+			r.footer = footerRecord
+			r.isIncompleteFile.Store(false)
+			r.version.Store(uint32(footerRecord.Version))
+			r.flags.Store(uint32(footerRecord.Flags))
+			logger.Ctx(ctx).Debug("loaded footer from footer.blk", zap.Int32("totalBlocks", footerRecord.TotalBlocks))
+		}
+	}
+
+	// Load block indexes by reading block headers from each block file
+	r.blockIndexes = make([]*codec.IndexRecord, 0, len(blockIds))
+
+	for _, blockId := range blockIds {
+		blockPath := getBlockFilePath(r.baseDir, r.logId, r.segId, blockId)
+		blockData, err := os.ReadFile(blockPath)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to read block file", zap.String("blockPath", blockPath), zap.Error(err))
+			continue
+		}
+
+		// Parse block header to get entry range
+		if len(blockData) < codec.RecordHeaderSize+codec.BlockHeaderRecordSize {
+			logger.Ctx(ctx).Warn("block file too small", zap.String("blockPath", blockPath), zap.Int("size", len(blockData)))
+			continue
+		}
+
+		headerData := blockData[:codec.RecordHeaderSize+codec.BlockHeaderRecordSize]
+		record, err := codec.DecodeRecord(headerData)
+		if err != nil || record.Type() != codec.BlockHeaderRecordType {
+			logger.Ctx(ctx).Warn("failed to decode block header", zap.String("blockPath", blockPath), zap.Error(err))
+			continue
+		}
+
+		blockHeader := record.(*codec.BlockHeaderRecord)
+
+		// Create index record
+		indexRecord := &codec.IndexRecord{
+			BlockNumber:  int32(blockId),
+			StartOffset:  blockId, // Virtual offset
+			BlockSize:    uint32(len(blockData)),
+			FirstEntryID: blockHeader.FirstEntryID,
+			LastEntryID:  blockHeader.LastEntryID,
+		}
+		r.blockIndexes = append(r.blockIndexes, indexRecord)
+
+		logger.Ctx(ctx).Debug("loaded block index",
+			zap.Int64("blockId", blockId),
+			zap.Int64("firstEntryId", blockHeader.FirstEntryID),
+			zap.Int64("lastEntryId", blockHeader.LastEntryID))
+	}
+
+	// Update version if not set from footer
+	if len(r.blockIndexes) > 0 && r.footer == nil {
+		r.version.Store(codec.FormatVersion)
+	}
+
+	return nil
 }
 
 func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseFooterAndIndexesIfExists")
 	defer sp.End()
-	logger.Ctx(ctx).Debug("try to read footer and block indexes with priority", zap.String("filePath", r.filePath))
+	logger.Ctx(ctx).Debug("try to read footer and block indexes")
 
 	// check if already exists
 	if !r.isIncompleteFile.Load() {
@@ -194,21 +275,14 @@ func (r *StagedFileReaderAdv) tryParseFooterAndIndexesIfExists(ctx context.Conte
 		return nil
 	}
 
-	// Priority 1: Try to read footer from minio (compacted data)
+	// Try to read footer from minio (compacted data)
 	if err := r.tryParseMinioFooterUnsafe(ctx); err != nil {
-		logger.Ctx(ctx).Debug("failed to parse minio footer, trying local file",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-	} else if !r.isIncompleteFile.Load() {
-		// Successfully parsed minio footer
-		logger.Ctx(ctx).Info("successfully parsed compacted footer from minio",
-			zap.String("filePath", r.filePath),
-			zap.Bool("isCompacted", r.isCompacted.Load()))
-		return nil
+		logger.Ctx(ctx).Debug("failed to parse minio footer", zap.Error(err))
+		return nil // Not an error - data might still be in local per-block files
 	}
 
-	// Priority 2: Try to read footer from staged local file
-	return r.tryParseLocalFooterUnsafe(ctx)
+	logger.Ctx(ctx).Info("successfully parsed compacted footer from minio", zap.Bool("isCompacted", r.isCompacted.Load()))
+	return nil
 }
 
 // tryParseMinioFooterUnsafe attempts to parse footer from minio object storage
@@ -223,30 +297,23 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	// Check if compacted footer exists in minio
 	footerKey := r.getFooterBlockKey()
 
-	logger.Ctx(ctx).Debug("checking for compacted footer in minio",
-		zap.String("bucket", r.bucket),
-		zap.String("footerKey", footerKey))
+	logger.Ctx(ctx).Debug("checking for compacted footer in minio", zap.String("bucket", r.bucket), zap.String("footerKey", footerKey))
 
 	// Check if footer exists
 	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey)
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
-			logger.Ctx(ctx).Debug("no compacted footer found in minio",
-				zap.String("footerKey", footerKey))
+			logger.Ctx(ctx).Debug("no compacted footer found in minio", zap.String("footerKey", footerKey))
 			return fmt.Errorf("no footer in minio")
 		}
-		logger.Ctx(ctx).Warn("failed to stat footer object in minio",
-			zap.String("footerKey", footerKey),
-			zap.Error(err))
+		logger.Ctx(ctx).Warn("failed to stat footer object in minio", zap.String("footerKey", footerKey), zap.Error(err))
 		return fmt.Errorf("failed to stat footer object: %w", err)
 	}
 
 	// Read the entire footer file
 	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize)
 	if err != nil {
-		logger.Ctx(ctx).Warn("failed to get footer object from minio",
-			zap.String("footerKey", footerKey),
-			zap.Error(err))
+		logger.Ctx(ctx).Warn("failed to get footer object from minio", zap.String("footerKey", footerKey), zap.Error(err))
 		return fmt.Errorf("failed to get footer object: %w", err)
 	}
 	defer reader.Close()
@@ -254,17 +321,13 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	footerData := make([]byte, objSize)
 	_, err = io.ReadFull(reader, footerData)
 	if err != nil {
-		logger.Ctx(ctx).Warn("failed to read footer data from minio",
-			zap.String("footerKey", footerKey),
-			zap.Error(err))
+		logger.Ctx(ctx).Warn("failed to read footer data from minio", zap.String("footerKey", footerKey), zap.Error(err))
 		return fmt.Errorf("failed to read footer data: %w", err)
 	}
 
 	// Parse footer and indexes from minio data
 	if err := r.parseMinioFooterDataUnsafe(ctx, footerData); err != nil {
-		logger.Ctx(ctx).Warn("failed to parse minio footer data",
-			zap.String("footerKey", footerKey),
-			zap.Error(err))
+		logger.Ctx(ctx).Warn("failed to parse minio footer data", zap.String("footerKey", footerKey), zap.Error(err))
 		return fmt.Errorf("failed to parse minio footer data: %w", err)
 	}
 
@@ -273,9 +336,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	r.isIncompleteFile.Store(false)
 
 	logger.Ctx(ctx).Info("successfully parsed compacted footer from minio",
-		zap.String("footerKey", footerKey),
-		zap.Int32("totalBlocks", r.footer.TotalBlocks),
-		zap.Bool("isCompacted", codec.IsCompacted(r.footer.Flags)))
+		zap.String("footerKey", footerKey), zap.Int32("totalBlocks", r.footer.TotalBlocks), zap.Bool("isCompacted", codec.IsCompacted(r.footer.Flags)))
 
 	return nil
 }
@@ -370,85 +431,6 @@ func (r *StagedFileReaderAdv) parseIndexDataUnsafe(ctx context.Context, indexDat
 	return nil
 }
 
-// tryParseLocalFooterUnsafe attempts to parse footer from staged local file (fallback)
-func (r *StagedFileReaderAdv) tryParseLocalFooterUnsafe(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "tryParseLocalFooterUnsafe")
-	defer sp.End()
-
-	logger.Ctx(ctx).Debug("trying to parse footer from staged local file", zap.String("filePath", r.filePath))
-
-	stat, err := r.file.Stat()
-	if err != nil {
-		logger.Ctx(ctx).Warn("failed to stat staged local file",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		return fmt.Errorf("stat file: %w", err)
-	}
-	currentFileSize := stat.Size()
-
-	// Check if file has minimum size for a footer (use V5 footer size as minimum)
-	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
-	if currentFileSize < int64(minFooterSize) {
-		// File is too small to contain footer, might be empty or still being written
-		logger.Ctx(ctx).Debug("staged local file too small for footer, performing raw scan",
-			zap.String("filePath", r.filePath),
-			zap.Int64("fileSize", currentFileSize))
-		r.isIncompleteFile.Store(true)
-		return nil
-	}
-
-	// Try to read and parse footer from the end of the file using compatibility parsing
-	maxFooterSize := codec.GetMaxFooterReadSize()
-	footerData, err := r.readAtUnsafe(ctx, currentFileSize-int64(maxFooterSize), maxFooterSize)
-	if err != nil {
-		logger.Ctx(ctx).Debug("failed to read footer data from staged local file, performing raw scan",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		r.isIncompleteFile.Store(true)
-		return werr.ErrEntryNotFound.WithCauseErrMsg("read file failed") // client would retry later
-	}
-
-	// Try to parse footer with compatibility parsing
-	footerRecord, err := codec.ParseFooterFromBytes(footerData)
-	if err != nil {
-		logger.Ctx(ctx).Debug("failed to parse footer record from staged local file, performing raw scan",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		r.isIncompleteFile.Store(true)
-		return nil
-	}
-
-	// Successfully found footer, parse using footer method
-	r.footer = footerRecord
-	r.isIncompleteFile.Store(false)
-	r.isCompacted.Store(false) // Staged local file is not compacted
-	r.version.Store(uint32(r.footer.Version))
-	r.flags.Store(uint32(r.footer.Flags))
-
-	logger.Ctx(ctx).Debug("found footer in staged local file, parsing index records",
-		zap.String("filePath", r.filePath),
-		zap.Int32("totalBlocks", r.footer.TotalBlocks))
-
-	// Parse index records - they are located before the footer
-	if r.footer.TotalBlocks > 0 {
-		if err := r.parseIndexRecordsUnsafe(ctx, currentFileSize); err != nil {
-			logger.Ctx(ctx).Debug("failed to decode index records from staged local file, performing raw scan",
-				zap.String("filePath", r.filePath),
-				zap.Error(err))
-			r.isIncompleteFile.Store(true)
-			r.footer = nil // reset footer since we can't parse indexes
-			return nil
-		}
-	}
-
-	logger.Ctx(ctx).Info("successfully parsed footer from staged local file",
-		zap.String("filePath", r.filePath),
-		zap.Int32("totalBlocks", r.footer.TotalBlocks),
-		zap.Bool("isCompacted", false))
-
-	return nil
-}
-
 // getFooterBlockKey generates the object key for the footer block
 func (r *StagedFileReaderAdv) getFooterBlockKey() string {
 	return fmt.Sprintf("%s/%d/%d/footer.blk", r.rootPath, r.logId, r.segId)
@@ -457,61 +439,6 @@ func (r *StagedFileReaderAdv) getFooterBlockKey() string {
 // getCompactedBlockKey generates the object key for a compacted block
 func (r *StagedFileReaderAdv) getCompactedBlockKey(blockID int64) string {
 	return fmt.Sprintf("%s/%d/%d/m_%d.blk", r.rootPath, r.logId, r.segId, blockID)
-}
-
-// parseIndexRecords parses all index records from the file
-func (r *StagedFileReaderAdv) parseIndexRecordsUnsafe(ctx context.Context, currentFileSize int64) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "parseIndexRecords")
-	defer sp.End()
-	// Calculate where index records start
-	// Index records are located before the footer record
-	footerRecordSize := int64(codec.RecordHeaderSize + codec.GetFooterRecordSize(r.footer.Version))
-	indexRecordSize := int64(codec.RecordHeaderSize + codec.IndexRecordSize) // IndexRecord payload size
-	totalIndexSize := int64(r.footer.TotalBlocks) * indexRecordSize
-
-	indexStartOffset := currentFileSize - footerRecordSize - totalIndexSize
-
-	if indexStartOffset < 0 {
-		return fmt.Errorf("invalid index start offset: %d", indexStartOffset)
-	}
-
-	// Read all index data
-	indexData, err := r.readAtUnsafe(ctx, indexStartOffset, int(totalIndexSize))
-	if err != nil {
-		return fmt.Errorf("read index data: %w", err)
-	}
-
-	// Parse index records sequentially
-	r.blockIndexes = make([]*codec.IndexRecord, 0, r.footer.TotalBlocks)
-	offset := 0
-
-	for i := int32(0); i < r.footer.TotalBlocks; i++ {
-		if offset+codec.RecordHeaderSize+codec.IndexRecordSize > len(indexData) {
-			return fmt.Errorf("incomplete index record at offset %d", offset)
-		}
-
-		recordData := indexData[offset : offset+codec.RecordHeaderSize+codec.IndexRecordSize]
-		record, err := codec.DecodeRecord(recordData)
-		if err != nil {
-			return fmt.Errorf("decode index record %d: %w", i, err)
-		}
-
-		if record.Type() != codec.IndexRecordType {
-			return fmt.Errorf("expected index record type %d, got %d at record %d", codec.IndexRecordType, record.Type(), i)
-		}
-
-		indexRecord := record.(*codec.IndexRecord)
-		r.blockIndexes = append(r.blockIndexes, indexRecord)
-
-		offset += codec.RecordHeaderSize + codec.IndexRecordSize
-	}
-
-	// Sort index records by block number to ensure correct order
-	sort.Slice(r.blockIndexes, func(i, j int) bool {
-		return r.blockIndexes[i].BlockNumber < r.blockIndexes[j].BlockNumber
-	})
-
-	return nil
 }
 
 // ReadNextBatchAdv reads the next batch of entries from the file according to read opt
@@ -537,8 +464,7 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 		// Try to parse footer and indexes
 		if err := r.tryParseFooterAndIndexesIfExists(ctx); err != nil {
 			logger.Ctx(ctx).Warn("failed to parse footer and indexes",
-				zap.String("filePath", r.filePath),
-				zap.Error(err))
+				zap.String("baseDir", r.baseDir), zap.Int64("logId", r.logId), zap.Int64("segId", r.segId), zap.Error(err))
 			return nil, fmt.Errorf("try parse footer and indexes: %w", err)
 		}
 	}
@@ -565,15 +491,13 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 		startBlockID = int64(lastReadBatchInfo.LastBlockId)
 		startBlockOffset = lastReadBatchInfo.BlockOffset
 		logger.Ctx(ctx).Debug("using advOpt mode",
-			zap.Int64("lastBlockNumber", int64(lastReadBatchInfo.LastBlockId)),
-			zap.Int64("startBlockID", startBlockID),
-			zap.Int64("startBlockOffset", startBlockOffset))
+			zap.Int64("lastBlockNumber", int64(lastReadBatchInfo.LastBlockId)), zap.Int64("startBlockID", startBlockID), zap.Int64("startBlockOffset", startBlockOffset))
 	} else if !r.isIncompleteFile.Load() {
 		// Scenario 2: First read with footer (completed file)
 		// When we have footer, find the block containing the start entry ID
 		foundStartBlock, err := codec.SearchBlock(r.blockIndexes, opt.StartEntryID)
 		if err != nil {
-			logger.Ctx(ctx).Warn("search block failed", zap.String("filePath", r.filePath), zap.Int64("entryId", opt.StartEntryID), zap.Error(err))
+			logger.Ctx(ctx).Warn("search block failed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId), zap.Int64("entryId", opt.StartEntryID), zap.Error(err))
 			return nil, err
 		}
 		if foundStartBlock != nil {
@@ -586,46 +510,15 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 		if foundStartBlock == nil {
 			if opt.StartEntryID <= r.footer.LAC {
 				logger.Ctx(ctx).Debug("some data less than footer's LAC but can't read here now, try to read from other nodes",
-					zap.Int64("lac", r.footer.LAC), zap.String("filePath", r.filePath), zap.Int64("startEntryId", opt.StartEntryID))
+					zap.Int64("lac", r.footer.LAC), zap.Int64("logId", r.logId), zap.Int64("segId", r.segId), zap.Int64("startEntryId", opt.StartEntryID))
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than footer's LAC but can't read here now, try to read from other nodes")
 			}
-			logger.Ctx(ctx).Debug("no more entries to read", zap.String("filePath", r.filePath), zap.Int64("startEntryId", opt.StartEntryID))
+			logger.Ctx(ctx).Debug("no more entries to read", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId), zap.Int64("startEntryId", opt.StartEntryID))
 			return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 		}
 	}
 
 	return r.readDataBlocksUnsafe(ctx, opt, startBlockID, startBlockOffset)
-}
-
-// readAt reads data from the file at the specified offset
-func (r *StagedFileReaderAdv) readAtUnsafe(ctx context.Context, offset int64, length int) ([]byte, error) {
-	logger.Ctx(ctx).Debug("reading data from file",
-		zap.Int64("offset", offset),
-		zap.Int("length", length),
-		zap.String("filePath", r.filePath))
-
-	if offset < 0 || length < 0 {
-		return nil, fmt.Errorf("invalid read parameters: offset=%d, length=%d", offset, length)
-	}
-
-	// Read data
-	data := make([]byte, length)
-	n, err := r.file.ReadAt(data, offset)
-	if err != nil {
-		// if EOF, maybe the file is at the beginning or EOF, otherwise it maybe in error state
-		if err != io.EOF {
-			logger.Ctx(ctx).Warn("failed to read data from file", zap.String("filePath", r.filePath), zap.Int64("offset", offset), zap.Int("requestedLength", length), zap.Int("actualRead", n), zap.Error(err))
-		}
-		return nil, err
-	}
-
-	logger.Ctx(ctx).Debug("data read successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("offset", offset),
-		zap.Int("requestedLength", length),
-		zap.Int("actualRead", n))
-
-	return data[:n], nil
 }
 
 // GetLastEntryID returns the last entry ID in the file
@@ -644,9 +537,9 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 	}
 	r.mu.RUnlock()
 
-	// If the file is incomplete, try to scan for new blocks to get the latest entry ID
+	// If the file is incomplete, try to reload block files to get the latest entry ID
 	if r.isIncompleteFile.Load() {
-		r.mu.Lock() // Need write lock for scanning
+		r.mu.Lock() // Need write lock for reloading
 		defer r.mu.Unlock()
 
 		// Double-check after acquiring write lock
@@ -655,11 +548,19 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 			return lastBlock.LastEntryID, nil
 		}
 
-		if err := r.scanForAllBlockInfoUnsafe(ctx); err != nil {
+		// Reload block files to get latest state
+		blockFiles, err := r.listBlockFiles(ctx)
+		if err != nil {
+			return -1, err
+		}
+		if len(blockFiles) == 0 {
+			return -1, werr.ErrFileReaderNoBlockFound
+		}
+		if err := r.loadBlockFilesUnsafe(ctx, blockFiles); err != nil {
 			return -1, err
 		}
 
-		// Check if we have any blocks after scanning
+		// Check if we have any blocks after reloading
 		if len(r.blockIndexes) == 0 {
 			return -1, werr.ErrFileReaderNoBlockFound
 		}
@@ -672,192 +573,6 @@ func (r *StagedFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error)
 	return -1, werr.ErrFileReaderNoBlockFound
 }
 
-// scanForNewBlocks scans for new blocks that may have been written since last scan
-// This is used for incomplete files to detect newly written data
-func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "scanForAllBlockInfo")
-	defer sp.End()
-	startTime := time.Now()
-
-	// Get current file stat
-	stat, err := r.file.Stat()
-	if err != nil {
-		return fmt.Errorf("stat file for scan: %w", err)
-	}
-
-	currentFileSize := stat.Size()
-	if currentFileSize <= codec.RecordHeaderSize+codec.HeaderRecordSize+codec.RecordHeaderSize+codec.BlockHeaderRecordSize {
-		// No data to scan
-		logger.Ctx(ctx).Debug("no data to scan",
-			zap.String("filePath", r.filePath),
-			zap.Int64("currentFileSize", currentFileSize))
-		return nil
-	}
-
-	logger.Ctx(ctx).Debug("scanning for block index only",
-		zap.String("filePath", r.filePath),
-		zap.Int64("currentFileSize", currentFileSize))
-
-	// Start scanning from the beginning of the file
-	currentOffset := int64(0)
-
-	// First, read and skip the file header record if it exists
-	// Try to read HeaderRecord first
-	headerRecordSize := codec.RecordHeaderSize + codec.HeaderRecordSize
-	headerData, readHeaderErr := r.readAtUnsafe(ctx, currentOffset, headerRecordSize)
-	if readHeaderErr != nil {
-		logger.Ctx(ctx).Warn("read file header failed",
-			zap.String("filePath", r.filePath),
-			zap.Error(readHeaderErr))
-		return readHeaderErr
-	}
-
-	headerRecord, decodeHeaderErr := codec.DecodeRecord(headerData)
-	if decodeHeaderErr != nil {
-		logger.Ctx(ctx).Warn("decode file header failed",
-			zap.String("filePath", r.filePath),
-			zap.Error(decodeHeaderErr))
-		return decodeHeaderErr
-	}
-
-	if headerRecord.Type() == codec.HeaderRecordType {
-		// Found and decoded HeaderRecord successfully
-		fileHeaderRecord := headerRecord.(*codec.HeaderRecord)
-		r.version.Store(uint32(fileHeaderRecord.Version))
-		r.flags.Store(uint32(fileHeaderRecord.Flags))
-		currentOffset += int64(headerRecordSize)
-		logger.Ctx(ctx).Debug("found file header record",
-			zap.String("filePath", r.filePath),
-			zap.Int64("headerOffset", int64(0)),
-			zap.Uint16("version", uint16(r.version.Load())),
-			zap.Uint16("flags", uint16(r.flags.Load())),
-			zap.Int64("firstEntryID", fileHeaderRecord.FirstEntryID))
-	} else {
-		// No valid header found, start from beginning
-		logger.Ctx(ctx).Warn("Error decoding header record",
-			zap.String("filePath", r.filePath),
-			zap.Error(decodeHeaderErr))
-		return werr.ErrFileReaderInvalidRecord.WithCauseErrMsg("invalid header record type")
-	}
-
-	// Now scan for block header
-	blockNumber := int32(0)
-	tmpBlockIndexes := make([]*codec.IndexRecord, 0)
-	for currentOffset < currentFileSize {
-		// Try to read BlockHeaderRecord
-		blockHeaderRecordSize := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
-		if currentOffset+int64(blockHeaderRecordSize) > currentFileSize {
-			// Not enough data for a complete BlockHeaderRecord
-			logger.Ctx(ctx).Debug("not enough data for block header record",
-				zap.String("filePath", r.filePath),
-				zap.Int64("currentOffset", currentOffset),
-				zap.Int64("remainingSize", currentFileSize-currentOffset),
-				zap.Int("requiredSize", blockHeaderRecordSize))
-			break
-		}
-
-		blockHeaderData, err := r.readAtUnsafe(ctx, currentOffset, blockHeaderRecordSize)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read block header data",
-				zap.String("filePath", r.filePath),
-				zap.Int64("currentOffset", currentOffset),
-				zap.Error(err))
-			break
-		}
-
-		blockHeaderRecord, err := codec.DecodeRecord(blockHeaderData)
-		if err != nil || blockHeaderRecord.Type() != codec.BlockHeaderRecordType {
-			logger.Ctx(ctx).Debug("invalid block header record, stopping scan",
-				zap.String("filePath", r.filePath),
-				zap.Int64("currentOffset", currentOffset),
-				zap.Error(err))
-			break
-		}
-
-		blockHeader := blockHeaderRecord.(*codec.BlockHeaderRecord)
-		blockStartOffset := currentOffset
-
-		// Read the block data to verify CRC
-		blockDataLength := int(blockHeader.BlockLength)
-		blockDataOffset := currentOffset + int64(blockHeaderRecordSize)
-
-		if blockDataOffset+int64(blockDataLength) > currentFileSize {
-			// Not enough data for the complete block
-			logger.Ctx(ctx).Debug("not enough data for complete block",
-				zap.String("filePath", r.filePath),
-				zap.Int32("blockNumber", blockNumber),
-				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
-				zap.Int64("blockDataOffset", blockDataOffset),
-				zap.Int("blockDataLength", blockDataLength),
-				zap.Int64("remainingSize", currentFileSize-blockDataOffset))
-			break
-		}
-
-		blockData, err := r.readAtUnsafe(ctx, blockDataOffset, blockDataLength)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to read block data for verification",
-				zap.String("filePath", r.filePath),
-				zap.Int32("blockNumber", blockNumber),
-				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
-				zap.Int64("blockDataOffset", blockDataOffset),
-				zap.Error(err))
-			break
-		}
-
-		// Verify block data integrity using CRC
-		if err := codec.VerifyBlockDataIntegrity(blockHeader, blockData); err != nil {
-			logger.Ctx(ctx).Warn("block CRC verification failed, skipping block",
-				zap.String("filePath", r.filePath),
-				zap.Int32("blockNumber", blockNumber),
-				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
-				zap.Uint32("expectedCrc", blockHeader.BlockCrc),
-				zap.Error(err))
-			currentOffset = blockDataOffset + int64(blockDataLength)
-			blockNumber++
-			break
-		}
-
-		// CRC verification passed, create index record
-		totalBlockSize := uint32(blockHeaderRecordSize + blockDataLength)
-		indexRecord := &codec.IndexRecord{
-			BlockNumber:  blockNumber,
-			StartOffset:  blockStartOffset,
-			BlockSize:    totalBlockSize,
-			FirstEntryID: blockHeader.FirstEntryID,
-			LastEntryID:  blockHeader.LastEntryID,
-		}
-
-		tmpBlockIndexes = append(tmpBlockIndexes, indexRecord)
-
-		logger.Ctx(ctx).Debug("successfully verified and added block",
-			zap.String("filePath", r.filePath),
-			zap.Int32("blockNumber", blockNumber),
-			zap.Int64("startOffset", blockStartOffset),
-			zap.Uint32("blockSize", totalBlockSize),
-			zap.Int32("readBlockNumber", blockHeader.BlockNumber),
-			zap.Int64("firstEntryID", blockHeader.FirstEntryID),
-			zap.Int64("lastEntryID", blockHeader.LastEntryID),
-			zap.Uint32("blockCrc", blockHeader.BlockCrc))
-
-		// Move to the next block
-		blockNumber++
-		currentOffset = blockDataOffset + int64(blockDataLength)
-	}
-
-	// Update file size
-	r.blockIndexes = tmpBlockIndexes
-
-	logger.Ctx(ctx).Info("completed block info scan",
-		zap.String("filePath", r.filePath),
-		zap.Int("totalBlocks", len(r.blockIndexes)),
-		zap.Int64("fileSize", currentFileSize),
-		zap.Int64("scannedOffset", currentOffset))
-
-	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return nil
-}
-
 func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startBlockOffset int64) (*proto.BatchReadResult, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "readDataBlocks")
 	defer sp.End()
@@ -865,22 +580,23 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 
 	// Check if this is a compacted segment - if so, read from minio
 	if r.isCompacted.Load() {
-		logger.Ctx(ctx).Debug("reading compacted data from minio",
-			zap.String("filePath", r.filePath),
-			zap.Int64("startBlockID", startBlockID))
+		logger.Ctx(ctx).Debug("reading compacted data from minio", zap.String("baseDir", r.baseDir), zap.Int64("startBlockID", startBlockID))
 		return r.readCompactedDataFromMinio(ctx, opt, startBlockID, startBlockOffset)
 	}
 
-	logger.Ctx(ctx).Debug("reading data from staged local file",
-		zap.String("filePath", r.filePath),
-		zap.Int64("startBlockID", startBlockID))
+	// Read from per-block files (default local mode)
+	logger.Ctx(ctx).Debug("reading data from per-block files", zap.String("baseDir", r.baseDir), zap.Int64("startBlockID", startBlockID))
+	return r.readDataBlocksFromPerBlockFilesUnsafe(ctx, opt, startBlockID, startTime)
+}
 
+// readDataBlocksFromPerBlockFilesUnsafe reads data blocks from per-block files
+func (r *StagedFileReaderAdv) readDataBlocksFromPerBlockFilesUnsafe(ctx context.Context, opt storage.ReaderOpt, startBlockID int64, startTime time.Time) (*proto.BatchReadResult, error) {
 	// Soft limitation
-	maxEntries := opt.MaxBatchEntries // soft count limit: Read the minimum number of blocks exceeding the count limit
+	maxEntries := opt.MaxBatchEntries
 	if maxEntries <= 0 {
 		maxEntries = 100
 	}
-	maxBytes := r.maxBatchSize // soft bytes limit: Read the minimum number of blocks exceeding the bytes limit
+	maxBytes := r.maxBatchSize
 
 	// read data result
 	entries := make([]*proto.LogEntry, 0, maxEntries)
@@ -888,103 +604,80 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 
 	// get current lac
 	currentLAC := r.lastAddConfirmed.Load()
-	lastReadEntryID := int64(-1) // The last entry id that has been read
-	// read stats
-	startOffset := startBlockOffset
+	lastReadEntryID := int64(-1)
 	entriesCollected := int64(0)
 	readBytes := int64(0)
 	hasDataReadError := false
 
+	segmentDir := getSegmentDir(r.baseDir, r.logId, r.segId)
+
 	// extract data from blocks
 	for i := startBlockID; readBytes < maxBytes && entriesCollected < maxEntries; i++ {
-		currentLAC = r.lastAddConfirmed.Load() // Obtain the lac before each block starts reading, more aggressive realtime read
+		currentLAC = r.lastAddConfirmed.Load()
 		if r.footer != nil && r.footer.LAC > currentLAC {
 			currentLAC = r.footer.LAC
 		}
 		currentBlockID := i
 
-		headersLen := codec.RecordHeaderSize + codec.BlockHeaderRecordSize
-		if currentBlockID == 0 && startOffset == 0 {
-			// if we start from the beginning, we need to read the file header to init version&flags
-			headersLen = codec.RecordHeaderSize + codec.HeaderRecordSize + codec.RecordHeaderSize + codec.BlockHeaderRecordSize
-		}
+		// Get block file path
+		blockFilePath := filepath.Join(segmentDir, fmt.Sprintf("%d.blk", currentBlockID))
 
-		// Read header Record
-		headersData, readErr := r.readAtUnsafe(ctx, startOffset, headersLen)
-		if readErr != nil {
-			// if EOF, maybe the file is at the beginning or EOF, otherwise it maybe in error state
-			if io.EOF == readErr {
-				logger.Ctx(ctx).Info("no block header to read currently, retry later", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID))
-			} else {
-				logger.Ctx(ctx).Warn("Failed to read block header", zap.String("filePath", r.filePath), zap.Int64("blockNumber", currentBlockID), zap.Error(readErr))
-			}
-			hasDataReadError = true
-			break
-		}
-		headerRecords, decodeErr := codec.DecodeRecordList(headersData)
-		if decodeErr != nil {
-			logger.Ctx(ctx).Warn("Failed to decode block",
-				zap.String("filePath", r.filePath),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(decodeErr))
-			break
-		}
-		// Find BlockHeaderRecord and verify data integrity
-		var blockHeaderRecord *codec.BlockHeaderRecord
-		for _, record := range headerRecords {
-			if record.Type() == codec.HeaderRecordType {
-				// if no footer/no advOpt, it may start from 0, and header record will be read to init version&flags
-				fileHeaderRecord := record.(*codec.HeaderRecord)
-				r.version.Store(uint32(fileHeaderRecord.Version))
-				r.flags.Store(uint32(fileHeaderRecord.Flags))
-				continue
-			}
-			if record.Type() == codec.BlockHeaderRecordType {
-				blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-				break
-			}
-		}
-		if blockHeaderRecord == nil {
-			logger.Ctx(ctx).Warn("block header record not found, stop reading",
-				zap.String("filePath", r.filePath),
-				zap.Int64("blockNumber", currentBlockID))
-			break
-		}
-		blockDataLen := int(blockHeaderRecord.BlockLength)
-
-		// Read the block data
-		blockData, err := r.readAtUnsafe(ctx, startOffset+int64(headersLen), blockDataLen)
+		// Read entire block file
+		blockData, err := os.ReadFile(blockFilePath)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Failed to read block data",
-				zap.String("filePath", r.filePath),
-				zap.Int64("blockNumber", currentBlockID),
-				zap.Error(err))
-			hasDataReadError = true
-			break // Stop reading on error, return what we have so far
+			if os.IsNotExist(err) {
+				logger.Ctx(ctx).Debug("block file not found, stopping read", zap.String("blockFilePath", blockFilePath), zap.Int64("blockNumber", currentBlockID))
+			} else {
+				logger.Ctx(ctx).Warn("failed to read block file",
+					zap.String("blockFilePath", blockFilePath), zap.Int64("blockNumber", currentBlockID), zap.Error(err))
+				hasDataReadError = true
+			}
+			break
 		}
-		// Verify the block data integrity
-		if err := r.verifyBlockDataIntegrity(ctx, blockHeaderRecord, currentBlockID, blockData); err != nil {
-			logger.Ctx(ctx).Warn("verify block data integrity failed, stop reading",
-				zap.String("filePath", r.filePath),
+
+		// Parse block header
+		if len(blockData) < codec.RecordHeaderSize+codec.BlockHeaderRecordSize {
+			logger.Ctx(ctx).Warn("block file too small",
+				zap.String("blockFilePath", blockFilePath), zap.Int64("blockNumber", currentBlockID), zap.Int("blockSize", len(blockData)))
+			break
+		}
+
+		headerData := blockData[:codec.RecordHeaderSize+codec.BlockHeaderRecordSize]
+		record, err := codec.DecodeRecord(headerData)
+		if err != nil || record.Type() != codec.BlockHeaderRecordType {
+			logger.Ctx(ctx).Warn("failed to decode block header",
+				zap.String("blockFilePath", blockFilePath),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(err))
-			break // Stop reading on data integrity error, return what we have so far
+			break
+		}
+
+		blockHeaderRecord := record.(*codec.BlockHeaderRecord)
+
+		// Verify block data integrity
+		blockContent := blockData[codec.RecordHeaderSize+codec.BlockHeaderRecordSize:]
+		if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, blockContent); err != nil {
+			logger.Ctx(ctx).Warn("block integrity check failed",
+				zap.String("blockFilePath", blockFilePath),
+				zap.Int64("blockNumber", currentBlockID),
+				zap.Error(err))
+			break
 		}
 
 		// decode block data to extract data records
-		records, decodeErr := codec.DecodeRecordList(blockData)
+		records, decodeErr := codec.DecodeRecordList(blockContent)
 		if decodeErr != nil {
-			logger.Ctx(ctx).Warn("Failed to decode block",
-				zap.String("filePath", r.filePath),
+			logger.Ctx(ctx).Warn("failed to decode block records",
+				zap.String("blockFilePath", blockFilePath),
 				zap.Int64("blockNumber", currentBlockID),
 				zap.Error(decodeErr))
-			break // Stop reading on error, return what we have so far
+			break
 		}
 
 		currentEntryID := blockHeaderRecord.FirstEntryID
 		hasDataCollectedFromThisBlock := false
 		reachLac := false
-		// Parse all data records in the block even if it exceeds the maxSize or maxBytes, because one block should be read once
+
 		for j := 0; j < len(records); j++ {
 			if records[j].Type() != codec.DataRecordType {
 				continue
@@ -993,7 +686,6 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 				reachLac = true
 				break
 			}
-			// Only include entries from the start sequence number onwards
 			if opt.StartEntryID <= currentEntryID && currentEntryID <= currentLAC {
 				dr := records[j].(*codec.DataRecord)
 				entry := &proto.LogEntry{
@@ -1010,72 +702,53 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			currentEntryID++
 		}
 
-		logger.Ctx(ctx).Debug("Extracted data from block",
-			zap.String("segmentPath", r.filePath),
+		logger.Ctx(ctx).Debug("extracted data from per-block file",
+			zap.String("blockFilePath", blockFilePath),
 			zap.Int64("blockNumber", currentBlockID),
-			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
 			zap.Int64("blockFirstEntryID", blockHeaderRecord.FirstEntryID),
 			zap.Int64("blockLastEntryID", blockHeaderRecord.LastEntryID),
-			zap.Int64("currentEntryID", currentEntryID),
 			zap.Int64("totalCollectedEntries", entriesCollected),
-			zap.Int64("totalCollectedBytes", readBytes),
 			zap.Bool("hasDataCollectedFromThisBlock", hasDataCollectedFromThisBlock),
 			zap.Bool("reachLac", reachLac),
 			zap.Int64("lac", currentLAC))
 
 		if hasDataCollectedFromThisBlock {
-			// only if collected data from this block, update lastBlockInfo of last read block
 			lastBlockInfo = &codec.IndexRecord{
 				BlockNumber:  int32(currentBlockID),
-				StartOffset:  startOffset,
-				BlockSize:    uint32(headersLen + blockDataLen),
+				StartOffset:  0, // Not meaningful for per-block files
+				BlockSize:    uint32(len(blockData)),
 				FirstEntryID: blockHeaderRecord.FirstEntryID,
 				LastEntryID:  blockHeaderRecord.LastEntryID,
 			}
 		}
 
 		if reachLac {
-			// reach the LAC, stop this batch scan
 			break
 		}
-
-		// Move to the next block
-		startOffset += int64(headersLen + blockDataLen)
 	}
 
 	if len(entries) == 0 {
-		logger.Ctx(ctx).Debug("no entry extracted",
-			zap.String("filePath", r.filePath),
+		logger.Ctx(ctx).Debug("no entry extracted from per-block files",
+			zap.String("baseDir", r.baseDir),
 			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int64("lac", currentLAC),
-			zap.Int64("lastReadEntryID", lastReadEntryID),
-			zap.Int("entriesReturned", len(entries)))
+			zap.Int64("lastReadEntryID", lastReadEntryID))
 		if !hasDataReadError {
 			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
-				// when node restart or no lac received ever, currentLAC == -1, means can't read here, should retry to read other nodes
-				// when lac received, currentLAC > -1, and startEntryId < currentLAC, means maybe some data not LAC, should retry to read other nodes
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than LAC but can't read here now, retry later or try to read from other nodes")
 			}
 			if r.footer != nil && opt.StartEntryID <= r.footer.LAC {
-				// means maybe some data not LAC, should retry to read other nodes
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than footer's LAC but can't read here now, retry later or try to read from other nodes")
 			}
-			// only read without dataReadError, determine whether it is an EOF
 			if !r.isIncompleteFile.Load() || r.footer != nil {
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
-			if r.isFooterExistsUnsafe(ctx) {
-				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
-			}
 		}
-		// return entryNotFound to let read caller retry later
 		return nil, werr.ErrEntryNotFound.WithCauseErrMsg("no record extract")
 	} else {
-		logger.Ctx(ctx).Debug("read data blocks completed",
-			zap.String("filePath", r.filePath),
+		logger.Ctx(ctx).Debug("read data from per-block files completed",
+			zap.String("baseDir", r.baseDir),
 			zap.Int64("startEntryId", opt.StartEntryID),
-			zap.Int64("maxBatchEntries", opt.MaxBatchEntries),
 			zap.Int("entriesReturned", len(entries)),
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
@@ -1083,7 +756,6 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
 	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
-	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
 	if lastBlockInfo != nil {
 		lastReadState = &proto.LastReadState{
@@ -1103,74 +775,6 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	return batch, nil
 }
 
-// isFooterExistsUnsafe determines whether a valid footer record exists in the local file
-func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "isFooterExists")
-	defer sp.End()
-
-	// update size
-	stat, err := r.file.Stat()
-	if err != nil {
-		logger.Ctx(ctx).Warn("failed to stat file",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		return false
-	}
-	currentSize := stat.Size()
-
-	// Check if file has minimum size for a footer (use V5 footer size as minimum)
-	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
-	if currentSize < int64(minFooterSize) {
-		// File is too small to contain footer, might be empty or still being written
-		logger.Ctx(ctx).Debug("file too small for footer, no footer exists yet",
-			zap.String("filePath", r.filePath),
-			zap.Int64("fileSize", currentSize))
-		return false
-	}
-
-	// Try to read and parse footer from the end of the file using compatibility parsing
-	maxFooterSize := codec.GetMaxFooterReadSize()
-	footerData, err := r.readAtUnsafe(ctx, currentSize-int64(maxFooterSize), maxFooterSize)
-	if err != nil {
-		logger.Ctx(ctx).Debug("failed to read footer data, no footer exists yet",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		return false
-	}
-
-	// Try to parse footer with compatibility parsing
-	_, err = codec.ParseFooterFromBytes(footerData)
-	if err != nil {
-		logger.Ctx(ctx).Debug("failed to parse footer record, no footer exists yet",
-			zap.String("filePath", r.filePath),
-			zap.Error(err))
-		return false
-	}
-
-	// footer exists
-	return true
-}
-
-func (r *StagedFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, blockHeaderRecord *codec.BlockHeaderRecord, currentBlockID int64, dataRecordsBuffer []byte) error {
-	// Verify block data integrity
-	if err := codec.VerifyBlockDataIntegrity(blockHeaderRecord, dataRecordsBuffer); err != nil {
-		logger.Ctx(ctx).Warn("block data integrity verification failed",
-			zap.String("filePath", r.filePath),
-			zap.Int64("blockNumber", currentBlockID),
-			zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
-			zap.Error(err))
-		return err // Stop reading on error, return what we have so far
-	}
-
-	logger.Ctx(ctx).Debug("block data integrity verified successfully",
-		zap.String("filePath", r.filePath),
-		zap.Int64("blockNumber", currentBlockID),
-		zap.Int32("recordBlockNumber", blockHeaderRecord.BlockNumber),
-		zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
-		zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
-	return nil
-}
-
 // Close closes the reader
 func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "Close")
@@ -1183,13 +787,6 @@ func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	if !r.closed.CompareAndSwap(false, true) {
 		logger.Ctx(ctx).Debug("reader already closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 		return nil
-	}
-
-	if r.file != nil {
-		if err := r.file.Close(); err != nil {
-			return fmt.Errorf("close file: %w", err)
-		}
-		r.file = nil
 	}
 
 	if r.pool != nil {
@@ -1328,7 +925,8 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		// No desired data found in current segment and the entire segment has been scanned.
 		// Return EOF to let client proceed to next segment.
 		logger.Ctx(ctx).Debug("no more entries to read",
-			zap.String("filePath", r.filePath),
+			zap.Int64("logId", r.logId),
+			zap.Int64("segId", r.segId),
 			zap.Int64("startEntryId", opt.StartEntryID))
 		return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 	}

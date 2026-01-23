@@ -260,34 +260,53 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 	var deleteErrors []error
 	deletedCount := 0
 
-	// Filter and delete segment files
+	// Delete files and directories based on flag
 	for _, entry := range entries {
+		fileName := entry.Name()
+		filePath := filepath.Join(rs.segmentDir, fileName)
+		shouldDelete := false
+
+		// Handle fence directories (directories named like {blockId}.blk)
 		if entry.IsDir() {
+			// Fence directories are named like "0.blk", "1.blk", etc.
+			if strings.HasSuffix(fileName, ".blk") && !strings.HasPrefix(fileName, "m_") {
+				// This is likely a fence directory
+				switch flag {
+				case 0: // Delete all
+					shouldDelete = true
+				case 1: // Delete only original blocks (not merged)
+					shouldDelete = true
+				}
+			}
+			if shouldDelete {
+				if err := os.RemoveAll(filePath); err != nil {
+					logger.Ctx(ctx).Warn("Failed to delete fence directory",
+						zap.String("path", filePath),
+						zap.Error(err))
+					deleteErrors = append(deleteErrors, err)
+				} else {
+					logger.Ctx(ctx).Debug("Successfully deleted fence directory",
+						zap.String("path", filePath))
+					deletedCount++
+				}
+			}
 			continue
 		}
 
-		shouldDelete := false
-		fileName := entry.Name()
-
 		// Determine what to delete based on flag and file type
 		switch flag {
-		case 0:
-			// Delete all segment-related files
-			shouldDelete = strings.HasSuffix(fileName, ".log") ||
-				strings.HasSuffix(fileName, ".lock") ||
-				strings.HasSuffix(fileName, ".fence")
-		case 1, 2:
-			// For partial deletion, only delete .log files (main segment data)
-			shouldDelete = strings.HasSuffix(fileName, ".log")
+		case 0: // Delete all segment-related files
+			shouldDelete = rs.shouldDeleteFile(fileName)
+		case 1: // Delete only original blocks (not merged)
+			shouldDelete = rs.shouldDeleteOriginalBlocks(fileName)
+		case 2: // Delete only merged blocks
+			shouldDelete = rs.shouldDeleteMergedBlocks(fileName)
 		default:
-			// Delete all files
-			shouldDelete = true
+			// Delete all segment-related files
+			shouldDelete = rs.shouldDeleteFile(fileName)
 		}
 
 		if shouldDelete {
-			filePath := filepath.Join(rs.segmentDir, fileName)
-
-			// Delete file
 			if err := os.Remove(filePath); err != nil {
 				logger.Ctx(ctx).Warn("Failed to delete local file",
 					zap.String("filePath", filePath),
@@ -311,4 +330,75 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 	}
 
 	return deletedCount, nil
+}
+
+// shouldDeleteFile determines if a file should be deleted (flag=0, delete all)
+func (rs *StagedSegmentImpl) shouldDeleteFile(fileName string) bool {
+	// Legacy single-file format
+	if strings.HasSuffix(fileName, ".log") {
+		return true
+	}
+	// Block files (N.blk, m_N.blk)
+	if strings.HasSuffix(fileName, ".blk") {
+		return true
+	}
+	// Inflight files (N.blk.inflight, m_N.blk.inflight)
+	if strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Completed files (N.blk.completed, m_N.blk.completed)
+	if strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	// Lock files
+	if strings.HasSuffix(fileName, ".lock") {
+		return true
+	}
+	// Fence flag files
+	if strings.HasSuffix(fileName, ".fence") {
+		return true
+	}
+	return false
+}
+
+// shouldDeleteOriginalBlocks determines if a file should be deleted (flag=1, original blocks only)
+func (rs *StagedSegmentImpl) shouldDeleteOriginalBlocks(fileName string) bool {
+	// Legacy single-file format
+	if strings.HasSuffix(fileName, ".log") {
+		return true
+	}
+	// Skip merged blocks (m_N.blk)
+	if strings.HasPrefix(fileName, "m_") {
+		return false
+	}
+	// Original block files (N.blk, but not footer.blk)
+	if strings.HasSuffix(fileName, ".blk") && fileName != "footer.blk" {
+		return true
+	}
+	// Original inflight files (N.blk.inflight, but not m_N.blk.inflight)
+	if strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Original completed files (N.blk.completed, but not m_N.blk.completed)
+	if strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	return false
+}
+
+// shouldDeleteMergedBlocks determines if a file should be deleted (flag=2, merged blocks only)
+func (rs *StagedSegmentImpl) shouldDeleteMergedBlocks(fileName string) bool {
+	// Merged block files (m_N.blk)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk") {
+		return true
+	}
+	// Merged inflight files (m_N.blk.inflight)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk.inflight") {
+		return true
+	}
+	// Merged completed files (m_N.blk.completed)
+	if strings.HasPrefix(fileName, "m_") && strings.HasSuffix(fileName, ".blk.completed") {
+		return true
+	}
+	return false
 }

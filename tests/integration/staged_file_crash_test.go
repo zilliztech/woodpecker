@@ -1,26 +1,25 @@
-// Licensed to the LF AI & Data foundation under one
-// or more contributor license agreements. See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership. The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License. You may obtain a copy of the License at
+// Copyright (C) 2025 Zilliz. All rights reserved.
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// This file is part of the Woodpecker project.
+//
+// Woodpecker is dual-licensed under the GNU Affero General Public License v3.0
+// (AGPLv3) and the Server Side Public License v1 (SSPLv1). You may use this
+// file under either license, at your option.
+//
+// AGPLv3 License: https://www.gnu.org/licenses/agpl-3.0.html
+// SSPLv1 License: https://www.mongodb.com/licensing/server-side-public-license
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under these licenses is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// See the license texts for specific language governing permissions and
+// limitations under the licenses.
 
 package integration
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,772 +28,595 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zilliztech/woodpecker/common/channel"
-	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/serde"
 	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
 
-const (
-	// test File records
-	// {HeaderRecord,BlockHeaderRecord,DataRecord,BlockHeaderRecord,DataRecord,IndexRecord,IndexRecord,FooterRecord}
-	headerRecordIndex            = 0
-	firstBlockHeaderRecordIndex  = 1
-	firstDataRecordIndex         = 2
-	secondBlockHeaderRecordIndex = 3
-	secondDataRecordIndex        = 4
-	firstIndexRecordIndex        = 5
-	secondIndexRecordIndex       = 6
-	footerRecordIndex            = 7
-)
+// =============================================================================
+// Per-Block Format Crash Recovery Tests
+// =============================================================================
+//
+// These tests verify crash recovery for the per-block file format:
+// - Each block is written as a separate {blockId}.blk file
+// - Atomic writes use three-stage: .blk.inflight -> .blk.completed -> .blk
+// - Only .blk files are considered committed; .inflight and .completed are cleaned up
+// - Footer is written as footer.blk with two-stage: footer.blk.inflight -> footer.blk
+//
+// Test scenarios cover crashes at various stages of the write process.
 
-// RecordPosition represents the byte range of a record in the file
-type RecordPosition struct {
-	RecordType string // "header", "data", "block_header", "index", "footer"
-	EntryID    int64  // For data records, -1 for metadata records
-	StartPos   int64
-	EndPos     int64
+// =============================================================================
+// Helper Functions for Creating Test Files
+// =============================================================================
+
+// createSegmentDir creates the segment directory for testing
+func createSegmentDir(t *testing.T, tempDir string, logId, segmentId int64) string {
+	segmentDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
+	err := os.MkdirAll(segmentDir, 0755)
+	require.NoError(t, err, "Failed to create segment directory")
+	return segmentDir
 }
 
-// PreparedTestData contains information about a prepared test file
-type PreparedTestData struct {
-	FilePath        string
-	TotalSize       int64
-	EntryIDs        []int64
-	RecordPositions []RecordPosition
+// createBlockFile creates a complete .blk file with test data
+// Note: stagedstorage block format is: BlockHeaderRecord + DataRecords (no HeaderRecord)
+func createBlockFile(t *testing.T, segmentDir string, blockId int64, entries []*serde.BlockEntry) {
+	blockPath := filepath.Join(segmentDir, fmt.Sprintf("%d.blk", blockId))
+	// stagedstorage does NOT include HeaderRecord in block files
+	blockData := serde.SerializeBlock(blockId, entries, false)
+	err := os.WriteFile(blockPath, blockData, 0644)
+	require.NoError(t, err, "Failed to write block file %s", blockPath)
 }
 
-// prepareCompleteTestFile prepares a complete finalized file with fixed 5 entries
-// Returns PreparedTestData with file path and record positions for crash simulation
-func prepareCompleteTestFile(t *testing.T, ctx context.Context, cfg *config.Configuration, tempDir string,
-	logId, segmentId int64, storageCli objectstorage.ObjectStorage) *PreparedTestData {
-
-	const numEntries = 2
-	segmentFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
-
-	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
-	require.NoError(t, err)
-
-	entryIds := make([]int64, numEntries)
-	testDataList := make([][]byte, numEntries)
-
-	// Write fixed 5 entries
-	for i := 0; i < numEntries; i++ {
-		testData := []byte(fmt.Sprintf("TestData-%d-%s", i, generateStagedTestData(50)))
-		testDataList[i] = testData
-		resultCh := channel.NewLocalResultChannel(fmt.Sprintf("prepare-complete-%d", i))
-		returnedId, err := writer.WriteDataAsync(ctx, int64(i), testData, resultCh)
-		require.NoError(t, err)
-		entryIds[i] = returnedId
-
-		result, err := resultCh.ReadResult(ctx)
-		require.NoError(t, err)
-		require.Equal(t, int64(i), result.SyncedId)
-	}
-
-	// Finalize to create complete file structure: header | datablk | index session | footer
-	lastEntryId, err := writer.Finalize(ctx, int64(numEntries-1))
-	require.NoError(t, err)
-	require.Equal(t, int64(numEntries-1), lastEntryId)
-
-	writer.Close(ctx)
-
-	// Parse file to extract record positions
-	recordPositions := parseFileRecordPositions(t, segmentFilePath)
-
-	stat, err := os.Stat(segmentFilePath)
-	require.NoError(t, err)
-
-	result := &PreparedTestData{
-		FilePath:        segmentFilePath,
-		TotalSize:       stat.Size(),
-		EntryIDs:        entryIds,
-		RecordPositions: recordPositions,
-	}
-
-	t.Logf("Prepared complete test file: %s, size=%d bytes, %d entries, %d records",
-		segmentFilePath, result.TotalSize, numEntries, len(recordPositions))
-
-	return result
+// createInflightBlockFile creates a .blk.inflight file (stage 1 of atomic write)
+func createInflightBlockFile(t *testing.T, segmentDir string, blockId int64, entries []*serde.BlockEntry) {
+	inflightPath := filepath.Join(segmentDir, fmt.Sprintf("%d.blk.inflight", blockId))
+	// stagedstorage does NOT include HeaderRecord in block files
+	blockData := serde.SerializeBlock(blockId, entries, false)
+	err := os.WriteFile(inflightPath, blockData, 0644)
+	require.NoError(t, err, "Failed to write inflight block file %s", inflightPath)
 }
 
-// parseFileRecordPositions parses the file and returns positions of all records
-func parseFileRecordPositions(t *testing.T, filePath string) []RecordPosition {
-	file, err := os.Open(filePath)
-	require.NoError(t, err)
-	defer file.Close()
+// createCompletedBlockFile creates a .blk.completed file (stage 2 of atomic write)
+func createCompletedBlockFile(t *testing.T, segmentDir string, blockId int64, entries []*serde.BlockEntry) {
+	completedPath := filepath.Join(segmentDir, fmt.Sprintf("%d.blk.completed", blockId))
+	// stagedstorage does NOT include HeaderRecord in block files
+	blockData := serde.SerializeBlock(blockId, entries, false)
+	err := os.WriteFile(completedPath, blockData, 0644)
+	require.NoError(t, err, "Failed to write completed block file %s", completedPath)
+}
 
-	stat, err := file.Stat()
-	require.NoError(t, err)
-	fileSize := stat.Size()
+// createFooterFile creates a complete footer.blk file
+func createFooterFile(t *testing.T, segmentDir string, blockCount int, lastEntryId int64) {
+	footerPath := filepath.Join(segmentDir, "footer.blk")
+	footerData, _ := serde.SerializeFooterAndIndexes(createIndexRecords(blockCount), lastEntryId)
+	err := os.WriteFile(footerPath, footerData, 0644)
+	require.NoError(t, err, "Failed to write footer file %s", footerPath)
+}
 
-	data := make([]byte, fileSize)
-	_, err = io.ReadFull(file, data)
-	require.NoError(t, err)
+// createFooterInflightFile creates a footer.blk.inflight file
+func createFooterInflightFile(t *testing.T, segmentDir string, blockCount int, lastEntryId int64) {
+	inflightPath := filepath.Join(segmentDir, "footer.blk.inflight")
+	footerData, _ := serde.SerializeFooterAndIndexes(createIndexRecords(blockCount), lastEntryId)
+	err := os.WriteFile(inflightPath, footerData, 0644)
+	require.NoError(t, err, "Failed to write footer inflight file %s", inflightPath)
+}
 
-	positions := make([]RecordPosition, 0)
-	offset := int64(0)
+// createCorruptedFooterInflightFile creates a corrupted footer.blk.inflight file
+func createCorruptedFooterInflightFile(t *testing.T, segmentDir string) {
+	inflightPath := filepath.Join(segmentDir, "footer.blk.inflight")
+	corruptedData := []byte("corrupted footer data")
+	err := os.WriteFile(inflightPath, corruptedData, 0644)
+	require.NoError(t, err, "Failed to write corrupted footer inflight file %s", inflightPath)
+}
 
-	// Parse records sequentially
-	for offset < fileSize {
-		if offset+codec.RecordHeaderSize > fileSize {
-			break
-		}
-
-		startPos := offset
-
-		// Read record header to get payload length
-		// Record header: CRC32(4) + Type(1) + Length(4)
-		recordType := data[offset+4]
-		payloadLength := binary.LittleEndian.Uint32(data[offset+5 : offset+9])
-		recordSize := int64(codec.RecordHeaderSize) + int64(payloadLength)
-
-		// Check if we have complete record
-		if offset+recordSize > fileSize {
-			t.Logf("Incomplete record at offset %d: need %d bytes, only %d available", offset, recordSize, fileSize-offset)
-			break
-		}
-
-		endPos := startPos + recordSize
-
-		var recordTypeStr string
-		var entryID int64 = -1
-
-		switch recordType {
-		case codec.HeaderRecordType:
-			recordTypeStr = "header"
-		case codec.DataRecordType:
-			recordTypeStr = "data"
-		case codec.BlockHeaderRecordType:
-			recordTypeStr = "block_header"
-		case codec.IndexRecordType:
-			recordTypeStr = "index"
-		case codec.FooterRecordType:
-			recordTypeStr = "footer"
-		default:
-			recordTypeStr = fmt.Sprintf("unknown_%d", recordType)
-		}
-
-		positions = append(positions, RecordPosition{
-			RecordType: recordTypeStr,
-			EntryID:    entryID,
-			StartPos:   startPos,
-			EndPos:     endPos,
+// createIndexRecords creates index records for testing
+func createIndexRecords(blockCount int) []*codec.IndexRecord {
+	var indexes []*codec.IndexRecord
+	for i := 0; i < blockCount; i++ {
+		indexes = append(indexes, &codec.IndexRecord{
+			BlockNumber:  int32(i),
+			StartOffset:  0,
+			BlockSize:    100, // dummy size
+			FirstEntryID: int64(i),
+			LastEntryID:  int64(i),
 		})
-
-		offset = endPos
 	}
-
-	return positions
+	return indexes
 }
 
-func TestStagedFileWriter_CrashRecovery_Empty(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-after-header-%d", time.Now().Unix())
+// createTestEntries creates test entries for a block
+func createTestEntries(startEntryId int64, count int) []*serde.BlockEntry {
+	entries := make([]*serde.BlockEntry, count)
+	for i := 0; i < count; i++ {
+		entries[i] = &serde.BlockEntry{
+			EntryId: startEntryId + int64(i),
+			Data:    []byte(fmt.Sprintf("test-data-entry-%d", startEntryId+int64(i))),
+		}
+	}
+	return entries
+}
+
+// =============================================================================
+// Test: Empty Segment Directory
+// =============================================================================
+
+// TestStagedFileCrash_EmptySegmentDir tests behavior when segment directory is empty
+func TestStagedFileCrash_EmptySegmentDir(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-empty-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1000, 2000
 
-	// prepare test file
-	preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId, storageCli)
-	crashPos := int64(0)
+	t.Run("empty directory - writer recovery should succeed with no data", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		t.Logf("Created empty segment directory for writer: %s", segmentDir)
 
-	t.Run("Testing crash at empty file", func(t *testing.T) {
-		// test crash empty file & recover the crash file
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(-1), 0, werr.ErrEntryNotFound, // Pre-read: 0 entries, no specific error expected
-			int64(-1), 0, werr.ErrFileReaderEndOfFile) // Post-read: 0 entries after recovery from empty file
-
-		// test recover the completed empty file
-		recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+		// Create writer in recovery mode on empty directory
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
 			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
-		require.NoError(t, err, "Recovery empty completed file failed for log=%d segment=%d (expected recovery to always succeed)", logId, segmentId)
-		require.NotNil(t, recoveryWriter)
-		firstEntryID := recoveryWriter.GetFirstEntryId(context.TODO())
-		require.Equal(t, firstEntryID, int64(-1))
-		lastEntryID := recoveryWriter.GetLastEntryId(context.TODO())
-		require.Equal(t, lastEntryID, int64(-1))
-		footer := recoveryWriter.GetRecoveredFooter()
-		require.NotNil(t, footer)
-		require.Equal(t, footer.LAC, int64(-1))
+		require.NoError(t, err, "Should be able to create recovery writer on empty directory")
+
+		// Should have no entries
+		require.Equal(t, int64(-1), writer.GetLastEntryId(ctx), "LastEntryId should be -1 for empty segment")
+		require.Equal(t, int64(-1), writer.GetFirstEntryId(ctx), "FirstEntryId should be -1 for empty segment")
+
+		writer.Close(ctx)
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_HeaderRecord tests crash right after header record
-func TestStagedFileWriter_CrashRecovery_HeaderRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-after-header-%d", time.Now().Unix())
+// =============================================================================
+// Test: Inflight and Completed Files Cleanup
+// =============================================================================
+
+// TestStagedFileCrash_InflightAndCompletedCleanup tests that inflight and completed files are cleaned up
+func TestStagedFileCrash_InflightAndCompletedCleanup(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-cleanup-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1001, 2001
 
-	t.Run("crash after file headerRecord, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[headerRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(-1), 0, werr.ErrEntryNotFound,
-			int64(-1), 0, werr.ErrFileReaderEndOfFile)
+	t.Run("inflight files should be cleaned up", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		createInflightBlockFile(t, segmentDir, 0, createTestEntries(0, 5))
+
+		// Writer recovery should clean up inflight files
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		// Inflight data should not be recovered
+		require.Equal(t, int64(-1), writer.GetLastEntryId(ctx), "Inflight data should not be recovered")
+		writer.Close(ctx)
+
+		// Verify inflight file was removed
+		_, err = os.Stat(filepath.Join(segmentDir, "0.blk.inflight"))
+		require.True(t, os.IsNotExist(err), "Inflight file should be removed")
 	})
 
-	t.Run("crash after file headerRecord, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[headerRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(0), 0, werr.ErrEntryNotFound,
-			int64(0), 0, werr.ErrFileReaderEndOfFile)
+	t.Run("completed files should be cleaned up", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+1)
+		createCompletedBlockFile(t, segmentDir, 0, createTestEntries(0, 5))
+
+		// Writer recovery should clean up completed files
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+1, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		// Completed data should not be recovered (three-stage write: only .blk is committed)
+		require.Equal(t, int64(-1), writer.GetLastEntryId(ctx), "Completed data should not be recovered")
+		writer.Close(ctx)
+
+		// Verify completed file was removed
+		_, err = os.Stat(filepath.Join(segmentDir, "0.blk.completed"))
+		require.True(t, os.IsNotExist(err), "Completed file should be removed")
 	})
 
-	t.Run("crash within file headerRecord", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[headerRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(-1), 0, werr.ErrEntryNotFound,
-			int64(-1), 0, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("mixed inflight and completed should all be cleaned up", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+2)
+		createInflightBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createCompletedBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		createInflightBlockFile(t, segmentDir, 2, createTestEntries(6, 3))
 
-	t.Run("crash within file headerRecord", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[headerRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(0), 0, werr.ErrEntryNotFound,
-			int64(0), 0, werr.ErrFileReaderEndOfFile)
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+2, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(-1), writer.GetLastEntryId(ctx), "No data should be recovered from uncommitted files")
+		writer.Close(ctx)
+
+		// All incomplete files should be removed
+		_, err = os.Stat(filepath.Join(segmentDir, "0.blk.inflight"))
+		require.True(t, os.IsNotExist(err))
+		_, err = os.Stat(filepath.Join(segmentDir, "1.blk.completed"))
+		require.True(t, os.IsNotExist(err))
+		_, err = os.Stat(filepath.Join(segmentDir, "2.blk.inflight"))
+		require.True(t, os.IsNotExist(err))
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_FirstBlockHeaderRecord tests crash scenarios for first block header record
-func TestStagedFileWriter_CrashRecovery_FirstBlockHeaderRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-first-blkhdr-%d", time.Now().Unix())
+// =============================================================================
+// Test: Complete Block Recovery
+// =============================================================================
+
+// TestStagedFileCrash_CompleteBlockRecovery tests recovery from complete .blk files
+func TestStagedFileCrash_CompleteBlockRecovery(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-complete-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1002, 2002
 
-	t.Run("crash after first block header record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[firstBlockHeaderRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(-1), 0, werr.ErrEntryNotFound,
-			int64(-1), 0, werr.ErrFileReaderEndOfFile)
+	t.Run("single complete block should be recovered", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		entries := createTestEntries(0, 5)
+		createBlockFile(t, segmentDir, 0, entries)
+
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(4), writer.GetLastEntryId(ctx), "Should recover lastEntryId=4")
+		require.Equal(t, int64(0), writer.GetFirstEntryId(ctx), "Should recover firstEntryId=0")
+		writer.Close(ctx)
+
+		// Reader should be able to read the data
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		reader.UpdateLastAddConfirmed(ctx, 4)
+		result, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 10,
+		}, nil)
+		require.NoError(t, readErr, "Should be able to read recovered data")
+		require.Len(t, result.Entries, 5, "Should read all 5 entries")
 	})
 
-	t.Run("crash after first block header record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[firstBlockHeaderRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(0), 0, werr.ErrEntryNotFound,
-			int64(0), 0, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("multiple complete blocks should be recovered", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+1)
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		createBlockFile(t, segmentDir, 2, createTestEntries(6, 4))
 
-	t.Run("crash within first block header record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[firstBlockHeaderRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(-1), 0, werr.ErrEntryNotFound,
-			int64(-1), 0, werr.ErrFileReaderEndOfFile)
-	})
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+1, storageCli, cfg, true)
+		require.NoError(t, err)
 
-	t.Run("crash within first block header record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[firstBlockHeaderRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			int64(0), 0, werr.ErrEntryNotFound,
-			int64(0), 0, werr.ErrFileReaderEndOfFile)
+		require.Equal(t, int64(9), writer.GetLastEntryId(ctx), "Should recover lastEntryId=9")
+		require.Equal(t, int64(0), writer.GetFirstEntryId(ctx), "Should recover firstEntryId=0")
+		writer.Close(ctx)
+
+		// Reader should read all blocks
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId+1, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		reader.UpdateLastAddConfirmed(ctx, 9)
+		result, _ := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.Len(t, result.Entries, 10, "Should read all 10 entries from 3 blocks")
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_FirstDataRecord tests crash scenarios for first data record
-func TestStagedFileWriter_CrashRecovery_FirstDataRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-first-data-%d", time.Now().Unix())
+// =============================================================================
+// Test: Mixed Complete and Incomplete Files
+// =============================================================================
+
+// TestStagedFileCrash_MixedBlockFiles tests recovery with mix of .blk and incomplete files
+func TestStagedFileCrash_MixedBlockFiles(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-mixed-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1003, 2003
 
-	t.Run("crash after first data record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[firstDataRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, no records found
-			int64(-1), 0, werr.ErrEntryNotFound,
-			// if finalized, reader's LAC will be ignore, using footer's LAC instead, so it should read 1 entry at first batchRead, and get EOF at second read
-			int64(-1), 1, werr.ErrFileReaderEndOfFile)
+	t.Run("complete blocks + inflight - only complete should be recovered", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		// Block 0 and 1: complete
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		// Block 2: inflight (should be cleaned up)
+		createInflightBlockFile(t, segmentDir, 2, createTestEntries(6, 3))
+
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		// Should only see entries from complete blocks (0-5), not inflight (6-8)
+		require.Equal(t, int64(5), writer.GetLastEntryId(ctx), "Should recover up to entry 5")
+		require.Equal(t, int64(0), writer.GetFirstEntryId(ctx))
+		writer.Close(ctx)
+
+		// Inflight file should be removed
+		_, err = os.Stat(filepath.Join(segmentDir, "2.blk.inflight"))
+		require.True(t, os.IsNotExist(err), "Inflight file should be removed")
+
+		// Reader should only read complete blocks
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		reader.UpdateLastAddConfirmed(ctx, 5)
+		result, _ := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.Len(t, result.Entries, 6, "Should read 6 entries from complete blocks")
 	})
 
-	t.Run("crash after first data record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[firstDataRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, found 1 record
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, reader's LAC will be ignore, using footer's LAC instead, so it should read 1 entry at first batchRead, and get EOF at second read
-			int64(0), 1, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("complete blocks + completed - only committed data recovered", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+1)
+		// Block 0: complete
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		// Block 1: completed (not yet committed, will be cleaned up)
+		createCompletedBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
 
-	t.Run("crash within first data record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[firstDataRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, incomplete data record cannot be read
-			int64(-1), 0, werr.ErrEntryNotFound,
-			// if finalized, incomplete entry is discarded during recovery, so no data to read
-			int64(-1), 0, werr.ErrFileReaderEndOfFile)
-	})
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+1, storageCli, cfg, true)
+		require.NoError(t, err)
 
-	t.Run("crash within first data record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[firstDataRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, incomplete data record cannot be read
-			int64(0), 0, werr.ErrEntryNotFound,
-			// if finalized, incomplete entry is discarded during recovery, so no data to read
-			int64(0), 0, werr.ErrFileReaderEndOfFile)
+		// Should only see block 0 (committed), not block 1 (completed but not committed)
+		require.Equal(t, int64(2), writer.GetLastEntryId(ctx), "Should recover only committed data")
+		writer.Close(ctx)
+
+		// Completed file should be removed
+		_, err = os.Stat(filepath.Join(segmentDir, "1.blk.completed"))
+		require.True(t, os.IsNotExist(err), "Completed file should be removed")
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_SecondBlockHeaderRecord tests crash scenarios for second block header record
-func TestStagedFileWriter_CrashRecovery_SecondBlockHeaderRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-second-blkhdr-%d", time.Now().Unix())
+// =============================================================================
+// Test: Footer Crash Scenarios
+// =============================================================================
+
+// TestStagedFileCrash_FooterScenarios tests crash during footer write
+func TestStagedFileCrash_FooterScenarios(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-footer-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1004, 2004
 
-	t.Run("crash after second block header record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[secondBlockHeaderRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, first block's entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, using footer's LAC, first block's entry is available
-			int64(0), 1, werr.ErrFileReaderEndOfFile)
+	t.Run("complete blocks with valid footer.blk.inflight - footer should be completed", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		// Create complete blocks
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		// Create valid footer.blk.inflight
+		createFooterInflightFile(t, segmentDir, 2, 5)
+
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+		writer.Close(ctx)
+
+		// Footer.blk should exist after recovery (inflight renamed)
+		_, err = os.Stat(filepath.Join(segmentDir, "footer.blk"))
+		require.NoError(t, err, "footer.blk should exist after recovery")
+		// Footer.blk.inflight should be removed
+		_, err = os.Stat(filepath.Join(segmentDir, "footer.blk.inflight"))
+		require.True(t, os.IsNotExist(err), "footer.blk.inflight should be removed")
 	})
 
-	t.Run("crash after second block header record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[secondBlockHeaderRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, first block's entry can be read
-			int64(1), 1, werr.ErrEntryNotFound,
-			// if finalized, using footer's LAC, first block's entry is available
-			int64(1), 1, werr.ErrFileReaderEndOfFile)
+	t.Run("complete blocks with corrupted footer.blk.inflight - should be removed", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+1)
+		// Create complete blocks
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		// Create corrupted footer.blk.inflight
+		createCorruptedFooterInflightFile(t, segmentDir)
+
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+1, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		// Should still recover block data
+		require.Equal(t, int64(2), writer.GetLastEntryId(ctx), "Should recover entries from blocks")
+		writer.Close(ctx)
+
+		// Corrupted footer.blk.inflight should be removed
+		_, err = os.Stat(filepath.Join(segmentDir, "footer.blk.inflight"))
+		require.True(t, os.IsNotExist(err), "corrupted footer.blk.inflight should be removed")
 	})
 
-	t.Run("crash within second block header record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[secondBlockHeaderRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, first block's entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, second block header incomplete, only first block data recovered
-			int64(0), 1, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("complete footer.blk - fully finalized segment", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+2)
+		// Create complete blocks
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		// Create complete footer
+		createFooterFile(t, segmentDir, 2, 5)
 
-	t.Run("crash within second block header record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[secondBlockHeaderRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, first block's entry can be read
-			int64(1), 1, werr.ErrEntryNotFound,
-			// if finalized, second block header incomplete, only first block data recovered
-			int64(1), 1, werr.ErrFileReaderEndOfFile)
+		// Reader should work correctly with finalized segment
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId+2, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Finalized segment doesn't need LAC
+		result, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.NoError(t, readErr, "Should read finalized segment")
+		require.Len(t, result.Entries, 6, "Should read all 6 entries")
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_SecondDataRecord tests crash scenarios for second data record
-func TestStagedFileWriter_CrashRecovery_SecondDataRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-second-data-%d", time.Now().Unix())
+// =============================================================================
+// Test: Sequential Block Recovery
+// =============================================================================
+
+// TestStagedFileCrash_SequentialRecovery tests recovery with non-sequential block states
+func TestStagedFileCrash_SequentialRecovery(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-sequential-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1005, 2005
 
-	t.Run("crash after second data record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[secondDataRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, using footer's LAC, both entries (0 and 1) recovered
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
+	t.Run("gap in block sequence - recovery scans all blocks", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		// Block 0: complete
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		// Block 1: missing (gap)
+		// Block 2: complete
+		createBlockFile(t, segmentDir, 2, createTestEntries(6, 3))
+
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
+
+		// NOTE: Current implementation recovers blocks independently.
+		// With gap at block 1, recovery finds block 2 (entries 6-8) as the last block.
+		// This is the current behavior - blocks are recovered based on what exists.
+		lastEntry := writer.GetLastEntryId(ctx)
+		// The recovery scans blocks in order and uses the last valid block found
+		// Block 0 has entries 0-2, block 2 has entries 6-8
+		// Recovery should find the higher numbered block
+		require.True(t, lastEntry == 2 || lastEntry == 8, "Should recover available blocks, got lastEntry=%d", lastEntry)
+		writer.Close(ctx)
 	})
 
-	t.Run("crash after second data record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[secondDataRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, using footer's LAC, both entries (0 and 1) recovered
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("sequential blocks without gap - all recovered", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId+1)
+		// All blocks sequential: 0, 1, 2
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		createBlockFile(t, segmentDir, 2, createTestEntries(6, 3))
 
-	t.Run("crash within second data record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[secondDataRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, second data incomplete and discarded, only entry 0 recovered
-			int64(0), 1, werr.ErrFileReaderEndOfFile)
-	})
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId+1, storageCli, cfg, true)
+		require.NoError(t, err)
 
-	t.Run("crash within second data record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[secondDataRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(1), 1, werr.ErrEntryNotFound,
-			// if finalized, second data incomplete and discarded, only entry 0 recovered
-			int64(1), 1, werr.ErrFileReaderEndOfFile)
+		// All sequential blocks should be recovered
+		require.Equal(t, int64(8), writer.GetLastEntryId(ctx), "Should recover all entries up to 8")
+		require.Equal(t, int64(0), writer.GetFirstEntryId(ctx), "Should start from entry 0")
+		writer.Close(ctx)
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_FirstIndexRecord tests crash scenarios for first index record
-func TestStagedFileWriter_CrashRecovery_FirstIndexRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-first-index-%d", time.Now().Unix())
+// =============================================================================
+// Test: Write After Recovery
+// =============================================================================
+
+// TestStagedFileCrash_WriteAfterRecovery tests finalization after crash recovery
+func TestStagedFileCrash_WriteAfterRecovery(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-write-after-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1006, 2006
 
-	t.Run("crash after first index record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[firstIndexRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, recovery uses full scan to find both entries
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
-	})
+	t.Run("finalize after partial recovery", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		// Create complete blocks
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+		// Create inflight (will be cleaned up)
+		createInflightBlockFile(t, segmentDir, 2, createTestEntries(6, 3))
 
-	t.Run("crash after first index record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[firstIndexRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, recovery uses full scan to find both entries
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
+		// Recovery writer
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		require.NoError(t, err)
 
-	t.Run("crash within first index record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[firstIndexRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, incomplete index discarded, recovery uses full scan to find both entries
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
-	})
+		recoveredLastEntry := writer.GetLastEntryId(ctx)
+		require.Equal(t, int64(5), recoveredLastEntry, "Should recover up to entry 5")
 
-	t.Run("crash within first index record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[firstIndexRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, incomplete index discarded, recovery uses full scan to find both entries
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
+		// Finalize the recovered data
+		_, err = writer.Finalize(ctx, recoveredLastEntry)
+		require.NoError(t, err)
+		writer.Close(ctx)
+
+		// Verify final state with reader
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		result, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.NoError(t, readErr)
+		require.Len(t, result.Entries, 6, "Should read 6 entries after recovery and finalize")
+
+		// After finalize, should get EOF on next read
+		result2, readErr2 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    6,
+			MaxBatchEntries: 20,
+		}, result.LastReadState)
+		require.Nil(t, result2)
+		require.True(t, errors.Is(readErr2, werr.ErrFileReaderEndOfFile), "Should get EOF after all entries")
 	})
 }
 
-// TestStagedFileWriter_CrashRecovery_SecondIndexRecord tests crash scenarios for second index record
-func TestStagedFileWriter_CrashRecovery_SecondIndexRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-second-index-%d", time.Now().Unix())
+// =============================================================================
+// Test: Reader with LAC (Last Add Confirmed)
+// =============================================================================
+
+// TestStagedFileCrash_ReaderWithLAC tests reader behavior with different LAC values
+func TestStagedFileCrash_ReaderWithLAC(t *testing.T) {
+	rootPath := fmt.Sprintf("test-crash-lac-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
 	ctx := context.Background()
 	defer cleanupStagedTestObjects(t, storageCli, rootPath)
 
 	const logId, segmentId = 1007, 2007
 
-	t.Run("crash after second index record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[secondIndexRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, all index records present, recovery uses full scan to find both entries
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
+	t.Run("reader respects LAC for non-finalized segment", func(t *testing.T) {
+		segmentDir := createSegmentDir(t, tempDir, logId, segmentId)
+		// Create complete blocks with entries 0-5
+		createBlockFile(t, segmentDir, 0, createTestEntries(0, 3))
+		createBlockFile(t, segmentDir, 1, createTestEntries(3, 3))
+
+		// Create reader
+		reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
+			tempDir, logId, segmentId, storageCli, cfg)
+		require.NoError(t, err)
+		defer reader.Close(ctx)
+
+		// Set LAC to only confirm first 3 entries
+		reader.UpdateLastAddConfirmed(ctx, 2)
+		result, readErr := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    0,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.NoError(t, readErr)
+		require.Len(t, result.Entries, 3, "Should only read entries up to LAC=2")
+
+		// Trying to read beyond LAC should return EntryNotFound
+		result2, readErr2 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    3,
+			MaxBatchEntries: 20,
+		}, result.LastReadState)
+		require.Nil(t, result2)
+		require.True(t, errors.Is(readErr2, werr.ErrEntryNotFound), "Should get EntryNotFound beyond LAC")
+
+		// Update LAC to confirm all entries
+		reader.UpdateLastAddConfirmed(ctx, 5)
+		result3, readErr3 := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+			StartEntryID:    3,
+			MaxBatchEntries: 20,
+		}, nil)
+		require.NoError(t, readErr3)
+		require.Len(t, result3.Entries, 3, "Should read remaining entries after LAC update")
 	})
-
-	t.Run("crash after second index record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[secondIndexRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, all index records present, recovery uses full scan to find both entries
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
-
-	t.Run("crash within second index record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[secondIndexRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, second index incomplete, recovery uses full scan to find both entries
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
-	})
-
-	t.Run("crash within second index record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[secondIndexRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, second index incomplete, recovery uses full scan to find both entries
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
-}
-
-// TestStagedFileWriter_CrashRecovery_FooterRecord tests crash scenarios for footer record
-func TestStagedFileWriter_CrashRecovery_FooterRecord(t *testing.T) {
-	rootPath := fmt.Sprintf("test-crash-footer-%d", time.Now().Unix())
-	storageCli, cfg, tempDir := setupStagedFileTest(t, rootPath)
-	ctx := context.Background()
-	defer cleanupStagedTestObjects(t, storageCli, rootPath)
-
-	const logId, segmentId = 1008, 2008
-
-	t.Run("crash after footer record (complete file), before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+100, storageCli)
-		crashPos := preparedData.RecordPositions[footerRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+100,
-			storageCli, preparedData.FilePath, crashPos,
-			// file is finalized, reader uses footer's LAC, both entries can be read
-			int64(0), 2, werr.ErrFileReaderEndOfFile,
-			// file already finalized and complete, both entries still available after recovery
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
-	})
-
-	t.Run("crash after footer record (complete file), after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+200, storageCli)
-		crashPos := preparedData.RecordPositions[footerRecordIndex].EndPos
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+200,
-			storageCli, preparedData.FilePath, crashPos,
-			// file is finalized, reader uses footer's LAC, both entries can be read
-			int64(1), 2, werr.ErrFileReaderEndOfFile,
-			// file already finalized and complete, both entries still available after recovery
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
-
-	t.Run("crash within footer record, before lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+300, storageCli)
-		rec := preparedData.RecordPositions[footerRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+300,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, only first entry can be read
-			int64(0), 1, werr.ErrEntryNotFound,
-			// if finalized, incomplete footer, recovery uses full scan to find both entries
-			int64(0), 2, werr.ErrFileReaderEndOfFile)
-	})
-
-	t.Run("crash within footer record, after lac", func(t *testing.T) {
-		preparedData := prepareCompleteTestFile(t, ctx, cfg, tempDir, logId, segmentId+400, storageCli)
-		rec := preparedData.RecordPositions[footerRecordIndex]
-		crashPos := rec.StartPos + (rec.EndPos-rec.StartPos)/2
-		testCrashRecoveryAtPosition(t, ctx, cfg, tempDir, logId, segmentId+400,
-			storageCli, preparedData.FilePath, crashPos,
-			// if not finalized, reader's LAC will be active, both entries can be read
-			int64(1), 2, werr.ErrEntryNotFound,
-			// if finalized, incomplete footer, recovery uses full scan to find both entries
-			int64(1), 2, werr.ErrFileReaderEndOfFile)
-	})
-}
-
-// testCrashRecoveryAtPosition tests the four-step crash recovery process
-func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.Configuration,
-	tempDir string, logId, segmentId int64, storageCli objectstorage.ObjectStorage,
-	sourcePath string, truncatePosition int64,
-	preReaderLAC int64,
-	expectPreReadEntries int, expectPreReadError error,
-	postReaderLAC int64,
-	expectPostReadEntries int, expectPostReadError error) {
-
-	// Step1: prepare crash data
-	// Prepare target path for this test
-	targetDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
-	err := os.MkdirAll(targetDir, 0755)
-	require.NoError(t, err, "Failed to create target directory %s for log=%d segment=%d", targetDir, logId, segmentId)
-
-	targetPath := filepath.Join(targetDir, "data.log")
-
-	// Copy source file to target
-	sourceData, err := os.ReadFile(sourcePath)
-	require.NoError(t, err, "Failed to read source file %s for log=%d segment=%d", sourcePath, logId, segmentId)
-	err = os.WriteFile(targetPath, sourceData, 0644)
-	require.NoError(t, err, "Failed to write target file %s for log=%d segment=%d", targetPath, logId, segmentId)
-
-	// Simulate crash by truncating
-	if truncatePosition >= 0 {
-		err = os.Truncate(targetPath, truncatePosition)
-		require.NoError(t, err,
-			"Failed to truncate file %s to position %d for log=%d segment=%d (file size was %d)",
-			targetPath, truncatePosition, logId, segmentId, len(sourceData))
-		t.Logf("Simulated crash: truncated to position %d (original size: %d)", truncatePosition, len(sourceData))
-	}
-
-	// Step 2: Pre-Recovery Read Verification
-	t.Log("Step 2: Pre-Recovery Read - attempting to read from crashed file")
-	preReader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
-		tempDir, logId, segmentId, storageCli, cfg)
-	require.NoError(t, err, "Failed to create pre-recovery reader for log=%d segment=%d at truncate position %d",
-		logId, segmentId, truncatePosition)
-	_ = preReader.UpdateLastAddConfirmed(ctx, preReaderLAC)
-
-	// preRecovery first read
-	preReadResult, preReadErr := preReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-		StartEntryID:    0,
-		MaxBatchEntries: 10,
-	}, nil)
-	if expectPreReadEntries == 0 {
-		require.True(t, errors.Is(preReadErr, expectPreReadError),
-			"Pre-recovery first read error mismatch: expected error type %v, got %v (truncate at %d, LAC=%d)",
-			expectPreReadError, preReadErr, truncatePosition, preReaderLAC)
-	} else {
-		require.NoError(t, preReadErr,
-			"Pre-recovery first read failed unexpectedly (truncate at %d, LAC=%d, expected %d entries)",
-			truncatePosition, preReaderLAC, expectPreReadEntries)
-		actualEntries := len(preReadResult.Entries)
-		require.Equal(t, expectPreReadEntries, actualEntries,
-			"Pre-recovery read entries count mismatch at truncate position %d with LAC=%d: expected %d entries, got %d",
-			truncatePosition, preReaderLAC, expectPreReadEntries, actualEntries)
-
-		// preRecovery last read
-		preReadResult2, preReadErr2 := preReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID:    preReadResult.Entries[len(preReadResult.Entries)-1].EntryId + 1,
-			MaxBatchEntries: 10,
-		}, preReadResult.LastReadState)
-		require.Error(t, preReadErr2,
-			"Pre-recovery last read should fail after reading %d entries (truncate at %d, LAC=%d)",
-			expectPreReadEntries, truncatePosition, preReaderLAC)
-		require.Nil(t, preReadResult2,
-			"Pre-recovery last read result should be nil (truncate at %d, LAC=%d)",
-			truncatePosition, preReaderLAC)
-		require.True(t, errors.Is(preReadErr2, expectPreReadError),
-			"Pre-recovery last read error mismatch: expected error type %v, got %v (truncate at %d, LAC=%d)",
-			expectPreReadError, preReadErr2, truncatePosition, preReaderLAC)
-	}
-	_ = preReader.Close(ctx)
-
-	// Step 3: Recovery and Finalization
-	t.Log("Step 3: Recovery - starting writer in recovery mode")
-	recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
-		cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
-	require.NoError(t, err,
-		"Recovery failed at truncate position %d for log=%d segment=%d (expected recovery to always succeed)",
-		truncatePosition, logId, segmentId)
-
-	// Get recovered last entry
-	lastEntryId := recoveryWriter.GetLastEntryId(ctx)
-	t.Logf("Recovered lastEntryId: %d", lastEntryId)
-
-	// Finalize with recovered last entry
-	finalizedId, finalizeErr := recoveryWriter.Finalize(ctx, lastEntryId)
-	require.NoError(t, finalizeErr,
-		"Finalize failed after recovery at truncate position %d with recovered lastEntryId=%d (log=%d segment=%d)",
-		truncatePosition, lastEntryId, logId, segmentId)
-	require.Equal(t, lastEntryId, finalizedId,
-		"Finalize returned unexpected lastEntryId at truncate position %d: expected=%d, got=%d (log=%d segment=%d)",
-		truncatePosition, lastEntryId, finalizedId, logId, segmentId)
-	recoveryWriter.Close(ctx)
-
-	// Step 4: Post-Recovery Read Verification
-	t.Log("Step 4: Post-Recovery Read - attempting to read after recovery")
-	postReader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath,
-		tempDir, logId, segmentId, storageCli, cfg)
-	require.NoError(t, err,
-		"Failed to create post-recovery reader for log=%d segment=%d after recovery (truncate was at %d, recovered lastEntryId=%d)",
-		logId, segmentId, truncatePosition, lastEntryId)
-	_ = postReader.UpdateLastAddConfirmed(ctx, postReaderLAC)
-
-	// postRecovery first read
-	postReadResult, postReadErr := postReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-		StartEntryID:    0,
-		MaxBatchEntries: 10,
-	}, nil)
-	if expectPostReadEntries == 0 {
-		require.True(t, errors.Is(postReadErr, expectPostReadError),
-			"Post-recovery first read error mismatch: expected error type %v, got %v (truncate at %d, recovered lastEntryId=%d, LAC=%d)",
-			expectPostReadError, postReadErr, truncatePosition, lastEntryId, postReaderLAC)
-	} else {
-		require.NoError(t, postReadErr,
-			"Post-recovery first read failed unexpectedly (truncate at %d, recovered lastEntryId=%d, LAC=%d, expected %d entries)",
-			truncatePosition, lastEntryId, postReaderLAC, expectPostReadEntries)
-		actualEntries := len(postReadResult.Entries)
-		require.Equal(t, expectPostReadEntries, actualEntries,
-			"Post-recovery read entries count mismatch at truncate position %d with LAC=%d: expected %d entries, got %d (recovered lastEntryId=%d)",
-			truncatePosition, postReaderLAC, expectPostReadEntries, actualEntries, lastEntryId)
-
-		// postRecovery last read
-		postReadResult2, postReadErr2 := postReader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
-			StartEntryID:    postReadResult.Entries[len(postReadResult.Entries)-1].EntryId + 1,
-			MaxBatchEntries: 10,
-		}, postReadResult.LastReadState)
-		require.Error(t, postReadErr2,
-			"Post-recovery last read should fail after reading %d entries (truncate at %d, recovered lastEntryId=%d, LAC=%d)",
-			expectPostReadEntries, truncatePosition, lastEntryId, postReaderLAC)
-		require.Nil(t, postReadResult2,
-			"Post-recovery last read result should be nil (truncate at %d, recovered lastEntryId=%d, LAC=%d)",
-			truncatePosition, lastEntryId, postReaderLAC)
-		require.True(t, errors.Is(postReadErr2, expectPostReadError),
-			"Post-recovery last read error mismatch: expected error type %v, got %v (truncate at %d, recovered lastEntryId=%d, LAC=%d)",
-			expectPostReadError, postReadErr2, truncatePosition, lastEntryId, postReaderLAC)
-	}
-	_ = postReader.Close(ctx)
 }

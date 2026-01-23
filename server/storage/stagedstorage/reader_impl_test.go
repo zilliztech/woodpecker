@@ -20,6 +20,7 @@ package stagedstorage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -44,6 +45,39 @@ func encodeRecordList(records []codec.Record) []byte {
 	return buffer.Bytes()
 }
 
+// Helper function to create a per-block file with given entries
+func createBlockFile(t *testing.T, segmentDir string, blockId int64, firstEntryId int64, lastEntryId int64) {
+	// Create data records for entries
+	dataRecords := make([]codec.Record, 0, lastEntryId-firstEntryId+1)
+	for i := firstEntryId; i <= lastEntryId; i++ {
+		dataRecord := &codec.DataRecord{
+			Payload: []byte("test data"),
+		}
+		dataRecords = append(dataRecords, dataRecord)
+	}
+
+	blockData := encodeRecordList(dataRecords)
+	blockHeader := &codec.BlockHeaderRecord{
+		BlockNumber:  int32(blockId),
+		FirstEntryID: firstEntryId,
+		LastEntryID:  lastEntryId,
+		BlockLength:  uint32(len(blockData)),
+		BlockCrc:     crc32.ChecksumIEEE(blockData),
+	}
+
+	// Write block file: blockHeader + blockData
+	blockFilePath := filepath.Join(segmentDir, fmt.Sprintf("%d.blk", blockId))
+	blockFile, err := os.Create(blockFilePath)
+	require.NoError(t, err)
+
+	blockHeaderData := codec.EncodeRecord(blockHeader)
+	_, err = blockFile.Write(blockHeaderData)
+	require.NoError(t, err)
+	_, err = blockFile.Write(blockData)
+	require.NoError(t, err)
+	blockFile.Close()
+}
+
 // TestReadDataBlocksWithLACButNoData tests the scenario where:
 // - LAC (Last Add Confirmed) is set to a value (e.g., 100)
 // - File has some data (e.g., entries 0-20)
@@ -56,52 +90,14 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	logId := int64(1)
 	segId := int64(1)
 
-	// Create a file with data blocks for entries 0-20
+	// Create segment directory
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	err := os.MkdirAll(segmentDir, 0755)
 	require.NoError(t, err)
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-
-	// Create file with HeaderRecord and one data block (entries 0-20)
-	file, err := os.Create(filePath)
-	require.NoError(t, err)
-
-	// Write a header record
-	headerRecord := &codec.HeaderRecord{
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		FirstEntryID: 0,
-	}
-	headerData := codec.EncodeRecord(headerRecord)
-	_, err = file.Write(headerData)
-	require.NoError(t, err)
-
-	// Write one data block with entries 0-20
-	dataRecords := make([]codec.Record, 0, 21)
-	for i := int64(0); i <= 20; i++ {
-		dataRecord := &codec.DataRecord{
-			Payload: []byte("test data"),
-		}
-		dataRecords = append(dataRecords, dataRecord)
-	}
-
-	blockData := encodeRecordList(dataRecords)
-	blockHeader := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  20,
-		BlockLength:  uint32(len(blockData)),
-		BlockCrc:     crc32.ChecksumIEEE(blockData),
-	}
-	blockHeaderData := codec.EncodeRecord(blockHeader)
-	_, err = file.Write(blockHeaderData)
-	require.NoError(t, err)
-	_, err = file.Write(blockData)
-	require.NoError(t, err)
-	// DO NOT write footer - keep the file incomplete so it will scan from beginning
-	file.Close()
+	// Create per-block file with entries 0-20
+	createBlockFile(t, segmentDir, 0, 0, 20)
 
 	// Create configuration
 	cfg, err := config.NewConfiguration()
@@ -120,7 +116,6 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to read starting from entry 18 (greater than LAC but within file data range)
-	// - File is incomplete (no footer), so will scan blocks from beginning
 	// - Will read block 0 (entries 0-20)
 	// - When iterating through entries, currentEntryID starts from 0
 	// - When currentEntryID reaches 16, it exceeds LAC (15), so reachLac=true and breaks
@@ -156,52 +151,14 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	logId := int64(2)
 	segId := int64(2)
 
-	// Create a file with data blocks for entries 0-50
+	// Create segment directory
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	err := os.MkdirAll(segmentDir, 0755)
 	require.NoError(t, err)
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-
-	// Create file with HeaderRecord and one data block (entries 0-50)
-	file, err := os.Create(filePath)
-	require.NoError(t, err)
-
-	// Write a header record
-	headerRecord := &codec.HeaderRecord{
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		FirstEntryID: 0,
-	}
-	headerData := codec.EncodeRecord(headerRecord)
-	_, err = file.Write(headerData)
-	require.NoError(t, err)
-
-	// Write one data block with entries 0-50
-	dataRecords := make([]codec.Record, 0, 51)
-	for i := int64(0); i <= 50; i++ {
-		dataRecord := &codec.DataRecord{
-			Payload: []byte("test data"),
-		}
-		dataRecords = append(dataRecords, dataRecord)
-	}
-
-	blockData := encodeRecordList(dataRecords)
-	blockHeader := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  50,
-		BlockLength:  uint32(len(blockData)),
-		BlockCrc:     crc32.ChecksumIEEE(blockData),
-	}
-	blockHeaderData := codec.EncodeRecord(blockHeader)
-	_, err = file.Write(blockHeaderData)
-	require.NoError(t, err)
-	_, err = file.Write(blockData)
-	require.NoError(t, err)
-	// DO NOT write footer - keep the file incomplete
-	file.Close()
+	// Create per-block file with entries 0-50
+	createBlockFile(t, segmentDir, 0, 0, 50)
 
 	// Create configuration
 	cfg, err := config.NewConfiguration()
@@ -220,7 +177,6 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to read starting from entry 48 (greater than LAC but within file data range)
-	// - File is incomplete (no footer), will scan blocks from beginning
 	// - Will read block 0 (entries 0-50)
 	// - When currentEntryID reaches 46, it exceeds LAC (45), so reachLac=true and breaks
 	// - Since startEntryID=48 > LAC=45, no data is collected
@@ -254,52 +210,14 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	logId := int64(5)
 	segId := int64(5)
 
-	// Create a file with data blocks for entries 0-10 only
+	// Create segment directory
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	err := os.MkdirAll(segmentDir, 0755)
 	require.NoError(t, err)
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-
-	// Create file with HeaderRecord and one data block (entries 0-10)
-	file, err := os.Create(filePath)
-	require.NoError(t, err)
-
-	// Write a header record
-	headerRecord := &codec.HeaderRecord{
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		FirstEntryID: 0,
-	}
-	headerData := codec.EncodeRecord(headerRecord)
-	_, err = file.Write(headerData)
-	require.NoError(t, err)
-
-	// Write one data block with entries 0-10
-	dataRecords := make([]codec.Record, 0, 11)
-	for i := int64(0); i <= 10; i++ {
-		dataRecord := &codec.DataRecord{
-			Payload: []byte("test data"),
-		}
-		dataRecords = append(dataRecords, dataRecord)
-	}
-
-	blockData := encodeRecordList(dataRecords)
-	blockHeader := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  10,
-		BlockLength:  uint32(len(blockData)),
-		BlockCrc:     crc32.ChecksumIEEE(blockData),
-	}
-	blockHeaderData := codec.EncodeRecord(blockHeader)
-	_, err = file.Write(blockHeaderData)
-	require.NoError(t, err)
-	_, err = file.Write(blockData)
-	require.NoError(t, err)
-	// DO NOT write footer - keep the file incomplete
-	file.Close()
+	// Create per-block file with entries 0-10
+	createBlockFile(t, segmentDir, 0, 0, 10)
 
 	// Create configuration
 	cfg, err := config.NewConfiguration()
@@ -318,7 +236,6 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to read starting from entry 11 (beyond actual data but within LAC)
-	// - File is incomplete (no footer), will scan blocks from beginning
 	// - Will read block 0 (entries 0-10), but startEntryID=11 > 10, so no data collected
 	// - Tries to read next block but reaches EOF (no more blocks)
 	// - hasDataReadError = true
@@ -337,9 +254,6 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, werr.ErrEntryNotFound.Is(err), "Expected ErrEntryNotFound, got: %v", err)
 	assert.Nil(t, result)
-	// Note: Due to hasDataReadError=true (EOF when trying next block),
-	// this will return generic "no record extract" error, not LAC-specific message
-	assert.Contains(t, err.Error(), "no record extract")
 }
 
 // TestReadDataBlocksWithLACAtBoundary tests the scenario where:
@@ -353,51 +267,14 @@ func TestReadDataBlocksWithLACAtBoundary(t *testing.T) {
 	logId := int64(3)
 	segId := int64(3)
 
-	// Create a file with data blocks for entries 0-50
+	// Create segment directory
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	err := os.MkdirAll(segmentDir, 0755)
 	require.NoError(t, err)
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-
-	// Create file with HeaderRecord and one data block (entries 0-50)
-	file, err := os.Create(filePath)
-	require.NoError(t, err)
-
-	// Write a header record
-	headerRecord := &codec.HeaderRecord{
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		FirstEntryID: 0,
-	}
-	headerData := codec.EncodeRecord(headerRecord)
-	_, err = file.Write(headerData)
-	require.NoError(t, err)
-
-	// Write one data block with entries 0-50
-	dataRecords := make([]codec.Record, 0, 51)
-	for i := int64(0); i <= 50; i++ {
-		dataRecord := &codec.DataRecord{
-			Payload: []byte("test data"),
-		}
-		dataRecords = append(dataRecords, dataRecord)
-	}
-
-	blockData := encodeRecordList(dataRecords)
-	blockHeader := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  50,
-		BlockLength:  uint32(len(blockData)),
-		BlockCrc:     crc32.ChecksumIEEE(blockData),
-	}
-	blockHeaderData := codec.EncodeRecord(blockHeader)
-	_, err = file.Write(blockHeaderData)
-	require.NoError(t, err)
-	_, err = file.Write(blockData)
-	require.NoError(t, err)
-	file.Close()
+	// Create per-block file with entries 0-50
+	createBlockFile(t, segmentDir, 0, 0, 50)
 
 	// Create configuration
 	cfg, err := config.NewConfiguration()
@@ -439,51 +316,14 @@ func TestReadDataBlocksSuccessfulRead(t *testing.T) {
 	logId := int64(4)
 	segId := int64(4)
 
-	// Create a file with data blocks for entries 0-50
+	// Create segment directory
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	err := os.MkdirAll(segmentDir, 0755)
 	require.NoError(t, err)
 
-	filePath := getSegmentFilePath(localBaseDir, logId, segId)
-
-	// Create file with HeaderRecord and one data block (entries 0-50)
-	file, err := os.Create(filePath)
-	require.NoError(t, err)
-
-	// Write a header record
-	headerRecord := &codec.HeaderRecord{
-		Version:      codec.FormatVersion,
-		Flags:        0,
-		FirstEntryID: 0,
-	}
-	headerData := codec.EncodeRecord(headerRecord)
-	_, err = file.Write(headerData)
-	require.NoError(t, err)
-
-	// Write one data block with entries 0-50
-	dataRecords := make([]codec.Record, 0, 51)
-	for i := int64(0); i <= 50; i++ {
-		dataRecord := &codec.DataRecord{
-			Payload: []byte("test data"),
-		}
-		dataRecords = append(dataRecords, dataRecord)
-	}
-
-	blockData := encodeRecordList(dataRecords)
-	blockHeader := &codec.BlockHeaderRecord{
-		BlockNumber:  0,
-		FirstEntryID: 0,
-		LastEntryID:  50,
-		BlockLength:  uint32(len(blockData)),
-		BlockCrc:     crc32.ChecksumIEEE(blockData),
-	}
-	blockHeaderData := codec.EncodeRecord(blockHeader)
-	_, err = file.Write(blockHeaderData)
-	require.NoError(t, err)
-	_, err = file.Write(blockData)
-	require.NoError(t, err)
-	file.Close()
+	// Create per-block file with entries 0-50
+	createBlockFile(t, segmentDir, 0, 0, 50)
 
 	// Create configuration
 	cfg, err := config.NewConfiguration()
