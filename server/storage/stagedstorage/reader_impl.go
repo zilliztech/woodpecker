@@ -805,17 +805,9 @@ func (r *StagedFileReaderAdv) readDataBlocksFromPerBlockFilesUnsafe(ctx context.
 			zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
 			zap.Bool("hasFooter", r.footer != nil))
 		if !hasDataReadError {
-			// If segment is still incomplete, try to check if footer has been written
-			if r.isIncompleteFile.Load() && r.footer == nil {
-				// Try to load footer if it now exists
-				r.mu.Lock()
-				_ = r.tryLoadLocalFooterUnsafe(ctx)
-				r.mu.Unlock()
-
-				logger.Ctx(ctx).Debug("rechecked for footer after no data extracted",
-					zap.Bool("isIncompleteFile", r.isIncompleteFile.Load()),
-					zap.Bool("hasFooter", r.footer != nil))
-			}
+			// Note: We don't try to load footer here because we're already holding a read lock
+			// and can't upgrade to a write lock. The footer will be properly checked on
+			// the next call via tryParseFooterAndIndexesIfExists which runs before acquiring the read lock.
 
 			if r.isIncompleteFile.Load() && r.footer == nil && (opt.StartEntryID <= currentLAC || currentLAC == -1) {
 				return nil, werr.ErrEntryNotFound.WithCauseErrMsg("some data less than LAC but can't read here now, retry later or try to read from other nodes")
