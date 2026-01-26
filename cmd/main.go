@@ -221,6 +221,9 @@ func main() {
 	case err := <-errChan:
 		log.Printf("Server error: %v", err)
 		os.Exit(1)
+	case err := <-srv.GetStartupErrCh():
+		log.Printf("Server startup error (gossip/membership): %v", err)
+		os.Exit(1)
 	case sig := <-sigChan:
 		log.Printf("Received signal %s, shutting down...", sig)
 	}

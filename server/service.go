@@ -47,6 +47,7 @@ type Server struct {
 	logStore     LogStore
 	grpcWG       sync.WaitGroup
 	grpcErrChan  chan error
+	startupErrCh chan error // Channel to propagate async startup errors
 	grpcServer   *grpc.Server
 	listener     net.Listener
 
@@ -70,7 +71,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 
 // NewServerWithConfig creates a new server instance with custom configuration
 func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) *Server {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		var err error
@@ -80,10 +81,11 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		}
 	}
 	s := &Server{
-		cfg:         configuration,
-		ctx:         ctx,
-		cancel:      cancel,
-		grpcErrChan: make(chan error),
+		cfg:          configuration,
+		ctx:          ctx,
+		cancel:       cancel,
+		grpcErrChan:  make(chan error),
+		startupErrCh: make(chan error, 1), // Buffered channel to avoid blocking
 	}
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
@@ -405,59 +407,106 @@ func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
 	return fmt.Sprintf("%s:%d", s.serverConfig.AdvertiseAddr, s.serverConfig.AdvertisePort)
 }
 
+// GetStartupErrCh returns the channel for async startup errors.
+// The main program can listen to this channel to detect if the async
+// server node creation (gossip port binding) failed.
+func (s *Server) GetStartupErrCh() <-chan error {
+	return s.startupErrCh
+}
+
 // asyncJoinSeeds continuously monitors and joins missing seed nodes with adaptive backoff [[memory:3527742]]
 // It maintains a list of seed nodes and periodically checks which ones are not in memberlist
 func (s *Server) asyncStartAndJoinSeeds(ctx context.Context, seeds []string) {
 	// 1. Create server node directly using the stored config
-	s.waitAndStartCurrentNode(ctx)
+	if err := s.waitAndStartCurrentNode(ctx); err != nil {
+		// Send error to startup error channel (non-blocking due to buffered channel)
+		select {
+		case s.startupErrCh <- err:
+		default:
+		}
+		logger.Ctx(ctx).Error("Failed to start server node, aborting async join",
+			zap.String("nodeID", s.serverConfig.NodeID),
+			zap.Error(err))
+		return
+	}
 
 	// 2. Join the cluster seeds nodes
 	s.monitorAndJoinSeeds(ctx, seeds)
 }
 
-func (s *Server) waitAndStartCurrentNode(ctx context.Context) {
+func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 	// 1. Create server node directly using the stored config
 	var node *membership.ServerNode
 	var err error
 	currentNodeID := s.serverConfig.NodeID
 	retryInterval := 1 * time.Second
+	const maxAttempts = 30 // Maximum retry attempts (30 seconds total)
 
 	// 1.1 wait for hostname resolvable
-	for {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for hostname resolution: %w", ctx.Err())
+		default:
+		}
+
 		resolvedIP := wpNet.ResolveAdvertiseAddr(s.serverConfig.AdvertiseAddr)
 		if resolvedIP != nil {
 			break
 		}
+
+		if attempt == maxAttempts-1 {
+			return fmt.Errorf("failed to resolve hostname '%s' after %d attempts", s.serverConfig.AdvertiseAddr, maxAttempts)
+		}
+
+		logger.Ctx(ctx).Info("Waiting for hostname resolvable",
+			zap.String("nodeID", currentNodeID),
+			zap.String("hostname", s.serverConfig.AdvertiseAddr),
+			zap.Int("attempt", attempt+1),
+			zap.Int("maxAttempts", maxAttempts))
 		time.Sleep(retryInterval)
-		logger.Ctx(ctx).Info("Waiting for hostname resolvable", zap.String("nodeID", currentNodeID), zap.String("hostname", s.serverConfig.AdvertiseAddr))
 	}
 
 	// 1.2 start currentNode
-	attemptCount := 0
-	for {
-		attemptCount++
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while creating server node: %w", ctx.Err())
+		default:
+		}
+
 		logger.Ctx(ctx).Info("Attempting to create server node",
 			zap.String("currentNodeID", currentNodeID),
-			zap.Int("attempt", attemptCount),
+			zap.Int("attempt", attempt+1),
+			zap.Int("maxAttempts", maxAttempts),
 			zap.Int("gossipPort", s.serverConfig.BindPort))
 		node, err = membership.NewServerNode(s.serverConfig)
 		if err != nil {
 			logger.Ctx(ctx).Warn("server node create failed",
 				zap.String("currentNodeID", currentNodeID),
-				zap.Int("attempt", attemptCount),
+				zap.Int("attempt", attempt+1),
+				zap.Int("maxAttempts", maxAttempts),
 				zap.Error(err))
+
+			if attempt == maxAttempts-1 {
+				return fmt.Errorf("failed to create server node after %d attempts: %w", maxAttempts, err)
+			}
 
 			time.Sleep(retryInterval)
 			continue
-		} else {
-			logger.Ctx(ctx).Info("server node create success",
-				zap.String("currentNodeID", currentNodeID),
-				zap.Int("attempt", attemptCount),
-				zap.String("initMemberlist", node.GetMemberlistStatus()))
-			break
 		}
+
+		logger.Ctx(ctx).Info("server node create success",
+			zap.String("currentNodeID", currentNodeID),
+			zap.Int("attempt", attempt+1),
+			zap.String("initMemberlist", node.GetMemberlistStatus()))
+		s.serverNode = node
+		return nil
 	}
-	s.serverNode = node
+
+	return fmt.Errorf("unexpected: exceeded max attempts for server node creation")
 }
 
 func (s *Server) monitorAndJoinSeeds(ctx context.Context, seeds []string) {
