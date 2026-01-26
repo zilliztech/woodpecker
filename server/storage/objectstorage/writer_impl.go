@@ -1265,7 +1265,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 		return f.lastEntryID.Load(), nil
 	}
 
-	err := f.Sync(context.Background()) // manual sync all pending append operation
+	err := f.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -1315,7 +1315,7 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		return nil
 	}
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-	err := f.Sync(context.Background()) // manual sync all pending append operation
+	err := f.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),

@@ -124,15 +124,19 @@ func (l *logStore) Stop() error {
 	// Stop background cleanup goroutine and wait for it to finish
 	l.stopBackgroundCleanup()
 
-	// Clean up all segment processors
+	// Clean up all segment processors with a timeout to avoid indefinite blocking
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
+
+	const processorCloseTimeout = 15 * time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), processorCloseTimeout)
+	defer shutdownCancel()
 
 	totalProcessors := 0
 	for logKey, processors := range l.segmentProcessors {
 		for segmentId, processor := range processors {
 			totalProcessors += 1
-			l.closeSegmentProcessorUnsafe(context.Background(), logKey, segmentId, processor)
+			l.closeSegmentProcessorUnsafe(shutdownCtx, logKey, segmentId, processor)
 		}
 	}
 

@@ -918,7 +918,7 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 		return nil
 	}
 	logger.Ctx(ctx).Info("Close: trigger sync before close", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId))
-	err := w.Sync(context.Background()) // manual sync all pending append operation
+	err := w.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
 	}

@@ -993,7 +993,7 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 		return nil
 	}
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("inst", fmt.Sprintf("%p", w)))
-	err := w.Sync(context.Background()) // manual sync all pending append operation
+	err := w.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId),
