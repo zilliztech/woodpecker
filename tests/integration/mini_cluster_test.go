@@ -145,14 +145,12 @@ func TestMiniCluster_LastScale(t *testing.T) {
 	t.Logf("Stopping cluster...")
 	cluster.StopMultiNodeCluster(t)
 
-	// Wait for nodes to shutdown
-	time.Sleep(5 * time.Second)
+	// Poll until all nodes are gone from discovery (gossip propagation for 50 nodes needs time)
+	assert.Eventually(t, func() bool {
+		return len(clientNode.GetDiscovery().GetAllServers()) == 0
+	}, 30*time.Second, 1*time.Second, "All nodes should be stopped within timeout")
 
-	// Verify active nodes count
-	activeNodes := clientNode.GetDiscovery().GetAllServers()
-	assert.Equal(t, 0, len(activeNodes), "All nodes should be stopped", activeNodes)
-
-	t.Logf("TestMiniCluster_Basic completed successfully")
+	t.Logf("TestMiniCluster_LastScale completed successfully")
 }
 
 func TestMiniCluster_Join(t *testing.T) {
@@ -819,4 +817,327 @@ func TestMiniCluster_AddressBasedOperations(t *testing.T) {
 	t.Logf("✓ Correctly failed to restart non-existent address: %v", err)
 
 	t.Logf("TestMiniCluster_AddressBasedOperations completed successfully")
+}
+
+// TestMiniCluster_StopClusterState verifies that StopMultiNodeCluster properly
+// nils out server entries, so GetActiveNodes and GetSeedList reflect the stopped state.
+func TestMiniCluster_StopClusterState(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_StopClusterState")
+
+	const nodeCount = 3
+	cluster, _, _, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
+
+	time.Sleep(2 * time.Second)
+
+	// Verify initial state
+	assert.Equal(t, nodeCount, cluster.GetActiveNodes(), "Should have all nodes active initially")
+	assert.Equal(t, nodeCount, len(cluster.GetSeedList()), "Seed list should have all nodes initially")
+
+	// Stop the cluster
+	cluster.StopMultiNodeCluster(t)
+	time.Sleep(1 * time.Second)
+
+	// After stop, internal state must reflect that all servers are down
+	assert.Equal(t, 0, cluster.GetActiveNodes(), "GetActiveNodes should return 0 after StopMultiNodeCluster")
+	assert.Empty(t, cluster.GetActiveNodeIndexes(), "GetActiveNodeIndexes should be empty after StopMultiNodeCluster")
+	assert.Empty(t, cluster.GetSeedList(), "GetSeedList should be empty after StopMultiNodeCluster")
+
+	// Calling StopMultiNodeCluster again should be safe (idempotent)
+	cluster.StopMultiNodeCluster(t)
+	assert.Equal(t, 0, cluster.GetActiveNodes(), "GetActiveNodes should still be 0 after second stop")
+
+	t.Logf("TestMiniCluster_StopClusterState completed successfully")
+}
+
+// TestMiniCluster_MultipleRestartCycles tests that the same node can be
+// stopped and restarted multiple times without issues.
+func TestMiniCluster_MultipleRestartCycles(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_MultipleRestartCycles")
+
+	const nodeCount = 3
+	cluster, _, _, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	targetNode := 1
+	currentSeeds := cluster.GetSeedList()
+
+	for cycle := 1; cycle <= 3; cycle++ {
+		t.Logf("Cycle %d: Leaving node %d...", cycle, targetNode)
+		_, err := cluster.LeaveNodeWithIndex(t, targetNode)
+		assert.NoError(t, err, "Cycle %d: should leave node %d", cycle, targetNode)
+		time.Sleep(1 * time.Second)
+
+		assert.Equal(t, nodeCount-1, cluster.GetActiveNodes(), "Cycle %d: should have %d active nodes after leave", cycle, nodeCount-1)
+
+		t.Logf("Cycle %d: Restarting node %d...", cycle, targetNode)
+		restartedAddr, err := cluster.RestartNode(t, targetNode, currentSeeds)
+		assert.NoError(t, err, "Cycle %d: should restart node %d", cycle, targetNode)
+		assert.NotEmpty(t, restartedAddr, "Cycle %d: restarted address should not be empty", cycle)
+		time.Sleep(2 * time.Second)
+
+		assert.Equal(t, nodeCount, cluster.GetActiveNodes(), "Cycle %d: should have %d active nodes after restart", cycle, nodeCount)
+
+		// Update seeds to include the restarted node's new address
+		currentSeeds = cluster.GetSeedList()
+	}
+
+	// Final verification
+	activeIndexes := cluster.GetActiveNodeIndexes()
+	assert.ElementsMatch(t, []int{0, 1, 2}, activeIndexes, "All original nodes should be active after multiple cycles")
+
+	t.Logf("TestMiniCluster_MultipleRestartCycles completed successfully")
+}
+
+// TestMiniCluster_CustomAZRGPreservation verifies that restarting a node
+// originally started with custom AZ/ResourceGroup preserves those values.
+func TestMiniCluster_CustomAZRGPreservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_CustomAZRGPreservation")
+
+	// Start cluster with custom AZ/ResourceGroup configurations
+	nodeConfigs := []utils.NodeConfig{
+		{Index: 0, ResourceGroup: "rg-premium", AZ: "us-east-1"},
+		{Index: 1, ResourceGroup: "rg-standard", AZ: "us-west-2"},
+		{Index: 2, ResourceGroup: "rg-premium", AZ: "eu-west-1"},
+	}
+
+	cluster, _, seeds, _ := utils.StartMiniClusterWithCustomNodes(t, nodeConfigs, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(3 * time.Second)
+
+	// Create a client node to observe the cluster
+	clientConfig := &membership.ClientConfig{
+		NodeID:   "test-client-azrg",
+		BindAddr: "127.0.0.1",
+		BindPort: 0,
+	}
+
+	clientNode, err := membership.NewClientNode(clientConfig)
+	assert.NoError(t, err)
+	defer func() {
+		_ = clientNode.Leave()
+		_ = clientNode.Shutdown()
+	}()
+
+	err = clientNode.Join(seeds)
+	assert.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Verify initial AZ/RG values via discovery
+	discovery := clientNode.GetDiscovery()
+	allServers := discovery.GetAllServers()
+	assert.Equal(t, 3, len(allServers), "Should discover all 3 nodes initially")
+
+	// Build a map of nodeId -> (az, rg) for verification
+	initialMeta := make(map[string][2]string) // nodeId -> [az, rg]
+	for _, srv := range allServers {
+		initialMeta[srv.NodeId] = [2]string{srv.Az, srv.ResourceGroup}
+		t.Logf("Initial: %s -> AZ=%s, RG=%s", srv.NodeId, srv.Az, srv.ResourceGroup)
+	}
+
+	// Verify expected initial values
+	assert.Equal(t, "us-east-1", initialMeta["node0"][0], "node0 AZ")
+	assert.Equal(t, "rg-premium", initialMeta["node0"][1], "node0 RG")
+	assert.Equal(t, "us-west-2", initialMeta["node1"][0], "node1 AZ")
+	assert.Equal(t, "rg-standard", initialMeta["node1"][1], "node1 RG")
+
+	// Leave node 1 (rg-standard, us-west-2)
+	t.Logf("Leaving node 1...")
+	_, err = cluster.LeaveNodeWithIndex(t, 1)
+	assert.NoError(t, err)
+	time.Sleep(3 * time.Second)
+
+	// Restart node 1 — should preserve AZ/RG
+	t.Logf("Restarting node 1...")
+	_, err = cluster.RestartNode(t, 1, cluster.GetSeedList())
+	assert.NoError(t, err)
+	time.Sleep(3 * time.Second)
+
+	// Verify the restarted node has preserved AZ/RG via discovery
+	updatedServers := discovery.GetAllServers()
+	assert.Equal(t, 3, len(updatedServers), "Should discover all 3 nodes after restart")
+
+	restartedMeta := make(map[string][2]string)
+	for _, srv := range updatedServers {
+		restartedMeta[srv.NodeId] = [2]string{srv.Az, srv.ResourceGroup}
+		t.Logf("After restart: %s -> AZ=%s, RG=%s", srv.NodeId, srv.Az, srv.ResourceGroup)
+	}
+
+	// Verify AZ/RG preserved after restart
+	assert.Equal(t, "us-west-2", restartedMeta["node1"][0], "node1 AZ should be preserved after restart")
+	assert.Equal(t, "rg-standard", restartedMeta["node1"][1], "node1 RG should be preserved after restart")
+
+	// Other nodes should be unaffected
+	assert.Equal(t, "us-east-1", restartedMeta["node0"][0], "node0 AZ should be unchanged")
+	assert.Equal(t, "rg-premium", restartedMeta["node0"][1], "node0 RG should be unchanged")
+	assert.Equal(t, "eu-west-1", restartedMeta["node2"][0], "node2 AZ should be unchanged")
+	assert.Equal(t, "rg-premium", restartedMeta["node2"][1], "node2 RG should be unchanged")
+
+	t.Logf("TestMiniCluster_CustomAZRGPreservation completed successfully")
+}
+
+// TestMiniCluster_SeedListAccuracy verifies that GetSeedList always reflects
+// exactly the set of currently active nodes after leave/join operations.
+func TestMiniCluster_SeedListAccuracy(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_SeedListAccuracy")
+
+	const nodeCount = 4
+	cluster, _, _, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	// Helper: verify seed list length matches active node count
+	verifySeedCount := func(expectedCount int, context string) {
+		t.Helper()
+		activeCount := cluster.GetActiveNodes()
+		seedList := cluster.GetSeedList()
+		assert.Equal(t, expectedCount, activeCount, "%s: active node count", context)
+		assert.Equal(t, expectedCount, len(seedList), "%s: seed list length should match active count", context)
+	}
+
+	// Initial state
+	verifySeedCount(4, "initial")
+
+	// Leave node 1
+	_, err := cluster.LeaveNodeWithIndex(t, 1)
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+	verifySeedCount(3, "after leaving node 1")
+
+	// Leave node 3
+	_, err = cluster.LeaveNodeWithIndex(t, 3)
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+	verifySeedCount(2, "after leaving node 3")
+
+	// Join a new node
+	_, _, err = cluster.JoinNewNode(t, cluster.GetSeedList())
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+	verifySeedCount(3, "after joining new node")
+
+	// Restart node 1
+	_, err = cluster.RestartNode(t, 1, cluster.GetSeedList())
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+	verifySeedCount(4, "after restarting node 1")
+
+	// Leave all nodes one by one
+	for _, idx := range cluster.GetActiveNodeIndexes() {
+		_, err := cluster.LeaveNodeWithIndex(t, idx)
+		assert.NoError(t, err)
+	}
+	time.Sleep(1 * time.Second)
+	verifySeedCount(0, "after leaving all nodes")
+
+	t.Logf("TestMiniCluster_SeedListAccuracy completed successfully")
+}
+
+// TestMiniCluster_LeaveRandomNodeDeterminism verifies that LeaveRandomNode
+// always picks the highest-indexed active node (deterministic after sort fix).
+func TestMiniCluster_LeaveRandomNodeDeterminism(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_LeaveRandomNodeDeterminism")
+
+	const nodeCount = 5
+	cluster, _, _, _ := utils.StartMiniCluster(t, nodeCount, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	// LeaveRandomNode should always pick the highest-indexed active node
+	// Active: {0,1,2,3,4} → should leave 4
+	leftIdx, err := cluster.LeaveRandomNode(t)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, leftIdx, "Should leave highest index node (4)")
+	time.Sleep(500 * time.Millisecond)
+
+	// Active: {0,1,2,3} → should leave 3
+	leftIdx, err = cluster.LeaveRandomNode(t)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, leftIdx, "Should leave highest index node (3)")
+	time.Sleep(500 * time.Millisecond)
+
+	// Active: {0,1,2} → should leave 2
+	leftIdx, err = cluster.LeaveRandomNode(t)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, leftIdx, "Should leave highest index node (2)")
+	time.Sleep(500 * time.Millisecond)
+
+	// Active: {0,1} → should leave 1
+	leftIdx, err = cluster.LeaveRandomNode(t)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, leftIdx, "Should leave highest index node (1)")
+	time.Sleep(500 * time.Millisecond)
+
+	// Active: {0} → should leave 0
+	leftIdx, err = cluster.LeaveRandomNode(t)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, leftIdx, "Should leave highest index node (0)")
+
+	// No active nodes left
+	_, err = cluster.LeaveRandomNode(t)
+	assert.Error(t, err, "Should fail when no active nodes remain")
+
+	assert.Equal(t, 0, cluster.GetActiveNodes(), "Should have no active nodes")
+
+	t.Logf("TestMiniCluster_LeaveRandomNodeDeterminism completed successfully")
+}
+
+// TestMiniCluster_NodeConfigStorage verifies that NodeConfigs are correctly
+// stored for initial nodes, joined nodes, and accessible after operations.
+func TestMiniCluster_NodeConfigStorage(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestMiniCluster_NodeConfigStorage")
+
+	// Start with custom configs
+	nodeConfigs := []utils.NodeConfig{
+		{Index: 0, ResourceGroup: "rg-a", AZ: "az-1"},
+		{Index: 1, ResourceGroup: "rg-b", AZ: "az-2"},
+	}
+
+	cluster, _, _, _ := utils.StartMiniClusterWithCustomNodes(t, nodeConfigs, rootPath)
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	// Verify initial node configs are stored
+	assert.Equal(t, "rg-a", cluster.NodeConfigs[0].ResourceGroup, "node0 RG should be stored")
+	assert.Equal(t, "az-1", cluster.NodeConfigs[0].AZ, "node0 AZ should be stored")
+	assert.Equal(t, "rg-b", cluster.NodeConfigs[1].ResourceGroup, "node1 RG should be stored")
+	assert.Equal(t, "az-2", cluster.NodeConfigs[1].AZ, "node1 AZ should be stored")
+
+	// Join a new node (defaults to "default" AZ/RG)
+	newIdx, _, err := cluster.JoinNewNode(t, cluster.GetSeedList())
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+
+	assert.Equal(t, "default", cluster.NodeConfigs[newIdx].ResourceGroup, "joined node RG should be 'default'")
+	assert.Equal(t, "default", cluster.NodeConfigs[newIdx].AZ, "joined node AZ should be 'default'")
+
+	// Leave and restart node 1 — verify config persists
+	_, err = cluster.LeaveNodeWithIndex(t, 1)
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+
+	// Config should still be stored even after leave
+	assert.Equal(t, "rg-b", cluster.NodeConfigs[1].ResourceGroup, "node1 RG should persist after leave")
+	assert.Equal(t, "az-2", cluster.NodeConfigs[1].AZ, "node1 AZ should persist after leave")
+
+	// Restart and verify config is still intact
+	_, err = cluster.RestartNode(t, 1, cluster.GetSeedList())
+	assert.NoError(t, err)
+	time.Sleep(1 * time.Second)
+
+	assert.Equal(t, "rg-b", cluster.NodeConfigs[1].ResourceGroup, "node1 RG should persist after restart")
+	assert.Equal(t, "az-2", cluster.NodeConfigs[1].AZ, "node1 AZ should persist after restart")
+
+	t.Logf("TestMiniCluster_NodeConfigStorage completed successfully")
 }
