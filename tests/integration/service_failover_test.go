@@ -149,12 +149,11 @@ func TestStagedStorageService_Normal_BasicRW(t *testing.T) {
 	t.Logf("TestStagedStorageService_Basic completed successfully with %d nodes", len(cluster.Servers))
 }
 
-// TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues tests failover case 1:
-// es=3, wq=3, aq=2 configuration: Start a writer continuously writing data, a reader continuously tail reading data.
-// When writer writes 20 entries, kill one of the current writable segment's quorum nodes;
-// Writer should continue writing 10 more entries, ultimately writer writes 30 entries normally,
-// reader should also read 30 entries normally.
-// Simplified test to verify segment rolling basic functionality
+// TestStagedStorageService_Failover_Simple_SegmentRollingVerification tests basic segment rolling:
+// 3-node cluster with es=3, wq=3, aq=2.
+// Write 5 entries, kill one quorum node, write 1-2 more entries to trigger rolling,
+// then verify that entries before and after failure are readable.
+// This is a simplified smoke test for segment rolling; see Case1-Case3 for full scenarios.
 func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *testing.T) {
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Simple")
@@ -421,7 +420,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 		for {
 			select {
 			case <-ctx.Done():
-				t.Logf("Reader stopping due to context cancellation")
+				fmt.Printf("[Case1 Reader] stopping due to context cancellation\n")
 				return
 			default:
 				// Try to read next message
@@ -431,7 +430,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 
 				if readErr != nil {
 					// Handle read errors gracefully during failover
-					t.Logf("Reader encountered error: %v, retrying...", readErr)
+					fmt.Printf("[Case1 Reader] encountered error: %v, retrying...\n", readErr)
 					readMutex.Lock()
 					readerErr = readErr
 					readMutex.Unlock()
@@ -445,7 +444,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 					currentCount := len(readMessages)
 					readMutex.Unlock()
 
-					t.Logf("Reader read entry %d: %s (total read: %d)", msg.Id.EntryId, string(msg.Payload), currentCount)
+					fmt.Printf("[Case1 Reader] read entry %d: %s (total read: %d)\n", msg.Id.EntryId, string(msg.Payload), currentCount)
 
 					// Reset reader error on successful read
 					readMutex.Lock()
@@ -454,7 +453,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 
 					// Check if we've read the target amount
 					if currentCount >= 10 {
-						t.Logf("Reader reached target of 10 entries, stopping")
+						fmt.Printf("[Case1 Reader] reached target of 10 entries, stopping\n")
 						return
 					}
 				} else {
@@ -973,7 +972,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 		for {
 			select {
 			case <-ctx.Done():
-				t.Logf("Reader stopping due to context cancellation")
+				fmt.Printf("[Case2 Reader] stopping due to context cancellation\n")
 				return
 			default:
 				// Try to read next message
@@ -984,7 +983,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 				if readErr != nil {
 					// Handle read errors gracefully during failover
 					if !errors.Is(readErr, context.DeadlineExceeded) {
-						t.Logf("Reader encountered error: %v, retrying...", readErr)
+						fmt.Printf("[Case2 Reader] encountered error: %v, retrying...\n", readErr)
 						readMutex.Lock()
 						readerErr = readErr
 						readMutex.Unlock()
@@ -996,7 +995,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 					readMutex.Unlock()
 
 					if currentCount >= totalEntries {
-						t.Logf("Reader reached target of %d entries, stopping", totalEntries)
+						fmt.Printf("[Case2 Reader] reached target of %d entries, stopping\n", totalEntries)
 						return
 					}
 					continue
@@ -1008,11 +1007,11 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 					currentCount := len(readMessages)
 					readMutex.Unlock()
 
-					t.Logf("Reader read entry %d: %s (total read: %d)",
+					fmt.Printf("[Case2 Reader] read entry %d: %s (total read: %d)\n",
 						msg.Id.EntryId, string(msg.Payload), currentCount)
 
 					if currentCount >= totalEntries {
-						t.Logf("Reader reached target of %d entries, stopping", totalEntries)
+						fmt.Printf("[Case2 Reader] reached target of %d entries, stopping\n", totalEntries)
 						return
 					}
 				}
@@ -1562,4 +1561,1031 @@ func TestStagedStorageService_Failover_Case3_NodeRestartTriggersSegmentRolling(t
 	t.Logf("=== CASE 3 PASSED: Node %d restart with recovery mode triggered segment rolling ===", targetNodeIndex)
 	t.Logf("Successfully wrote and read %d entries with es=3, wq=2, aq=2 configuration - %d before and %d after restart",
 		totalEntries, entriesPhase1, entriesPhase2)
+}
+
+// =============================================================================
+// Helper: map quorum node address (e.g. "0.0.0.0:60196") to cluster node index
+// =============================================================================
+
+func findClusterNodeByQuorumAddr(t *testing.T, cluster *utils.MiniCluster, quorumAddr string) (int, bool) {
+	t.Helper()
+	parts := strings.Split(quorumAddr, ":")
+	if len(parts) != 2 {
+		return -1, false
+	}
+	port, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return -1, false
+	}
+	for nodeIndex, clusterPort := range cluster.UsedPorts {
+		if clusterPort == port {
+			return nodeIndex, true
+		}
+	}
+	return -1, false
+}
+
+// =============================================================================
+// Case 4: Non-quorum node failure — writer and reader completely unaffected
+// =============================================================================
+//
+// 5-node cluster, es=3. Kill a node that is NOT in the segment's quorum.
+// Writer should keep writing to the same segment with no rolling.
+// Reader should read all entries from a single segment.
+func TestStagedStorageService_Failover_Case4_NonQuorumNodeFailure(t *testing.T) {
+	const (
+		clusterSize   = 5
+		entriesPhase1 = 5
+		entriesPhase2 = 5
+		totalEntries  = entriesPhase1 + entriesPhase2
+	)
+
+	t.Logf("=== CASE 4: Non-quorum node failure — writer/reader unaffected ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case4")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case4_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write first batch
+	t.Logf("Phase 1: Writing %d entries...", entriesPhase1)
+	for i := 0; i < entriesPhase1; i++ {
+		data := []byte(fmt.Sprintf("case4 entry %d", i))
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: data})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+	}
+
+	// Phase 2: Identify quorum nodes and find a NON-quorum node
+	t.Logf("Phase 2: Finding a non-quorum node to kill...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	// Build set of quorum node indexes
+	quorumNodeIndexes := make(map[int]bool)
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		if found {
+			quorumNodeIndexes[nodeIdx] = true
+		}
+	}
+
+	// Find a node NOT in the quorum
+	var nonQuorumNodeIndex int
+	nonQuorumFound := false
+	for _, nodeIdx := range cluster.GetActiveNodeIndexes() {
+		if !quorumNodeIndexes[nodeIdx] {
+			nonQuorumNodeIndex = nodeIdx
+			nonQuorumFound = true
+			break
+		}
+	}
+	require.True(t, nonQuorumFound, "Should find a non-quorum node in a 5-node cluster with es=3")
+	t.Logf("Non-quorum node to kill: %d", nonQuorumNodeIndex)
+
+	// Kill the non-quorum node
+	_, err = cluster.LeaveNodeWithIndex(t, nonQuorumNodeIndex)
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: Write more entries — should succeed with NO rolling
+	t.Logf("Phase 3: Writing %d more entries after non-quorum node failure...", entriesPhase2)
+	for i := entriesPhase1; i < totalEntries; i++ {
+		data := []byte(fmt.Sprintf("case4 entry %d", i))
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: data})
+		require.NoError(t, result.Err, "Write should succeed despite non-quorum node failure, entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+	}
+
+	// Phase 4: Read all entries and verify they are all in the SAME segment
+	t.Logf("Phase 4: Reading all entries and verifying no segment rolling...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case4-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		require.NoError(t, readErr, "Failed to read entry %d", i)
+		require.NotNil(t, msg)
+		t.Logf("Read entry %d: segmentId=%d, entryId=%d", i, msg.Id.SegmentId, msg.Id.EntryId)
+
+		// All entries should be in the same segment (no rolling)
+		assert.Equal(t, int64(0), msg.Id.SegmentId,
+			"Entry %d should be in segment 0 (no rolling expected)", i)
+		expected := fmt.Sprintf("case4 entry %d", i)
+		assert.Equal(t, expected, string(msg.Payload), "Entry %d content mismatch", i)
+	}
+
+	t.Logf("=== CASE 4 PASSED: Non-quorum node %d failure had no impact on writer/reader ===", nonQuorumNodeIndex)
+}
+
+// =============================================================================
+// Case 5: All quorum nodes fail → write fails → restart nodes → write recovers
+// =============================================================================
+//
+// 5-node cluster, es=3. Kill all 3 quorum nodes so no write can succeed.
+// Writes should fail. Restart 2 killed nodes so 4 nodes are alive (enough for
+// new quorum es=3). Writes should recover via segment rolling.
+func TestStagedStorageService_Failover_Case5_QuorumLossAndRecovery(t *testing.T) {
+	const (
+		clusterSize   = 5
+		entriesPhase1 = 5
+		entriesPhase2 = 5
+		totalEntries  = entriesPhase1 + entriesPhase2
+	)
+
+	t.Logf("=== CASE 5: Total quorum loss → write fails → restart → recovery ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case5")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case5_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write first batch
+	t.Logf("Phase 1: Writing %d entries...", entriesPhase1)
+	for i := 0; i < entriesPhase1; i++ {
+		data := []byte(fmt.Sprintf("case5 entry %d", i))
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: data})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Phase 2: Get quorum info and kill ALL 3 quorum nodes
+	t.Logf("Phase 2: Killing all quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	killedNodeIndexes := make([]int, 0)
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find node for quorum address %s", addr)
+		t.Logf("Killing quorum node %d (address: %s)", nodeIdx, addr)
+		_, killErr := cluster.LeaveNodeWithIndex(t, nodeIdx)
+		require.NoError(t, killErr)
+		killedNodeIndexes = append(killedNodeIndexes, nodeIdx)
+	}
+	t.Logf("Killed all %d quorum nodes: %v", len(killedNodeIndexes), killedNodeIndexes)
+
+	// Only 2 non-quorum nodes alive — not enough for es=3
+	time.Sleep(3 * time.Second)
+	assert.Equal(t, 2, cluster.GetActiveNodes(), "Should have only 2 nodes alive")
+
+	// Phase 3: Restart 2 killed nodes → 4 nodes alive, enough for new quorum
+	t.Logf("Phase 3: Restarting 2 killed nodes to enable recovery...")
+	for i := 0; i < 2; i++ {
+		nodeIdx := killedNodeIndexes[i]
+		currentSeeds := cluster.GetSeedList()
+		_, restartErr := cluster.RestartNode(t, nodeIdx, currentSeeds)
+		require.NoError(t, restartErr)
+		t.Logf("Restarted node %d", nodeIdx)
+	}
+	time.Sleep(3 * time.Second)
+	assert.Equal(t, 4, cluster.GetActiveNodes(), "Should have 4 nodes alive after restart")
+
+	// Phase 4: Write more entries — should recover via segment rolling
+	t.Logf("Phase 4: Writing %d more entries after recovery...", entriesPhase2)
+	successfulWrites := 0
+	maxRetries := 30
+	for attempt := 0; attempt < maxRetries && successfulWrites < entriesPhase2; attempt++ {
+		entryIndex := entriesPhase1 + successfulWrites
+		data := []byte(fmt.Sprintf("case5 entry %d (after recovery)", entryIndex))
+		result := logWriter.Write(context.Background(), &log.WriteMessage{Payload: data})
+		if result.Err != nil {
+			t.Logf("Write attempt %d failed: %v", attempt+1, result.Err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		successfulWrites++
+		t.Logf("Wrote entry %d with ID %d after recovery (%d/%d)",
+			entryIndex, result.LogMessageId.EntryId, successfulWrites, entriesPhase2)
+		time.Sleep(200 * time.Millisecond)
+	}
+	assert.Equal(t, entriesPhase2, successfulWrites,
+		"Should have written all %d entries after recovery", entriesPhase2)
+
+	// Phase 5: Read all entries
+	t.Logf("Phase 5: Reading all entries...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case5-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed: %v", readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+	assert.Equal(t, totalEntries, readCount, "Should read all %d entries", totalEntries)
+
+	t.Logf("=== CASE 5 PASSED: Recovered from total quorum loss, wrote and read %d entries ===", readCount)
+}
+
+// =============================================================================
+// Case 6: Data durability after full cluster restart
+// =============================================================================
+//
+// 3-node cluster. Write 10 entries, close writer to flush. Stop ALL nodes.
+// Restart ALL nodes. Open new reader, verify all 10 entries are readable.
+func TestStagedStorageService_Failover_Case6_FullClusterRestartDurability(t *testing.T) {
+	const (
+		clusterSize  = 3
+		totalEntries = 10
+	)
+
+	t.Logf("=== CASE 6: Data durability after full cluster restart ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case6")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case6_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+
+	// Phase 1: Write entries and close writer to ensure data is flushed
+	t.Logf("Phase 1: Writing %d entries...", totalEntries)
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+
+	writtenPayloads := make([]string, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		payload := fmt.Sprintf("case6 durable entry %d", i)
+		writtenPayloads[i] = payload
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+	}
+
+	// Close writer to flush
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+	require.NoError(t, logHandle.Close(ctx))
+	logHandle = nil
+	t.Logf("Writer and log handle closed, data should be flushed")
+
+	// Phase 2: Stop ALL nodes
+	t.Logf("Phase 2: Stopping all %d nodes...", clusterSize)
+	cluster.StopMultiNodeCluster(t)
+	assert.Equal(t, 0, cluster.GetActiveNodes(), "All nodes should be stopped")
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: Restart ALL nodes
+	t.Logf("Phase 3: Restarting all %d nodes...", clusterSize)
+	for i := 0; i < clusterSize; i++ {
+		restartSeeds := cluster.GetSeedList()
+		_, restartErr := cluster.RestartNode(t, i, restartSeeds)
+		require.NoError(t, restartErr, "Failed to restart node %d", i)
+		t.Logf("Restarted node %d", i)
+	}
+	time.Sleep(3 * time.Second)
+	assert.Equal(t, clusterSize, cluster.GetActiveNodes(), "All nodes should be active after restart")
+
+	// Update seeds for new client
+	newSeeds := cluster.GetSeedList()
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+
+	// Phase 4: Create new client and reader, verify all data is readable
+	t.Logf("Phase 4: Creating new client and reading data after full restart...")
+
+	// Re-open log handle
+	logHandle, openErr = woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case6-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed after retry: %v", readErr)
+				continue
+			}
+		}
+		require.NotNil(t, msg, "Entry %d should be readable after full cluster restart", i)
+		assert.Equal(t, writtenPayloads[i], string(msg.Payload), "Entry %d content should match", i)
+		readCount++
+		t.Logf("Read entry %d: segmentId=%d, entryId=%d, payload=%s",
+			i, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	}
+
+	assert.Equal(t, totalEntries, readCount, "Should read all %d entries after full cluster restart", totalEntries)
+
+	t.Logf("=== CASE 6 PASSED: All %d entries survived full cluster restart ===", readCount)
+}
+
+// =============================================================================
+// Case 7: Rolling restart — restart nodes one by one during continuous writes
+// =============================================================================
+//
+// 5-node cluster, es=3. Writer writes continuously. Kill and restart each of the
+// 5 nodes one at a time. Writer should keep writing throughout (possibly with
+// segment rolling when quorum nodes are affected). Reader verifies all data.
+func TestStagedStorageService_Failover_Case7_RollingRestart(t *testing.T) {
+	const (
+		clusterSize      = 5
+		entriesPerPhase  = 3
+		entriesBeforeOps = 5
+	)
+
+	t.Logf("=== CASE 7: Rolling restart — restart nodes one by one during writes ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case7")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case7_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Write helper with retries
+	writeEntries := func(count int, label string) int {
+		t.Helper()
+		written := 0
+		maxAttempts := count * 10
+		for attempt := 0; attempt < maxAttempts && written < count; attempt++ {
+			data := []byte(fmt.Sprintf("case7 %s entry %d", label, written))
+			result := logWriter.Write(context.Background(), &log.WriteMessage{Payload: data})
+			if result.Err != nil {
+				t.Logf("Write attempt %d failed (%s): %v", attempt+1, label, result.Err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			written++
+			t.Logf("Wrote %s entry %d (ID %d)", label, written, result.LogMessageId.EntryId)
+			time.Sleep(100 * time.Millisecond)
+		}
+		return written
+	}
+
+	// Phase 1: Write initial entries
+	t.Logf("Phase 1: Writing %d initial entries...", entriesBeforeOps)
+	written := writeEntries(entriesBeforeOps, "initial")
+	require.Equal(t, entriesBeforeOps, written)
+
+	totalWritten := written
+
+	// Phase 2: Rolling restart — kill and restart each node with writes in between
+	t.Logf("Phase 2: Rolling restart of all %d nodes...", clusterSize)
+	for nodeIdx := 0; nodeIdx < clusterSize; nodeIdx++ {
+		t.Logf("--- Rolling restart: node %d ---", nodeIdx)
+
+		// Kill node
+		_, leaveErr := cluster.LeaveNodeWithIndex(t, nodeIdx)
+		require.NoError(t, leaveErr, "Failed to leave node %d", nodeIdx)
+		time.Sleep(2 * time.Second)
+
+		// Write some entries while node is down
+		label := fmt.Sprintf("node%d-down", nodeIdx)
+		w := writeEntries(entriesPerPhase, label)
+		totalWritten += w
+		t.Logf("Wrote %d entries while node %d was down", w, nodeIdx)
+
+		// Restart node
+		currentSeeds := cluster.GetSeedList()
+		_, restartErr := cluster.RestartNode(t, nodeIdx, currentSeeds)
+		require.NoError(t, restartErr, "Failed to restart node %d", nodeIdx)
+		time.Sleep(2 * time.Second)
+
+		t.Logf("Node %d restarted, active nodes: %d", nodeIdx, cluster.GetActiveNodes())
+	}
+
+	// Phase 3: Write final entries
+	t.Logf("Phase 3: Writing %d final entries...", entriesPerPhase)
+	w := writeEntries(entriesPerPhase, "final")
+	totalWritten += w
+
+	t.Logf("Total entries written: %d", totalWritten)
+
+	// Phase 4: Read all entries
+	t.Logf("Phase 4: Reading all %d entries...", totalWritten)
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case7-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalWritten; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed: %v", readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			t.Logf("Read entry: segmentId=%d, entryId=%d", msg.Id.SegmentId, msg.Id.EntryId)
+		}
+	}
+
+	assert.Equal(t, totalWritten, readCount, "Should read all %d entries after rolling restart", totalWritten)
+
+	t.Logf("=== CASE 7 PASSED: Rolling restart completed, wrote and read %d entries ===", readCount)
+}
+
+// =============================================================================
+// Case 8: Multiple sequential segment rollings
+// =============================================================================
+//
+// 5-node cluster, es=3. Trigger rolling twice by killing different quorum nodes
+// at different times. Verify reader traverses all 3 segments correctly.
+func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testing.T) {
+	const (
+		clusterSize      = 5
+		entriesPerBatch  = 5
+		numRollingEvents = 2
+	)
+
+	t.Logf("=== CASE 8: Multiple sequential segment rollings ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case8")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case8_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Write helper with retries
+	writeN := func(count int, prefix string) int {
+		t.Helper()
+		written := 0
+		maxAttempts := count * 10
+		for attempt := 0; attempt < maxAttempts && written < count; attempt++ {
+			data := []byte(fmt.Sprintf("case8 %s %d", prefix, written))
+			result := logWriter.Write(context.Background(), &log.WriteMessage{Payload: data})
+			if result.Err != nil {
+				t.Logf("Write attempt %d failed (%s): %v", attempt+1, prefix, result.Err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			written++
+			time.Sleep(100 * time.Millisecond)
+		}
+		return written
+	}
+
+	totalWritten := 0
+
+	// Phase 1: Write initial batch
+	t.Logf("Phase 1: Writing initial %d entries...", entriesPerBatch)
+	w := writeN(entriesPerBatch, "batch0")
+	require.Equal(t, entriesPerBatch, w)
+	totalWritten += w
+
+	// Phase 2 & 3: Trigger rolling events
+	killedNodes := make([]int, 0)
+	for rolling := 0; rolling < numRollingEvents; rolling++ {
+		t.Logf("--- Rolling event %d ---", rolling+1)
+
+		// Get current quorum and kill one node
+		segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+		if segHandle == nil {
+			t.Logf("No writable segment handle, waiting...")
+			time.Sleep(3 * time.Second)
+			segHandle = logHandle.GetCurrentWritableSegmentHandle(ctx)
+		}
+		require.NotNil(t, segHandle, "Should have writable segment handle for rolling %d", rolling+1)
+
+		qi, qErr := segHandle.GetQuorumInfo(ctx)
+		require.NoError(t, qErr)
+		t.Logf("Rolling %d: quorum nodes = %v", rolling+1, qi.Nodes)
+
+		// Find a quorum node that is still alive and not already killed
+		var targetIdx int
+		targetFound := false
+		for _, addr := range qi.Nodes {
+			nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+			if found {
+				// Check node is still alive
+				srv := cluster.Servers[nodeIdx]
+				if srv != nil {
+					targetIdx = nodeIdx
+					targetFound = true
+					break
+				}
+			}
+		}
+		require.True(t, targetFound, "Should find a live quorum node to kill for rolling %d", rolling+1)
+
+		t.Logf("Killing quorum node %d to trigger rolling %d", targetIdx, rolling+1)
+		_, killErr := cluster.LeaveNodeWithIndex(t, targetIdx)
+		require.NoError(t, killErr)
+		killedNodes = append(killedNodes, targetIdx)
+		time.Sleep(3 * time.Second)
+
+		// Write entries that will go to the new segment after rolling
+		label := fmt.Sprintf("batch%d", rolling+1)
+		t.Logf("Writing %d entries after rolling %d...", entriesPerBatch, rolling+1)
+		w = writeN(entriesPerBatch, label)
+		assert.Equal(t, entriesPerBatch, w, "Should write %d entries after rolling %d", entriesPerBatch, rolling+1)
+		totalWritten += w
+	}
+
+	t.Logf("Total entries written across %d rolling events: %d", numRollingEvents, totalWritten)
+
+	// Phase 4: Read all entries and verify multiple segments were used
+	t.Logf("Phase 4: Reading all %d entries and checking segment distribution...", totalWritten)
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case8-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	segmentIds := make(map[int64]int) // segmentId -> count of entries
+	for i := 0; i < totalWritten; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed: %v", readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			segmentIds[msg.Id.SegmentId]++
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+
+	assert.Equal(t, totalWritten, readCount, "Should read all %d entries", totalWritten)
+
+	// Verify that multiple segments were used (at least numRollingEvents + 1)
+	t.Logf("Segment distribution: %v", segmentIds)
+	assert.GreaterOrEqual(t, len(segmentIds), numRollingEvents+1,
+		"Should have at least %d segments after %d rolling events", numRollingEvents+1, numRollingEvents)
+
+	t.Logf("=== CASE 8 PASSED: %d rolling events, %d segments, %d entries read ===",
+		numRollingEvents, len(segmentIds), readCount)
+}
+
+// =============================================================================
+// Case 9: Reader node failover — reader switches replica when node fails
+// =============================================================================
+//
+// 5-node cluster, es=3. Write entries, open reader, read some entries.
+// Kill a quorum node. Reader should continue reading remaining entries from
+// another replica without any gaps.
+func TestStagedStorageService_Failover_Case9_ReaderNodeFailover(t *testing.T) {
+	const (
+		clusterSize  = 5
+		totalEntries = 10
+	)
+
+	t.Logf("=== CASE 9: Reader node failover ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case9")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case9_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write all entries
+	t.Logf("Phase 1: Writing %d entries...", totalEntries)
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+
+	writtenPayloads := make([]string, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		payload := fmt.Sprintf("case9 entry %d", i)
+		writtenPayloads[i] = payload
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Close writer to ensure data is flushed
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+
+	// Phase 2: Open reader and read first half
+	t.Logf("Phase 2: Reading first half of entries...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case9-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	halfEntries := totalEntries / 2
+	readMessages := make([]*log.LogMessage, 0, totalEntries)
+
+	for i := 0; i < halfEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		require.NoError(t, readErr, "Failed to read entry %d", i)
+		require.NotNil(t, msg)
+		readMessages = append(readMessages, msg)
+		t.Logf("Read entry %d: segmentId=%d, entryId=%d", i, msg.Id.SegmentId, msg.Id.EntryId)
+	}
+
+	// Phase 3: Kill a quorum node while reader is mid-stream
+	t.Logf("Phase 3: Killing a quorum node while reader is mid-stream...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	if currentSegmentHandle == nil {
+		// If no writable handle, get the segment from reader's perspective
+		t.Logf("No writable segment handle, will kill first available quorum node")
+	}
+
+	// Kill the first active quorum node
+	var killedNodeIdx int
+	if currentSegmentHandle != nil {
+		qi, qErr := currentSegmentHandle.GetQuorumInfo(ctx)
+		if qErr == nil && qi != nil {
+			for _, addr := range qi.Nodes {
+				nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+				if found && cluster.Servers[nodeIdx] != nil {
+					killedNodeIdx = nodeIdx
+					break
+				}
+			}
+		}
+	}
+	if killedNodeIdx == 0 {
+		// Fallback: kill the first active node
+		killedNodeIdx = cluster.GetActiveNodeIndexes()[0]
+	}
+
+	t.Logf("Killing quorum node %d while reader is mid-stream", killedNodeIdx)
+	_, killErr := cluster.LeaveNodeWithIndex(t, killedNodeIdx)
+	require.NoError(t, killErr)
+	time.Sleep(2 * time.Second)
+
+	// Phase 4: Continue reading remaining entries — reader should failover to another replica
+	t.Logf("Phase 4: Reading remaining entries after quorum node failure...")
+	for i := halfEntries; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+
+		if readErr != nil {
+			t.Logf("Read error at entry %d (expected during failover): %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+		}
+
+		require.NoError(t, readErr, "Reader should failover and read entry %d", i)
+		require.NotNil(t, msg)
+		readMessages = append(readMessages, msg)
+		t.Logf("Read entry %d after failover: segmentId=%d, entryId=%d",
+			i, msg.Id.SegmentId, msg.Id.EntryId)
+	}
+
+	// Phase 5: Verify all entries are correct and no gaps
+	t.Logf("Phase 5: Verifying all entries...")
+	assert.Equal(t, totalEntries, len(readMessages), "Should have read all %d entries", totalEntries)
+
+	for i, msg := range readMessages {
+		assert.Equal(t, writtenPayloads[i], string(msg.Payload),
+			"Entry %d content should match after reader failover", i)
+	}
+
+	// Verify entry IDs are monotonically increasing (no gaps)
+	for i := 1; i < len(readMessages); i++ {
+		prev := readMessages[i-1]
+		curr := readMessages[i]
+		if prev.Id.SegmentId == curr.Id.SegmentId {
+			assert.Equal(t, prev.Id.EntryId+1, curr.Id.EntryId,
+				"Entry IDs should be consecutive within segment at index %d", i)
+		}
+	}
+
+	t.Logf("=== CASE 9 PASSED: Reader survived node %d failure, read all %d entries without gaps ===",
+		killedNodeIdx, totalEntries)
 }
