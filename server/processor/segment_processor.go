@@ -454,12 +454,14 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 	}
 }
 
+// get user instance bucketName
 func (s *segmentProcessor) getInstanceBucket() string {
-	return s.cfg.Minio.BucketName
+	return s.bucketName
 }
 
+// get user instance minio rootPath
 func (s *segmentProcessor) getLogBaseDir() string {
-	return s.cfg.Minio.RootPath
+	return s.rootPath
 }
 
 func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata, error) {
@@ -561,7 +563,7 @@ func (s *segmentProcessor) Clean(ctx context.Context, flag int) error {
 }
 
 func (s *segmentProcessor) UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Clean")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "UpdateSegmentLAC")
 	defer sp.End()
 	s.updateAccessTime()
 	start := time.Now()

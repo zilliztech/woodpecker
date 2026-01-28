@@ -86,7 +86,7 @@ func (l *LocalResultChannel) ReadResult(ctx context.Context) (*AppendResult, err
 		}
 		logger.Ctx(ctx).Debug("read result from local channel",
 			zap.String("identifier", l.identifier),
-			zap.Int64("identifier", r.SyncedId),
+			zap.Int64("syncedId", r.SyncedId),
 			zap.String("ch", fmt.Sprintf("%p", l)),
 			zap.Error(r.Err),
 		)

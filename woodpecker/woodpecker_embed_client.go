@@ -413,6 +413,8 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getAllLogsUnsafe(ctx, c.Metadata)
 }
 
@@ -422,6 +424,8 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
 }
 

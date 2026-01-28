@@ -44,7 +44,7 @@ type ServiceDiscovery struct {
 }
 
 func NewServiceDiscovery() *ServiceDiscovery {
-	cache, err := lru.New[string, *regexp.Regexp](100)
+	cache, err := lru.New[string, *regexp.Regexp](100) // TODO should be configurable
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create regex cache: %v", err))
 	}

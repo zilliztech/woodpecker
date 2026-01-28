@@ -77,7 +77,7 @@ func CheckIfConditionWriteSupport(ctx context.Context, objectStorage ObjectStora
 }
 
 // doCheckIfConditionWriteSupport checks if ObjectStorage supports PutObjectIfNoneMatch and PutFencedObject
-// This function will panic if the ObjectStorage does not support conditional write features
+// This function will check if the ObjectStorage support conditional write features
 func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient ObjectStorage, bucketName string, basePath string) (bool, error) {
 	// Test object keys
 	checkID := generateUniqueTestID()
@@ -115,13 +115,13 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 	// Test: put fence block with the same objectName should fail
 	err = objectStorageClient.PutFencedObject(ctx, bucketName, testObjectKey)
 	if err == nil {
-		panic("CheckIfConditionWriteSupport failed: PutFencedObject should return error for existing object, " +
-			"but it succeeded. This indicates fenced object detection is not working properly.")
+		return false, fmt.Errorf("checkIfConditionWriteSupport failed: PutFencedObject should return error for existing object," +
+			"but it succeeded. This indicates fenced object detection is not working properly")
 	}
 
 	if !werr.ErrObjectAlreadyExists.Is(err) {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutFencedObject should return ErrObjectAlreadyExists "+
-			"for existing object, but got: %v. This indicates the error handling for fenced object is incorrect.", err))
+		return false, fmt.Errorf("checkIfConditionWriteSupport failed: PutFencedObject should return ErrObjectAlreadyExists for existing object,"+
+			"but got: %v. This indicates the error handling for fenced object is incorrect", err)
 	}
 
 	// Test 3: PutFencedObject should succeed

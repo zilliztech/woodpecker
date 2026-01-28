@@ -39,10 +39,10 @@ func GetIP(ip string) string {
 	}
 	// only localhost or unicast is acceptable
 	if netIP.IsUnspecified() {
-		panic(errors.Newf(`"%s" in param table is Unspecified IP address and cannot be used`))
+		panic(errors.Newf(`"%s" in param table is Unspecified IP address and cannot be used`, ip))
 	}
 	if netIP.IsMulticast() || netIP.IsLinkLocalMulticast() || netIP.IsInterfaceLocalMulticast() {
-		panic(errors.Newf(`"%s" in param table is Multicast IP address and cannot be used`))
+		panic(errors.Newf(`"%s" in param table is Multicast IP address and cannot be used`, ip))
 	}
 	return ip
 }

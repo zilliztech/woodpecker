@@ -172,7 +172,10 @@ func main() {
 
 	// Create server
 	ctx := context.Background()
-	srv := server.NewServerWithConfig(ctx, cfg, serverConfig, seedNodes)
+	srv, err := server.NewServerWithConfig(ctx, cfg, serverConfig, seedNodes)
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Prepare server (sets up listener and gossip)
 	if err := srv.Prepare(); err != nil {

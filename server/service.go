@@ -57,7 +57,7 @@ type Server struct {
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
-func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) *Server {
+func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) (*Server, error) {
 	return NewServerWithConfig(ctx, configuration, &membership.ServerConfig{
 		NodeID:               "", // Will be set in Prepare()
 		BindPort:             bindPort,
@@ -71,14 +71,15 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 }
 
 // NewServerWithConfig creates a new server instance with custom configuration
-func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) *Server {
+func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		var err error
 		storageCli, err = storageclient.NewObjectStorage(ctx, configuration)
 		if err != nil {
-			panic(err)
+			cancel()
+			return nil, err
 		}
 	}
 	s := &Server{
@@ -92,7 +93,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
 	s.gossipSeeds = gossipSeeds
-	return s
+	return s, nil
 }
 
 func (s *Server) Prepare() error {

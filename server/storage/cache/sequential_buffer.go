@@ -19,7 +19,6 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -93,12 +92,12 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 
 	// Validate if entryId is outside the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId < b.FirstEntryId {
-		return -1, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
+		return -1, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(fmt.Sprintf("invalid entryId: %d smaller than %d", entryId, b.FirstEntryId))
 	}
 
 	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId >= b.FirstEntryId+b.MaxEntries {
-		return -1, werr.ErrFileWriterBufferFull.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
+		return -1, werr.ErrFileWriterBufferFull.WithCauseErrMsg(fmt.Sprintf("Out of buffer bounds, maybe disorder and write too fast, entryId: %d larger than %d", entryId, b.FirstEntryId+b.MaxEntries))
 	}
 
 	relatedIdx := entryId - b.FirstEntryId
@@ -129,12 +128,12 @@ func (b *SequentialBuffer) ReadEntry(entryId int64) (*BufferEntry, error) {
 
 	// Validate if entryId is outside the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId < b.FirstEntryId {
-		return nil, errors.New(fmt.Sprintf("invalid entryId: %d smaller then %d", entryId, b.FirstEntryId))
+		return nil, fmt.Errorf("invalid entryId: %d smaller than %d", entryId, b.FirstEntryId)
 	}
 
 	// Validate if entryId exceeds the valid range [firstEntryId, firstEntryId + maxEntries)
 	if entryId >= b.FirstEntryId+b.MaxEntries {
-		return nil, errors.New(fmt.Sprintf("invalid entryId: %d larger then %d", entryId, b.FirstEntryId+b.MaxEntries))
+		return nil, fmt.Errorf("invalid entryId: %d larger than %d", entryId, b.FirstEntryId+b.MaxEntries)
 	}
 
 	relatedIdx := entryId - b.FirstEntryId
@@ -260,6 +259,9 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 }
 
 func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([]*BufferEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if len(b.Entries) == 0 {
 		return nil, werr.ErrLogWriterBufferEmpty
 	}
@@ -274,7 +276,7 @@ func (b *SequentialBuffer) ReadEntriesToLast(fromEntryId int64) ([]*BufferEntry,
 		return make([]*BufferEntry, 0), nil
 	}
 
-	return b.ReadEntriesRange(fromEntryId, b.FirstEntryId+b.MaxEntries)
+	return b.readEntriesRangeUnsafe(fromEntryId, b.FirstEntryId+b.MaxEntries)
 }
 
 // ReadEntriesRange reads entries from the buffer starting from the startEntryId to the endEntryId (Exclusive).
@@ -282,6 +284,10 @@ func (b *SequentialBuffer) ReadEntriesRange(startEntryId int64, endEntryId int64
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	return b.readEntriesRangeUnsafe(startEntryId, endEntryId)
+}
+
+func (b *SequentialBuffer) readEntriesRangeUnsafe(startEntryId int64, endEntryId int64) ([]*BufferEntry, error) {
 	if startEntryId >= b.FirstEntryId+b.MaxEntries || startEntryId < b.FirstEntryId {
 		return nil, werr.ErrFileWriterInvalidEntryId.WithCauseErrMsg(
 			fmt.Sprintf("startEntryId:%d not in [%d,%d)", startEntryId, b.FirstEntryId, b.FirstEntryId+b.MaxEntries))
