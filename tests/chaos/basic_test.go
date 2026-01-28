@@ -3,21 +3,23 @@ package chaos
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/etcd"
-	"github.com/zilliztech/woodpecker/tests/utils"
-	"github.com/zilliztech/woodpecker/woodpecker"
-	"github.com/zilliztech/woodpecker/woodpecker/log"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/woodpecker"
+	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
 // Test basic functionality of docker compose deployed cluster, requires pre-deployed docker compose cluster
 
 func TestBasicReadWriteInServiceMode(t *testing.T) {
-	utils.StartGopsAgentWithPort(6060)
 	tmpDir := t.TempDir()
 	rootPath := filepath.Join(tmpDir, "TestBasicReadWriteInServiceMode")
 	testCases := []struct {
@@ -38,7 +40,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			cfg.Log.Level = "debug"
 
 			cfg.Woodpecker.Storage.Type = tc.storageType
@@ -49,18 +51,17 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 
 			// Setup etcd client for service mode
 			etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer etcdCli.Close()
 
 			// Create service mode client
 			client, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer func() {
 				if client != nil {
 					_ = client.Close(ctx)
 				}
 			}()
-			defer client.Close(context.TODO())
 
 			// CreateLog if not exists
 			logName := "TestBasicReadWriteInServiceMode" + t.Name() + "_" + time.Now().Format("20060102150405")
@@ -68,12 +69,12 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 
 			// OpenLog
 			logHandle, openErr := client.OpenLog(context.Background(), logName)
-			assert.NoError(t, openErr)
+			require.NoError(t, openErr)
 
 			// Test write
 			// OpenWriter
 			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
-			assert.NoError(t, openWriterErr)
+			require.NoError(t, openWriterErr)
 			resultChan := make([]<-chan *log.WriteResult, 1000)
 			for i := 0; i < 1000; i++ {
 				writeResultChan := logWriter.WriteAsync(context.Background(),
@@ -117,7 +118,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 			{
 				earliest := log.EarliestLogMessageID()
 				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &earliest, "client-earliest-reader")
-				assert.NoError(t, openReaderErr)
+				require.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 1000; i++ {
 					msg, err := logReader.ReadNext(context.Background())
@@ -151,7 +152,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 					EntryId:   50,
 				}
 				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), start, "client-specific-position-reader")
-				assert.NoError(t, openReaderErr)
+				require.NoError(t, openReaderErr)
 				readMsgs := make([]*log.LogMessage, 0)
 				for i := 0; i < 950; i++ {
 					msg, err := logReader.ReadNext(context.Background())
@@ -181,16 +182,16 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 			{
 				latest := log.LatestLogMessageID()
 				logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), &latest, "client-latest-reader")
-				assert.NoError(t, openReaderErr)
-				readOne := false
+				require.NoError(t, openReaderErr)
+				var readOne atomic.Bool
 				go func() {
 					_, err := logReader.ReadNext(context.Background())
 					if err == nil {
-						readOne = true
+						readOne.Store(true)
 					}
 				}()
 				time.Sleep(2 * time.Second)
-				assert.False(t, readOne)
+				assert.False(t, readOne.Load())
 				closeReaderErr := logReader.Close(context.Background())
 				assert.NoError(t, closeReaderErr)
 			}
