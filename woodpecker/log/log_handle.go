@@ -142,8 +142,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 }
 
 func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, error) {
-	//TODO implement me
-	panic("implement me")
+	return nil, werr.ErrOperationNotSupported
 }
 
 func (l *logHandleImpl) GetName() string {
@@ -523,7 +522,8 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
-	return nil, nil
+	logger.Ctx(ctx).Warn("get exists read only segment handle failed, no segmentMeta found", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", segmentId))
+	return nil, werr.ErrSegmentNotFound.WithCauseErrMsg("no segment meta found")
 }
 
 func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
@@ -1103,7 +1103,9 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 	}
 }
 
-// TODO for Test only
+// Test only
 func (l *logHandleImpl) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
+	l.RUnlock()
+	defer l.RLock()
 	return l.SegmentHandles[l.WritableSegmentId]
 }

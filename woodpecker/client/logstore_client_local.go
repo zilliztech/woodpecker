@@ -65,12 +65,12 @@ func (l *logStoreClientLocal) SegmentClean(ctx context.Context, bucketName strin
 }
 
 func (l *logStoreClientLocal) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
-	// NO-OP
+	// NO-OP: LAC mechanism is not needed in single-node mode
 	return nil
 }
 
 func (l *logStoreClientLocal) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
-	// NO-Op
+	// NO-OP: Node selection is not required in single-node mode
 	return nil, nil
 }
 

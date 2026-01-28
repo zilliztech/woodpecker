@@ -18,8 +18,6 @@ package woodpecker
 
 import (
 	"context"
-	"fmt"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +28,6 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
-	netutil "github.com/zilliztech/woodpecker/common/net"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -106,7 +103,7 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(err)
 	}
 	// Increment active connections metric
-	metrics.WpClientActiveConnections.WithLabelValues(fmt.Sprintf("%s", netutil.GetLocalIP())).Inc()
+	metrics.WpClientActiveConnections.WithLabelValues("default").Inc()
 	return c, nil
 }
 
@@ -271,6 +268,8 @@ func (c *woodpeckerClient) GetAllLogs(ctx context.Context) ([]string, error) {
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getAllLogsUnsafe(ctx, c.Metadata)
 }
 
@@ -294,6 +293,8 @@ func (c *woodpeckerClient) GetLogsWithPrefix(ctx context.Context, logNamePrefix 
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
 }
 
@@ -347,24 +348,4 @@ func (c *woodpeckerClient) Close(ctx context.Context) error {
 		}
 	}
 	return werr.Combine(closeErr, closePoolErr, discoveryCloseErr)
-}
-
-// randomSelectNodes randomly selects n nodes from the available servers
-func (c *woodpeckerClient) randomSelectNodes(servers []*proto.NodeMeta, n int) []*proto.NodeMeta {
-	if len(servers) <= n {
-		return servers
-	}
-
-	// Create a copy to avoid modifying the original slice
-	serversCopy := make([]*proto.NodeMeta, len(servers))
-	copy(serversCopy, servers)
-
-	// Fisher-Yates shuffle algorithm to randomly select n nodes
-	for i := len(serversCopy) - 1; i > len(serversCopy)-n-1; i-- {
-		j := rand.Intn(i + 1)
-		serversCopy[i], serversCopy[j] = serversCopy[j], serversCopy[i]
-	}
-
-	// Return the last n elements (which are randomly selected)
-	return serversCopy[len(serversCopy)-n:]
 }
