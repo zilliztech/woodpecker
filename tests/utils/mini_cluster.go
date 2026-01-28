@@ -164,7 +164,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		nodeCfg.Woodpecker.Storage.RootPath = filepath.Join(baseDir, fmt.Sprintf("node%d", allocation.nodeIndex))
 
 		// Create server with custom AZ/RG
-		nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
+		nodeServer, err := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
 			NodeID:               fmt.Sprintf("node%d", allocation.nodeIndex),
 			BindPort:             allocation.gossipPort,
 			AdvertisePort:        allocation.gossipPort,
@@ -176,6 +176,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 			AZ:                   allocation.nodeConfig.AZ,
 			Tags:                 map[string]string{"role": "test"},
 		}, gossipSeeds) // Pass complete gossip seeds
+		require.NoError(t, err, "Failed to create node %d server", allocation.nodeIndex)
 
 		// Prepare server (sets up listener and gossip)
 		err := nodeServer.Prepare()
@@ -261,7 +262,7 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 
 	ctx := context.Background()
 	// Create server with default AZ/RG
-	nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
+	nodeServer, err := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
 		NodeID:               fmt.Sprintf("node%d", nodeIndex),
 		BindPort:             gossipPort,
 		AdvertisePort:        gossipPort,
@@ -273,6 +274,7 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 		AZ:                   "default",
 		Tags:                 map[string]string{"role": "test"},
 	}, gossipSeeds) // Pass complete gossip seeds
+	require.NoError(t, err, "Failed to create node %d server", nodeIndex)
 
 	// Prepare server (sets up listener and gossip)
 	err = nodeServer.Prepare()
@@ -417,7 +419,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 	}
 
 	// Create server with original AZ/RG
-	nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
+	nodeServer, err := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
 		NodeID:               fmt.Sprintf("node%d", nodeIndex),
 		BindPort:             gossipPort,
 		AdvertisePort:        gossipPort,
@@ -429,6 +431,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 		AZ:                   az,
 		Tags:                 map[string]string{"role": "test"},
 	}, gossipSeeds) // Pass complete gossip seeds
+	require.NoError(t, err, "Failed to create server for node %d", nodeIndex)
 
 	// Prepare server (sets up listener and gossip)
 	err = nodeServer.Prepare()

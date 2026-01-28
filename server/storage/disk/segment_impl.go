@@ -125,7 +125,7 @@ func (rs *DiskSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, e
 		zap.Int("errorCount", len(deleteErrors)))
 
 	if len(deleteErrors) > 0 {
-		return deletedCount, fmt.Errorf("failed to delete %d segment files: ", len(deleteErrors))
+		return deletedCount, fmt.Errorf("failed to delete %d segment files", len(deleteErrors))
 	}
 	return deletedCount, nil
 }

@@ -17,6 +17,8 @@
 
 package codec
 
+// SearchBlock searches for a block in a list of index records
+// Returns the index record if found, or nil if not found
 func SearchBlock(list []*IndexRecord, entryId int64) (*IndexRecord, error) {
 	low, high := 0, len(list)-1
 	var candidate *IndexRecord
