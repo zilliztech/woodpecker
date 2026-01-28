@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/membership"
@@ -37,10 +37,11 @@ type MiniCluster struct {
 	Servers        map[int]*server.Server // Map of nodeIndex -> server
 	Config         *config.Configuration
 	BaseDir        string
-	UsedPorts      map[int]int    // Map of nodeIndex -> port for consistent restart, service gRPC ports
-	UsedAddresses  map[int]string // Map of nodeIndex -> last known address, gossip advertiseAddr
-	MaxNodeIndex   int            // Track the highest nodeIndex used
-	allocatedPorts map[int]bool   // Track all allocated ports in this test to avoid competitive reuse
+	UsedPorts      map[int]int        // Map of nodeIndex -> port for consistent restart, service gRPC ports
+	UsedAddresses  map[int]string     // Map of nodeIndex -> last known address, gossip advertiseAddr
+	NodeConfigs    map[int]NodeConfig // Map of nodeIndex -> node configuration (AZ, ResourceGroup, etc.)
+	MaxNodeIndex   int                // Track the highest nodeIndex used
+	allocatedPorts map[int]bool       // Track all allocated ports in this test to avoid competitive reuse
 }
 
 // NodeConfig represents configuration for a single node in the cluster
@@ -75,7 +76,7 @@ func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 func StartMiniCluster(t *testing.T, nodeCount int, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	assert.NoError(t, err)
+	require.NoError(t, err, "Failed to load configuration")
 	return StartMiniClusterWithCfg(t, nodeCount, baseDir, cfg)
 }
 
@@ -97,7 +98,7 @@ func StartMiniClusterWithCfg(t *testing.T, nodeCount int, baseDir string, cfg *c
 func StartMiniClusterWithCustomNodes(t *testing.T, nodeConfigs []NodeConfig, baseDir string) (*MiniCluster, *config.Configuration, []string, []string) {
 	// Load base configuration
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
-	assert.NoError(t, err)
+	require.NoError(t, err, "Failed to load configuration")
 	return StartMiniClusterWithCustomNodesAndCfg(t, nodeConfigs, baseDir, cfg)
 }
 
@@ -115,6 +116,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		BaseDir:        baseDir,
 		UsedPorts:      make(map[int]int),
 		UsedAddresses:  make(map[int]string),
+		NodeConfigs:    make(map[int]NodeConfig),
 		MaxNodeIndex:   -1,
 		allocatedPorts: make(map[int]bool),
 	}
@@ -133,11 +135,11 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 	for i, nodeConfig := range nodeConfigs {
 		// Allocate unique service port
 		servicePort, err := cluster.allocateUniquePort()
-		assert.NoError(t, err, "Failed to allocate service port for node %d", nodeConfig.Index)
+		require.NoError(t, err, "Failed to allocate service port for node %d", nodeConfig.Index)
 
 		// Allocate unique gossip port
 		gossipPort, err := cluster.allocateUniquePort()
-		assert.NoError(t, err, "Failed to allocate gossip port for node %d", nodeConfig.Index)
+		require.NoError(t, err, "Failed to allocate gossip port for node %d", nodeConfig.Index)
 
 		portAllocations[i] = portAllocation{
 			nodeIndex:   nodeConfig.Index,
@@ -177,13 +179,13 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 
 		// Prepare server (sets up listener and gossip)
 		err := nodeServer.Prepare()
-		assert.NoError(t, err)
+		require.NoError(t, err, "Failed to prepare node %d", allocation.nodeIndex)
 
 		// Run server (starts grpc server and log store)
 		go func(srv *server.Server, nodeID int) {
-			err := srv.Run()
-			if err != nil {
-				t.Logf("Node %d server run error: %v", nodeID, err)
+			if runErr := srv.Run(); runErr != nil {
+				// Use fmt instead of t.Logf to avoid panic if test has already finished
+				fmt.Printf("Node %d server run error: %v\n", nodeID, runErr)
 			}
 		}(nodeServer, allocation.nodeIndex)
 
@@ -191,6 +193,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		cluster.Servers[allocation.nodeIndex] = nodeServer
 		cluster.UsedPorts[allocation.nodeIndex] = allocation.servicePort
 		cluster.UsedAddresses[allocation.nodeIndex] = fmt.Sprintf("127.0.0.1:%d", allocation.gossipPort)
+		cluster.NodeConfigs[allocation.nodeIndex] = allocation.nodeConfig
 		if allocation.nodeIndex > cluster.MaxNodeIndex {
 			cluster.MaxNodeIndex = allocation.nodeIndex
 		}
@@ -215,6 +218,7 @@ func (cluster *MiniCluster) StopMultiNodeCluster(t *testing.T) {
 			if err != nil {
 				t.Logf("Error stopping node %d: %v", nodeIndex, err)
 			}
+			cluster.Servers[nodeIndex] = nil
 			t.Logf("Stopped node %d", nodeIndex)
 		}
 	}
@@ -278,9 +282,9 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 
 	// Run server (starts grpc server and log store)
 	go func(srv *server.Server, nodeID int) {
-		err := srv.Run()
-		if err != nil {
-			t.Logf("Node %d server run error: %v", nodeID, err)
+		if runErr := srv.Run(); runErr != nil {
+			// Use fmt instead of t.Logf to avoid panic if test has already finished
+			fmt.Printf("Node %d server run error: %v\n", nodeID, runErr)
 		}
 	}(nodeServer, nodeIndex)
 
@@ -290,6 +294,11 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 	// Add to cluster
 	cluster.Servers[nodeIndex] = nodeServer
 	cluster.UsedPorts[nodeIndex] = servicePort
+	cluster.NodeConfigs[nodeIndex] = NodeConfig{
+		Index:         nodeIndex,
+		ResourceGroup: "default",
+		AZ:            "default",
+	}
 
 	// Update MaxNodeIndex if necessary
 	if nodeIndex > cluster.MaxNodeIndex {
@@ -323,7 +332,8 @@ func (cluster *MiniCluster) LeaveRandomNode(t *testing.T) (int, error) {
 		return -1, fmt.Errorf("no active nodes to leave")
 	}
 
-	// Choose the last active node for simplicity (could be randomized)
+	// Sort to ensure deterministic behavior: always pick the highest-indexed active node
+	sort.Ints(activeNodes)
 	nodeIndex := activeNodes[len(activeNodes)-1]
 	return cluster.LeaveNodeWithIndex(t, nodeIndex)
 }
@@ -389,7 +399,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 
 	// Allocate unique gossip port for restart (we'll use the same service port)
 	gossipPort, err := cluster.allocateUniquePort()
-	assert.NoError(t, err, "Failed to allocate gossip port for node %d", nodeIndex)
+	require.NoError(t, err, "Failed to allocate gossip port for node %d", nodeIndex)
 
 	// Create server configuration for this node
 	nodeCfg := *cluster.Config // Copy the base config
@@ -397,7 +407,16 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 
 	ctx := context.Background()
 
-	// Create server with default AZ/RG
+	// Retrieve stored node config (AZ, ResourceGroup) for this node
+	nodeMeta, hasMeta := cluster.NodeConfigs[nodeIndex]
+	rg := "default"
+	az := "default"
+	if hasMeta {
+		rg = nodeMeta.ResourceGroup
+		az = nodeMeta.AZ
+	}
+
+	// Create server with original AZ/RG
 	nodeServer := server.NewServerWithConfig(ctx, &nodeCfg, &membership.ServerConfig{
 		NodeID:               fmt.Sprintf("node%d", nodeIndex),
 		BindPort:             gossipPort,
@@ -406,8 +425,8 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 		ServicePort:          servicePort,
 		AdvertiseServicePort: servicePort,
 		AdvertiseServiceAddr: "127.0.0.1",
-		ResourceGroup:        "default",
-		AZ:                   "default",
+		ResourceGroup:        rg,
+		AZ:                   az,
 		Tags:                 map[string]string{"role": "test"},
 	}, gossipSeeds) // Pass complete gossip seeds
 
@@ -419,9 +438,9 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 
 	// Run server (starts grpc server and log store)
 	go func(srv *server.Server, nodeID int) {
-		err := srv.Run()
-		if err != nil {
-			t.Logf("Node %d server run error: %v", nodeID, err)
+		if runErr := srv.Run(); runErr != nil {
+			// Use fmt instead of t.Logf to avoid panic if test has already finished
+			fmt.Printf("Node %d server run error: %v\n", nodeID, runErr)
 		}
 	}(nodeServer, nodeIndex)
 
@@ -432,7 +451,7 @@ func (cluster *MiniCluster) RestartNode(t *testing.T, nodeIndex int, gossipSeeds
 	advertiseAddr := fmt.Sprintf("127.0.0.1:%d", gossipPort)
 	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Update the address record
 
-	t.Logf("Restarted node %d on service port %d, gossip port %d", nodeIndex, servicePort, gossipPort)
+	t.Logf("Restarted node %d on service port %d, gossip port %d, AZ=%s, RG=%s", nodeIndex, servicePort, gossipPort, az, rg)
 
 	return advertiseAddr, nil
 }

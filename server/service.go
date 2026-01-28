@@ -46,7 +46,9 @@ type Server struct {
 	gossipSeeds  []string                 // Seeds for cluster joining
 	logStore     LogStore
 	grpcWG       sync.WaitGroup
+	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
 	grpcErrChan  chan error
+	startupErrCh chan error // Channel to propagate async startup errors
 	grpcServer   *grpc.Server
 	listener     net.Listener
 
@@ -70,7 +72,7 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 
 // NewServerWithConfig creates a new server instance with custom configuration
 func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) *Server {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		var err error
@@ -80,10 +82,11 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		}
 	}
 	s := &Server{
-		cfg:         configuration,
-		ctx:         ctx,
-		cancel:      cancel,
-		grpcErrChan: make(chan error),
+		cfg:          configuration,
+		ctx:          ctx,
+		cancel:       cancel,
+		grpcErrChan:  make(chan error),
+		startupErrCh: make(chan error, 1), // Buffered channel to avoid blocking
 	}
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
@@ -103,7 +106,11 @@ func (s *Server) Prepare() error {
 
 	// Start async join if seeds are provided
 	if len(s.gossipSeeds) > 0 {
-		go s.asyncStartAndJoinSeeds(s.ctx, s.gossipSeeds)
+		s.gossipWG.Add(1)
+		go func() {
+			defer s.gossipWG.Done()
+			s.asyncStartAndJoinSeeds(s.ctx, s.gossipSeeds)
+		}()
 	}
 
 	return nil
@@ -133,13 +140,17 @@ func (s *Server) init() error {
 // start grpc server loop
 func (s *Server) startGrpcLoop() {
 	defer s.grpcWG.Done()
-	_, cancel := context.WithCancel(s.ctx)
-	defer cancel()
 	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize()),
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
-		grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
-		grpc.ChainStreamInterceptor(otelgrpc.StreamServerInterceptor()),
+		grpc.ChainUnaryInterceptor(
+			s.shutdownUnaryInterceptor(),
+			otelgrpc.UnaryServerInterceptor(),
+		),
+		grpc.ChainStreamInterceptor(
+			s.shutdownStreamInterceptor(),
+			otelgrpc.StreamServerInterceptor(),
+		),
 	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
@@ -147,7 +158,13 @@ func (s *Server) startGrpcLoop() {
 	logger.Ctx(s.ctx).Info("start grpc server", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.listener.Addr().String()))
 	if err := s.grpcServer.Serve(s.listener); err != nil {
 		logger.Ctx(s.ctx).Error("grpc server failed", zap.Error(err))
-		s.grpcErrChan <- err
+		// Non-blocking send: during shutdown, init() has already consumed the
+		// startup signal so nobody is reading grpcErrChan. A blocking send here
+		// would prevent grpcWG.Done() from running, causing Stop() to hang.
+		select {
+		case s.grpcErrChan <- err:
+		default:
+		}
 	}
 	logger.Ctx(s.ctx).Info("grpc server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 }
@@ -162,41 +179,98 @@ func (s *Server) start() error {
 }
 
 func (s *Server) Stop() error {
-	// First, stop accepting new connections by closing the listener
+	// 1. Stop accepting new connections by closing the listener
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil {
 			logger.Ctx(s.ctx).Warn("failed to close listener", zap.Error(err))
 		}
 	}
 
-	// Leave and shutdown the gossip cluster
+	// 2. Leave and shutdown the gossip cluster
 	if s.serverNode != nil {
-		// First, notify other nodes we're leaving
 		leaveErr := s.serverNode.Leave()
 		if leaveErr != nil {
 			logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
 		}
-		// Then shutdown the memberlist to release ports immediately
 		shutdownErr := s.serverNode.Shutdown()
 		if shutdownErr != nil {
 			logger.Ctx(s.ctx).Error("server node shutdown failed", zap.Error(shutdownErr))
 		}
 	}
 
-	// Stop the log store
-	stopErr := s.logStore.Stop()
-	if stopErr != nil {
-		logger.Ctx(s.ctx).Error("log store stop failed", zap.Error(stopErr))
+	// 3. GracefulStop with timeout — prevents deadlock when in-flight requests
+	//    are blocked on resultCh that will never be notified after logStore.Stop()
+	if s.grpcServer != nil {
+		stopped := make(chan struct{})
+		go func() {
+			s.grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		t := time.NewTimer(shutdownGracePeriod)
+		defer t.Stop()
+		select {
+		case <-stopped:
+			logger.Ctx(s.ctx).Info("gRPC server gracefully stopped")
+		case <-t.C:
+			logger.Ctx(s.ctx).Warn("gRPC graceful stop timed out, forcing stop")
+			s.grpcServer.Stop()
+			<-stopped
+		}
 	}
 
-	// Gracefully stop the gRPC server (wait for in-flight requests)
-	s.grpcServer.GracefulStop()
+	// 4. Wait for gRPC loop goroutine to finish
+	s.grpcWG.Wait()
 
-	// Cancel the context
+	// 5. Stop LogStore AFTER gRPC handlers have drained — avoids killing ack
+	//    goroutines while AddEntry handlers are still waiting on resultCh
+	if s.logStore != nil {
+		if stopErr := s.logStore.Stop(); stopErr != nil {
+			logger.Ctx(s.ctx).Error("log store stop failed", zap.Error(stopErr))
+		}
+	}
+
+	// 6. Cancel server context
 	s.cancel()
+
+	// 7. Wait for gossip goroutine to finish
+	s.gossipWG.Wait()
 
 	logger.Ctx(s.ctx).Info("server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
 	return nil
+}
+
+const shutdownGracePeriod = 10 * time.Second
+
+// wrappedServerStream wraps a grpc.ServerStream with a custom context.
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context { return w.ctx }
+
+// shutdownUnaryInterceptor returns a gRPC unary interceptor that cancels handler
+// contexts when the server context is cancelled (during shutdown).
+func (s *Server) shutdownUnaryInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(s.ctx, func() { cancel() })
+		defer stop()
+		defer cancel()
+		return handler(ctx, req)
+	}
+}
+
+// shutdownStreamInterceptor returns a gRPC stream interceptor that cancels handler
+// contexts when the server context is cancelled (during shutdown).
+func (s *Server) shutdownStreamInterceptor() grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx, cancel := context.WithCancel(ss.Context())
+		stop := context.AfterFunc(s.ctx, func() { cancel() })
+		defer stop()
+		defer cancel()
+		return handler(srv, &wrappedServerStream{ServerStream: ss, ctx: ctx})
+	}
 }
 
 func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.ServerStreamingServer[proto.AddEntryResponse]) error {
@@ -292,7 +366,6 @@ func (s *Server) CompactSegment(ctx context.Context, request *proto.CompactSegme
 	if err != nil {
 		return &proto.CompactSegmentResponse{Status: werr.Status(err)}, nil
 	}
-	// meta 已经是 *proto.SegmentMetadata
 	return &proto.CompactSegmentResponse{Status: werr.Success(), Metadata: meta}, nil
 }
 
@@ -405,59 +478,106 @@ func (s *Server) GetAdvertiseAddrPort(ctx context.Context) string {
 	return fmt.Sprintf("%s:%d", s.serverConfig.AdvertiseAddr, s.serverConfig.AdvertisePort)
 }
 
+// GetStartupErrCh returns the channel for async startup errors.
+// The main program can listen to this channel to detect if the async
+// server node creation (gossip port binding) failed.
+func (s *Server) GetStartupErrCh() <-chan error {
+	return s.startupErrCh
+}
+
 // asyncJoinSeeds continuously monitors and joins missing seed nodes with adaptive backoff [[memory:3527742]]
 // It maintains a list of seed nodes and periodically checks which ones are not in memberlist
 func (s *Server) asyncStartAndJoinSeeds(ctx context.Context, seeds []string) {
 	// 1. Create server node directly using the stored config
-	s.waitAndStartCurrentNode(ctx)
+	if err := s.waitAndStartCurrentNode(ctx); err != nil {
+		// Send error to startup error channel (non-blocking due to buffered channel)
+		select {
+		case s.startupErrCh <- err:
+		default:
+		}
+		logger.Ctx(ctx).Error("Failed to start server node, aborting async join",
+			zap.String("nodeID", s.serverConfig.NodeID),
+			zap.Error(err))
+		return
+	}
 
 	// 2. Join the cluster seeds nodes
 	s.monitorAndJoinSeeds(ctx, seeds)
 }
 
-func (s *Server) waitAndStartCurrentNode(ctx context.Context) {
+func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 	// 1. Create server node directly using the stored config
 	var node *membership.ServerNode
 	var err error
 	currentNodeID := s.serverConfig.NodeID
 	retryInterval := 1 * time.Second
+	const maxAttempts = 30 // Maximum retry attempts (30 seconds total)
 
 	// 1.1 wait for hostname resolvable
-	for {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for hostname resolution: %w", ctx.Err())
+		default:
+		}
+
 		resolvedIP := wpNet.ResolveAdvertiseAddr(s.serverConfig.AdvertiseAddr)
 		if resolvedIP != nil {
 			break
 		}
+
+		if attempt == maxAttempts-1 {
+			return fmt.Errorf("failed to resolve hostname '%s' after %d attempts", s.serverConfig.AdvertiseAddr, maxAttempts)
+		}
+
+		logger.Ctx(ctx).Info("Waiting for hostname resolvable",
+			zap.String("nodeID", currentNodeID),
+			zap.String("hostname", s.serverConfig.AdvertiseAddr),
+			zap.Int("attempt", attempt+1),
+			zap.Int("maxAttempts", maxAttempts))
 		time.Sleep(retryInterval)
-		logger.Ctx(ctx).Info("Waiting for hostname resolvable", zap.String("nodeID", currentNodeID), zap.String("hostname", s.serverConfig.AdvertiseAddr))
 	}
 
 	// 1.2 start currentNode
-	attemptCount := 0
-	for {
-		attemptCount++
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while creating server node: %w", ctx.Err())
+		default:
+		}
+
 		logger.Ctx(ctx).Info("Attempting to create server node",
 			zap.String("currentNodeID", currentNodeID),
-			zap.Int("attempt", attemptCount),
+			zap.Int("attempt", attempt+1),
+			zap.Int("maxAttempts", maxAttempts),
 			zap.Int("gossipPort", s.serverConfig.BindPort))
 		node, err = membership.NewServerNode(s.serverConfig)
 		if err != nil {
 			logger.Ctx(ctx).Warn("server node create failed",
 				zap.String("currentNodeID", currentNodeID),
-				zap.Int("attempt", attemptCount),
+				zap.Int("attempt", attempt+1),
+				zap.Int("maxAttempts", maxAttempts),
 				zap.Error(err))
+
+			if attempt == maxAttempts-1 {
+				return fmt.Errorf("failed to create server node after %d attempts: %w", maxAttempts, err)
+			}
 
 			time.Sleep(retryInterval)
 			continue
-		} else {
-			logger.Ctx(ctx).Info("server node create success",
-				zap.String("currentNodeID", currentNodeID),
-				zap.Int("attempt", attemptCount),
-				zap.String("initMemberlist", node.GetMemberlistStatus()))
-			break
 		}
+
+		logger.Ctx(ctx).Info("server node create success",
+			zap.String("currentNodeID", currentNodeID),
+			zap.Int("attempt", attempt+1),
+			zap.String("initMemberlist", node.GetMemberlistStatus()))
+		s.serverNode = node
+		return nil
 	}
-	s.serverNode = node
+
+	return fmt.Errorf("unexpected: exceeded max attempts for server node creation")
 }
 
 func (s *Server) monitorAndJoinSeeds(ctx context.Context, seeds []string) {

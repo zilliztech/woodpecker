@@ -377,40 +377,36 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 	defer sp.End()
 	startTime := time.Now()
 	currentBuffer := w.buffer.Load()
-	if currentBuffer == nil || currentBuffer.GetExpectedNextEntryId() <= currentBuffer.GetFirstEntryId() {
+	if currentBuffer == nil {
 		return
 	}
 
-	// Create new buffer for incoming writes
-	nextStartEntryId := currentBuffer.GetExpectedNextEntryId()
-	newBuffer := cache.NewSequentialBuffer(w.logId, w.segmentId, nextStartEntryId, w.maxBufferEntries)
-	w.buffer.Store(newBuffer)
+	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
+	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
+		return
+	}
 
 	// Get entries from old buffer
-	firstEntryId := currentBuffer.GetFirstEntryId()
-
-	entries, err := currentBuffer.ReadEntriesRange(firstEntryId, currentBuffer.GetExpectedNextEntryId())
-	if err != nil || len(entries) == 0 {
+	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
+	if err != nil || len(toFlushEntries) == 0 {
 		return
 	}
 
 	// Create flush task
 	blockNumber := w.currentBlockNumber.Load()
-
 	flushTask := &blockFlushTask{
-		entries:      entries,
-		firstEntryId: entries[0].EntryId,
-		lastEntryId:  entries[len(entries)-1].EntryId,
+		entries:      toFlushEntries,
+		firstEntryId: toFlushEntries[0].EntryId,
+		lastEntryId:  toFlushEntries[len(toFlushEntries)-1].EntryId,
 		blockNumber:  int32(blockNumber),
 	}
 
-	// Update flushing size
-	w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
-	w.lastSubmittedFlushingBlockID.Store(int64(flushTask.blockNumber))
-
-	// Increment block number for next block
-	w.currentBlockNumber.Add(1)
-	w.lastSyncTimestamp.Store(time.Now().UnixMilli())
+	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
+	if err != nil {
+		return
+	}
+	restDataFirstEntryId := expectedNextEntryId
+	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData)
 
 	// Submit flush task
 	logger.Ctx(ctx).Debug("Submitting flush task to channel",
@@ -426,6 +422,15 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 			zap.Int64("lastEntryId", flushTask.lastEntryId),
 			zap.Int32("blockNumber", flushTask.blockNumber),
 			zap.Int("entriesCount", len(flushTask.entries)))
+		// Update stats only after successful submission
+		// Update flushing size
+		w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
+		w.lastSubmittedFlushingBlockID.Store(int64(flushTask.blockNumber))
+		// Increment block number for next block
+		w.currentBlockNumber.Add(1)
+		w.lastSyncTimestamp.Store(time.Now().UnixMilli())
+		// switch buffer
+		w.buffer.Store(newBuffer)
 	case <-ctx.Done():
 		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
 		// Notify entries of cancellation
@@ -941,7 +946,7 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 		return nil
 	}
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("inst", fmt.Sprintf("%p", w)))
-	err := w.Sync(context.Background()) // manual sync all pending append operation
+	err := w.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
 			zap.String("segmentFilePath", w.segmentFilePath),
