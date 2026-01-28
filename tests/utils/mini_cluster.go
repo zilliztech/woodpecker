@@ -179,7 +179,7 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 		require.NoError(t, err, "Failed to create node %d server", allocation.nodeIndex)
 
 		// Prepare server (sets up listener and gossip)
-		err := nodeServer.Prepare()
+		err = nodeServer.Prepare()
 		require.NoError(t, err, "Failed to prepare node %d", allocation.nodeIndex)
 
 		// Run server (starts grpc server and log store)

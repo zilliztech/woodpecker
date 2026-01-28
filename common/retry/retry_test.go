@@ -116,8 +116,44 @@ func TestUnRecoveryError(t *testing.T) {
 
 	err := Do(ctx, testFn, Attempts(3))
 	assert.Error(t, err)
-	assert.Equal(t, attempts, 1)
+	assert.Equal(t, 1, attempts)
 	assert.True(t, errors.Is(err, mockErr))
+}
+
+func TestIsRecoverable(t *testing.T) {
+	// Normal errors are recoverable
+	normalErr := errors.New("normal error")
+	assert.True(t, IsRecoverable(normalErr))
+
+	// Unrecoverable-wrapped errors are not recoverable
+	unrecoverableErr := Unrecoverable(normalErr)
+	assert.False(t, IsRecoverable(unrecoverableErr))
+
+	// The original error is still accessible through the chain
+	assert.True(t, errors.Is(unrecoverableErr, normalErr))
+
+	// Wrapping a woodpecker error as unrecoverable
+	wpErr := werr.ErrTimeoutError.WithCauseErrMsg("timeout")
+	unrecoverableWpErr := Unrecoverable(wpErr)
+	assert.False(t, IsRecoverable(unrecoverableWpErr))
+	assert.True(t, errors.Is(unrecoverableWpErr, werr.ErrTimeoutError))
+}
+
+func TestUnrecoverableStopsRetry(t *testing.T) {
+	attempts := 0
+	ctx := context.Background()
+
+	testFn := func() error {
+		attempts++
+		if attempts == 2 {
+			return Unrecoverable(errors.New("fatal error"))
+		}
+		return errors.New("transient error")
+	}
+
+	err := Do(ctx, testFn, Attempts(10), Sleep(time.Millisecond))
+	assert.Error(t, err)
+	assert.Equal(t, 2, attempts, "retry should stop at the first unrecoverable error")
 }
 
 func TestContextDeadline(t *testing.T) {
