@@ -1,0 +1,19 @@
+# Chaos testing override for docker-compose.yaml
+# Disables auto-restart so killed containers stay dead during chaos tests.
+# Usage: docker compose -f docker-compose.yaml -f ../tests/chaos/docker-compose.chaos.yaml up -d
+
+services:
+  woodpecker-node1:
+    restart: "no"
+  woodpecker-node2:
+    restart: "no"
+  woodpecker-node3:
+    restart: "no"
+  woodpecker-node4:
+    restart: "no"
+  etcd:
+    restart: "no"
+  minio:
+    restart: "no"
+  jaeger:
+    restart: "no"

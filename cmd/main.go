@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/zilliztech/woodpecker/cmd/external"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -221,24 +222,33 @@ func main() {
 	case err := <-errChan:
 		log.Printf("Server error: %v", err)
 		os.Exit(1)
+	case err := <-srv.GetStartupErrCh():
+		log.Printf("Server startup error (gossip/membership): %v", err)
+		os.Exit(1)
 	case sig := <-sigChan:
 		log.Printf("Received signal %s, shutting down...", sig)
 	}
 
-	// Graceful shutdown
+	// Graceful shutdown with global timeout
 	log.Println("Stopping server...")
 
-	// Stop main server
-	if err := srv.Stop(); err != nil {
-		log.Printf("Error during server shutdown: %v", err)
+	const shutdownTimeout = 35 * time.Second
+	shutdownDone := make(chan struct{})
+	go func() {
+		if err := srv.Stop(); err != nil {
+			log.Printf("Error during server shutdown: %v", err)
+		}
+		if err := commonhttp.Stop(); err != nil {
+			log.Printf("Error during HTTP server shutdown: %v", err)
+		}
+		close(shutdownDone)
+	}()
+
+	select {
+	case <-shutdownDone:
+		log.Println("Server stopped successfully")
+	case <-time.After(shutdownTimeout):
+		log.Println("Shutdown timed out, forcing exit")
 		os.Exit(1)
 	}
-
-	// Stop HTTP server
-	if err := commonhttp.Stop(); err != nil {
-		log.Printf("Error during HTTP server shutdown: %v", err)
-		os.Exit(1)
-	}
-
-	log.Println("Server stopped successfully")
 }
