@@ -181,7 +181,6 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
 			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
-			return
 		}
 		if werr.ErrAppendOpResultChannelClosed.Is(readChanErr) {
 			// chan already close
