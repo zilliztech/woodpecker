@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -167,7 +168,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		segmentFilePath:     filePath,
 		logId:               logId,
 		segmentId:           segmentId,
-		logIdStr:            fmt.Sprintf("%d", logId),
+		logIdStr:            strconv.FormatInt(logId, 10),
 		bucket:              bucket,
 		rootPath:            rootPath,
 		storageCli:          storageCli,

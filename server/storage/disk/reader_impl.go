@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -118,7 +119,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 	reader := &LocalFileReaderAdv{
 		logId:        logId,
 		segId:        segId,
-		logIdStr:     fmt.Sprintf("%d", logId),
+		logIdStr:     strconv.FormatInt(logId, 10),
 		filePath:     filePath,
 		maxBatchSize: maxBatchSize,
 		file:         file,

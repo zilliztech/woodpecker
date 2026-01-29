@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,7 +92,7 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 	defer rs.mu.Unlock()
 
 	startTime := time.Now()
-	logId := fmt.Sprintf("%d", rs.logId)
+	logId := strconv.FormatInt(rs.logId, 10)
 
 	logger.Ctx(ctx).Info("Starting to delete segment data (minio + local)",
 		zap.String("segmentDir", rs.segmentDir),

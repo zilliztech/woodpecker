@@ -19,6 +19,7 @@ package segment
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -211,8 +212,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 			if op.completed.CompareAndSwap(false, true) {
 				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
 				cost := time.Since(startRequestTime)
-				metrics.WpClientAppendLatency.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(cost.Milliseconds()))
-				metrics.WpClientAppendBytes.WithLabelValues(fmt.Sprintf("%d", op.logId)).Observe(float64(len(op.value)))
+				metrics.WpClientAppendLatency.WithLabelValues(strconv.FormatInt(op.logId, 10)).Observe(float64(cost.Milliseconds()))
+				metrics.WpClientAppendBytes.WithLabelValues(strconv.FormatInt(op.logId, 10)).Observe(float64(len(op.value)))
 			}
 		}
 		logger.Ctx(ctx).Debug(fmt.Sprintf("synced received:%d for log:%d seg:%d entry:%d from %s ", syncedResult.SyncedId, op.logId, op.segmentId, op.entryId, serverAddr))

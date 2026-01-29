@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,7 +86,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 	reader := &MinioFileReaderAdv{
 		logId:          logId,
 		segmentId:      segId,
-		logIdStr:       fmt.Sprintf("%d", logId),
+		logIdStr:       strconv.FormatInt(logId, 10),
 		client:         client,
 		bucket:         bucket,
 		segmentFileKey: segmentFileKey,

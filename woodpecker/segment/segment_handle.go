@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -573,7 +574,7 @@ func (s *segmentHandleImpl) GetLastAddConfirmed(ctx context.Context) (int64, err
 	}
 
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	lac, err := cli.GetLastAddConfirmed(ctx, s.bucketName, s.rootPath, s.logId, currentSegmentMeta.Metadata.SegNo)
 	metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "get_lac", "success").Inc()
 	metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "get_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -667,7 +668,7 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 	}
 
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	// fast fail all pending append operations
 	s.fastFailAppendOpsUnsafe(ctx, lastFlushedEntryId, werr.ErrSegmentHandleSegmentClosed)
 
@@ -844,7 +845,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	}
 
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	currentBlockCounts, err := cli.GetBlockCount(ctx, s.bucketName, s.rootPath, s.logId, currentSegmentMeta.Metadata.SegNo)
 	if err != nil {
 		logger.Ctx(ctx).Info("Failed to get blocks count",
@@ -1317,7 +1318,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 	}
 
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
+	logIdStr := strconv.FormatInt(s.logId, 10)
 
 	// fence segment, prevent new append operations
 	quorumInfo, err := s.GetQuorumInfo(ctx)
@@ -1441,7 +1442,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	}
 
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", s.logId)
+	logIdStr := strconv.FormatInt(s.logId, 10)
 	logger.Ctx(ctx).Info("Starting segment compaction from Completed to Sealed",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),

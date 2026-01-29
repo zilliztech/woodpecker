@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -152,7 +153,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		segmentFilePath:  filePath,
 		logId:            logId,
 		segmentId:        segmentId,
-		logIdStr:         fmt.Sprintf("%d", logId),
+		logIdStr:         strconv.FormatInt(logId, 10),
 		blockIndexes:     make([]*codec.IndexRecord, 0),
 		writtenBytes:     0,
 		maxFlushSize:     blockSize,

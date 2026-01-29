@@ -20,6 +20,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,7 +176,7 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
+	logIdStr := strconv.FormatInt(logId, 10) // Using logId as logName for metrics
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, entry.SegId)
 	if err != nil {
@@ -230,7 +231,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 	l.segmentProcessors[logKey][segmentId] = s
 
 	// Update metrics for active segment processors
-	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(strconv.FormatInt(logId, 10)).Inc()
 
 	logger.Ctx(ctx).Info("Segment processor created successfully",
 		zap.Int64("logId", logId),
@@ -261,7 +262,7 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, bucketName string, ro
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -291,7 +292,7 @@ func (l *logStore) CompleteSegment(ctx context.Context, bucketName string, rootP
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
 		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "complete", "error_get_processor").Inc()
@@ -309,7 +310,7 @@ func (l *logStore) FenceSegment(ctx context.Context, bucketName string, rootPath
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -335,7 +336,7 @@ func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, bucketName st
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -363,7 +364,7 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, bucketName string, 
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentBlockCount")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -398,7 +399,7 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompactSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -427,7 +428,7 @@ func (l *logStore) CleanSegment(ctx context.Context, bucketName string, rootPath
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CleanSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
@@ -455,7 +456,7 @@ func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "UpdateLastAddConfirmed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
