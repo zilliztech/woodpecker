@@ -237,7 +237,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	}
 
 	// Create pending append operation
-	appendOp := s.createPendingAppendOp(ctx, bytes, callback)
+	appendOp := s.createPendingAppendOp(ctx, bytes, s.lastPushed.Load()+1, callback)
 
 	// Try to submit first, only add to queue if successful
 	if submitOk := s.executor.Submit(ctx, appendOp); !submitOk {
@@ -246,6 +246,7 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	}
 
 	// Only add to queue and update metrics after successful submit
+	s.lastPushed.Add(1)
 	s.appendOpsQueue.PushBack(appendOp)
 	s.submittedSize.Add(int64(len(bytes)))
 	metrics.WpClientAppendEntriesTotal.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
@@ -253,13 +254,13 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(fmt.Sprintf("%d", s.logId)).Inc()
 }
 
-func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
+func (s *segmentHandleImpl) createPendingAppendOp(ctx context.Context, bytes []byte, entryId int64, callback func(segmentId int64, entryId int64, err error)) *AppendOp {
 	pendingAppendOp := NewAppendOp(
 		s.bucketName,
 		s.rootPath,
 		s.logId,
 		s.GetId(ctx),
-		s.lastPushed.Add(1),
+		entryId,
 		bytes,
 		callback,
 		s.ClientPool,
