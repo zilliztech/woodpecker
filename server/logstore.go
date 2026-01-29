@@ -497,7 +497,7 @@ func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey strin
 	}
 
 	// Update metrics
-	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", processor.GetLogId())).Dec()
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(strconv.FormatInt(processor.GetLogId(), 10)).Dec()
 }
 
 // cleanupIdleSegmentProcessorsUnsafe removes segment processors that haven't been accessed for the specified duration

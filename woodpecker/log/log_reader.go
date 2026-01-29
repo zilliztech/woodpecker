@@ -18,7 +18,7 @@ package log
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -73,7 +73,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 	return &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
-		logIdStr:             fmt.Sprintf("%d", logHandle.GetId()),
+		logIdStr:             strconv.FormatInt(logHandle.GetId(), 10),
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,

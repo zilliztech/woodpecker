@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "NewLogWriter")
 	defer sp.End()
 	w := &logWriterImpl{
-		logIdStr:           fmt.Sprintf("%d", logHandle.GetId()),
+		logIdStr:           strconv.FormatInt(logHandle.GetId(), 10),
 		logHandle:          logHandle,
 		auditorMaxInterval: cfg.Woodpecker.Client.Auditor.MaxInterval.Seconds(),
 		cfg:                cfg,
