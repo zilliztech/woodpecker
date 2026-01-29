@@ -142,10 +142,9 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 	defer sp.End()
 	startRequestTime := time.Now()
 
-	isRemoteMode := len(op.resultChannels) >= 3
 	if len(op.resultChannels) > serverIndex && op.resultChannels[serverIndex] == nil {
 		// create new result channel for this server if not exists
-		if isRemoteMode {
+		if cli.IsRemoteClient() {
 			resultChannel := channel.NewRemoteResultChannel(op.Identifier())
 			op.resultChannels[serverIndex] = resultChannel
 		} else {

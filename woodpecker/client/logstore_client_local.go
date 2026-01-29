@@ -74,6 +74,10 @@ func (l *logStoreClientLocal) SelectNodes(ctx context.Context, strategyType prot
 	return nil, nil
 }
 
+func (l *logStoreClientLocal) IsRemoteClient() bool {
+	return false
+}
+
 func (l *logStoreClientLocal) Close(ctx context.Context) error {
 	return nil
 }

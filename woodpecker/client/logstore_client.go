@@ -45,6 +45,8 @@ type LogStoreClient interface {
 	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
 	// SelectNodes selects nodes based on the specified filter and returns a list of node IDs.
 	SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error)
+	// IsRemoteClient returns true if the log store client is a remote client.
+	IsRemoteClient() bool
 	// Close closes the log store client and returns an error if any.
 	Close(ctx context.Context) error
 }
