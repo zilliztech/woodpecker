@@ -194,11 +194,14 @@ func TestAppendOp_receivedAckCallback_FailureSignal(t *testing.T) {
 }
 
 func TestAppendOp_receivedAckCallback_ChannelClosed(t *testing.T) {
-	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, nil, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
+	mockHandle := mocks_segment_handle.NewSegmentHandle(t)
+	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, nil, mockHandle, &proto.QuorumInfo{Nodes: []string{"127.0.0.1"}})
 
 	// Create a channel and close it
 	rc := channel.NewLocalResultChannel(fmt.Sprintf("1/0/%d", 0))
 	_ = rc.Close(context.TODO())
+
+	mockHandle.EXPECT().HandleAppendRequestFailure(mock.Anything, int64(3), mock.Anything, mock.Anything, mock.Anything).Return()
 
 	// Execute callback - should return without error when channel is closed
 	op.receivedAckCallback(context.Background(), time.Now(), 3, rc, nil, 0, "node0")

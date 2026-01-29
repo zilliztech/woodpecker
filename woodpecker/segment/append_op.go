@@ -32,6 +32,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
@@ -179,12 +180,15 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
 			logger.Ctx(ctx).Warn(fmt.Sprintf("read chan timeout for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
-			op.channelErrors[serverIndex] = readChanErr
-			op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
 			return
 		}
-		// chan already close, just return
-		logger.Ctx(ctx).Warn(fmt.Sprintf("chan already close for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
+		if werr.ErrAppendOpResultChannelClosed.Is(readChanErr) {
+			// chan already close
+			logger.Ctx(ctx).Warn(fmt.Sprintf("chan already close for log:%d seg:%d entry:%d from %s", op.logId, op.segmentId, op.entryId, serverAddr))
+		}
+		// read chan error, retry if necessary
+		op.channelErrors[serverIndex] = readChanErr
+		op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
 		return
 	}
 
