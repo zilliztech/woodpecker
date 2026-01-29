@@ -129,8 +129,8 @@ func (l *logStore) Stop() error {
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
 
-	const processorCloseTimeout = 15 * time.Second
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), processorCloseTimeout)
+	shutdownTimeout := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds()) * time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
 	totalProcessors := 0
@@ -657,9 +657,9 @@ func (l *logStore) stopBackgroundCleanup() {
 func (l *logStore) backgroundCleanupLoop() {
 	defer l.cleanupWg.Done()
 
-	// Cleanup configuration
-	const cleanupInterval = 1 * time.Minute // How often to check for cleanup
-	const maxIdleTime = 5 * time.Minute     // How long a processor can be idle before cleanup
+	// Cleanup configuration from config
+	cleanupInterval := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds()) * time.Second
+	maxIdleTime := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds()) * time.Second
 
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()

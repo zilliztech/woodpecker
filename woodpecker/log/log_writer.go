@@ -114,9 +114,8 @@ type logWriterImpl struct {
 func (l *logWriterImpl) monitorSession() {
 	session := l.sessionLock.GetSession()
 	// Track consecutive failures to detect persistent etcd connectivity issues
-	// After 5 consecutive failures (about 15 seconds), we consider the session invalid
-	maxConsecutiveFailures := 5
-	checkInterval := 3 * time.Second
+	maxConsecutiveFailures := l.cfg.Woodpecker.Client.SessionMonitor.MaxFailures
+	checkInterval := time.Duration(l.cfg.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds()) * time.Second
 	checkTicker := time.NewTicker(checkInterval)
 	defer checkTicker.Stop()
 	consecutiveFailures := 0
@@ -335,6 +334,8 @@ func (l *logWriterImpl) runAuditor() {
 				zap.Int("totalSegments", len(segmentMetaList)))
 
 			// compact/recover if necessary
+			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
+			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
 			truncatedSegmentExists := make([]int64, 0)
 			segmentsProcessed := 0
 			segmentsCompacted := 0
@@ -565,7 +566,9 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 		zap.Int("count", len(segmentIdsToClean)),
 		zap.Int64s("segmentIds", segmentIdsToClean))
 
-	// Start concurrent cleanup of all eligible segments
+	// Clean up eligible segments sequentially.
+	// NOTE: Sequential cleanup is intentional to minimize per-log resource usage.
+	// The cluster may host many logs, so keeping each log's cleanup work lightweight is preferred.
 	cleanupStartTime := time.Now()
 	successCount := 0
 	failureCount := 0

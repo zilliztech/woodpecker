@@ -37,7 +37,7 @@ const (
 )
 
 func createTestLogStore() *logStore {
-	cfg := &config.Configuration{}
+	cfg, _ := config.NewConfiguration()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	store := &logStore{

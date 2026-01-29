@@ -259,6 +259,8 @@ func (l *internalLogWriterImpl) runAuditor() {
 				zap.Int("totalSegments", len(segmentMetaList)))
 
 			// compact/recover if necessary
+			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
+			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
 			truncatedSegmentExists := make([]int64, 0)
 			segmentsProcessed := 0
 			segmentsCompacted := 0
@@ -489,7 +491,9 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 		zap.Int("count", len(segmentIdsToClean)),
 		zap.Int64s("segmentIds", segmentIdsToClean))
 
-	// Start concurrent cleanup of all eligible segments
+	// Clean up eligible segments sequentially.
+	// NOTE: Sequential cleanup is intentional to minimize per-log resource usage.
+	// The cluster may host many logs, so keeping each log's cleanup work lightweight is preferred.
 	cleanupStartTime := time.Now()
 	successCount := 0
 	failureCount := 0

@@ -49,10 +49,17 @@ type ClientConfig struct {
 	SegmentRollingPolicy SegmentRollingPolicyConfig `yaml:"segmentRollingPolicy"`
 	Auditor              AuditorConfig              `yaml:"auditor"`
 	Quorum               QuorumConfig               `yaml:"quorum"`
+	SessionMonitor       SessionMonitorConfig       `yaml:"sessionMonitor"`
 }
 
 type AuditorConfig struct {
 	MaxInterval DurationSeconds `yaml:"maxInterval"`
+}
+
+// SessionMonitorConfig stores the session monitor configuration for writer lock health checking.
+type SessionMonitorConfig struct {
+	CheckInterval DurationSeconds `yaml:"checkInterval"` // How often to check session health
+	MaxFailures   int             `yaml:"maxFailures"`   // Consecutive failures before marking session invalid
 }
 
 // QuorumBufferPool stores the quorum buffer pool configuration.
@@ -308,6 +315,14 @@ type LogstoreConfig struct {
 	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
 	FencePolicy             FencePolicyConfig       `yaml:"fencePolicy"`
 	GRPCConfig              GRPCConfig              `yaml:"grpc"`
+	ProcessorCleanupPolicy ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
+}
+
+// ProcessorCleanupPolicyConfig stores the background segment processor cleanup and shutdown configuration.
+type ProcessorCleanupPolicyConfig struct {
+	CleanupInterval DurationSeconds `yaml:"cleanupInterval"` // How often to scan for idle processors
+	MaxIdleTime     DurationSeconds `yaml:"maxIdleTime"`     // How long a processor can be idle before cleanup
+	ShutdownTimeout DurationSeconds `yaml:"shutdownTimeout"` // Timeout for closing all processors during LogStore shutdown
 }
 
 type StorageConfig struct {
@@ -685,6 +700,10 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 					CustomPlacement: []CustomPlacement{},
 				},
 			},
+			SessionMonitor: SessionMonitorConfig{
+				CheckInterval: DurationSeconds{Duration: Duration{duration: 3 * time.Second}},
+				MaxFailures:   5,
+			},
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
@@ -717,6 +736,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ServerMaxRecvSize: ByteSize(256 * 1024 * 1024), // 256 MB
 				ClientMaxSendSize: ByteSize(256 * 1024 * 1024), // 256 MB
 				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
+			},
+			ProcessorCleanupPolicy: ProcessorCleanupPolicyConfig{
+				CleanupInterval: DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min
+				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 300 * time.Second}}, // 5 min
+				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
 			},
 		},
 		Storage: StorageConfig{

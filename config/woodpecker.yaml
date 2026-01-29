@@ -32,6 +32,9 @@ woodpecker:
       maxBlocks: 1000 # Maximum number of blocks in a segment, default is 1000
     auditor:
       maxInterval: 10 # Maximum interval between two auditing operations in seconds, default is 10 seconds
+    sessionMonitor:
+      checkInterval: 3 # How often to check session health in seconds, default is 3 seconds
+      maxFailures: 5 # Consecutive failures before marking session invalid, default is 5
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools
     quorum:
@@ -101,6 +104,10 @@ woodpecker:
       serverMaxRecvSize: 268435456 # The maximum size of each RPC request that the logStore can receive, unit: byte
       clientMaxSendSize: 268435456 # The maximum size of each RPC request that the clients on logStore can send, unit: byte
       clientMaxRecvSize: 536870912 # The maximum size of each RPC request that the clients on logStore can receive, unit: byte
+    processorCleanupPolicy:
+      cleanupInterval: 60 # How often to scan for idle segment processors in seconds, default is 60 seconds
+      maxIdleTime: 300 # How long a processor can be idle before cleanup in seconds, default is 300 seconds
+      shutdownTimeout: 15 # Timeout for closing all processors during LogStore shutdown in seconds, default is 15 seconds
   # Configuration of Woodpecker Storage Backend.
   storage:
     # The default value is "default", which configures Woodpecker to use MinIO-compatible storage.
