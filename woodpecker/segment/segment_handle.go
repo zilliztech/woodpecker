@@ -610,8 +610,8 @@ func (s *segmentHandleImpl) refreshAndGetMetadataUnsafe(ctx context.Context) err
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segmentId),
 			zap.Error(err))
-		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "refresh_meta", "success").Inc()
-		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "refresh_meta", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "refresh_meta", "error").Inc()
+		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "refresh_meta", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 	s.segmentMetaCache.Store(newMeta)
