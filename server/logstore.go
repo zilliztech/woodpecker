@@ -511,13 +511,19 @@ func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey strin
 	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(strconv.FormatInt(processor.GetLogId(), 10)).Dec()
 }
 
-// cleanupIdleSegmentProcessorsUnsafe removes segment processors that haven't been accessed for the specified duration
-// This method should be called while holding the spMu lock
-func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxIdleTime time.Duration) {
+// collectIdleSegmentProcessorsUnsafe collects idle segment processors and removes them from the map.
+// The actual closing of processors should be done outside the lock by the caller.
+// This method should be called while holding the spMu lock.
+func (l *logStore) collectIdleSegmentProcessorsUnsafe(ctx context.Context, maxIdleTime time.Duration) []struct {
+	logKey    string
+	segmentId int64
+	processor processor.SegmentProcessor
+} {
 	now := time.Now()
 	var toRemove []struct {
 		logKey    string
 		segmentId int64
+		processor processor.SegmentProcessor
 	}
 
 	logger.Ctx(ctx).Info("Scanning for idle segment processors to cleanup",
@@ -536,14 +542,14 @@ func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 		}
 
 		// Check each segment for cleanup eligibility
-		for segmentId, processor := range processors {
+		for segmentId, proc := range processors {
 			// Always protect the highest segment ID (most likely writing)
 			if segmentId == maxSegmentId {
 				continue
 			}
 
 			// Get last access time from processor
-			lastAccessTimeMs := processor.GetLastAccessTime()
+			lastAccessTimeMs := proc.GetLastAccessTime()
 			lastAccessTime := time.UnixMilli(lastAccessTimeMs)
 
 			// Check if idle time exceeds threshold
@@ -551,39 +557,32 @@ func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 				toRemove = append(toRemove, struct {
 					logKey    string
 					segmentId int64
-				}{logKey, segmentId})
+					processor processor.SegmentProcessor
+				}{logKey, segmentId, proc})
 			}
 		}
 	}
 
-	// Perform cleanup
+	// Remove from maps under the lock
 	for _, item := range toRemove {
 		if processors, logExists := l.segmentProcessors[item.logKey]; logExists {
-			if processor, segExists := processors[item.segmentId]; segExists {
-				// Close the processor
-				l.closeSegmentProcessorUnsafe(ctx, item.logKey, item.segmentId, processor)
-
-				// Remove from maps
-				delete(processors, item.segmentId)
-				if len(processors) == 0 {
-					delete(l.segmentProcessors, item.logKey)
-				}
-
-				logger.Ctx(ctx).Debug("cleaned up idle segment processor",
-					zap.String("logKey", item.logKey),
-					zap.Int64("segmentId", item.segmentId))
+			delete(processors, item.segmentId)
+			if len(processors) == 0 {
+				delete(l.segmentProcessors, item.logKey)
 			}
 		}
 	}
 
 	if len(toRemove) > 0 {
-		logger.Ctx(ctx).Info("Idle segment processor cleanup completed",
+		logger.Ctx(ctx).Info("Idle segment processors collected for cleanup",
 			zap.Int("cleanedCount", len(toRemove)),
 			zap.Int("remainingProcessors", l.getTotalProcessorCountUnsafe()))
 	} else {
-		logger.Ctx(ctx).Info("Idle segment processor cleanup completed - no processors cleaned",
+		logger.Ctx(ctx).Info("Idle segment processor cleanup completed - no processors to clean",
 			zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 	}
+
+	return toRemove
 }
 
 // getTotalProcessorCountUnsafe returns the total number of segment processors
@@ -685,8 +684,8 @@ func (l *logStore) backgroundCleanupLoop() {
 
 // performBackgroundCleanup performs the actual cleanup logic
 func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
+	// Phase 1: Under lock, collect idle processors and remove from map
 	l.spMu.Lock()
-	defer l.spMu.Unlock()
 
 	totalProcessors := l.getTotalProcessorCountUnsafe()
 
@@ -694,5 +693,15 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		zap.Int("totalProcessors", totalProcessors),
 		zap.Duration("maxIdleTime", maxIdleTime))
 
-	l.cleanupIdleSegmentProcessorsUnsafe(l.ctx, maxIdleTime)
+	idleProcessors := l.collectIdleSegmentProcessorsUnsafe(l.ctx, maxIdleTime)
+	l.spMu.Unlock()
+
+	// Phase 2: Close processors outside the lock to avoid blocking I/O under lock
+	for _, item := range idleProcessors {
+		l.closeSegmentProcessorUnsafe(l.ctx, item.logKey, item.segmentId, item.processor)
+
+		logger.Ctx(l.ctx).Debug("cleaned up idle segment processor",
+			zap.String("logKey", item.logKey),
+			zap.Int64("segmentId", item.segmentId))
+	}
 }
