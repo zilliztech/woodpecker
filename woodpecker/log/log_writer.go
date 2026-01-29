@@ -108,6 +108,7 @@ type logWriterImpl struct {
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
 	cleanupInProgress bool
+	closeOnce         sync.Once
 }
 
 func (l *logWriterImpl) monitorSession() {
@@ -607,34 +608,39 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 func (l *logWriterImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Close")
 	defer sp.End()
-	start := time.Now()
 
-	l.writerClose <- struct{}{}
-	close(l.writerClose)
-	status := "success"
-	closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
-	if closeErr != nil {
-		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
-		status = "error"
-		if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
-			closeErr = nil
-			status = "success"
+	var result error
+	l.closeOnce.Do(func() {
+		start := time.Now()
+
+		l.writerClose <- struct{}{}
+		close(l.writerClose)
+		status := "success"
+		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
+		if closeErr != nil {
+			logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
+			status = "error"
+			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
+				closeErr = nil
+				status = "success"
+			}
 		}
-	}
-	releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
-	if releaseLockErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-		status = "error"
-	}
+		releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
+		if releaseLockErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			status = "error"
+		}
 
-	closeLogHandleErr := l.logHandle.Close(ctx)
-	if closeLogHandleErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-		status = "error"
-	}
+		closeLogHandleErr := l.logHandle.Close(ctx)
+		if closeLogHandleErr != nil {
+			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			status = "error"
+		}
 
-	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, releaseLockErr, closeLogHandleErr)
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
+		result = werr.Combine(closeErr, releaseLockErr, closeLogHandleErr)
+	})
+	return result
 }
 
 // GetWriterSessionForTest For Test only
