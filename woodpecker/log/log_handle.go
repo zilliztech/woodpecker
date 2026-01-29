@@ -1105,7 +1105,7 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 
 // Test only
 func (l *logHandleImpl) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
-	l.RUnlock()
-	defer l.RLock()
+	l.RLock()
+	defer l.RUnlock()
 	return l.SegmentHandles[l.WritableSegmentId]
 }
