@@ -203,12 +203,23 @@ func GetLogKey(bucketName string, rootPath string, logId int64) string {
 }
 
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (processor.SegmentProcessor, error) {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+
+	// Fast path: read lock to check if processor already exists
+	l.spMu.RLock()
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		if segProcessor, segExists := processors[segmentId]; segExists {
+			l.spMu.RUnlock()
+			return segProcessor, nil
+		}
+	}
+	l.spMu.RUnlock()
+
+	// Slow path: write lock to create new processor
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
 
-	logKey := GetLogKey(bucketName, rootPath, logId)
-
-	// Check if segment processor already exists
+	// Double-check after acquiring write lock
 	if processors, logExists := l.segmentProcessors[logKey]; logExists {
 		if segProcessor, segExists := processors[segmentId]; segExists {
 			return segProcessor, nil
