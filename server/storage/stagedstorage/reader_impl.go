@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,7 +140,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 	reader := &StagedFileReaderAdv{
 		logId:           logId,
 		segId:           segId,
-		logIdStr:        fmt.Sprintf("%d", logId),
+		logIdStr:        strconv.FormatInt(logId, 10),
 		filePath:        filePath,
 		maxBatchSize:    maxBatchSize,
 		file:            file,

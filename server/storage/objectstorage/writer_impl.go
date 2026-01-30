@@ -124,8 +124,8 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	segmentFileWriter := &MinioFileWriter{
 		logId:          logId,
 		segmentId:      segId,
-		logIdStr:       fmt.Sprintf("%d", logId),
-		segmentIdStr:   fmt.Sprintf("%d", segId),
+		logIdStr:       strconv.FormatInt(logId, 10),
+		segmentIdStr:   strconv.FormatInt(segId, 10),
 		client:         objectCli,
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
@@ -564,7 +564,7 @@ func (f *MinioFileWriter) run() {
 	ticker := time.NewTicker(time.Duration(f.maxIntervalMs * int(time.Millisecond)))
 	defer ticker.Stop()
 	f.lastSyncTimestamp.Store(time.Now().UnixMilli())
-	logIdStr := fmt.Sprintf("%d", f.logId)
+	logIdStr := strconv.FormatInt(f.logId, 10)
 	metrics.WpFileWriters.WithLabelValues(logIdStr).Inc()
 	logger.Ctx(context.TODO()).Debug("writer start", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("maxIntervalMs", f.maxIntervalMs), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	for {

@@ -20,6 +20,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -57,7 +58,7 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 	b := &SequentialBuffer{
 		logId:        logId,
 		segmentId:    segmentId,
-		logIdStr:     fmt.Sprintf("%d", logId),
+		logIdStr:     strconv.FormatInt(logId, 10),
 		Entries:      make([]*BufferEntry, maxEntries),
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -76,7 +77,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 	b := &SequentialBuffer{
 		logId:        logId,
 		segmentId:    segmentId,
-		logIdStr:     fmt.Sprintf("%d", logId),
+		logIdStr:     strconv.FormatInt(logId, 10),
 		Entries:      entries,
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,

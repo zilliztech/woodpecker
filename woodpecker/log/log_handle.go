@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -161,7 +162,7 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*meta.Segmen
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetSegments")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 	result, err := l.Metadata.GetAllSegmentMetadata(ctx, l.Name)
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_segments", "error").Inc()
@@ -241,7 +242,7 @@ func (l *logHandleImpl) openInternalLogWriter(ctx context.Context) (LogWriter, e
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenInternalLogWriter")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 	logger.Ctx(ctx).Info("open internal log writer start", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 
 	// Fence all active segments to prevent split-brain scenarios
@@ -605,7 +606,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogReader")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 
 	readerName := fmt.Sprintf("%s-r-%d", l.Name, time.Now().UnixNano())
 	if len(readerBaseName) > 0 {
@@ -744,7 +745,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CheckAndSetSegmentTruncatedIfNeed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 
 	// 1. Get current LogMeta
 	logMeta, err := l.Metadata.GetLogMeta(ctx, l.Name)

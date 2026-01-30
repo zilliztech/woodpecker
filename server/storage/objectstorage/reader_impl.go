@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,7 +86,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 	reader := &MinioFileReaderAdv{
 		logId:          logId,
 		segmentId:      segId,
-		logIdStr:       fmt.Sprintf("%d", logId),
+		logIdStr:       strconv.FormatInt(logId, 10),
 		client:         client,
 		bucket:         bucket,
 		segmentFileKey: segmentFileKey,
@@ -401,7 +402,8 @@ func (f *MinioFileReaderAdv) getBlockHeaderRecord(ctx context.Context, blockID i
 func (f *MinioFileReaderAdv) GetLastEntryID(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentReaderScope, "GetLastEntryID")
 	defer sp.End()
-
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	// Try to fetch new blocks incrementally to get the latest entry ID
 	_, lastBlockInfo, err := f.prefetchIncrementalBlockInfoUnsafe(ctx)
 	if err != nil {

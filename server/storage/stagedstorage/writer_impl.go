@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -167,7 +168,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		segmentFilePath:     filePath,
 		logId:               logId,
 		segmentId:           segmentId,
-		logIdStr:            fmt.Sprintf("%d", logId),
+		logIdStr:            strconv.FormatInt(logId, 10),
 		bucket:              bucket,
 		rootPath:            rootPath,
 		storageCli:          storageCli,
@@ -395,7 +396,11 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 
 	// Get entries from old buffer
 	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
-	if err != nil || len(toFlushEntries) == 0 {
+	if err != nil {
+		logger.Ctx(ctx).Warn("rollBufferAndSubmitFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
+		return
+	}
+	if len(toFlushEntries) == 0 {
 		return
 	}
 

@@ -214,6 +214,10 @@ func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType pro
 	return resp.Nodes, nil
 }
 
+func (l *logStoreClientRemote) IsRemoteClient() bool {
+	return true
+}
+
 // Close implements io.Closer
 func (l *logStoreClientRemote) Close(ctx context.Context) error {
 	l.mu.Lock()

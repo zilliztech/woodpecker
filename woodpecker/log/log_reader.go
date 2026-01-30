@@ -18,7 +18,7 @@ package log
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -73,7 +73,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 	return &logBatchReaderImpl{
 		logName:              logHandle.GetName(),
 		logId:                logHandle.GetId(),
-		logIdStr:             fmt.Sprintf("%d", logHandle.GetId()),
+		logIdStr:             strconv.FormatInt(logHandle.GetId(), 10),
 		logHandle:            logHandle,
 		from:                 from,
 		currentSegmentHandle: segmentHandle,
@@ -182,7 +182,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 
 			// For other errors, return them directly
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "error").Observe(float64(time.Since(start).Milliseconds()))
-			logger.Ctx(ctx).Warn("read entries error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(err))
+			logger.Ctx(ctx).Warn("read entries error", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId), zap.Error(readBatchErr))
 			return nil, readBatchErr
 		}
 
@@ -232,7 +232,7 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 	}
 
 	metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return nil
+	return err
 }
 
 func (l *logBatchReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.SegmentHandle, int64, int64, error) {

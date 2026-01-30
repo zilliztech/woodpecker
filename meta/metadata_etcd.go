@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/metadata"
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -128,7 +129,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	ops = append(ops, clientv3.OpGet(VersionKey))
 	ops = append(ops, clientv3.OpGet(LogIdGeneratorKey))
 	ops = append(ops, clientv3.OpGet(QuorumIdGeneratorKey))
-	ctx1, cancel1 := e.getContextWithTimeout()
+	ctx1, cancel1 := e.getContextWithTimeout(ctx)
 	defer cancel1()
 
 	log := logger.Ctx(ctx)
@@ -181,7 +182,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		return err
 	}
 	// cluster not initialized, initialize it
-	ctx2, cancel2 := e.getContextWithTimeout()
+	ctx2, cancel2 := e.getContextWithTimeout(ctx)
 	defer cancel2()
 	initResp, initErr := e.client.Txn(ctx2).If().Then(initOps...).Commit()
 	if initErr != nil || !initResp.Succeeded {
@@ -201,7 +202,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 
 func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Version, error) {
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, VersionKey)
 	if getErr != nil {
@@ -235,7 +236,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Get the current id value from logIdGenerator
@@ -349,7 +350,7 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 	startTime := time.Now()
 
 	// Get log meta for the path = logs/<logName>
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logName))
 	if err != nil {
@@ -393,7 +394,7 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction to update the log metadata
 	txn := e.client.Txn(ctx1)
@@ -431,7 +432,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*Lo
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get log meta for the path = logs/<logName>
 	logMeta, err := e.GetLogMeta(ctx1, logName)
@@ -461,7 +462,7 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckExists")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logName))
@@ -484,7 +485,7 @@ func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	list, err := e.ListLogsWithPrefix(ctx1, "")
 	if err != nil {
@@ -501,7 +502,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListLogsWithPrefix")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logNamePrefix), clientv3.WithPrefix())
 	if err != nil {
@@ -554,7 +555,7 @@ func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Check if lock already exists for this log using sync.Map
@@ -627,7 +628,7 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Load and delete atomically using sync.Map
@@ -677,7 +678,7 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -726,7 +727,7 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -764,7 +765,7 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, segmentKey)
 	if getErr != nil {
@@ -801,7 +802,7 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, "")
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, segmentKey, clientv3.WithPrefix())
 	if getErr != nil {
@@ -844,7 +845,7 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckSegmentExists")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	segmentResp, err := e.client.Get(ctx1, BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId)))
 	if err != nil {
@@ -871,7 +872,7 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 	defer e.Unlock()
 
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -921,7 +922,7 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 		logger.Ctx(ctx).Warn("marshal quorum info failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -960,7 +961,7 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	defer sp.End()
 	startTime := time.Now()
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", quorumId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, quorumKey)
 	if getErr != nil {
@@ -1017,7 +1018,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Create a lease with TTL of 60 seconds
 	lease, err := e.client.Grant(ctx1, 60)
@@ -1057,7 +1058,7 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 	startTime := time.Now()
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get reader info from etcd
 	resp, err := e.client.Get(ctx1, readerKey)
@@ -1098,7 +1099,7 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 	// Create the prefix for all readers of this log
 	readerPrefix := BuildLogAllReaderTempInfosKey(logId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get all reader infos with this prefix
 	resp, err := e.client.Get(ctx1, readerPrefix, clientv3.WithPrefix())
@@ -1137,7 +1138,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get the current reader info
 	resp, err := e.client.Get(ctx1, readerKey)
@@ -1214,7 +1215,7 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Delete the reader information
 	resp, err := e.client.Delete(ctx1, readerKey)
@@ -1319,7 +1320,7 @@ func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, s
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a new transaction
 	txn := e.client.Txn(ctx1)
@@ -1362,7 +1363,7 @@ func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, s
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a new transaction
 	txn := e.client.Txn(ctx1)
@@ -1398,7 +1399,7 @@ func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logI
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	resp, err := e.client.Get(ctx1, key)
 	if err != nil {
@@ -1435,7 +1436,7 @@ func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, l
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	_, err := e.client.Delete(ctx1, key)
 	if err != nil {
@@ -1458,7 +1459,7 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	// Create a prefix key for the log to retrieve all segments
 	prefix := BuildAllSegmentsCleanupStatusKey(logId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	resp, err := e.client.Get(ctx1, prefix, clientv3.WithPrefix())
 	if err != nil {
@@ -1506,7 +1507,7 @@ func (e *metadataProviderEtcd) StoreOrGetConditionWriteResult(ctx context.Contex
 		valueToStore = "true"
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Start a transaction with CAS logic
@@ -1567,7 +1568,7 @@ func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (boo
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Get the condition write key from etcd
@@ -1600,6 +1601,16 @@ func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (boo
 
 // getContextWithTimeout returns a context with timeout
 // NOTE: uniformly create etcd request context to avoid using upper-layer passed ctx with auth contamination
-func (e *metadataProviderEtcd) getContextWithTimeout() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), e.requestTimeout)
+func (e *metadataProviderEtcd) getContextWithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	// Use original ctx as base to preserve context values,
+	// but remove RBAC auth info to avoid auth contamination in etcd requests
+	newCtx := ctx
+
+	// Extract a metadata copy from incoming context and remove auth-related keys
+	if mdCopy, ok := metadata.FromIncomingContext(ctx); ok {
+		mdCopy.Delete("authorization")
+		mdCopy.Delete("token")
+		newCtx = metadata.NewIncomingContext(ctx, mdCopy)
+	}
+	return context.WithTimeout(newCtx, e.requestTimeout)
 }
