@@ -85,7 +85,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 
 	// Monitor keepAlive channel
 	go w.runAuditor()
-	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
+	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 	return w
 }
 
@@ -234,7 +234,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
-			logger.Ctx(ctx).Info("Starting auditor cycle",
+			logger.Ctx(ctx).Debug("Starting auditor cycle",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 
@@ -253,7 +253,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 				continue
 			}
 
-			logger.Ctx(ctx).Info("Auditor loaded segment metadata",
+			logger.Ctx(ctx).Debug("Auditor loaded segment metadata",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
@@ -557,7 +557,7 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 		}
 		closeLogHandleErr := l.logHandle.Close(ctx)
 		if closeLogHandleErr != nil {
-			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			logger.Ctx(ctx).Warn("failed to close log handle of the writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			status = "error"
 		}
 

@@ -85,7 +85,7 @@ func NewLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configur
 	// Monitor keepAlive channel
 	go w.monitorSession()
 	go w.runAuditor()
-	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
+	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()), zap.Int64("sessionId", int64(sessionLock.GetSession().Lease())))
 	return w
 }
 
@@ -147,7 +147,7 @@ func (l *logWriterImpl) monitorSession() {
 				if consecutiveFailures >= maxConsecutiveFailures {
 					// Too many consecutive failures, mark session as invalid
 					l.sessionLock.MarkInvalid()
-					logger.Ctx(context.Background()).Info("Writer lock session marked as invalid due to persistent etcd connectivity issues", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Int("consecutiveFailures", consecutiveFailures), zap.Error(err))
+					logger.Ctx(context.Background()).Warn("Writer lock session marked as invalid due to persistent etcd connectivity issues", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Int("consecutiveFailures", consecutiveFailures), zap.Error(err))
 					return
 				}
 			} else {
@@ -156,7 +156,7 @@ func (l *logWriterImpl) monitorSession() {
 				if !isAlive {
 					// Lease is expired
 					l.sessionLock.MarkInvalid()
-					logger.Ctx(context.Background()).Info("Writer lock session lease has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Bool("alive", isAlive))
+					logger.Ctx(context.Background()).Warn("Writer lock session lease has expired", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("sessionId", int64(session.Lease())), zap.Bool("alive", isAlive))
 					return
 				}
 			}
@@ -309,7 +309,7 @@ func (l *logWriterImpl) runAuditor() {
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
-			logger.Ctx(ctx).Info("Starting auditor cycle",
+			logger.Ctx(ctx).Debug("Starting auditor cycle",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 
@@ -328,7 +328,7 @@ func (l *logWriterImpl) runAuditor() {
 				continue
 			}
 
-			logger.Ctx(ctx).Info("Auditor loaded segment metadata",
+			logger.Ctx(ctx).Debug("Auditor loaded segment metadata",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
@@ -630,13 +630,13 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 		}
 		releaseLockErr := l.logHandle.GetMetadataProvider().ReleaseLogWriterLock(ctx, l.logHandle.GetName())
 		if releaseLockErr != nil {
-			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to release log writer lock for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			logger.Ctx(ctx).Warn("failed to release log writer lock", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			status = "error"
 		}
 
 		closeLogHandleErr := l.logHandle.Close(ctx)
 		if closeLogHandleErr != nil {
-			logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			logger.Ctx(ctx).Warn("failed to close log handle of the writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 			status = "error"
 		}
 

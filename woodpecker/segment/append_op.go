@@ -233,17 +233,12 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 	defer op.mu.Unlock()
 	// Use atomic operation to ensure it is executed only once
 	if !op.fastCalled.CompareAndSwap(false, true) {
-		logger.Ctx(ctx).Debug("FastFail already called, skipping",
-			zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		return // Already called
 	}
 
-	logger.Ctx(ctx).Debug("FastFail called, processing channels",
-		zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Int("channels", len(op.resultChannels)), zap.Error(err))
-
 	for index, ch := range op.resultChannels {
 		if ch == nil {
-			logger.Ctx(ctx).Info("FastFail channel is nil, skipping",
+			logger.Ctx(ctx).Debug("FastFail channel is nil, skipping",
 				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 			continue
 		}
@@ -254,17 +249,11 @@ func (op *AppendOp) FastFail(ctx context.Context, err error) {
 		if sendErr != nil {
 			logger.Ctx(ctx).Warn("send FastFail result to channel failed",
 				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(sendErr))
-		} else {
-			logger.Ctx(ctx).Debug("send FastFail result to channel finish",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		}
 		closeErr := ch.Close(ctx)
 		if closeErr != nil {
 			logger.Ctx(ctx).Warn("failed to close channel in FastFail",
 				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(closeErr))
-		} else {
-			logger.Ctx(ctx).Debug("close channel in FastFail finish",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		}
 	}
 
@@ -278,17 +267,12 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 	defer op.mu.Unlock()
 	// Use atomic operation to ensure it is executed only once
 	if !op.fastCalled.CompareAndSwap(false, true) {
-		logger.Ctx(ctx).Debug("FastSuccess already called, skipping",
-			zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		return // Already called
 	}
 
-	logger.Ctx(ctx).Debug("FastSuccess called, processing channels",
-		zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Int("channels", len(op.resultChannels)))
-
 	for index, ch := range op.resultChannels {
 		if ch == nil {
-			logger.Ctx(ctx).Info("FastSuccess channel is nil, skipping",
+			logger.Ctx(ctx).Debug("FastSuccess channel is nil, skipping",
 				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 			continue
 		}
@@ -299,17 +283,11 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 		if sendErr != nil {
 			logger.Ctx(ctx).Warn("send FastSuccess result to channel failed",
 				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(sendErr))
-		} else {
-			logger.Ctx(ctx).Debug("send FastSuccess result to channel finish",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		}
 		closeErr := ch.Close(ctx)
 		if closeErr != nil {
 			logger.Ctx(ctx).Warn("failed to close channel in FastSuccess",
 				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Error(closeErr))
-		} else {
-			logger.Ctx(ctx).Debug("close channel in FastSuccess finish",
-				zap.Int("channelIndex", index), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
 		}
 	}
 

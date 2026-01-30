@@ -166,7 +166,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				// idgen initial value is 0
 				initOps = append(initOps, clientv3.OpPut(keys[index], "0"))
 			}
-			log.Info("init service metadata warning, key not found", zap.String("key", keys[index]))
+			log.Debug("service metadata key not found, will initialize", zap.String("key", keys[index]))
 		}
 	}
 	if len(initOps) == 0 {

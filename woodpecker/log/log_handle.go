@@ -456,7 +456,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 		}
 
 		// 3. return new segmentHandle
-		logger.Ctx(ctx).Debug("doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe success",
+		logger.Ctx(ctx).Info("segment rolling completed successfully",
 			zap.String("logName", l.Name),
 			zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
 			zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
@@ -537,7 +537,7 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context,
 	l.SegmentHandles[newSegMeta.Metadata.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.Metadata.SegNo
 	l.lastRolloverTimeMs = newSegMeta.Metadata.CreateTime
-	logger.Ctx(ctx).Debug("create and cache new SegmentHandle success", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.Metadata.SegNo))
+	logger.Ctx(ctx).Info("new writable segment created", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.Metadata.SegNo))
 	return newSegHandle, nil
 }
 
@@ -636,7 +636,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_reader", "success").Observe(float64(time.Since(start).Milliseconds()))
-	logger.Ctx(ctx).Debug("open log reader success", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName))
+	logger.Ctx(ctx).Info("open log reader success", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName))
 	return r, nil
 }
 
@@ -905,7 +905,7 @@ func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) er
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.ForceCompleteAndClose(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Info("Complete active segment failed when closing logHandle",
+			logger.Ctx(ctx).Warn("Complete active segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
@@ -940,7 +940,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.ForceCompleteAndClose(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Info("CompleteAndClose segment failed when closing logHandle",
+			logger.Ctx(ctx).Warn("CompleteAndClose segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
