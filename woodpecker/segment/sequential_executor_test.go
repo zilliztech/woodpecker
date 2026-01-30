@@ -121,6 +121,7 @@ func TestNewSequentialExecutor(t *testing.T) {
 	assert.NotNil(t, executor)
 	assert.NotNil(t, executor.operationQueue)
 	assert.Equal(t, bufferSize, cap(executor.operationQueue))
+	assert.NotNil(t, executor.done)
 	assert.False(t, executor.closed)
 }
 
@@ -259,46 +260,7 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 	}
 }
 
-func TestSequentialExecutor_FullBufferNonBlocking(t *testing.T) {
-	bufferSize := 2
-	executor := NewSequentialExecutor(bufferSize)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
-	// Create a blocker to control when the first operation completes
-	var workerBlocked sync.WaitGroup
-	workerBlocked.Add(1)
-
-	// Submit the blocking operation first - this will block the worker
-	blockingOp := createBlockingMockOperation(&workerBlocked)
-	success := executor.Submit(context.TODO(), blockingOp)
-	assert.True(t, success)
-
-	// Give the worker time to pick up the blocking op
-	time.Sleep(20 * time.Millisecond)
-
-	// Now submit operations to fill the buffer
-	fillOps := make([]*MockOperation, bufferSize)
-	for i := 0; i < bufferSize; i++ {
-		fillOps[i] = createMockOperation(0)
-		success := executor.Submit(context.TODO(), fillOps[i])
-		assert.True(t, success)
-	}
-
-	// Now the buffer should be full (blocking op occupying worker + 2 buffered ops)
-	// The next submit should return false immediately (non-blocking)
-	extraOp := createMockOperation(0)
-	success = executor.Submit(context.TODO(), extraOp)
-	assert.False(t, success, "Submit should return false when queue is full")
-
-	// The extra operation should not be executed since it was rejected
-	assert.False(t, extraOp.IsExecuted())
-
-	// Release the worker to process buffered operations
-	workerBlocked.Done()
-}
-
-func TestSequentialExecutor_FullBufferRetryAfterDrain(t *testing.T) {
+func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 	bufferSize := 2
 	executor := NewSequentialExecutor(bufferSize)
 	executor.Start(context.TODO())
@@ -324,28 +286,90 @@ func TestSequentialExecutor_FullBufferRetryAfterDrain(t *testing.T) {
 		assert.True(t, success)
 	}
 
-	// Verify queue is full - submit should fail
-	rejectedOp := createMockOperation(0)
-	success = executor.Submit(context.TODO(), rejectedOp)
-	assert.False(t, success, "Submit should return false when queue is full")
+	// Now the buffer should be full. Submit in a goroutine — it should block.
+	blocked := make(chan bool, 1)
+	extraOp := createMockOperation(0)
+	go func() {
+		result := executor.Submit(context.TODO(), extraOp)
+		blocked <- result
+	}()
+
+	// Verify that Submit is still blocking after a short wait
+	select {
+	case <-blocked:
+		t.Fatal("Submit should block when queue is full")
+	case <-time.After(100 * time.Millisecond):
+		// expected: Submit is still blocked
+	}
+
+	// Release the worker to drain the queue — this should unblock Submit
+	workerBlocked.Done()
+
+	// Now the blocked Submit should succeed
+	select {
+	case result := <-blocked:
+		assert.True(t, result, "Submit should succeed after queue drains")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Submit did not unblock after worker drained")
+	}
+}
+
+func TestSequentialExecutor_FullBufferBlockingThenDrain(t *testing.T) {
+	bufferSize := 2
+	executor := NewSequentialExecutor(bufferSize)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Create a blocker to control when the first operation completes
+	var workerBlocked sync.WaitGroup
+	workerBlocked.Add(1)
+
+	// Submit the blocking operation first - this will block the worker
+	blockingOp := createBlockingMockOperation(&workerBlocked)
+	success := executor.Submit(context.TODO(), blockingOp)
+	assert.True(t, success)
+
+	// Give the worker time to pick up the blocking op
+	time.Sleep(20 * time.Millisecond)
+
+	// Fill the buffer
+	fillOps := make([]*MockOperation, bufferSize)
+	for i := 0; i < bufferSize; i++ {
+		fillOps[i] = createMockOperation(0)
+		success := executor.Submit(context.TODO(), fillOps[i])
+		assert.True(t, success)
+	}
+
+	// Submit another op in a goroutine — it should block because queue is full
+	blockedResult := make(chan bool, 1)
+	extraOp := createMockOperation(0)
+	go func() {
+		blockedResult <- executor.Submit(context.TODO(), extraOp)
+	}()
+
+	// Confirm it's blocked
+	select {
+	case <-blockedResult:
+		t.Fatal("Submit should block when queue is full")
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
 
 	// Release the worker so it can drain the queue
 	workerBlocked.Done()
 
-	// Wait for the worker to drain some operations
-	time.Sleep(100 * time.Millisecond)
+	// The blocked Submit should succeed after draining
+	select {
+	case result := <-blockedResult:
+		assert.True(t, result, "Submit should succeed after queue is drained")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Submit did not unblock after worker drained")
+	}
 
-	// Now there should be space in the queue - submit should succeed again
-	retryOp := createMockOperation(0)
-	success = executor.Submit(context.TODO(), retryOp)
-	assert.True(t, success, "Submit should succeed after queue is drained")
+	// Wait for execution of all ops
+	time.Sleep(200 * time.Millisecond)
 
-	// Wait for execution
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify: rejected op was NOT executed, retry op WAS executed
-	assert.False(t, rejectedOp.IsExecuted(), "Rejected operation should not be executed")
-	assert.True(t, retryOp.IsExecuted(), "Retry operation should be executed after queue drained")
+	assert.True(t, extraOp.IsExecuted(), "Extra operation should be executed after queue drained")
 
 	// All fill ops should also have been executed
 	for i, op := range fillOps {
@@ -458,5 +482,108 @@ func TestSequentialExecutor_ConcurrentSubmits(t *testing.T) {
 	// All operations should be executed
 	for i, op := range allOps {
 		assert.True(t, op.IsExecuted(), "Operation %d should be executed", i)
+	}
+}
+
+func TestSequentialExecutor_FullBufferContextCancel(t *testing.T) {
+	bufferSize := 2
+	executor := NewSequentialExecutor(bufferSize)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Block the worker
+	var workerBlocked sync.WaitGroup
+	workerBlocked.Add(1)
+	blockingOp := createBlockingMockOperation(&workerBlocked)
+	success := executor.Submit(context.TODO(), blockingOp)
+	assert.True(t, success)
+
+	// Give worker time to pick up the blocking op
+	time.Sleep(20 * time.Millisecond)
+
+	// Fill the buffer
+	for i := 0; i < bufferSize; i++ {
+		success := executor.Submit(context.TODO(), createMockOperation(0))
+		assert.True(t, success)
+	}
+
+	// Submit with a cancellable context — should block, then return false on cancel
+	ctx, cancel := context.WithCancel(context.Background())
+	submitResult := make(chan bool, 1)
+	go func() {
+		submitResult <- executor.Submit(ctx, createMockOperation(0))
+	}()
+
+	// Confirm it's blocked
+	select {
+	case <-submitResult:
+		t.Fatal("Submit should block when queue is full")
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+
+	// Cancel the context — Submit should return false
+	cancel()
+
+	select {
+	case result := <-submitResult:
+		assert.False(t, result, "Submit should return false when context is cancelled")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Submit did not unblock after context cancel")
+	}
+
+	// Release the worker
+	workerBlocked.Done()
+}
+
+func TestSequentialExecutor_FullBufferStopUnblocks(t *testing.T) {
+	bufferSize := 2
+	executor := NewSequentialExecutor(bufferSize)
+	executor.Start(context.TODO())
+
+	// Block the worker
+	var workerBlocked sync.WaitGroup
+	workerBlocked.Add(1)
+	blockingOp := createBlockingMockOperation(&workerBlocked)
+	success := executor.Submit(context.TODO(), blockingOp)
+	assert.True(t, success)
+
+	// Give worker time to pick up the blocking op
+	time.Sleep(20 * time.Millisecond)
+
+	// Fill the buffer
+	for i := 0; i < bufferSize; i++ {
+		success := executor.Submit(context.TODO(), createMockOperation(0))
+		assert.True(t, success)
+	}
+
+	// Submit in a goroutine — should block because queue is full
+	submitResult := make(chan bool, 1)
+	go func() {
+		submitResult <- executor.Submit(context.TODO(), createMockOperation(0))
+	}()
+
+	// Confirm it's blocked
+	select {
+	case <-submitResult:
+		t.Fatal("Submit should block when queue is full")
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+
+	// Release the worker first so Stop() can complete (worker needs to drain)
+	workerBlocked.Done()
+
+	// Stop the executor — should unblock the blocked Submit
+	executor.Stop(context.TODO())
+
+	select {
+	case result := <-submitResult:
+		// Submit returns false because the executor is stopping,
+		// OR true if the worker drained fast enough to make space before done closed.
+		// Either outcome is valid — the key point is it doesn't deadlock.
+		_ = result
+	case <-time.After(2 * time.Second):
+		t.Fatal("Submit did not unblock after Stop")
 	}
 }

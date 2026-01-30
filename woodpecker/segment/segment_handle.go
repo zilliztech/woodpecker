@@ -394,7 +394,17 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 	// do not remove, just resubmit to retry again
 	for _, element := range elementsToRetry {
 		op := element.Value.(*AppendOp)
-		s.executor.Submit(ctx, NewAppendRequestRetryOp(ctx, serverIndex, op))
+		if !s.executor.Submit(ctx, NewAppendRequestRetryOp(ctx, serverIndex, op)) {
+			// Submit failed (queue full or executor closed), treat as final failure
+			logger.Ctx(ctx).Warn("append retry submit failed, failing op",
+				zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId),
+				zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId),
+				zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
+			s.appendOpsQueue.Remove(element)
+			op.FastFail(ctx, werr.ErrAppendOpRetrySubmitFailed)
+			metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(strconv.FormatInt(s.logId, 10)).Dec()
+			continue
+		}
 		logger.Ctx(ctx).Debug("append retry", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId), zap.Int("serverIndex", serverIndex), zap.String("serverAddr", serverAddr))
 	}
 

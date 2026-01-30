@@ -29,6 +29,7 @@ import (
 // SequentialExecutor is a sequential append executor
 type SequentialExecutor struct {
 	operationQueue chan Operation
+	done           chan struct{}
 	wg             sync.WaitGroup
 	mu             sync.RWMutex
 	closed         bool
@@ -39,6 +40,7 @@ type SequentialExecutor struct {
 func NewSequentialExecutor(bufferSize int) *SequentialExecutor {
 	return &SequentialExecutor{
 		operationQueue: make(chan Operation, bufferSize),
+		done:           make(chan struct{}),
 		closed:         false,
 		started:        false,
 	}
@@ -61,35 +63,55 @@ func (se *SequentialExecutor) Start(ctx context.Context) {
 
 // worker executes the logic for each order
 func (se *SequentialExecutor) worker() {
-	for op := range se.operationQueue {
-		// Use defer to ensure Done() is called even if Execute() panics
-		func() {
-			defer se.wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					// Use context.Background() since we don't have access to the original context here
-					logger.Ctx(context.Background()).Warn("Operation execution panicked",
-						zap.String("OpId", op.Identifier()),
-						zap.Any("panic", r))
-				}
-			}()
-			op.Execute()
-		}()
+	for {
+		select {
+		case op := <-se.operationQueue:
+			se.executeOp(op)
+		case <-se.done:
+			se.drainQueue()
+			return
+		}
 	}
 }
 
-// Submit an op to the queue. Returns false if the executor is closed or the queue is full.
+// executeOp runs a single operation with panic recovery.
+func (se *SequentialExecutor) executeOp(op Operation) {
+	defer se.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Ctx(context.Background()).Warn("Operation execution panicked",
+				zap.String("OpId", op.Identifier()),
+				zap.Any("panic", r))
+		}
+	}()
+	op.Execute()
+}
+
+// drainQueue processes any remaining operations in the queue after done is closed.
+func (se *SequentialExecutor) drainQueue() {
+	for {
+		select {
+		case op := <-se.operationQueue:
+			se.executeOp(op)
+		default:
+			return
+		}
+	}
+}
+
+// Submit an op to the queue. Blocks until the operation is enqueued.
+// Returns false if the executor is closed or the context is cancelled.
 func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
 	logger.Ctx(ctx).Debug("try to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 
-	// Use RLock to allow concurrent submits while preventing Stop() from closing the channel.
-	// Stop() acquires a write Lock before closing the channel, so holding RLock here guarantees
-	// the channel remains open through the non-blocking send attempt, preventing panic
-	// from sending on a closed channel.
+	// Use RLock to allow concurrent submits while preventing Stop() from proceeding.
+	// Stop() acquires a write Lock before closing done, so holding RLock here guarantees
+	// done is not closed while we are in the select, preventing any race between
+	// the channel send and shutdown.
 	se.mu.RLock()
+	defer se.mu.RUnlock()
 	if se.closed {
 		logger.Ctx(ctx).Debug("submit failed, executor already closed", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
-		se.mu.RUnlock()
 		return false
 	}
 
@@ -98,22 +120,19 @@ func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
 	// called yet, wg would go negative and panic.
 	se.wg.Add(1)
 
-	// Non-blocking send: return false immediately if queue is full to avoid
-	// blocking the caller (who may hold other locks such as segmentHandle lock).
 	select {
 	case se.operationQueue <- op:
-		// success
-	default:
-		// Undo wg.Add since the op was not enqueued
+		logger.Ctx(ctx).Debug("finish to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+		return true
+	case <-se.done:
 		se.wg.Done()
-		logger.Ctx(ctx).Warn("submit failed, operation queue is full", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
-		se.mu.RUnlock()
+		logger.Ctx(ctx).Debug("submit failed, executor stopping", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+		return false
+	case <-ctx.Done():
+		se.wg.Done()
+		logger.Ctx(ctx).Debug("submit failed, context cancelled", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 		return false
 	}
-	se.mu.RUnlock()
-
-	logger.Ctx(ctx).Debug("finish to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
-	return true
 }
 
 // Stop stops the sequential append executor
@@ -127,7 +146,7 @@ func (se *SequentialExecutor) Stop(ctx context.Context) {
 		return
 	}
 	se.closed = true
-	close(se.operationQueue)
+	close(se.done)
 	se.mu.Unlock()
 
 	// Wait for all operations to complete
