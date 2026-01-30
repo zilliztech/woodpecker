@@ -287,6 +287,11 @@ func (op *AppendOp) FastSuccess(ctx context.Context) {
 		zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.Int("channels", len(op.resultChannels)))
 
 	for index, ch := range op.resultChannels {
+		if ch == nil {
+			logger.Ctx(ctx).Info("FastSuccess channel is nil, skipping",
+				zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId))
+			continue
+		}
 		sendErr := ch.SendResult(ctx, &channel.AppendResult{
 			SyncedId: op.entryId,
 			Err:      nil,
