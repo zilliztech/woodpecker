@@ -113,6 +113,7 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	segmentHandle.segmentMetaCache.Store(segmentMeta)
 	segmentHandle.fencedState.Store(false)
 	segmentHandle.rollingState.Store(false)
+	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
 		segmentHandle.executor.Start(ctx)
@@ -775,6 +776,8 @@ func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error 
 			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
 			zap.Error(err))
 		if lastError == nil {
+			lastError = err
+		} else {
 			lastError = werr.Combine(err, lastError)
 		}
 	}
