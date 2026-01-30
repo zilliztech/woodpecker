@@ -259,7 +259,7 @@ func TestSequentialExecutor_ConcurrentSubmitAndStop(t *testing.T) {
 	}
 }
 
-func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
+func TestSequentialExecutor_FullBufferNonBlocking(t *testing.T) {
 	bufferSize := 2
 	executor := NewSequentialExecutor(bufferSize)
 	executor.Start(context.TODO())
@@ -274,39 +274,83 @@ func TestSequentialExecutor_FullBufferBlocking(t *testing.T) {
 	success := executor.Submit(context.TODO(), blockingOp)
 	assert.True(t, success)
 
+	// Give the worker time to pick up the blocking op
+	time.Sleep(20 * time.Millisecond)
+
 	// Now submit operations to fill the buffer
-	slowOps := make([]*MockOperation, bufferSize)
+	fillOps := make([]*MockOperation, bufferSize)
 	for i := 0; i < bufferSize; i++ {
-		slowOps[i] = createMockOperation(0)
-		success := executor.Submit(context.TODO(), slowOps[i])
+		fillOps[i] = createMockOperation(0)
+		success := executor.Submit(context.TODO(), fillOps[i])
 		assert.True(t, success)
 	}
 
-	// Now the buffer should be full (blocking op + 2 buffered ops)
-	// The next submit should block
-	start := time.Now()
-	var submitDone atomic.Bool
+	// Now the buffer should be full (blocking op occupying worker + 2 buffered ops)
+	// The next submit should return false immediately (non-blocking)
 	extraOp := createMockOperation(0)
+	success = executor.Submit(context.TODO(), extraOp)
+	assert.False(t, success, "Submit should return false when queue is full")
 
-	go func() {
-		success := executor.Submit(context.TODO(), extraOp)
+	// The extra operation should not be executed since it was rejected
+	assert.False(t, extraOp.IsExecuted())
+
+	// Release the worker to process buffered operations
+	workerBlocked.Done()
+}
+
+func TestSequentialExecutor_FullBufferRetryAfterDrain(t *testing.T) {
+	bufferSize := 2
+	executor := NewSequentialExecutor(bufferSize)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Create a blocker to control when the first operation completes
+	var workerBlocked sync.WaitGroup
+	workerBlocked.Add(1)
+
+	// Submit the blocking operation first - this will block the worker
+	blockingOp := createBlockingMockOperation(&workerBlocked)
+	success := executor.Submit(context.TODO(), blockingOp)
+	assert.True(t, success)
+
+	// Give the worker time to pick up the blocking op
+	time.Sleep(20 * time.Millisecond)
+
+	// Fill the buffer
+	fillOps := make([]*MockOperation, bufferSize)
+	for i := 0; i < bufferSize; i++ {
+		fillOps[i] = createMockOperation(0)
+		success := executor.Submit(context.TODO(), fillOps[i])
 		assert.True(t, success)
-		submitDone.Store(true)
-	}()
+	}
 
-	// Wait a bit and verify submit is still blocking
-	time.Sleep(50 * time.Millisecond)
-	assert.False(t, submitDone.Load(), "Submit should be blocking")
+	// Verify queue is full - submit should fail
+	rejectedOp := createMockOperation(0)
+	success = executor.Submit(context.TODO(), rejectedOp)
+	assert.False(t, success, "Submit should return false when queue is full")
 
-	// Release the worker to process operations
+	// Release the worker so it can drain the queue
 	workerBlocked.Done()
 
-	// Wait for submit to complete
+	// Wait for the worker to drain some operations
 	time.Sleep(100 * time.Millisecond)
-	assert.True(t, submitDone.Load(), "Submit should complete after buffer has space")
 
-	duration := time.Since(start)
-	assert.Greater(t, duration, 40*time.Millisecond, "Submit should have been blocked")
+	// Now there should be space in the queue - submit should succeed again
+	retryOp := createMockOperation(0)
+	success = executor.Submit(context.TODO(), retryOp)
+	assert.True(t, success, "Submit should succeed after queue is drained")
+
+	// Wait for execution
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify: rejected op was NOT executed, retry op WAS executed
+	assert.False(t, rejectedOp.IsExecuted(), "Rejected operation should not be executed")
+	assert.True(t, retryOp.IsExecuted(), "Retry operation should be executed after queue drained")
+
+	// All fill ops should also have been executed
+	for i, op := range fillOps {
+		assert.True(t, op.IsExecuted(), "Fill operation %d should be executed", i)
+	}
 }
 
 func TestSequentialExecutor_StopWaitsForCompletion(t *testing.T) {
@@ -373,13 +417,16 @@ func TestSequentialExecutor_SubmitWithoutStart(t *testing.T) {
 }
 
 func TestSequentialExecutor_ConcurrentSubmits(t *testing.T) {
-	executor := NewSequentialExecutor(100)
-	executor.Start(context.TODO())
-	defer executor.Stop(context.TODO())
-
 	numGoroutines := 50
 	numOpsPerGoroutine := 10
 	totalOps := numGoroutines * numOpsPerGoroutine
+
+	// Use a buffer large enough to hold all operations so none are rejected
+	// due to queue-full (this test focuses on concurrent submit correctness,
+	// not queue-full behavior).
+	executor := NewSequentialExecutor(totalOps)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
 
 	var wg sync.WaitGroup
 	var successCount atomic.Int32

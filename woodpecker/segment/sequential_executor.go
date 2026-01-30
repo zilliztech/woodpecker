@@ -78,26 +78,40 @@ func (se *SequentialExecutor) worker() {
 	}
 }
 
-// Submit an op to the queue
+// Submit an op to the queue. Returns false if the executor is closed or the queue is full.
 func (se *SequentialExecutor) Submit(ctx context.Context, op Operation) bool {
 	logger.Ctx(ctx).Debug("try to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 
-	se.mu.Lock()
+	// Use RLock to allow concurrent submits while preventing Stop() from closing the channel.
+	// Stop() acquires a write Lock before closing the channel, so holding RLock here guarantees
+	// the channel remains open through the non-blocking send attempt, preventing panic
+	// from sending on a closed channel.
+	se.mu.RLock()
 	if se.closed {
 		logger.Ctx(ctx).Debug("submit failed, executor already closed", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
-		se.mu.Unlock()
+		se.mu.RUnlock()
 		return false
 	}
 
+	// wg.Add must happen before the channel send, because once the op is in the channel
+	// the worker may immediately pick it up and call wg.Done(). If wg.Add hadn't been
+	// called yet, wg would go negative and panic.
 	se.wg.Add(1)
 
-	// Get a reference to the channel while holding the lock
-	queue := se.operationQueue
-	se.mu.Unlock()
+	// Non-blocking send: return false immediately if queue is full to avoid
+	// blocking the caller (who may hold other locks such as segmentHandle lock).
+	select {
+	case se.operationQueue <- op:
+		// success
+	default:
+		// Undo wg.Add since the op was not enqueued
+		se.wg.Done()
+		logger.Ctx(ctx).Warn("submit failed, operation queue is full", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
+		se.mu.RUnlock()
+		return false
+	}
+	se.mu.RUnlock()
 
-	// Now send to the channel outside the lock to avoid deadlock
-	// This is safe because once we've incremented wg, the Stop method will wait for us
-	queue <- op
 	logger.Ctx(ctx).Debug("finish to submit", zap.String("OpId", op.Identifier()), zap.String("inst", fmt.Sprintf("%p", se)))
 	return true
 }
