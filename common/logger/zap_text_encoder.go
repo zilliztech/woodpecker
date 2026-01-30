@@ -88,6 +88,7 @@ func putTextEncoder(enc *textEncoder) {
 	enc.buf = nil
 	enc.spaced = false
 	enc.openNamespaces = 0
+	enc.wrapFieldsInBrackets = false
 	enc.reflectBuf = nil
 	enc.reflectEnc = nil
 	_textPool.Put(enc)
@@ -95,10 +96,11 @@ func putTextEncoder(enc *textEncoder) {
 
 type textEncoder struct {
 	*zapcore.EncoderConfig
-	buf                 *buffer.Buffer
-	spaced              bool // include spaces after colons and commas
-	openNamespaces      int
-	disableErrorVerbose bool
+	buf                  *buffer.Buffer
+	spaced               bool // include spaces after colons and commas
+	openNamespaces       int
+	disableErrorVerbose  bool
+	wrapFieldsInBrackets bool // when true, Add* methods wrap each field in [...]
 
 	// for encoding generic values by reflection
 	reflectBuf *buffer.Buffer
@@ -148,13 +150,27 @@ func NewTextEncoderByConfig(format string) zapcore.Encoder {
 }
 
 func (enc *textEncoder) AddArray(key string, arr zapcore.ArrayMarshaler) error {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
-	return enc.AppendArray(arr)
+	err := enc.AppendArray(arr)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
+	return err
 }
 
 func (enc *textEncoder) AddObject(key string, obj zapcore.ObjectMarshaler) error {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
-	return enc.AppendObject(obj)
+	err := enc.AppendObject(obj)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
+	return err
 }
 
 func (enc *textEncoder) AddBinary(key string, val []byte) {
@@ -162,33 +178,69 @@ func (enc *textEncoder) AddBinary(key string, val []byte) {
 }
 
 func (enc *textEncoder) AddByteString(key string, val []byte) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendByteString(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddBool(key string, val bool) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendBool(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddComplex128(key string, val complex128) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendComplex128(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddDuration(key string, val time.Duration) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendDuration(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddFloat64(key string, val float64) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendFloat64(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddInt64(key string, val int64) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendInt64(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) resetReflectBuf() {
@@ -201,6 +253,9 @@ func (enc *textEncoder) resetReflectBuf() {
 }
 
 func (enc *textEncoder) AddReflected(key string, obj interface{}) error {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.resetReflectBuf()
 	err := enc.reflectEnc.Encode(obj)
 	if err != nil {
@@ -209,6 +264,9 @@ func (enc *textEncoder) AddReflected(key string, obj interface{}) error {
 	enc.reflectBuf.TrimNewline()
 	enc.addKey(key)
 	enc.AppendByteString(enc.reflectBuf.Bytes())
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 	return nil
 }
 
@@ -219,18 +277,36 @@ func (enc *textEncoder) OpenNamespace(key string) {
 }
 
 func (enc *textEncoder) AddString(key, val string) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendString(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddTime(key string, val time.Time) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendTime(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AddUint64(key string, val uint64) {
+	if enc.wrapFieldsInBrackets {
+		enc.beginQuoteFiled()
+	}
 	enc.addKey(key)
 	enc.AppendUint64(val)
+	if enc.wrapFieldsInBrackets {
+		enc.endQuoteFiled()
+	}
 }
 
 func (enc *textEncoder) AppendArray(arr zapcore.ArrayMarshaler) error {
@@ -389,6 +465,7 @@ func (enc *textEncoder) AppendUintptr(v uintptr) { enc.AppendUint64(uint64(v)) }
 func (enc *textEncoder) Clone() zapcore.Encoder {
 	clone := enc.cloned()
 	clone.buf.Write(enc.buf.Bytes())
+	clone.wrapFieldsInBrackets = true
 	return clone
 }
 
@@ -628,48 +705,13 @@ func (enc *textEncoder) tryAddRuneError(r rune, size int) bool {
 }
 
 func (enc *textEncoder) addFields(fields []zapcore.Field) {
-	// Check if we have trace-related fields (scope, intent, traceID)
-	var traceFields []zapcore.Field
-	var otherFields []zapcore.Field
-
 	for _, f := range fields {
-		if f.Key == "scope" || f.Key == "intent" || f.Key == "traceID" {
-			traceFields = append(traceFields, f)
-		} else {
-			otherFields = append(otherFields, f)
+		if f.Type == zapcore.ErrorType {
+			enc.encodeError(f)
+			continue
 		}
-	}
-
-	// Add trace fields with space separation (like zap's standard format)
-	if len(traceFields) > 0 {
-		if enc.buf.Len() > 0 {
-			enc.buf.AppendByte(' ')
-		}
-		for i, f := range traceFields {
-			if i > 0 {
-				enc.buf.AppendByte(',')
-			}
-			if f.Type == zapcore.ErrorType {
-				enc.encodeError(f)
-				continue
-			}
-			enc.addKey(f.Key)
-			f.AddTo(enc)
-		}
-	}
-
-	// Add other fields in brackets (standard zap format)
-	if len(otherFields) > 0 {
 		enc.beginQuoteFiled()
-		for _, f := range otherFields {
-			if f.Type == zapcore.ErrorType {
-				// handle ErrorType in pingcap/log to fix "[key=?,keyVerbose=?]" problem.
-				// see more detail at https://github.com/pingcap/log/pull/5
-				enc.encodeError(f)
-				continue
-			}
-			f.AddTo(enc)
-		}
+		f.AddTo(enc)
 		enc.endQuoteFiled()
 	}
 }
