@@ -513,7 +513,7 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 		batchResult, err := cli.ReadEntriesBatchAdv(ctx, s.bucketName, s.rootPath, s.logId, s.segmentId, from, maxEntries, nodeLastReadState)
 		if err != nil {
 			if werr.ErrEntryNotFound.Is(err) {
-				logger.Ctx(ctx).Info("read batch empty on node",
+				logger.Ctx(ctx).Debug("read batch empty on node",
 					zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("node", node))
 			} else {
 				logger.Ctx(ctx).Warn("read batch failed on node",
@@ -546,7 +546,7 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 
 	// All nodes failed
 	if werr.ErrEntryNotFound.Is(lastError) {
-		logger.Ctx(ctx).Info("read batch empty on all quorum nodes",
+		logger.Ctx(ctx).Debug("read batch empty on all quorum nodes",
 			zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int("totalNodes", nodeCount))
 	} else {
 		logger.Ctx(ctx).Warn("read batch failed on all quorum nodes",
@@ -755,7 +755,7 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "error").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		logger.Ctx(ctx).Debug("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime))
+		logger.Ctx(ctx).Info("segment closed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("lastFlushedEntryId", lastFlushedEntryId), zap.Int64("lastAddConfirmed", s.lastAddConfirmed.Load()), zap.Int64("completionTime", newSegmentMetadata.CompletionTime))
 		s.segmentMetaCache.Store(newSegMeta)
 		metrics.WpSegmentHandleOperationsTotal.WithLabelValues(logIdStr, "close", "success").Inc()
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
@@ -870,7 +870,7 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 	}
 
 	if len(quorumInfo.Nodes) != 1 || quorumInfo.Wq != 1 || quorumInfo.Aq != 1 || quorumInfo.Es != 1 {
-		logger.Ctx(ctx).Debug("Unsupported quorum configuration during get blocks count, return 0",
+		logger.Ctx(ctx).Warn("Unsupported quorum configuration during get blocks count, return 0",
 			zap.String("logName", s.logName),
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),

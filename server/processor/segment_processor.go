@@ -64,7 +64,7 @@ type SegmentProcessor interface {
 
 func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
-	logger.Ctx(ctx).Debug("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
+	logger.Ctx(ctx).Info("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	s := &segmentProcessor{
 		cfg:           cfg,
 		bucketName:    userBucketName,

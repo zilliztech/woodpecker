@@ -119,7 +119,7 @@ func (l *logStore) Stop() error {
 	l.cancel()
 
 	if !l.stopped.CompareAndSwap(false, true) {
-		logger.Ctx(l.ctx).Info("LogStore service is already stopped")
+		logger.Ctx(l.ctx).Debug("LogStore service is already stopped")
 	}
 
 	// Stop background cleanup goroutine and wait for it to finish
@@ -332,7 +332,7 @@ func (l *logStore) FenceSegment(ctx context.Context, bucketName string, rootPath
 	}
 	lastEntryId, fenceErr := segmentProcessor.Fence(ctx)
 	if fenceErr != nil {
-		logger.Ctx(ctx).Info("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
+		logger.Ctx(ctx).Debug("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
 		return -1, fenceErr
 	}
 	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
@@ -700,7 +700,7 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 	for _, item := range idleProcessors {
 		l.closeSegmentProcessorUnsafe(l.ctx, item.logKey, item.segmentId, item.processor)
 
-		logger.Ctx(l.ctx).Debug("cleaned up idle segment processor",
+		logger.Ctx(l.ctx).Info("cleaned up idle segment processor",
 			zap.String("logKey", item.logKey),
 			zap.Int64("segmentId", item.segmentId))
 	}

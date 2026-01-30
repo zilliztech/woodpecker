@@ -66,7 +66,6 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 
 	// Send unary append request first to get the actual entryId
 	respStream, err := l.innerClient.AddEntry(streamCtx, &proto.AddEntryRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, Entry: entry})
-	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry called", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId))
 	if err != nil {
 		streamCancel() // Cancel context on error
 		return -1, err

@@ -122,7 +122,6 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				l.next = 0
 				return nil, err
 			}
-			logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Int64("actualReadSegmentId", readEntryData.SegId), zap.Int64("actualReadEntryId", readEntryData.EntryId), zap.Int("cacheBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next))
 			l.pendingReadEntryId += 1
 			l.next += 1
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
@@ -133,7 +132,6 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 
 		// try get next read point
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
-		logger.Ctx(ctx).Debug("get next segment handle and ids", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("pendingReadSegmentId", l.pendingReadSegmentId), zap.Int64("pendingReadEntryId", l.pendingReadEntryId), zap.Int64("actualReadSegmentId", segId), zap.Int64("actualReadEntryId", entryId), zap.Error(err))
 		if err != nil && werr.ErrSegmentNotFound.Is(err) {
 			// segment not found, wait and try again
 			time.Sleep(NoDataReadWaitIntervalMs * time.Millisecond)
@@ -200,7 +198,6 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.next = 0
 			return nil, err
 		}
-		logger.Ctx(ctx).Debug("read one message complete", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("readSegmentId", segId), zap.Int64("readEntryId", entryId), zap.Int64("actualReadSegmentId", oneEntry.SegId), zap.Int64("actualReadEntryId", oneEntry.EntryId), zap.Int("newBatchSize", len(l.batch.Entries)), zap.Int("readIndex", l.next), zap.Any("readState", l.batch.LastReadState))
 		// move cursor
 		l.currentSegmentHandle = segHandle
 		l.pendingReadSegmentId = oneEntry.SegId
