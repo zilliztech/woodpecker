@@ -326,6 +326,15 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 		)
 		return sendErr
 	}
+	if result.Err != nil {
+		sendErr = serverStream.Send(&proto.AddEntryResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: result.SyncedId,
+			Status:  werr.Status(result.Err),
+		},
+		)
+		return sendErr
+	}
 	// persist added entry success
 	sendErr = serverStream.Send(&proto.AddEntryResponse{
 		State:   proto.AddEntryState_Synced,
