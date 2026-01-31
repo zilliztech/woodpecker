@@ -144,6 +144,8 @@ func (l *logStore) Stop() error {
 	// Clear the maps
 	l.segmentProcessors = make(map[string]map[int64]processor.SegmentProcessor)
 
+	metrics.WpLogStoreActiveLogs.Set(0)
+	metrics.WpLogStoreActiveSegments.Set(0)
 	metrics.WpLogStoreRunningTotal.WithLabelValues("default").Dec()
 
 	logger.Ctx(l.ctx).Info("LogStore service stopped successfully",
@@ -238,8 +240,10 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 	// Initialize log map if not exists
 	if _, exists := l.segmentProcessors[logKey]; !exists {
 		l.segmentProcessors[logKey] = make(map[int64]processor.SegmentProcessor)
+		metrics.WpLogStoreActiveLogs.Inc()
 	}
 	l.segmentProcessors[logKey][segmentId] = s
+	metrics.WpLogStoreActiveSegments.Inc()
 
 	// Update metrics for active segment processors
 	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(strconv.FormatInt(logId, 10)).Inc()
@@ -509,6 +513,7 @@ func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey strin
 
 	// Update metrics
 	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(strconv.FormatInt(processor.GetLogId(), 10)).Dec()
+	metrics.WpLogStoreActiveSegments.Dec()
 }
 
 // collectIdleSegmentProcessorsUnsafe collects idle segment processors and removes them from the map.
@@ -569,6 +574,7 @@ func (l *logStore) collectIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 			delete(processors, item.segmentId)
 			if len(processors) == 0 {
 				delete(l.segmentProcessors, item.logKey)
+				metrics.WpLogStoreActiveLogs.Dec()
 			}
 		}
 	}
@@ -617,6 +623,7 @@ func (l *logStore) RemoveSegmentProcessor(ctx context.Context, bucketName string
 			delete(processors, segmentId)
 			if len(processors) == 0 {
 				delete(l.segmentProcessors, logKey)
+				metrics.WpLogStoreActiveLogs.Dec()
 			}
 
 			logger.Ctx(ctx).Info("Segment processor removed successfully",

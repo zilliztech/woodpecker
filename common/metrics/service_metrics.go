@@ -32,6 +32,9 @@ var (
 	WpRegisterOnce sync.Once
 
 	// Log name-id mapping
+	// WARNING: In large-scale deployments with many logs, the "log_name" label
+	// may cause high cardinality issues. Consider removing or sampling if the
+	// number of distinct log names exceeds a few thousand.
 	WpLogNameIdMapping = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: woodpeckerNamespace,
@@ -40,36 +43,6 @@ var (
 			Help:      "Mapping between log name and id",
 		},
 		[]string{"log_name"},
-	)
-
-	// client metrics
-	WpClientOperationsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: woodpeckerNamespace,
-			Subsystem: clientRole,
-			Name:      "operations_total",
-			Help:      "Total number of client operations",
-		},
-		[]string{"operation", "status"},
-	)
-	WpClientOperationLatency = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: woodpeckerNamespace,
-			Subsystem: clientRole,
-			Name:      "operation_latency",
-			Help:      "Latency of client operations",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		},
-		[]string{"operation", "status"},
-	)
-	WpClientActiveConnections = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: woodpeckerNamespace,
-			Subsystem: clientRole,
-			Name:      "active_connections",
-			Help:      "Number of active client connections",
-		},
-		[]string{"node"},
 	)
 
 	// client append data to log
@@ -97,6 +70,7 @@ var (
 			Subsystem: clientRole,
 			Name:      "append_bytes",
 			Help:      "Size of append operations in bytes",
+			Buckets:   prometheus.ExponentialBuckets(256, 4, 8), // 256B ~ 4MB
 		},
 		[]string{"log_id"},
 	)
@@ -130,6 +104,26 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
 		},
 		[]string{"log_id", "operation", "status"},
+	)
+
+	// Client read metrics
+	WpClientReadRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: clientRole,
+			Name:      "read_requests_total",
+			Help:      "Total number of read requests",
+		},
+		[]string{"log_id"},
+	)
+	WpClientReadEntriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: clientRole,
+			Name:      "read_entries_total",
+			Help:      "Total number of entries read",
+		},
+		[]string{"log_id"},
 	)
 
 	// LogReader metrics
@@ -225,6 +219,33 @@ var (
 		[]string{"operation", "status"},
 	)
 
+	// LogStore resource gauges
+	WpLogStoreActiveLogs = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: serverRole,
+			Name:      "logstore_active_logs",
+			Help:      "Number of active logs in the log store",
+		},
+	)
+	WpLogStoreActiveSegments = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: serverRole,
+			Name:      "logstore_active_segments",
+			Help:      "Number of active segments in the log store",
+		},
+	)
+	WpFileReaders = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: serverRole,
+			Name:      "file_reader",
+			Help:      "Number of active segment file readers for log",
+		},
+		[]string{"log_id"},
+	)
+
 	// LogStore metrics
 	WpLogStoreRunningTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -260,6 +281,18 @@ var (
 			Subsystem: serverRole,
 			Name:      "logstore_active_segment_processors",
 			Help:      "Number of active segment processors in log store",
+		},
+		[]string{"log_id"},
+	)
+
+	// Buffer wait latency
+	WpServerBufferWaitLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: serverRole,
+			Name:      "buffer_wait_latency",
+			Help:      "Time entries spend waiting in the buffer before being notified (ms)",
+			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 15), // 0.1ms ~ ~1638ms
 		},
 		[]string{"log_id"},
 	)
@@ -308,8 +341,8 @@ var (
 		prometheus.CounterOpts{
 			Namespace: woodpeckerNamespace,
 			Subsystem: serverRole,
-			Name:      "read_bytes_written",
-			Help:      "Total read bytes",
+			Name:      "read_batch_bytes_total",
+			Help:      "Total bytes read in batch operations",
 		},
 		[]string{"log_id"},
 	)
@@ -370,9 +403,19 @@ var (
 			Subsystem: serverRole,
 			Name:      "object_storage_operation_latency",
 			Help:      "Latency of object storage operations",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1ms to ~16s
 		},
 		[]string{"operation", "status"},
+	)
+	WpObjectStorageRequestBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: woodpeckerNamespace,
+			Subsystem: serverRole,
+			Name:      "object_storage_request_bytes",
+			Help:      "Size of individual object storage requests in bytes",
+			Buckets:   prometheus.ExponentialBuckets(1024, 4, 8), // 1KB ~ 16MB
+		},
+		[]string{"operation"},
 	)
 	WpObjectStorageBytesTransferred = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -391,10 +434,6 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpLogNameIdMapping)
 
 		// -------------- Client metrics -----------------
-		// Client metrics
-		registerer.MustRegister(WpClientOperationsTotal)
-		registerer.MustRegister(WpClientOperationLatency)
-		registerer.MustRegister(WpClientActiveConnections)
 		registerer.MustRegister(WpClientAppendRequestsTotal)
 		registerer.MustRegister(WpClientAppendEntriesTotal)
 		registerer.MustRegister(WpClientAppendBytes)
@@ -402,6 +441,9 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		// LogHandle metrics
 		registerer.MustRegister(WpLogHandleOperationsTotal)
 		registerer.MustRegister(WpLogHandleOperationLatency)
+		// Client read metrics
+		registerer.MustRegister(WpClientReadRequestsTotal)
+		registerer.MustRegister(WpClientReadEntriesTotal)
 		// LogReader metrics
 		registerer.MustRegister(WpLogReaderBytesRead)
 		registerer.MustRegister(WpLogReaderOperationLatency)
@@ -417,11 +459,17 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpEtcdMetaOperationLatency)
 
 		// -------------- Server metrics -----------------
+		// LogStore resource gauges
+		registerer.MustRegister(WpLogStoreActiveLogs)
+		registerer.MustRegister(WpLogStoreActiveSegments)
+		registerer.MustRegister(WpFileReaders)
 		// LogStore metrics
 		registerer.MustRegister(WpLogStoreRunningTotal)
 		registerer.MustRegister(WpLogStoreOperationsTotal)
 		registerer.MustRegister(WpLogStoreOperationLatency)
 		registerer.MustRegister(WpLogStoreActiveSegmentProcessors)
+		// Buffer wait latency
+		registerer.MustRegister(WpServerBufferWaitLatency)
 		// Segment File Impl metrics
 		registerer.MustRegister(WpFileOperationsTotal)
 		registerer.MustRegister(WpFileOperationLatency)
@@ -435,7 +483,11 @@ func RegisterWoodpeckerWithRegisterer(registerer prometheus.Registerer) {
 		// Object storage metrics
 		registerer.MustRegister(WpObjectStorageOperationsTotal)
 		registerer.MustRegister(WpObjectStorageOperationLatency)
+		registerer.MustRegister(WpObjectStorageRequestBytes)
 		registerer.MustRegister(WpObjectStorageBytesTransferred)
+
+		// System metrics
+		RegisterSystemMetrics(registerer)
 	})
 }
 

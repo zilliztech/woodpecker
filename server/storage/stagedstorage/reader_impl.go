@@ -167,6 +167,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
 	}
 
+	metrics.WpFileReaders.WithLabelValues(reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("staged file reader created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -1196,6 +1197,7 @@ func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	if r.pool != nil {
 		r.pool.Release()
 	}
+	metrics.WpFileReaders.WithLabelValues(r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

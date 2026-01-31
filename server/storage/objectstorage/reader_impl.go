@@ -111,6 +111,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		return nil, readFooterErr
 	}
 
+	metrics.WpFileReaders.WithLabelValues(reader.logIdStr).Inc()
 	logger.Ctx(ctx).Info("create new minio file readerAdv finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Int64("maxBatchSize", maxBatchSize), zap.Int("maxFetchThreads", maxFetchThreads))
 	return reader, nil
 }
@@ -505,6 +506,7 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if f.pool != nil {
 		f.pool.Release()
 	}
+	metrics.WpFileReaders.WithLabelValues(f.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId))
 	return nil
 }

@@ -108,6 +108,7 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("get_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues("get_object").Observe(float64(info.Size))
 	return &ObjectReader{
 		Object: obj,
 	}, info.Size, info.LastModified.UnixMilli(), err
@@ -126,6 +127,7 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_object", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues("put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
@@ -154,6 +156,7 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
 		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
+		metrics.WpObjectStorageRequestBytes.WithLabelValues("condition_put_object").Observe(float64(info.Size))
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return info, werr.ErrObjectAlreadyExists
 	}
@@ -165,6 +168,7 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues("condition_put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
@@ -235,6 +239,7 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("put_fenced_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues("put_fenced_object").Observe(float64(info.Size))
 	return info, nil
 }
 

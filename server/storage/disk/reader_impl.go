@@ -140,6 +140,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
+	metrics.WpFileReaders.WithLabelValues(reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("local file readerAdv created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -900,6 +901,7 @@ func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 		}
 		r.file = nil
 	}
+	metrics.WpFileReaders.WithLabelValues(r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

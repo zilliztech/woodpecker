@@ -285,6 +285,7 @@ func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSiz
 	metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "success").Inc()
 	metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
 	metrics.WpObjectStorageBytesTransferred.WithLabelValues("read").Add(float64(bytesRead))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues("read_object_full").Observe(float64(bytesRead))
 
 	return buf, nil
 }
