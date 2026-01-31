@@ -1,0 +1,50 @@
+# Monitor testing override for docker-compose.yaml
+# Adds Prometheus and Grafana for metrics verification, disables auto-restart.
+# Usage: docker compose -f docker-compose.yaml -f ../tests/monitor/docker-compose.monitor.yaml up -d
+
+services:
+  woodpecker-node1:
+    restart: "no"
+  woodpecker-node2:
+    restart: "no"
+  woodpecker-node3:
+    restart: "no"
+  woodpecker-node4:
+    restart: "no"
+  etcd:
+    restart: "no"
+  minio:
+    restart: "no"
+  jaeger:
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle'
+    networks:
+      - woodpecker
+    restart: "no"
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    networks:
+      - woodpecker
+    restart: "no"
+
+networks:
+  woodpecker:
+    driver: bridge
