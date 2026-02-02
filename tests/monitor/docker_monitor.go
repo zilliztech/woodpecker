@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,6 +252,22 @@ func (mc *MonitorCluster) WaitForClusterReady(t *testing.T, timeout time.Duratio
 	t.Log("Cluster is ready")
 }
 
+// StopNode gracefully stops a container.
+func (mc *MonitorCluster) StopNode(t *testing.T, containerName string) {
+	t.Helper()
+	t.Logf("Stopping container %s...", containerName)
+	runCommandNoFail(t, "docker", "stop", "-t", "10", containerName)
+	t.Logf("Container %s stopped", containerName)
+}
+
+// StartNode starts a previously stopped/killed container.
+func (mc *MonitorCluster) StartNode(t *testing.T, containerName string) {
+	t.Helper()
+	t.Logf("Starting container %s...", containerName)
+	runCommandNoFail(t, "docker", "start", containerName)
+	t.Logf("Container %s started", containerName)
+}
+
 // GetLogs returns the last N lines of logs from a container.
 func (mc *MonitorCluster) GetLogs(t *testing.T, containerName string, tail int) string {
 	t.Helper()
@@ -415,4 +432,44 @@ func (mc *MonitorCluster) QueryMetricHasValue(t *testing.T, metricName string) b
 		}
 	}
 	return false
+}
+
+// QueryPromQL queries Prometheus with an arbitrary PromQL expression
+// and returns the first result value as a string.
+func (mc *MonitorCluster) QueryPromQL(t *testing.T, query string) (string, bool) {
+	t.Helper()
+
+	reqURL := fmt.Sprintf("%s/api/v1/query?query=%s", PrometheusURL, url.QueryEscape(query))
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		t.Logf("Failed to query Prometheus: %v", err)
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Logf("Failed to read Prometheus response: %v", err)
+		return "", false
+	}
+
+	var result PrometheusQueryResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Logf("Failed to parse Prometheus response: %v", err)
+		return "", false
+	}
+
+	if result.Status != "success" || len(result.Data.Result) == 0 {
+		return "", false
+	}
+
+	if len(result.Data.Result[0].Value) >= 2 {
+		if val, ok := result.Data.Result[0].Value[1].(string); ok {
+			return val, true
+		}
+	}
+
+	return "", false
 }

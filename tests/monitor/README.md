@@ -84,6 +84,7 @@ tests/monitor/
 ├── docker-compose.monitor.yaml     # Compose override (adds Prometheus + Grafana)
 ├── docker_monitor.go               # MonitorCluster helper struct
 ├── monitor_test.go                 # E2E metric verification tests
+├── rolling_restart_test.go         # Rolling restart latency profile test
 └── run_monitor_tests.sh            # One-click test runner
 ```
 
@@ -186,6 +187,56 @@ tests/monitor/
 | `grpc_server_handling_seconds` | Histogram | grpc_type, grpc_service, grpc_method | RPC handling time | RPC latency P50/P99 |
 | `grpc_server_msg_received_total` | Counter | grpc_type, grpc_service, grpc_method | Messages received | Streaming message throughput |
 | `grpc_server_msg_sent_total` | Counter | grpc_type, grpc_service, grpc_method | Messages sent | Streaming message throughput |
+
+## Rolling Restart Latency Baseline
+
+The `TestMonitor_RollingRestart_LatencyProfile` test measures write and read latency across a rolling restart of all 4 Woodpecker nodes. This serves as the baseline for evaluating rolling upgrade quality and future optimizations.
+
+**Test parameters**: 4-node cluster (ensemble_size=3, ack_quorum=2), write interval=5ms, baseline/recovery=15s each, gossip convergence wait=10s after each restart.
+
+### Write Latency (client-side, per-write round-trip)
+
+| Phase | Total | Failures | P50 | P99 | Max | Avg |
+|---|---|---|---|---|---|---|
+| Baseline | 1221 | 0 | 6.0ms | 13.3ms | 170.5ms | 6.8ms |
+| Restart-node1 | 1359 | 0 | 5.8ms | 14.4ms | 318.0ms | 6.6ms |
+| Restart-node2 | 1268 | 0 | 6.0ms | 14.5ms | 43.8ms | 6.8ms |
+| Restart-node3 | 1305 | 0 | 5.8ms | 13.3ms | 55.1ms | 6.4ms |
+| Restart-node4 | 1258 | 0 | 6.0ms | 14.4ms | 45.2ms | 6.9ms |
+| Recovery | 1303 | 0 | 5.8ms | 11.6ms | 40.2ms | 6.1ms |
+
+### Read Latency (client-side, includes blocking wait when caught up to writer head)
+
+| Phase | Total | Failures | P50 | P99 | Max | Avg |
+|---|---|---|---|---|---|---|
+| Baseline | 1207 | 0 | 2us | 210.1ms | 214.8ms | 12.3ms |
+| Restart-node1 | 1365 | 0 | 2us | 211.0ms | 487.3ms | 12.1ms |
+| Restart-node2 | 1264 | 0 | 2us | 210.7ms | 212.8ms | 12.3ms |
+| Restart-node3 | 1311 | 4 | 2us | 210.3ms | 247.2ms | 11.9ms |
+| Restart-node4 | 1268 | 1 | 2us | 210.5ms | 242.3ms | 12.4ms |
+| Recovery | 1304 | 0 | 3us | 213.5ms | 241.3ms | 11.5ms |
+
+### Write P99 Impact vs Baseline
+
+| Phase | P99 | Delta | Ratio |
+|---|---|---|---|
+| Baseline | 13.3ms | (reference) | 1.00x |
+| Restart-node1 | 14.4ms | +7.9% | 1.08x |
+| Restart-node2 | 14.5ms | +9.1% | 1.09x |
+| Restart-node3 | 13.3ms | -0.1% | 1.00x |
+| Restart-node4 | 14.4ms | +7.8% | 1.08x |
+| Recovery | 11.6ms | -12.8% | 0.87x |
+
+### Key Observations
+
+- **Zero write failures**: All 7714 entries written successfully across the entire rolling restart sequence. Data integrity verified by reading all entries back.
+- **Minimal P99 impact**: Write P99 increased by at most ~9% during rolling restarts (13.3ms -> 14.5ms), indicating the quorum-based replication handles single-node failures gracefully.
+- **P50 stable**: Write P50 remained steady at 5.8-6.0ms across all phases, showing no median latency degradation.
+- **Max latency spike on first restart**: The first node restart saw Max write latency of 318ms (vs 170ms baseline), likely due to initial gossip detection delay. Subsequent restarts showed much lower Max values (43-55ms).
+- **Read P50 near-zero**: Read P50 of 2-3us indicates the reader was mostly caught up with the writer (data already buffered). Read P99 ~210ms reflects the ReadNext blocking interval when waiting for new data.
+- **Recovery better than baseline**: Recovery phase showed improved P99 (11.6ms vs 13.3ms baseline), suggesting warmed-up caches and stabilized gossip state.
+
+*Measured on macOS (Docker Desktop), 2026-02-02. Results may vary by hardware and Docker runtime.*
 
 ## Troubleshooting
 
