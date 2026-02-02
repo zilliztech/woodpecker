@@ -18,6 +18,7 @@ import (
 	"os"
 	"testing"
 
+	cgroups "github.com/containerd/cgroups/v3"
 	"github.com/stretchr/testify/assert"
 )
 

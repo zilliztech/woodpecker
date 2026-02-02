@@ -88,6 +88,14 @@ if [ $PROM_RETRIES -eq $PROM_MAX_RETRIES ]; then
     echo "Prometheus logs saved to $LOG_DIR/prometheus.log"
 fi
 
+# Set up Grafana dashboard
+echo -n "       Setting up Grafana dashboard... "
+if go run ./grafana/cmd/ 2>/dev/null; then
+    echo "done"
+else
+    echo "skipped (non-fatal)"
+fi
+
 echo "       Cluster is ready"
 
 # Step 4: Run monitor tests
@@ -105,7 +113,7 @@ if [ "$NO_CLEANUP" = true ]; then
     echo "       docker compose -f $COMPOSE_FILE -f $OVERRIDE_FILE -p $PROJECT_NAME down -v"
     echo ""
     echo "       Access Prometheus: http://localhost:9090"
-    echo "       Access Grafana:    http://localhost:3000"
+    echo "       Access Grafana:    http://localhost:3000/d/woodpecker-overview/woodpecker"
 else
     echo "       Cleaning up cluster..."
     compose_cmd down -v 2>/dev/null || true

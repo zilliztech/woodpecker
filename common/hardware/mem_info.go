@@ -20,6 +20,7 @@ package hardware
 import (
 	"os"
 
+	"github.com/labstack/gommon/log"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/sirupsen/logrus"
 	"go.uber.org/zap"

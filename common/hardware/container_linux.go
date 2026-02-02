@@ -15,6 +15,7 @@ import (
 	"os"
 
 	"github.com/cockroachdb/errors"
+	cgroups "github.com/containerd/cgroups/v3"
 	"github.com/containerd/cgroups/v3/cgroup1"
 	statsv1 "github.com/containerd/cgroups/v3/cgroup1/stats"
 	"github.com/containerd/cgroups/v3/cgroup2"

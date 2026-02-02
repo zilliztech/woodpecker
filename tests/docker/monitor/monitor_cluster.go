@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"github.com/zilliztech/woodpecker/tests/docker/framework"
+	"github.com/zilliztech/woodpecker/tests/docker/monitor/grafana"
 )
 
 const (
 	// PrometheusURL is the base URL for the Prometheus HTTP API.
 	PrometheusURL = "http://localhost:9090"
+	// GrafanaURL is the base URL for the Grafana HTTP API.
+	GrafanaURL = "http://localhost:3000"
 )
 
 // MonitorCluster manages a Docker Compose-based Woodpecker cluster for monitor testing.
@@ -177,4 +180,21 @@ func (mc *MonitorCluster) QueryPromQL(t *testing.T, query string) (string, bool)
 	}
 
 	return "", false
+}
+
+// SetupGrafanaDashboard creates the Prometheus datasource and imports
+// the Woodpecker dashboard into Grafana. Failure is non-fatal — the
+// dashboard is a convenience, not a test requirement.
+func (mc *MonitorCluster) SetupGrafanaDashboard(t *testing.T) {
+	t.Helper()
+	cfg := grafana.Config{
+		GrafanaURL:    GrafanaURL,
+		PrometheusURL: "http://prometheus:9090",
+	}
+	dashURL, err := grafana.SetupDashboard(cfg)
+	if err != nil {
+		t.Logf("WARNING: Grafana dashboard setup failed: %v", err)
+		return
+	}
+	t.Logf("Grafana dashboard ready: %s", dashURL)
 }

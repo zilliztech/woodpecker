@@ -24,6 +24,11 @@ tests/docker/
     ├── docker-compose.monitor.yaml
     ├── prometheus.yml
     ├── run_monitor_tests.sh
+    ├── grafana/           # Grafana dashboard auto-setup tool
+    │   ├── panels.go      # Go struct types + panel/row builder helpers
+    │   ├── dashboard.go   # BuildDashboard: 6-row, 31-panel layout
+    │   ├── setup.go       # Grafana API client (datasource + import)
+    │   └── cmd/main.go    # Standalone CLI entry point
     └── rolling_restart/   # Rolling restart latency profiling
         └── rolling_restart_test.go
 ```
@@ -93,6 +98,34 @@ Each suite passes a `framework.ClusterConfig` to customize the base cluster:
 `wait_for_container`, `build_image_if_needed`, etc.). Each runner script
 sources `common.sh` and adds suite-specific setup (e.g., Prometheus readiness
 check for monitor tests).
+
+## Grafana Dashboard
+
+The monitor suite includes an auto-setup tool that creates a Woodpecker
+dashboard in Grafana with 31 panels organized by architecture layer:
+
+| Row | Layer | Panels |
+|-----|-------|--------|
+| 1 | Client Layer | Append rate, latency, bytes; Read rate; Reader/Writer bytes; Etcd ops |
+| 2 | Transport — gRPC | Request rate, error rate, latency P50/P99 |
+| 3 | Engine — LogStore | Active logs/segments, instances, operations, latency, processors |
+| 4 | Storage — File I/O | Buffer wait, file ops, flush/read/compaction latency, bytes rate |
+| 5 | Object Storage | Operations, latency, request size, bytes transferred |
+| 6 | Infrastructure | CPU, memory, disk, IO wait |
+
+The dashboard is set up automatically when monitor tests run. You can also
+set it up manually against an already-running cluster:
+
+```bash
+# Default (localhost:3000 Grafana, prometheus:9090 inside Docker)
+cd tests/docker/monitor
+go run ./grafana/cmd/
+
+# Custom URLs
+go run ./grafana/cmd/ --grafana-url http://localhost:3000 --prometheus-url http://prometheus:9090
+```
+
+After setup, open: http://localhost:3000/d/woodpecker-overview/woodpecker
 
 ## Adding a New Test Suite
 
