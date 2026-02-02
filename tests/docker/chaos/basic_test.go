@@ -39,7 +39,7 @@ func TestBasicReadWriteInServiceMode(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			cfg, err := config.NewConfiguration("../../../config/woodpecker.yaml")
 			require.NoError(t, err)
 			cfg.Log.Level = "debug"
 

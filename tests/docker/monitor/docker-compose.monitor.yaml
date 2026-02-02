@@ -1,6 +1,6 @@
 # Monitor testing override for docker-compose.yaml
 # Adds Prometheus and Grafana for metrics verification, disables auto-restart.
-# Usage: docker compose -f docker-compose.yaml -f ../tests/monitor/docker-compose.monitor.yaml up -d
+# Usage: docker compose -f docker-compose.yaml -f ../tests/docker/monitor/docker-compose.monitor.yaml up -d
 
 services:
   woodpecker-node1:
@@ -24,7 +24,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ../tests/monitor/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../tests/docker/monitor/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     entrypoint:
       - /opt/bitnami/prometheus/bin/prometheus
     command:

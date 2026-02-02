@@ -9,12 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/zilliztech/woodpecker/woodpecker/log"
-)
-
-const (
-	// writeResultTimeout is the maximum time to wait for a single WriteAsync result.
-	writeResultTimeout = 60 * time.Second
+	"github.com/zilliztech/woodpecker/tests/docker/framework"
 )
 
 // newMonitorCluster creates a MonitorCluster for use in monitor tests.
@@ -22,54 +17,6 @@ const (
 func newMonitorCluster(t *testing.T) *MonitorCluster {
 	t.Helper()
 	return NewMonitorCluster(t)
-}
-
-// writeEntries writes n entries to the given writer and returns the successful message IDs.
-func writeEntries(t *testing.T, ctx context.Context, writer log.LogWriter, offset, count int) []*log.LogMessageId {
-	t.Helper()
-	ids := make([]*log.LogMessageId, 0, count)
-	for i := 0; i < count; i++ {
-		resultCh := make(chan *log.WriteResult, 1)
-		go func(idx int) {
-			ch := writer.WriteAsync(ctx, &log.WriteMessage{
-				Payload: []byte(fmt.Sprintf("entry-%d", offset+idx)),
-				Properties: map[string]string{
-					"index": fmt.Sprintf("%d", offset+idx),
-				},
-			})
-			if ch != nil {
-				resultCh <- <-ch
-			}
-		}(i)
-
-		select {
-		case result := <-resultCh:
-			require.NoError(t, result.Err, "write entry %d failed", offset+i)
-			require.NotNil(t, result.LogMessageId, "write entry %d returned nil ID", offset+i)
-			ids = append(ids, result.LogMessageId)
-		case <-time.After(writeResultTimeout):
-			t.Fatalf("write entry %d timed out after %v (possible quorum failure)", offset+i, writeResultTimeout)
-		}
-	}
-	return ids
-}
-
-// readAllEntries reads entries from the earliest position and returns them.
-func readAllEntries(t *testing.T, ctx context.Context, logHandle log.LogHandle, expectedCount int) []*log.LogMessage {
-	t.Helper()
-	earliest := log.EarliestLogMessageID()
-	reader, err := logHandle.OpenLogReader(ctx, &earliest, fmt.Sprintf("monitor-reader-%d", time.Now().UnixNano()))
-	require.NoError(t, err, "failed to open log reader")
-	defer reader.Close(ctx)
-
-	msgs := make([]*log.LogMessage, 0, expectedCount)
-	for i := 0; i < expectedCount; i++ {
-		msg, err := reader.ReadNext(ctx)
-		require.NoError(t, err, "failed to read entry %d", i)
-		require.NotNil(t, msg, "entry %d is nil", i)
-		msgs = append(msgs, msg)
-	}
-	return msgs
 }
 
 // assertMetricExists asserts that a metric exists in Prometheus with a non-zero value.
@@ -120,7 +67,7 @@ func TestMonitor_MetricsVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 100 entries
-	ids := writeEntries(t, ctx, writer, 0, 100)
+	ids := framework.WriteEntries(t, ctx, writer, 0, 100)
 	require.Len(t, ids, 100)
 	t.Log("Wrote 100 entries")
 
@@ -128,7 +75,7 @@ func TestMonitor_MetricsVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read all entries back
-	msgs := readAllEntries(t, ctx, logHandle, 100)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle, 100)
 	require.Len(t, msgs, 100)
 	t.Log("Read 100 entries back")
 

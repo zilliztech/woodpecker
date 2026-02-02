@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/tests/docker/framework"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
@@ -365,7 +366,7 @@ func TestMonitor_RollingRestart_LatencyProfile(t *testing.T) {
 	if totalWritten > 0 {
 		logHandle2, err := client.OpenLog(ctx, logName)
 		require.NoError(t, err)
-		msgs := readAllEntries(t, ctx, logHandle2, totalWritten)
+		msgs := framework.ReadAllEntries(t, ctx, logHandle2, totalWritten)
 		require.Len(t, msgs, totalWritten, "all written entries should be readable")
 		t.Logf("Data integrity verified: %d entries read back successfully", totalWritten)
 	}
