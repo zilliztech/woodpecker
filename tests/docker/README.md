@@ -13,18 +13,19 @@ tests/docker/
 │   ├── cluster.go         # DockerCluster: shared cluster management
 │   └── helpers.go         # WriteEntries, ReadAllEntries helpers
 ├── chaos/
-│   ├── docker_cluster.go  # ChaosCluster (embeds framework.DockerCluster)
+│   ├── chaos_cluster.go   # ChaosCluster (embeds framework.DockerCluster)
 │   ├── chaos_test.go      # Chaos test scenarios (node kill, partition, etc.)
 │   ├── basic_test.go      # Basic read/write smoke test
 │   ├── docker-compose.chaos.yaml
 │   └── run_chaos_tests.sh
 └── monitor/
-    ├── docker_monitor.go  # MonitorCluster (embeds framework.DockerCluster)
+    ├── monitor_cluster.go # MonitorCluster (embeds framework.DockerCluster)
     ├── monitor_test.go    # Prometheus metrics verification
-    ├── rolling_restart_test.go  # Rolling restart latency profiling
     ├── docker-compose.monitor.yaml
     ├── prometheus.yml
-    └── run_monitor_tests.sh
+    ├── run_monitor_tests.sh
+    └── rolling_restart/   # Rolling restart latency profiling
+        └── rolling_restart_test.go
 ```
 
 ## Quick Start

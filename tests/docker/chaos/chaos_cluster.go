@@ -1,6 +1,8 @@
 package chaos
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -13,10 +15,18 @@ type ChaosCluster struct {
 	*framework.DockerCluster
 }
 
+// chaosDir returns the absolute path to the chaos suite directory,
+// derived from this source file's location so it works regardless of CWD.
+func chaosDir() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Dir(thisFile)
+}
+
 // NewChaosCluster creates a ChaosCluster with chaos test configuration.
 func NewChaosCluster(t *testing.T) *ChaosCluster {
 	t.Helper()
 	base := framework.NewDockerCluster(t, framework.ClusterConfig{
+		TestDir:      chaosDir(),
 		ProjectName:  "woodpecker-chaos",
 		OverrideFile: "docker-compose.chaos.yaml",
 		NetworkName:  "woodpecker-chaos_woodpecker",

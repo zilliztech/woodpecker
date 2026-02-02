@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -23,10 +25,18 @@ type MonitorCluster struct {
 	*framework.DockerCluster
 }
 
+// monitorDir returns the absolute path to the monitor suite directory,
+// derived from this source file's location so it works regardless of CWD.
+func monitorDir() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Dir(thisFile)
+}
+
 // NewMonitorCluster creates a MonitorCluster with monitor test configuration.
 func NewMonitorCluster(t *testing.T) *MonitorCluster {
 	t.Helper()
 	base := framework.NewDockerCluster(t, framework.ClusterConfig{
+		TestDir:         monitorDir(),
 		ProjectName:     "woodpecker-monitor",
 		OverrideFile:    "docker-compose.monitor.yaml",
 		NetworkName:     "woodpecker-monitor_woodpecker",

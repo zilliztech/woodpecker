@@ -75,6 +75,12 @@ type DockerCluster struct {
 
 // ClusterConfig holds configuration for creating a new DockerCluster.
 type ClusterConfig struct {
+	// TestDir is the absolute path to the suite directory containing the
+	// override compose file. If empty, filepath.Abs(".") is used. Callers
+	// that may be imported from sub-packages should set this explicitly
+	// (e.g., via runtime.Caller) so that paths resolve correctly regardless
+	// of the test binary's working directory.
+	TestDir         string
 	ProjectName     string
 	OverrideFile    string
 	NetworkName     string
@@ -83,18 +89,21 @@ type ClusterConfig struct {
 }
 
 // NewDockerCluster creates a DockerCluster with the given configuration.
-// It resolves paths relative to the caller's test directory (3 levels up to project root).
+// It resolves paths relative to TestDir (or CWD if TestDir is empty).
 func NewDockerCluster(t *testing.T, cfg ClusterConfig) *DockerCluster {
 	t.Helper()
 
-	testDir, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatalf("failed to resolve test directory: %v", err)
+	testDir := cfg.TestDir
+	if testDir == "" {
+		var err error
+		testDir, err = filepath.Abs(".")
+		if err != nil {
+			t.Fatalf("failed to resolve test directory: %v", err)
+		}
 	}
 
 	// The deployments/ directory is three levels up from tests/docker/<suite>/
-	deploymentsDir := filepath.Join(testDir, "..", "..", "..", "deployments")
-	deploymentsDir, err = filepath.Abs(deploymentsDir)
+	deploymentsDir, err := filepath.Abs(filepath.Join(testDir, "..", "..", "..", "deployments"))
 	if err != nil {
 		t.Fatalf("failed to resolve deployments directory: %v", err)
 	}

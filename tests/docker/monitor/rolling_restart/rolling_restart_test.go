@@ -1,4 +1,4 @@
-package monitor
+package rolling_restart
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/tests/docker/framework"
+	"github.com/zilliztech/woodpecker/tests/docker/monitor"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
@@ -260,7 +261,7 @@ func continuousRead(ctx context.Context, t *testing.T, logHandle log.LogHandle, 
 //   - Latency ratio vs baseline for each restart phase
 //   - Server-side Prometheus metrics (gRPC latency, buffer wait, flush latency)
 func TestMonitor_RollingRestart_LatencyProfile(t *testing.T) {
-	cluster := newMonitorCluster(t)
+	cluster := monitor.NewMonitorCluster(t)
 	ctx := context.Background()
 
 	cluster.WaitForPrometheusReady(t, 60*time.Second)
