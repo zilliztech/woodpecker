@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/tests/docker/framework"
 	"github.com/zilliztech/woodpecker/tests/docker/monitor/grafana"
+	"github.com/zilliztech/woodpecker/woodpecker"
 )
 
 const (
@@ -47,6 +50,34 @@ func NewMonitorCluster(t *testing.T) *MonitorCluster {
 		GossipWait:      15 * time.Second,
 	})
 	return &MonitorCluster{DockerCluster: base}
+}
+
+// NewClientWithOverride creates a Woodpecker client with custom configuration.
+// The override function is called after the default configuration is loaded,
+// allowing tests to modify settings (e.g. segment rolling interval) before
+// the client is created.
+func (mc *MonitorCluster) NewClientWithOverride(
+	t *testing.T, ctx context.Context,
+	override func(*config.Configuration),
+) (woodpecker.Client, *config.Configuration) {
+	t.Helper()
+
+	cfg := mc.NewConfig(t)
+	override(cfg)
+	etcdCli := mc.NewEtcdClient(t, cfg)
+
+	client, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	if err != nil {
+		etcdCli.Close()
+		t.Fatalf("failed to create Woodpecker client with override: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = client.Close(ctx)
+		_ = etcdCli.Close()
+	})
+
+	return client, cfg
 }
 
 // --- Prometheus Query Methods ---

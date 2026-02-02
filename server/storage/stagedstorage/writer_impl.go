@@ -296,6 +296,8 @@ func (w *StagedFileWriter) run() {
 	ticker := time.NewTicker(time.Duration(w.maxIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	metrics.WpFileWriters.WithLabelValues(w.logIdStr).Inc()
+
 	logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine started",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId))
@@ -305,18 +307,21 @@ func (w *StagedFileWriter) run() {
 		case <-w.runCtx.Done():
 			// Context cancelled, exit
 			logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to context cancellation")
+			metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 			return
 		case flushTask, ok := <-w.flushTaskChan:
 			// Process flush tasks with higher priority
 			if !ok {
 				// Channel closed, exit
 				logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to channel close")
+				metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 				return
 			}
 			if flushTask.entries == nil {
 				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
 					zap.String("segmentFilePath", w.segmentFilePath))
 				w.allUploadingTaskDone.Store(true)
+				metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 				return
 			}
 			// Process flush task synchronously
@@ -1241,6 +1246,7 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64) *mergedBlockUploadResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processMergeTask")
 	defer sp.End()
+	startTime := time.Now()
 
 	logger.Ctx(ctx).Debug("processing merge task",
 		zap.String("segmentFilePath", w.segmentFilePath),
@@ -1318,16 +1324,23 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		LastEntryID:  lastEntryID,
 	}
 
+	// Update compaction metrics
+	totalTime := time.Since(startTime)
+	blockSize := int64(len(mergedData))
+	metrics.WpFileCompactLatency.WithLabelValues(w.logIdStr).Observe(float64(totalTime.Milliseconds()))
+	metrics.WpFileCompactBytesWritten.WithLabelValues(w.logIdStr).Add(float64(blockSize))
+
 	logger.Ctx(ctx).Debug("uploaded merged block",
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.String("blockKey", blockKey),
-		zap.Int64("blockSize", int64(len(mergedData))),
+		zap.Int64("blockSize", blockSize),
 		zap.Int64("firstEntryID", firstEntryID),
-		zap.Int64("lastEntryID", lastEntryID))
+		zap.Int64("lastEntryID", lastEntryID),
+		zap.Int64("totalTimeMs", totalTime.Milliseconds()))
 
 	return &mergedBlockUploadResult{
 		blockIndex: newBlockIndex,
-		blockSize:  int64(len(mergedData)),
+		blockSize:  blockSize,
 		error:      nil,
 	}
 

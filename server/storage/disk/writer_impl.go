@@ -284,6 +284,8 @@ func (w *LocalFileWriter) run() {
 	ticker := time.NewTicker(time.Duration(w.maxIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	metrics.WpFileWriters.WithLabelValues(w.logIdStr).Inc()
+
 	logger.Ctx(w.runCtx).Debug("LocalFileWriter run goroutine started",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId))
@@ -293,18 +295,21 @@ func (w *LocalFileWriter) run() {
 		case <-w.runCtx.Done():
 			// Context cancelled, exit
 			logger.Ctx(w.runCtx).Debug("LocalFileWriter run goroutine stopping due to context cancellation")
+			metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 			return
 		case flushTask, ok := <-w.flushTaskChan:
 			// Process flush tasks with higher priority
 			if !ok {
 				// Channel closed, exit
 				logger.Ctx(w.runCtx).Debug("LocalFileWriter run goroutine stopping due to channel close")
+				metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 				return
 			}
 			if flushTask.entries == nil {
 				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
 					zap.String("segmentFilePath", w.segmentFilePath))
 				w.allUploadingTaskDone.Store(true)
+				metrics.WpFileWriters.WithLabelValues(w.logIdStr).Dec()
 				return
 			}
 			// Process flush task synchronously

@@ -108,7 +108,7 @@ services:
       - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-      - MINIO_BUCKET=woodpecker-cluster-data
+      - MINIO_BUCKET=a-bucket
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
       - METRICS_PORT=9091
@@ -153,7 +153,7 @@ services:
       - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-      - MINIO_BUCKET=woodpecker-cluster-data
+      - MINIO_BUCKET=a-bucket
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
       - METRICS_PORT=9092
@@ -197,7 +197,7 @@ services:
       - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-      - MINIO_BUCKET=woodpecker-cluster-data
+      - MINIO_BUCKET=a-bucket
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
       - METRICS_PORT=9093
@@ -242,7 +242,7 @@ services:
       - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-      - MINIO_BUCKET=woodpecker-cluster-data
+      - MINIO_BUCKET=a-bucket
       - STORAGE_TYPE=service
       - LOG_LEVEL=info
       - METRICS_PORT=9094

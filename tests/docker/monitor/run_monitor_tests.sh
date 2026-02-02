@@ -22,7 +22,7 @@
 #
 # Usage:
 #   ./run_monitor_tests.sh                    # Run all monitor tests
-#   ./run_monitor_tests.sh -run TestMonitor_MetricsVerification  # Run specific test
+#   ./run_monitor_tests.sh -run TestMonitor_BasicMetricsVerification  # Run specific test
 #   ./run_monitor_tests.sh --no-cleanup       # Keep cluster after tests
 #   ./run_monitor_tests.sh --skip-build       # Skip Docker image build
 #   ./run_monitor_tests.sh --cleanup          # Only clean up resources (no tests)
