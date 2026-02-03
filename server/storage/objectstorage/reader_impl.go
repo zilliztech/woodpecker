@@ -54,6 +54,7 @@ type MinioFileReaderAdv struct {
 	logId          int64
 	segmentId      int64
 	logIdStr       string // for metrics only
+	nsStr          string // for metrics namespace label
 
 	// file access
 	mu     sync.RWMutex
@@ -87,6 +88,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		logId:          logId,
 		segmentId:      segId,
 		logIdStr:       strconv.FormatInt(logId, 10),
+		nsStr:          bucket + "/" + baseDir,
 		client:         client,
 		bucket:         bucket,
 		segmentFileKey: segmentFileKey,
@@ -111,7 +113,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		return nil, readFooterErr
 	}
 
-	metrics.WpFileReaders.WithLabelValues(reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(reader.nsStr, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Info("create new minio file readerAdv finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Int64("maxBatchSize", maxBatchSize), zap.Int("maxFetchThreads", maxFetchThreads))
 	return reader, nil
 }
@@ -130,7 +132,7 @@ func (f *MinioFileReaderAdv) readFooterAndIndexUnsafe(ctx context.Context) (*Foo
 
 	// Check if footer.blk exists
 	footerKey := getFooterBlockKey(f.segmentFileKey)
-	statSize, _, err := f.client.StatObject(ctx, f.bucket, footerKey)
+	statSize, _, err := f.client.StatObject(ctx, f.bucket, footerKey, f.nsStr, f.logIdStr)
 	if err != nil {
 		if f.client.IsObjectNotExistsError(err) {
 			// no footer blk yet
@@ -140,13 +142,13 @@ func (f *MinioFileReaderAdv) readFooterAndIndexUnsafe(ctx context.Context) (*Foo
 	}
 
 	// Read the entire footer.blk file
-	footerObj, err := f.client.GetObject(ctx, f.bucket, footerKey, 0, statSize)
+	footerObj, err := f.client.GetObject(ctx, f.bucket, footerKey, 0, statSize, f.nsStr, f.logIdStr)
 	if err != nil {
 		return nil, err
 	}
 	defer footerObj.Close()
 
-	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, statSize)
+	footerBlkData, err := minioHandler.ReadObjectFull(ctx, footerObj, statSize, f.nsStr, f.logIdStr)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +293,7 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfoUnsafe(ctx context.Cont
 		blockKey := getBlockKey(f.segmentFileKey, blockID)
 
 		// check if the block exists in object storage
-		blockSize, isFenced, err := f.client.StatObject(ctx, f.bucket, blockKey)
+		blockSize, isFenced, err := f.client.StatObject(ctx, f.bucket, blockKey, f.nsStr, f.logIdStr)
 		if err != nil && f.client.IsObjectNotExistsError(err) {
 			break
 		}
@@ -328,8 +330,8 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfoUnsafe(ctx context.Cont
 	}
 
 	logger.Ctx(ctx).Debug("prefetch block infos", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("blocks", len(f.blocks)), zap.Int64("lastBlockID", blockID-1))
-	metrics.WpFileOperationsTotal.WithLabelValues(f.logIdStr, "loadIncr", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(f.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(f.nsStr, f.logIdStr, "loadIncr", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(f.nsStr, f.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return existsNewBlock, fetchedLastBlock, nil
 }
 
@@ -345,7 +347,7 @@ func (f *MinioFileReaderAdv) getBlockHeaderRecord(ctx context.Context, blockID i
 	}
 
 	// get block header record from the beginning of the block
-	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, 0, readSize)
+	headerRecordObj, getErr := f.client.GetObject(ctx, f.bucket, blockKey, 0, readSize, f.nsStr, f.logIdStr)
 	if getErr != nil {
 		logger.Ctx(ctx).Warn("Error getting block header record",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -355,7 +357,7 @@ func (f *MinioFileReaderAdv) getBlockHeaderRecord(ctx context.Context, blockID i
 	}
 	defer headerRecordObj.Close()
 
-	data, err := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize)
+	data, err := minioHandler.ReadObjectFull(ctx, headerRecordObj, readSize, f.nsStr, f.logIdStr)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Error reading block header record",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -506,7 +508,7 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if f.pool != nil {
 		f.pool.Release()
 	}
-	metrics.WpFileReaders.WithLabelValues(f.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(f.nsStr, f.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId))
 	return nil
 }
@@ -688,8 +690,8 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		zap.Int64("totalCollectedSize", totalCollectedSize),
 		zap.Any("lastBlockInfo", lastBlockInfo))
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(f.logIdStr).Add(float64(totalReadBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(f.nsStr, f.logIdStr).Add(float64(totalReadBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(f.nsStr, f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -720,7 +722,7 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 	}
 
 	// Get the object
-	blockObj, getErr := f.client.GetObject(ctx, f.bucket, block.objKey, 0, block.size)
+	blockObj, getErr := f.client.GetObject(ctx, f.bucket, block.objKey, 0, block.size, f.nsStr, f.logIdStr)
 	if getErr != nil {
 		// Check if block not found - use centralized handling
 		if f.client.IsObjectNotExistsError(getErr) {
@@ -736,7 +738,7 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 	}
 
 	// Read the full object data
-	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, block.size)
+	blockData, err := minioHandler.ReadObjectFull(ctx, blockObj, block.size, f.nsStr, f.logIdStr)
 	blockObj.Close() // release immediately after reading
 	if err != nil {
 		result.err = err
@@ -852,7 +854,7 @@ func (f *MinioFileReaderAdv) isFooterExists(ctx context.Context) bool {
 
 	// Check if footer.blk exists
 	footerKey := getFooterBlockKey(f.segmentFileKey)
-	statSize, _, err := f.client.StatObject(ctx, f.bucket, footerKey)
+	statSize, _, err := f.client.StatObject(ctx, f.bucket, footerKey, f.nsStr, f.logIdStr)
 	if err != nil {
 		if f.client.IsObjectNotExistsError(err) {
 			// no footer blk yet
@@ -923,7 +925,7 @@ func (f *MinioFileReaderAdv) readBlockBatchUnsafe(ctx context.Context, startBloc
 		blockObjKey := f.getBlockObjectKey(currentBlockID)
 
 		// StatObject to get size (very fast: 1-5ms)
-		objSize, isFenced, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey)
+		objSize, isFenced, statErr := f.client.StatObject(ctx, f.bucket, blockObjKey, f.nsStr, f.logIdStr)
 		if statErr != nil {
 			if f.client.IsObjectNotExistsError(statErr) {
 				// Use centralized block-not-found handling

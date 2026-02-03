@@ -33,18 +33,18 @@ func TestObjectStoragePutObject(t *testing.T) {
 
 	// 1. Test successful upload
 	err = storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Object uploaded successfully: %s", objectName)
 
 	// 2. Verify object exists and content is correct
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testData)), objSize)
 	assert.False(t, isFenced)
 
 	// 3. Read and verify content
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "test-ns", "0")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -53,7 +53,7 @@ func TestObjectStoragePutObject(t *testing.T) {
 	assert.Equal(t, testData, readData)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -73,24 +73,24 @@ func TestObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 
 	// 1. Test successful upload to non-existent object (should succeed)
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Initial upload succeeded: %s", objectName)
 
 	// 2. Test failed upload to existing object (should return ErrObjectAlreadyExists)
 	newData := []byte("should not be uploaded")
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(newData), int64(len(newData)))
+		bytes.NewReader(newData), int64(len(newData)), "test-ns", "0")
 	require.Error(t, err)
 	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Should return ErrObjectAlreadyExists for existing object")
 	t.Logf("Expected error for existing object: %v", err)
 
 	// 3. Verify original content is unchanged
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.False(t, isFenced)
 
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "test-ns", "0")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -99,7 +99,7 @@ func TestObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 	assert.Equal(t, testData, readData, "Original content should be unchanged")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -115,23 +115,23 @@ func TestObjectStoragePutFencedObject(t *testing.T) {
 	objectName := fmt.Sprintf("test-put-fenced-%d", time.Now().UnixNano())
 
 	// 1. Test successful fenced object creation
-	err = storageCli.PutFencedObject(ctx, bucketName, objectName)
+	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Fenced object created successfully: %s", objectName)
 
 	// 2. Verify object is fenced
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.True(t, isFenced, "Object should be marked as fenced")
 	assert.Greater(t, objSize, int64(0), "Fenced object should have some size")
 
 	// 3. Test idempotent behavior - calling PutFencedObject again should succeed
-	err = storageCli.PutFencedObject(ctx, bucketName, objectName)
+	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Idempotent fenced object creation succeeded")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -147,25 +147,25 @@ func TestObjectStoragePutIfNoneMatchWithFencedObject(t *testing.T) {
 	objectName := fmt.Sprintf("test-put-if-none-match-fenced-%d", time.Now().UnixNano())
 
 	// 1. Create a fenced object
-	err = storageCli.PutFencedObject(ctx, bucketName, objectName)
+	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Fenced object created: %s", objectName)
 
 	// 2. Test PutObjectIfNoneMatch with fenced object (should return ErrSegmentFenced)
 	testData := []byte("should not be uploaded to fenced object")
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.Error(t, err)
 	require.True(t, werr.ErrSegmentFenced.Is(err), "Should return ErrSegmentFenced for fenced object")
 	t.Logf("Expected fenced error: %v", err)
 
 	// 3. Verify object is still fenced
-	_, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	_, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.True(t, isFenced, "Object should remain fenced")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -192,7 +192,7 @@ func TestObjectStoragePutIfNoneMatchConcurrency(t *testing.T) {
 
 			data := []byte(fmt.Sprintf("concurrent data from goroutine %d", id))
 			err := storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-				bytes.NewReader(data), int64(len(data)))
+				bytes.NewReader(data), int64(len(data)), "test-ns", "0")
 			results <- err
 		}(i)
 	}
@@ -222,7 +222,7 @@ func TestObjectStoragePutIfNoneMatchConcurrency(t *testing.T) {
 		successCount, objectExistsCount, otherErrorCount)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -247,7 +247,7 @@ func TestObjectStoragePutFencedObjectConcurrency(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			err := storageCli.PutFencedObject(ctx, bucketName, objectName)
+			err := storageCli.PutFencedObject(ctx, bucketName, objectName, "test-ns", "0")
 			results <- err
 		}(i)
 	}
@@ -271,14 +271,14 @@ func TestObjectStoragePutFencedObjectConcurrency(t *testing.T) {
 	assert.Equal(t, 0, errorCount, "No fence operations should fail")
 
 	// Verify object is fenced
-	_, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	_, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.True(t, isFenced, "Object should be fenced after concurrent operations")
 
 	t.Logf("Fenced concurrency test results: %d success, %d errors", successCount, errorCount)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -298,28 +298,28 @@ func TestObjectStoragePutObjectIdempotency(t *testing.T) {
 
 	// 1. First upload should succeed
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("First upload succeeded: %s", objectName)
 
 	// 2. Second upload with same content should return ErrObjectAlreadyExists (idempotent)
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.Error(t, err)
 	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Second upload should return ErrObjectAlreadyExists")
 
 	// 3. Third upload with different content should also return ErrObjectAlreadyExists
 	differentData := []byte("different content")
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(differentData), int64(len(differentData)))
+		bytes.NewReader(differentData), int64(len(differentData)), "test-ns", "0")
 	require.Error(t, err)
 	require.True(t, werr.ErrObjectAlreadyExists.Is(err), "Upload with different content should also return ErrObjectAlreadyExists")
 
 	// 4. Verify original content is preserved
-	objSize, _, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, _, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "test-ns", "0")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -328,7 +328,7 @@ func TestObjectStoragePutObjectIdempotency(t *testing.T) {
 	assert.Equal(t, testData, readData, "Original content should be preserved")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }
 
@@ -437,7 +437,7 @@ func TestObjectStorageWalkWithObjects(t *testing.T) {
 	testData := []byte("test data for walk")
 	for _, objName := range testObjects {
 		err = storageCli.PutObject(ctx, bucketName, objName,
-			bytes.NewReader(testData), int64(len(testData)))
+			bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 		require.NoError(t, err)
 	}
 
@@ -446,7 +446,7 @@ func TestObjectStorageWalkWithObjects(t *testing.T) {
 	err = storageCli.WalkWithObjects(ctx, bucketName, basePath, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 		foundObjects = append(foundObjects, objInfo.FilePath)
 		return true // continue walking
-	})
+	}, "test-ns", "0")
 	require.NoError(t, err)
 
 	// Verify all objects were found
@@ -466,7 +466,7 @@ func TestObjectStorageWalkWithObjects(t *testing.T) {
 
 	// Cleanup
 	for _, objName := range testObjects {
-		err = storageCli.RemoveObject(ctx, bucketName, objName)
+		err = storageCli.RemoveObject(ctx, bucketName, objName, "test-ns", "0")
 		assert.NoError(t, err)
 	}
 }
@@ -490,18 +490,18 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 
 	// 1. Upload the 100-byte object
 	err = storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "test-ns", "0")
 	require.NoError(t, err)
 	t.Logf("Uploaded 100-byte object: %s", objectName)
 
 	// 2. Verify full object size
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "test-ns", "0")
 	require.NoError(t, err)
 	assert.Equal(t, int64(100), objSize, "Object should be 100 bytes")
 	assert.False(t, isFenced, "Object should not be fenced")
 
 	// 3. Read full object to verify content
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "test-ns", "0")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -511,7 +511,7 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, 100, len(fullData), "Full read should return 100 bytes")
 
 	// 4. Read only first 50 bytes using offset=0, size=50
-	partialReader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 50)
+	partialReader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 50, "test-ns", "0")
 	require.NoError(t, err)
 	defer partialReader.Close()
 
@@ -521,7 +521,7 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[:50], partialData, "Partial data should match first 50 bytes of original")
 
 	// 5. Read middle 30 bytes using offset=35, size=30 (bytes 35-64)
-	middleReader, err := storageCli.GetObject(ctx, bucketName, objectName, 35, 30)
+	middleReader, err := storageCli.GetObject(ctx, bucketName, objectName, 35, 30, "test-ns", "0")
 	require.NoError(t, err)
 	defer middleReader.Close()
 
@@ -531,7 +531,7 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[35:65], middleData, "Middle data should match bytes 35-64 of original")
 
 	// 6. Read last 25 bytes using offset=75, size=25
-	lastReader, err := storageCli.GetObject(ctx, bucketName, objectName, 75, 25)
+	lastReader, err := storageCli.GetObject(ctx, bucketName, objectName, 75, 25, "test-ns", "0")
 	require.NoError(t, err)
 	defer lastReader.Close()
 
@@ -541,7 +541,7 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[75:100], lastData, "Last data should match bytes 75-99 of original")
 
 	// 7. Test edge case: read beyond object size (should only return available bytes)
-	beyondReader, err := storageCli.GetObject(ctx, bucketName, objectName, 90, 20)
+	beyondReader, err := storageCli.GetObject(ctx, bucketName, objectName, 90, 20, "test-ns", "0")
 	require.NoError(t, err)
 	defer beyondReader.Close()
 
@@ -558,6 +558,6 @@ func TestObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	t.Logf("  - Beyond object (90+20): %d bytes", len(beyondData))
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "test-ns", "0")
 	assert.NoError(t, err)
 }

@@ -107,12 +107,12 @@ func TestDetectAndStoreConditionWriteCapability_AutoModeSuccess(t *testing.T) {
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Once()
 
 	// Mock: detection succeeds and stores successfully
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
 	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(true, nil).Once()
 
@@ -147,8 +147,8 @@ func TestDetectAndStoreConditionWriteCapability_AutoModeFailureWithFallback(t *t
 
 	// Mock: detection always fails
 	detectErr := fmt.Errorf("storage not supported")
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(detectErr).Maybe()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Mock: store false result after fallback
 	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(false, nil).Once()
@@ -184,8 +184,8 @@ func TestDetectAndStoreConditionWriteCapability_EnableModePanicOnFailure(t *test
 
 	// Mock: detection always fails
 	detectErr := fmt.Errorf("storage not supported")
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(detectErr).Maybe()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Should panic after 10 retries
 	assert.Panics(t, func() {
@@ -218,8 +218,8 @@ func TestDetectAndStoreConditionWriteCapability_AnotherNodeSetsResult(t *testing
 
 	// Detection fails on first attempt
 	detectErr := fmt.Errorf("temporary error")
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(detectErr).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Once()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Second retry: another node has set the result
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(true, nil).Once()
@@ -255,12 +255,12 @@ func TestDetectAndStoreConditionWriteCapability_StoreFailureThenRetrySuccess(t *
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Once()
 
 	// Detection succeeds once
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
 	// Storing to etcd fails on first attempt
 	etcdErr := fmt.Errorf("etcd connection failed")
@@ -299,8 +299,8 @@ func TestDetectAndStoreConditionWriteCapability_DetectionFalseStored(t *testing.
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Maybe()
 
 	// Mock: detection always fails (not supported)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(fmt.Errorf("not supported")).Maybe()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("not supported")).Maybe()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// After all retries fail, store false
 	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(false, nil).Once()
@@ -335,12 +335,12 @@ func TestDetectAndStoreConditionWriteCapability_AgreedResultDifferent(t *testing
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Once()
 
 	// Mock: detection succeeds with true
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
 	// But another node stored false first (CAS returns different value)
 	mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, true).Return(false, nil).Once()
@@ -376,12 +376,12 @@ func TestDetectAndStoreConditionWriteCapability_DetectionTrueButEtcdAlwaysFails(
 	mockMetadata.EXPECT().GetConditionWriteResult(mock.Anything).Return(false, werr.ErrMetadataKeyNotExists).Once()
 
 	// Mock: detection succeeds with true (supports condition write)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Once()
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(werr.ErrObjectAlreadyExists).Once()
-	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+	mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
 	// But etcd operations always fail (all 10 retry attempts)
 	etcdErr := fmt.Errorf("etcd connection timeout")
@@ -419,8 +419,8 @@ func TestDetectAndStoreConditionWriteCapability_DetectionFalseButEtcdAlwaysFails
 
 	// Mock: detection always fails (does not support condition write)
 	detectErr := fmt.Errorf("storage not supported")
-	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(detectErr).Maybe()
-	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
+	mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// After all detection retries fail, try to store false but etcd operations always fail
 	etcdErr := fmt.Errorf("etcd connection timeout")
@@ -493,19 +493,19 @@ func TestDetectAndStoreConditionWriteCapability_EtcdReturnsAgreedResult(t *testi
 			if tc.detectionShouldFail {
 				// Detection always fails
 				detectErr := fmt.Errorf("storage not supported")
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(detectErr).Maybe()
-				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Maybe()
+				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(detectErr).Maybe()
+				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Maybe()
 
 				// Store false result and get agreed result
 				mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, false).Return(tc.agreedResult, nil).Once()
 			} else {
 				// Detection succeeds
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Once()
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
-				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(werr.ErrObjectAlreadyExists).Once()
-				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
-				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
-				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string")).Return(nil).Times(2)
+				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(werr.ErrObjectAlreadyExists).Once()
+				mockStorage.EXPECT().PutFencedObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
+				mockStorage.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(werr.ErrSegmentFenced).Once()
+				mockStorage.EXPECT().RemoveObject(mock.Anything, "test-bucket", mock.AnythingOfType("string"), mock.Anything, mock.Anything).Return(nil).Times(2)
 
 				// Store detection result and get agreed result
 				mockMetadata.EXPECT().StoreOrGetConditionWriteResult(mock.Anything, tc.localDetection).Return(tc.agreedResult, nil).Once()

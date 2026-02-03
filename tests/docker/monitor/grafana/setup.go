@@ -18,12 +18,40 @@ package grafana
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+//go:embed templates/datasource.json
+var datasourceTemplate string
+
+//go:embed templates/dashboard_client.json
+var clientDashboardTemplate string
+
+//go:embed templates/dashboard_server.json
+var serverDashboardTemplate string
+
+//go:embed templates/dashboard_server_ns.json
+var serverNSDashboardTemplate string
+
+type dashboardDef struct {
+	template string
+	uid      string
+	slug     string
+}
+
+func getDashboards() []dashboardDef {
+	return []dashboardDef{
+		{clientDashboardTemplate, "woodpecker-client-ns", "woodpecker-client-ns"},
+		{serverDashboardTemplate, "woodpecker-server", "woodpecker-server"},
+		{serverNSDashboardTemplate, "woodpecker-server-ns", "woodpecker-server-ns"},
+	}
+}
 
 // Config holds the connection parameters for Grafana dashboard setup.
 type Config struct {
@@ -44,26 +72,29 @@ func DefaultConfig() Config {
 }
 
 // SetupDashboard creates the Prometheus datasource in Grafana and imports
-// the Woodpecker dashboard. It returns the URL to the dashboard.
-func SetupDashboard(cfg Config) (string, error) {
+// the Woodpecker dashboards. It returns the URLs to all dashboards.
+func SetupDashboard(cfg Config) ([]string, error) {
 	if err := waitForGrafanaReady(cfg.GrafanaURL, 30*time.Second); err != nil {
-		return "", fmt.Errorf("grafana not ready: %w", err)
+		return nil, fmt.Errorf("grafana not ready: %w", err)
 	}
 
 	dsUID, err := ensureDatasource(cfg.GrafanaURL, cfg.PrometheusURL)
 	if err != nil {
-		return "", fmt.Errorf("datasource setup failed: %w", err)
+		return nil, fmt.Errorf("datasource setup failed: %w", err)
 	}
 
-	dashboard := BuildDashboard()
-	setDatasourceUID(dashboard, dsUID)
+	var urls []string
+	for _, d := range getDashboards() {
+		dashboardJSON := strings.ReplaceAll(d.template, "__DATASOURCE_UID__", dsUID)
 
-	if err := importDashboard(cfg.GrafanaURL, dashboard); err != nil {
-		return "", fmt.Errorf("dashboard import failed: %w", err)
+		if err := importDashboard(cfg.GrafanaURL, dashboardJSON); err != nil {
+			return nil, fmt.Errorf("dashboard %s import failed: %w", d.uid, err)
+		}
+
+		urls = append(urls, fmt.Sprintf("%s/d/%s/%s", cfg.GrafanaURL, d.uid, d.slug))
 	}
 
-	dashURL := fmt.Sprintf("%s/d/%s/woodpecker", cfg.GrafanaURL, DashboardUID)
-	return dashURL, nil
+	return urls, nil
 }
 
 // waitForGrafanaReady polls the Grafana health endpoint until it responds OK
@@ -88,20 +119,9 @@ func waitForGrafanaReady(grafanaURL string, timeout time.Duration) error {
 // ensureDatasource creates a Prometheus datasource in Grafana.
 // If one already exists (HTTP 409), it fetches the existing datasource UID.
 func ensureDatasource(grafanaURL, prometheusURL string) (string, error) {
-	payload := map[string]interface{}{
-		"name":      "Prometheus",
-		"type":      "prometheus",
-		"url":       prometheusURL,
-		"access":    "proxy",
-		"isDefault": true,
-	}
+	body := strings.ReplaceAll(datasourceTemplate, "__PROMETHEUS_URL__", prometheusURL)
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := doRequest("POST", grafanaURL+"/api/datasources", body)
+	resp, err := doRequest("POST", grafanaURL+"/api/datasources", []byte(body))
 	if err != nil {
 		return "", err
 	}
@@ -153,35 +173,11 @@ func getDatasourceUID(grafanaURL, name string) (string, error) {
 	return ds.UID, nil
 }
 
-// setDatasourceUID walks all panels and sets the datasource UID.
-func setDatasourceUID(dashboard *Dashboard, uid string) {
-	for i := range dashboard.Panels {
-		setDSOnPanel(&dashboard.Panels[i], uid)
-	}
-}
+// importDashboard posts the dashboard JSON to Grafana with overwrite enabled.
+func importDashboard(grafanaURL string, dashboardJSON string) error {
+	payload := fmt.Sprintf(`{"dashboard":%s,"overwrite":true}`, dashboardJSON)
 
-func setDSOnPanel(p *Panel, uid string) {
-	if p.Datasource != nil {
-		p.Datasource.UID = uid
-	}
-	for i := range p.Panels {
-		setDSOnPanel(&p.Panels[i], uid)
-	}
-}
-
-// importDashboard posts the dashboard to Grafana with overwrite enabled.
-func importDashboard(grafanaURL string, dashboard *Dashboard) error {
-	payload := map[string]interface{}{
-		"dashboard": dashboard,
-		"overwrite": true,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	resp, err := doRequest("POST", grafanaURL+"/api/dashboards/db", body)
+	resp, err := doRequest("POST", grafanaURL+"/api/dashboards/db", []byte(payload))
 	if err != nil {
 		return err
 	}

@@ -248,7 +248,7 @@ func IsFencedObject(objInfo minio.ObjectInfo) bool {
 
 // ReadObjectFull reads all content from ObjectReader and returns a byte slice
 // It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
-func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSize int64) ([]byte, error) {
+func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSize int64, operatingNamespace string, operatingLogId string) ([]byte, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
 	defer sp.End()
 	start := time.Now()
@@ -275,17 +275,17 @@ func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSiz
 			break
 		} else if err != nil {
 			// Error occurred
-			metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "error").Inc()
-			metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "error").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, err
 		}
 	}
 
 	// Track metrics for successful read
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("read_object_full", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("read").Add(float64(bytesRead))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues("read_object_full").Observe(float64(bytesRead))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "read").Add(float64(bytesRead))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full").Observe(float64(bytesRead))
 
 	return buf, nil
 }

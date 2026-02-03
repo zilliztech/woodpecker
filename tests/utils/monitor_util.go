@@ -74,6 +74,9 @@ var (
 )
 
 func StartMetrics() {
+	if metrics.MetricsNamespace == "" {
+		metrics.MetricsNamespace = "test/default"
+	}
 	testMetricsRegistry = prometheus.DefaultRegisterer
 	metrics.RegisterWoodpeckerWithRegisterer(testMetricsRegistry)
 	testMetricsRegistry.MustRegister(MinioIOBytes)

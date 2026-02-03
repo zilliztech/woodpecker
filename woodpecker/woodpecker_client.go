@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
@@ -82,6 +83,10 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 	if initTraceErr != nil {
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
+	// Register client metrics so they are available before initClient() touches etcd metadata.
+	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
+	metrics.RegisterClientMetricsWithRegisterer(prometheus.DefaultRegisterer)
+
 	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
 	c := &woodpeckerClient{
 		cfg:        cfg,

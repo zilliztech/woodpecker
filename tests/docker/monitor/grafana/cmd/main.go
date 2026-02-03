@@ -36,10 +36,12 @@ func main() {
 	flag.StringVar(&cfg.PrometheusURL, "prometheus-url", cfg.PrometheusURL, "Prometheus URL (as seen by Grafana inside Docker)")
 	flag.Parse()
 
-	dashURL, err := grafana.SetupDashboard(cfg)
+	dashURLs, err := grafana.SetupDashboard(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Grafana dashboard ready: %s\n", dashURL)
+	for _, u := range dashURLs {
+		fmt.Printf("Grafana dashboard ready: %s\n", u)
+	}
 }

@@ -222,10 +222,12 @@ func (mc *MonitorCluster) SetupGrafanaDashboard(t *testing.T) {
 		GrafanaURL:    GrafanaURL,
 		PrometheusURL: "http://prometheus:9090",
 	}
-	dashURL, err := grafana.SetupDashboard(cfg)
+	dashURLs, err := grafana.SetupDashboard(cfg)
 	if err != nil {
 		t.Logf("WARNING: Grafana dashboard setup failed: %v", err)
 		return
 	}
-	t.Logf("Grafana dashboard ready: %s", dashURL)
+	for _, u := range dashURLs {
+		t.Logf("Grafana dashboard ready: %s", u)
+	}
 }

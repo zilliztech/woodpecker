@@ -77,7 +77,8 @@ func TestMinioReadPerformance(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
-				getOpts)
+				getOpts,
+				"test-ns", "0")
 			assert.NoError(t, getErr)
 			defer obj.Close()
 
@@ -113,7 +114,8 @@ func TestMinioDelete(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				fmt.Sprintf("%s%d", TEST_OBJECT_PREFIX, objectId),
-				minio.RemoveObjectOptions{})
+				minio.RemoveObjectOptions{},
+				"test-ns", "0")
 			assert.NoError(t, removeErr)
 			if removeErr != nil {
 				t.Logf("remove test_object_%d failed,err:%v\n", i, removeErr)
@@ -192,7 +194,8 @@ func TestMinioSingleThreadLatency(t *testing.T) {
 				objectKey,
 				bytes.NewReader(payloadStaticData),
 				int64(len(payloadStaticData)),
-				minio.PutObjectOptions{})
+				minio.PutObjectOptions{},
+				"test-ns", "0")
 			assert.NoError(t, putErr)
 
 			latency := time.Since(start)
@@ -294,7 +297,8 @@ func TestMinioSingleReadLatency(t *testing.T) {
 				objectKey,
 				bytes.NewReader(payloadStaticData),
 				int64(len(payloadStaticData)),
-				minio.PutObjectOptions{})
+				minio.PutObjectOptions{},
+				"test-ns", "0")
 			assert.NoError(t, putErr)
 		}
 
@@ -315,7 +319,8 @@ func TestMinioSingleReadLatency(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				objectKey,
-				minio.GetObjectOptions{})
+				minio.GetObjectOptions{},
+				"test-ns", "0")
 			assert.NoError(t, getErr)
 
 			readData, err := ioutil.ReadAll(obj)
@@ -369,7 +374,8 @@ func TestMinioSingleReadLatency(t *testing.T) {
 				context.Background(),
 				cfg.Minio.BucketName,
 				objectKey,
-				minio.RemoveObjectOptions{})
+				minio.RemoveObjectOptions{},
+				"test-ns", "0")
 		}
 	}
 

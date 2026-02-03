@@ -20,6 +20,7 @@ package objectstorage
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -27,6 +28,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/server/storage"
 )
@@ -45,6 +47,8 @@ type SegmentImpl struct {
 	logId          int64
 	segmentId      int64
 	segmentFileKey string
+	logIdStr       string // for metrics label only
+	nsStr          string // for metrics namespace label
 }
 
 // NewSegmentImpl is used to create a new Segment, which is used to write data to object storage
@@ -58,6 +62,8 @@ func NewSegmentImpl(ctx context.Context, bucket string, baseDir string, logId in
 		client:         objectCli,
 		segmentFileKey: segmentFileKey,
 		bucket:         bucket,
+		logIdStr:       strconv.FormatInt(logId, 10),
+		nsStr:          bucket + "/" + baseDir,
 	}
 	return segmentImpl
 }
@@ -81,7 +87,11 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 
 	// List all objects in the segment directory
 	listPrefix := fmt.Sprintf("%s/", s.segmentFileKey)
-	var objectsToDelete []string
+	type objectToDelete struct {
+		path string
+		size int64
+	}
+	var objectsToDelete []objectToDelete
 	var deletedCount int
 	var errorCount int
 
@@ -114,10 +124,10 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 		}
 
 		if shouldDelete {
-			objectsToDelete = append(objectsToDelete, objInfo.FilePath)
+			objectsToDelete = append(objectsToDelete, objectToDelete{path: objInfo.FilePath, size: objInfo.Size})
 		}
 		return true // continue walking
-	})
+	}, s.nsStr, s.logIdStr)
 	if walkErr != nil {
 		logger.Ctx(ctx).Warn("error listing blocks during deletion",
 			zap.String("segmentFileKey", s.segmentFileKey),
@@ -131,20 +141,22 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 		zap.Int("flag", flag))
 
 	// Delete objects
-	for _, objectKey := range objectsToDelete {
-		err := s.client.RemoveObject(ctx, s.bucket, objectKey)
+	for _, obj := range objectsToDelete {
+		err := s.client.RemoveObject(ctx, s.bucket, obj.path, s.nsStr, s.logIdStr)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
 				zap.String("segmentFileKey", s.segmentFileKey),
-				zap.String("objectKey", objectKey),
+				zap.String("objectKey", obj.path),
 				zap.Error(err))
 			errorCount++
 		} else {
 			logger.Ctx(ctx).Debug("successfully deleted block",
 				zap.String("segmentFileKey", s.segmentFileKey),
-				zap.String("objectKey", objectKey))
+				zap.String("objectKey", obj.path))
 			deletedCount++
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(s.nsStr, s.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(s.nsStr, s.logIdStr).Dec()
 		}
 	}
 

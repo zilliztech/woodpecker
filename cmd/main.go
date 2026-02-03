@@ -191,7 +191,9 @@ func main() {
 	}
 	log.Printf("HTTP server started on port %s (metrics, health, pprof, admin)", commonhttp.DefaultListenPort)
 
-	// Register woodpecker metrics with default prometheus registerer
+	// Set node identity and namespace for metrics, then register all metrics
+	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
+	metrics.NodeID = *nodeName
 	metrics.RegisterWoodpeckerWithRegisterer(prometheus.DefaultRegisterer)
 
 	// Start system metrics collector

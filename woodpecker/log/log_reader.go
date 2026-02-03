@@ -127,6 +127,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
 			metrics.WpClientReadEntriesTotal.WithLabelValues(l.logIdStr).Inc()
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
+			metrics.WpClientReadLatency.WithLabelValues(l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 			metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return logMsg, nil
 		}
@@ -212,6 +213,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// update metrics
 		metrics.WpClientReadEntriesTotal.WithLabelValues(l.logIdStr).Inc()
 		metrics.WpLogReaderBytesRead.WithLabelValues(l.logIdStr, l.readerName).Add(float64(len(oneEntry.Values)))
+		metrics.WpClientReadLatency.WithLabelValues(l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
 		metrics.WpLogReaderOperationLatency.WithLabelValues(l.logIdStr, "read_next", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return logMsg, nil
 	}

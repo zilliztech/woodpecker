@@ -55,6 +55,7 @@ type StagedFileReaderAdv struct {
 	logId    int64
 	segId    int64
 	logIdStr string // for metrics only
+	nsStr    string // for metrics only
 	filePath string
 
 	// object access, only used for compacted object access
@@ -141,6 +142,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		logId:           logId,
 		segId:           segId,
 		logIdStr:        strconv.FormatInt(logId, 10),
+		nsStr:           bucket + "/" + rootPath,
 		filePath:        filePath,
 		maxBatchSize:    maxBatchSize,
 		file:            file,
@@ -167,7 +169,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
 	}
 
-	metrics.WpFileReaders.WithLabelValues(reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(reader.nsStr, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("staged file reader created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -230,7 +232,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 		zap.String("footerKey", footerKey))
 
 	// Check if footer exists
-	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey)
+	objSize, _, err := r.storageCli.StatObject(ctx, r.bucket, footerKey, r.nsStr, r.logIdStr)
 	if err != nil {
 		if minioHandler.IsObjectNotExists(err) {
 			logger.Ctx(ctx).Debug("no compacted footer found in minio",
@@ -244,7 +246,7 @@ func (r *StagedFileReaderAdv) tryParseMinioFooterUnsafe(ctx context.Context) err
 	}
 
 	// Read the entire footer file
-	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize)
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, footerKey, 0, objSize, r.nsStr, r.logIdStr)
 	if err != nil {
 		logger.Ctx(ctx).Warn("failed to get footer object from minio",
 			zap.String("footerKey", footerKey),
@@ -855,8 +857,8 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -1082,8 +1084,8 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.nsStr, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -1197,7 +1199,7 @@ func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	if r.pool != nil {
 		r.pool.Release()
 	}
-	metrics.WpFileReaders.WithLabelValues(r.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(r.nsStr, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }
@@ -1443,7 +1445,7 @@ func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKe
 		zap.String("objKey", objKey))
 
 	// Read the block object
-	reader, err := r.storageCli.GetObject(ctx, r.bucket, objKey, 0, objSize)
+	reader, err := r.storageCli.GetObject(ctx, r.bucket, objKey, 0, objSize, r.nsStr, r.logIdStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block object: %w", err)
 	}
