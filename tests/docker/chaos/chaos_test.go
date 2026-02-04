@@ -9,50 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zilliztech/woodpecker/tests/docker/framework"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
-
-const (
-	// writeResultTimeout is the maximum time to wait for a single WriteAsync result.
-	// This prevents tests from hanging forever when quorum cannot be formed.
-	writeResultTimeout = 60 * time.Second
-)
-
-// writeEntries writes n entries to the given writer and returns the successful message IDs.
-// It uses WriteAsync and collects all results, requiring all writes to succeed.
-// Each entry has a timeout to prevent hanging on quorum failures.
-//
-// IMPORTANT: WriteAsync can block synchronously on SelectQuorum (e.g., when retrying
-// to find enough nodes). We run each WriteAsync in a goroutine so the timeout works
-// even when WriteAsync blocks before returning the result channel.
-func writeEntries(t *testing.T, ctx context.Context, writer log.LogWriter, offset, count int) []*log.LogMessageId {
-	t.Helper()
-	ids := make([]*log.LogMessageId, 0, count)
-	for i := 0; i < count; i++ {
-		resultCh := make(chan *log.WriteResult, 1)
-		go func(idx int) {
-			ch := writer.WriteAsync(ctx, &log.WriteMessage{
-				Payload: []byte(fmt.Sprintf("entry-%d", offset+idx)),
-				Properties: map[string]string{
-					"index": fmt.Sprintf("%d", offset+idx),
-				},
-			})
-			if ch != nil {
-				resultCh <- <-ch
-			}
-		}(i)
-
-		select {
-		case result := <-resultCh:
-			require.NoError(t, result.Err, "write entry %d failed", offset+i)
-			require.NotNil(t, result.LogMessageId, "write entry %d returned nil ID", offset+i)
-			ids = append(ids, result.LogMessageId)
-		case <-time.After(writeResultTimeout):
-			t.Fatalf("write entry %d timed out after %v (possible quorum failure)", offset+i, writeResultTimeout)
-		}
-	}
-	return ids
-}
 
 // writeEntriesAllowFailures writes n entries and returns successful IDs and failure count.
 // Each entry has a timeout — timeouts count as failures.
@@ -94,24 +53,6 @@ func writeEntriesAllowFailures(t *testing.T, ctx context.Context, writer log.Log
 	return ids, failures
 }
 
-// readAllEntries reads entries from the earliest position and returns them.
-func readAllEntries(t *testing.T, ctx context.Context, logHandle log.LogHandle, expectedCount int) []*log.LogMessage {
-	t.Helper()
-	earliest := log.EarliestLogMessageID()
-	reader, err := logHandle.OpenLogReader(ctx, &earliest, fmt.Sprintf("chaos-reader-%d", time.Now().UnixNano()))
-	require.NoError(t, err, "failed to open log reader")
-	defer reader.Close(ctx)
-
-	msgs := make([]*log.LogMessage, 0, expectedCount)
-	for i := 0; i < expectedCount; i++ {
-		msg, err := reader.ReadNext(ctx)
-		require.NoError(t, err, "failed to read entry %d", i)
-		require.NotNil(t, msg, "entry %d is nil", i)
-		msgs = append(msgs, msg)
-	}
-	return msgs
-}
-
 // verifyEntryOrder checks that entries have monotonically increasing IDs.
 func verifyEntryOrder(t *testing.T, msgs []*log.LogMessage) {
 	t.Helper()
@@ -128,11 +69,11 @@ func verifyEntryOrder(t *testing.T, msgs []*log.LogMessage) {
 	}
 }
 
-// newChaosCluster creates a DockerCluster for use in chaos tests.
+// newChaosCluster creates a ChaosCluster for use in chaos tests.
 // It does NOT call Up/Down — that is managed by TestMain or run_chaos_tests.sh.
-func newChaosCluster(t *testing.T) *DockerCluster {
+func newChaosCluster(t *testing.T) *ChaosCluster {
 	t.Helper()
-	return NewDockerCluster(t)
+	return NewChaosCluster(t)
 }
 
 // --- Chaos Test Cases ---
@@ -166,14 +107,14 @@ func TestChaos_BasicReadWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 1000 entries
-	ids := writeEntries(t, ctx, writer, 0, 1000)
+	ids := framework.WriteEntries(t, ctx, writer, 0, 1000)
 	require.Len(t, ids, 1000)
 
 	err = writer.Close(ctx)
 	require.NoError(t, err)
 
 	// Read all entries back
-	msgs := readAllEntries(t, ctx, logHandle, 1000)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle, 1000)
 	require.Len(t, msgs, 1000)
 
 	// Verify order
@@ -222,7 +163,7 @@ func TestChaos_SingleNodeKill_WriteContinues(t *testing.T) {
 	})
 
 	// Phase 1: Write 5 entries with all 4 nodes alive
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written with all nodes alive")
 
@@ -236,7 +177,7 @@ func TestChaos_SingleNodeKill_WriteContinues(t *testing.T) {
 	// Phase 2: Continue writing on the SAME writer — should succeed because aq=2
 	// Even if node1 was part of the current segment's ensemble, 2 of 3 ensemble nodes
 	// are alive, satisfying the ack quorum requirement. No recovery actions needed.
-	ids2 := writeEntries(t, ctx, writer, 5, 5)
+	ids2 := framework.WriteEntries(t, ctx, writer, 5, 5)
 	require.Len(t, ids2, 5)
 	t.Log("Phase 2: 5 more entries written on SAME writer after node kill (aq=2 satisfied)")
 
@@ -245,7 +186,7 @@ func TestChaos_SingleNodeKill_WriteContinues(t *testing.T) {
 
 	// Read all 10 entries and verify correctness
 	allIds := append(ids1, ids2...)
-	msgs := readAllEntries(t, ctx, logHandle, 10)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle, 10)
 	require.Len(t, msgs, 10)
 	verifyEntryOrder(t, msgs)
 
@@ -297,7 +238,7 @@ func TestChaos_DoubleNodeKill_WriteBlocksAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 1: Write 5 entries with all 4 nodes alive
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written with all nodes alive")
 
@@ -365,7 +306,7 @@ func TestChaos_DoubleNodeKill_WriteBlocksAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 5 entries → should succeed now
-	ids3 := writeEntries(t, ctx, writer3, 10, 5)
+	ids3 := framework.WriteEntries(t, ctx, writer3, 10, 5)
 	require.Len(t, ids3, 5)
 	t.Log("Phase 3: 5 entries written after restarting one node")
 
@@ -374,7 +315,7 @@ func TestChaos_DoubleNodeKill_WriteBlocksAndRecovers(t *testing.T) {
 
 	// Read all entries that succeeded (Phase 1 + any Phase 2 + Phase 3)
 	expectedCount := len(ids1) + len(ids2) + len(ids3)
-	msgs := readAllEntries(t, ctx, logHandle3, expectedCount)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle3, expectedCount)
 	require.Len(t, msgs, expectedCount)
 	verifyEntryOrder(t, msgs)
 
@@ -409,7 +350,7 @@ func TestChaos_NodeRestart_RecoveryMode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 1: Write 5 entries
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written")
 
@@ -435,7 +376,7 @@ func TestChaos_NodeRestart_RecoveryMode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 5 more entries in new segment
-	ids2 := writeEntries(t, ctx, writer2, 5, 5)
+	ids2 := framework.WriteEntries(t, ctx, writer2, 5, 5)
 	require.Len(t, ids2, 5)
 	t.Log("Phase 2: 5 more entries written after node restart")
 
@@ -444,7 +385,7 @@ func TestChaos_NodeRestart_RecoveryMode(t *testing.T) {
 
 	// Read all entries and verify
 	allIds := append(ids1, ids2...)
-	msgs := readAllEntries(t, ctx, logHandle2, 10)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle2, 10)
 	require.Len(t, msgs, 10)
 	verifyEntryOrder(t, msgs)
 
@@ -487,7 +428,7 @@ func TestChaos_RollingRestart(t *testing.T) {
 	writer, err := logHandle.OpenLogWriter(ctx)
 	require.NoError(t, err)
 
-	ids := writeEntries(t, ctx, writer, totalWritten, entriesPerRound)
+	ids := framework.WriteEntries(t, ctx, writer, totalWritten, entriesPerRound)
 	allIds = append(allIds, ids...)
 	totalWritten += entriesPerRound
 	t.Logf("Initial round: wrote %d entries", entriesPerRound)
@@ -516,7 +457,7 @@ func TestChaos_RollingRestart(t *testing.T) {
 		writer2, err := logHandle2.OpenLogWriter(ctx)
 		require.NoError(t, err)
 
-		ids := writeEntries(t, ctx, writer2, totalWritten, entriesPerRound)
+		ids := framework.WriteEntries(t, ctx, writer2, totalWritten, entriesPerRound)
 		allIds = append(allIds, ids...)
 		totalWritten += entriesPerRound
 
@@ -530,7 +471,7 @@ func TestChaos_RollingRestart(t *testing.T) {
 	logHandleFinal, err := client.OpenLog(ctx, logName)
 	require.NoError(t, err)
 
-	msgs := readAllEntries(t, ctx, logHandleFinal, totalWritten)
+	msgs := framework.ReadAllEntries(t, ctx, logHandleFinal, totalWritten)
 	require.Len(t, msgs, totalWritten)
 	verifyEntryOrder(t, msgs)
 
@@ -572,7 +513,7 @@ func TestChaos_FullClusterRestart_DataDurability(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 10 entries
-	ids := writeEntries(t, ctx, writer, 0, 10)
+	ids := framework.WriteEntries(t, ctx, writer, 0, 10)
 	require.Len(t, ids, 10)
 	t.Log("Wrote 10 entries")
 
@@ -602,7 +543,7 @@ func TestChaos_FullClusterRestart_DataDurability(t *testing.T) {
 	logHandle2, err := client2.OpenLog(ctx, logName)
 	require.NoError(t, err)
 
-	msgs := readAllEntries(t, ctx, logHandle2, 10)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle2, 10)
 	require.Len(t, msgs, 10)
 	verifyEntryOrder(t, msgs)
 
@@ -653,7 +594,7 @@ func TestChaos_NetworkPartition_SingleNode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 1: Write 5 entries and close writer (segment completed while all nodes alive)
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written with all nodes alive")
 
@@ -675,7 +616,7 @@ func TestChaos_NetworkPartition_SingleNode(t *testing.T) {
 	writer2, err := logHandle2.OpenLogWriter(ctx)
 	require.NoError(t, err)
 
-	ids2 := writeEntries(t, ctx, writer2, 5, 5)
+	ids2 := framework.WriteEntries(t, ctx, writer2, 5, 5)
 	require.Len(t, ids2, 5)
 	t.Log("Phase 2: 5 entries written with node1 down")
 
@@ -700,7 +641,7 @@ func TestChaos_NetworkPartition_SingleNode(t *testing.T) {
 	writer3, err := logHandle3.OpenLogWriter(ctx)
 	require.NoError(t, err)
 
-	ids3 := writeEntries(t, ctx, writer3, 10, 5)
+	ids3 := framework.WriteEntries(t, ctx, writer3, 10, 5)
 	require.Len(t, ids3, 5)
 	t.Log("Phase 3: 5 entries written after full recovery")
 
@@ -709,7 +650,7 @@ func TestChaos_NetworkPartition_SingleNode(t *testing.T) {
 
 	// Read all 15 entries and verify correctness
 	allIds := append(append(ids1, ids2...), ids3...)
-	msgs := readAllEntries(t, ctx, logHandle3, 15)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle3, 15)
 	require.Len(t, msgs, 15)
 	verifyEntryOrder(t, msgs)
 
@@ -748,8 +689,8 @@ func TestChaos_NetworkPartition_TwoNodes(t *testing.T) {
 
 	// Cleanup: ensure nodes are started at end
 	t.Cleanup(func() {
-		_, _, _ = runCommandDirect("docker", "start", "woodpecker-node1")
-		_, _, _ = runCommandDirect("docker", "start", "woodpecker-node2")
+		_, _, _ = framework.RunCommandDirect("docker", "start", "woodpecker-node1")
+		_, _, _ = framework.RunCommandDirect("docker", "start", "woodpecker-node2")
 	})
 
 	// Use manual client for Phase 1+2 to control lifecycle
@@ -766,7 +707,7 @@ func TestChaos_NetworkPartition_TwoNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 1: Write 5 entries with all 4 nodes alive
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written with all nodes alive")
 
@@ -836,7 +777,7 @@ func TestChaos_NetworkPartition_TwoNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write 5 entries → should succeed with all nodes back
-	ids3 := writeEntries(t, ctx, writer3, 10, 5)
+	ids3 := framework.WriteEntries(t, ctx, writer3, 10, 5)
 	require.Len(t, ids3, 5)
 	t.Log("Phase 3: 5 entries written after partition healed")
 
@@ -845,7 +786,7 @@ func TestChaos_NetworkPartition_TwoNodes(t *testing.T) {
 
 	// Read all entries that succeeded — tests reader fallback behavior.
 	expectedCount := len(ids1) + len(ids2) + len(ids3)
-	msgs := readAllEntries(t, ctx, logHandle3, expectedCount)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle3, expectedCount)
 	require.Len(t, msgs, expectedCount)
 	verifyEntryOrder(t, msgs)
 
@@ -881,7 +822,7 @@ func TestChaos_MinIOFailure_WriteBlocksAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 
 	// Phase 1: Write 5 entries with MinIO healthy
-	ids1 := writeEntries(t, ctx, writer, 0, 5)
+	ids1 := framework.WriteEntries(t, ctx, writer, 0, 5)
 	require.Len(t, ids1, 5)
 	t.Log("Phase 1: 5 entries written with MinIO healthy")
 
@@ -930,7 +871,7 @@ func TestChaos_MinIOFailure_WriteBlocksAndRecovers(t *testing.T) {
 	writer3, err := logHandle3.OpenLogWriter(ctx)
 	require.NoError(t, err)
 
-	ids3 := writeEntries(t, ctx, writer3, 10, 5)
+	ids3 := framework.WriteEntries(t, ctx, writer3, 10, 5)
 	require.Len(t, ids3, 5)
 	t.Log("Phase 3: 5 entries written after MinIO recovery")
 
@@ -939,7 +880,7 @@ func TestChaos_MinIOFailure_WriteBlocksAndRecovers(t *testing.T) {
 
 	// Read back everything we know succeeded
 	expectedCount := len(ids1) + len(ids2) + len(ids3)
-	msgs := readAllEntries(t, ctx, logHandle3, expectedCount)
+	msgs := framework.ReadAllEntries(t, ctx, logHandle3, expectedCount)
 	require.Len(t, msgs, expectedCount)
 	verifyEntryOrder(t, msgs)
 

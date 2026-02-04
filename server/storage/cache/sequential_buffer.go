@@ -23,19 +23,22 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 // BufferEntry represents a single entry in the buffer with its data and notification channel
 type BufferEntry struct {
-	EntryId    int64                 // The entry ID for this buffer entry
-	Data       []byte                // The actual data
-	NotifyChan channel.ResultChannel // Channel to notify when this entry is synced
+	EntryId     int64                 // The entry ID for this buffer entry
+	Data        []byte                // The actual data
+	NotifyChan  channel.ResultChannel // Channel to notify when this entry is synced
+	EnqueueTime time.Time            // Time when the entry was enqueued for buffer wait latency tracking
 }
 
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
@@ -44,6 +47,7 @@ type SequentialBuffer struct {
 	logId     int64
 	segmentId int64
 	logIdStr  string // for metrics only
+	nsStr     string // for metrics only
 
 	Entries                 []*BufferEntry // entries with data and notification channels
 	MaxEntries              int64          // max amount of entries
@@ -59,6 +63,7 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
+		nsStr:        metrics.MetricsNamespace,
 		Entries:      make([]*BufferEntry, maxEntries),
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -78,6 +83,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
+		nsStr:        metrics.MetricsNamespace,
 		Entries:      entries,
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -103,9 +109,10 @@ func (b *SequentialBuffer) WriteEntryWithNotify(entryId int64, value []byte, not
 
 	relatedIdx := entryId - b.FirstEntryId
 	b.Entries[relatedIdx] = &BufferEntry{
-		EntryId:    entryId,
-		Data:       value,
-		NotifyChan: notifyChan,
+		EntryId:     entryId,
+		Data:        value,
+		NotifyChan:  notifyChan,
+		EnqueueTime: time.Now(),
 	}
 	b.DataSize.Add(int64(len(value)))
 
@@ -172,6 +179,12 @@ func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryI
 		relatedIdx := entryId - b.FirstEntryId
 		entry := b.Entries[relatedIdx]
 		if entry != nil && entry.NotifyChan != nil {
+			// Track buffer wait latency
+			if !entry.EnqueueTime.IsZero() {
+				metrics.WpServerBufferWaitLatency.WithLabelValues(b.nsStr, b.logIdStr).
+					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
+			}
+
 			// Verify EntryId consistency for debugging
 			if entry.EntryId != entryId {
 				// This should not happen, but log it for debugging
@@ -224,6 +237,12 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 
 	for _, entry := range b.Entries {
 		if entry != nil && entry.NotifyChan != nil {
+			// Track buffer wait latency
+			if !entry.EnqueueTime.IsZero() {
+				metrics.WpServerBufferWaitLatency.WithLabelValues(b.nsStr, b.logIdStr).
+					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
+			}
+
 			// For successful writes, send the entry's own ID
 			// For failed writes, send the error result
 			notifyValue := result
@@ -369,7 +388,13 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 // NotifyPendingEntryDirectly notifies a single entry directly with the specified result
 // For successful entries (result >= 0), the entry receives the entryId
 // For failed entries (result < 0), the entry receives the error result
-func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error) {
+func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error, nsStr string, enqueueTime time.Time) {
+	// Track buffer wait latency
+	if !enqueueTime.IsZero() && nsStr != "" {
+		metrics.WpServerBufferWaitLatency.WithLabelValues(nsStr, strconv.FormatInt(logId, 10)).
+			Observe(float64(time.Since(enqueueTime).Milliseconds()))
+	}
+
 	// For successful writes, send the entry's own ID
 	// For failed writes, send the error result
 	notifyValue := result

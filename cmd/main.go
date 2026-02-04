@@ -28,11 +28,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/zilliztech/woodpecker/cmd/external"
 	"github.com/zilliztech/woodpecker/common/config"
 	commonhttp "github.com/zilliztech/woodpecker/common/http"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
 )
@@ -187,6 +190,14 @@ func main() {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 	log.Printf("HTTP server started on port %s (metrics, health, pprof, admin)", commonhttp.DefaultListenPort)
+
+	// Set node identity and namespace for metrics, then register all metrics
+	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
+	metrics.NodeID = *nodeName
+	metrics.RegisterWoodpeckerWithRegisterer(prometheus.DefaultRegisterer)
+
+	// Start system metrics collector
+	metrics.StartSystemMetricsCollector(ctx, cfg.Woodpecker.Storage.RootPath, 15*time.Second)
 
 	log.Printf("Starting Woodpecker Server:")
 	log.Printf("  Node Name: %s", *nodeName)

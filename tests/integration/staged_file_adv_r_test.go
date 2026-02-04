@@ -73,12 +73,12 @@ func cleanupStagedAdvTestObjects(t *testing.T, client storageclient.ObjectStorag
 	}
 
 	err := client.WalkWithObjects(ctx, cfg.Minio.BucketName, prefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		err := client.RemoveObject(ctx, cfg.Minio.BucketName, objInfo.FilePath)
+		err := client.RemoveObject(ctx, cfg.Minio.BucketName, objInfo.FilePath, "test-ns", "0")
 		if err != nil {
 			t.Logf("Warning: failed to cleanup object %s: %v", objInfo.FilePath, err)
 		}
 		return true // Continue walking
-	})
+	}, "test-ns", "0")
 	if err != nil {
 		t.Logf("Warning: failed to walk objects for cleanup: %v", err)
 	}

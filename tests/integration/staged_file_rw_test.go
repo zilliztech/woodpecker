@@ -74,12 +74,12 @@ func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStor
 func cleanupStagedTestObjects(t *testing.T, client storageclient.ObjectStorage, prefix string) {
 	ctx := context.Background()
 	err := client.WalkWithObjects(ctx, StagedTestBucket, prefix, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
-		err := client.RemoveObject(ctx, StagedTestBucket, objInfo.FilePath)
+		err := client.RemoveObject(ctx, StagedTestBucket, objInfo.FilePath, "test-ns", "0")
 		if err != nil {
 			t.Logf("Warning: failed to cleanup object %s: %v", objInfo.FilePath, err)
 		}
 		return true // Continue walking
-	})
+	}, "test-ns", "0")
 	if err != nil {
 		t.Logf("Warning: failed to walk objects for cleanup: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestStagedFileWriter_CompactOperation(t *testing.T) {
 				hasMergedBlocks = true
 			}
 			return true // Continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, walkErr)
 
 		assert.Greater(t, objectCount, 0, "Should have created objects in MinIO")

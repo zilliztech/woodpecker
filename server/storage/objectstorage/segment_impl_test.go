@@ -81,18 +81,18 @@ func TestDeleteFileData(t *testing.T) {
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Mock WalkWithObjects to simulate finding objects
-		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
-			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
 				// Simulate walking through objects
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
 			}).Once()
 
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk").Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything, mock.Anything).Return(nil)
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)
@@ -124,7 +124,7 @@ func TestDeleteFileData(t *testing.T) {
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Mock WalkWithObjects to return an error
-		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
 			Return(errors.New("list error")).Once()
 
 		// Call DeleteFileData
@@ -158,16 +158,16 @@ func TestDeleteFileData(t *testing.T) {
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Mock WalkWithObjects to simulate finding objects
-		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
-			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
 				// Simulate walking through objects
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
 			}).Once()
 
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk").Return(errors.New("remove error"))
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything, mock.Anything).Return(errors.New("remove error"))
 
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
@@ -201,7 +201,7 @@ func TestDeleteFileData(t *testing.T) {
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Mock WalkWithObjects to simulate no objects found
-		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).Once()
 
 		// Call DeleteFileData
@@ -236,17 +236,17 @@ func TestDeleteFileData(t *testing.T) {
 		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
 
 		// Mock WalkWithObjects to simulate finding objects including non-block files
-		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything).
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
-			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc) {
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
 				// Simulate walking through objects including non-block files
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/metadata.json"}) // Not a block
 				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
 			}).Once()
 
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk").Return(nil)
-		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk").Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything, mock.Anything).Return(nil)
 		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)

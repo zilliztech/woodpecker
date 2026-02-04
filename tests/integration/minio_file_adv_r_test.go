@@ -109,7 +109,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 					hasFooter = true
 				}
 				// Get object size for logging
-				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 				if statErr == nil {
 					t.Logf("Created object after interruption: %s (size: %d)", objInfo.FilePath, objSize)
 				} else {
@@ -117,7 +117,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 				}
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 
@@ -142,7 +142,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 				return false // stop walking
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 
 		if hasFooter {
@@ -232,7 +232,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			if strings.HasSuffix(objInfo.FilePath, ".blk") {
 				dataObjects = append(dataObjects, objInfo.FilePath)
 				// Get object size for logging
-				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 				if statErr == nil {
 					t.Logf("Found segment object: %s (size: %d)", objInfo.FilePath, objSize)
 				} else {
@@ -240,7 +240,7 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 				}
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 
 		assert.Greater(t, len(dataObjects), 0, "Should have created data objects")
@@ -306,14 +306,14 @@ func TestAdvAdvMinioFileWriter_RecoveryAfterInterruption(t *testing.T) {
 			}
 
 			// Get object size for logging
-			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 			if statErr == nil {
 				t.Logf("Final object: %s (size: %d)", objInfo.FilePath, objSize)
 			} else {
 				t.Logf("Final object: %s", objInfo.FilePath)
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 
 		assert.Greater(t, len(dataObjects), 0, "Should have data objects")
@@ -370,7 +370,7 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 	err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 		if strings.HasSuffix(objInfo.FilePath, ".blk") {
 			// Get object size for logging
-			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 			if statErr != nil {
 				t.Logf("Error getting object size for %s: %v", objInfo.FilePath, statErr)
 				return true // continue walking
@@ -378,7 +378,7 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 			t.Logf("Checking object: %s (size: %d)", objInfo.FilePath, objSize)
 
 			// Read the object
-			obj, err := minioHdl.GetObject(ctx, testBucket, objInfo.FilePath, 0, objSize)
+			obj, err := minioHdl.GetObject(ctx, testBucket, objInfo.FilePath, 0, objSize, "test-ns", "0")
 			if err != nil {
 				t.Logf("Error getting object %s: %v", objInfo.FilePath, err)
 				return true // continue walking
@@ -425,7 +425,7 @@ func TestAdvMinioFileWriter_VerifyBlockLastRecord(t *testing.T) {
 			assert.True(t, foundBlockHeaderRecord, "Should find BlockHeaderRecord in object %s", objInfo.FilePath)
 		}
 		return true // continue walking
-	})
+	}, "test-ns", "0")
 	require.NoError(t, err)
 }
 
@@ -1615,18 +1615,18 @@ func TestAdvMinioFileWriter_HeaderRecordVerification(t *testing.T) {
 			}
 		}
 		return true // continue walking
-	})
+	}, "test-ns", "0")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, firstDataObject, "Should find the first data object (0.blk)")
 	t.Logf("Found first data object: %s", firstDataObject)
 
 	// Get object size
-	objSize, _, err := minioHdl.StatObject(ctx, testBucket, firstDataObject)
+	objSize, _, err := minioHdl.StatObject(ctx, testBucket, firstDataObject, "test-ns", "0")
 	require.NoError(t, err)
 
 	// Read the first object content
-	obj, err := minioHdl.GetObject(ctx, testBucket, firstDataObject, 0, objSize)
+	obj, err := minioHdl.GetObject(ctx, testBucket, firstDataObject, 0, objSize, "test-ns", "0")
 	require.NoError(t, err)
 
 	data, err := io.ReadAll(obj)
@@ -1717,14 +1717,14 @@ func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 		t.Log("Objects BEFORE close:")
 		err = minioHdl.WalkWithObjects(ctx, testBucket, fmt.Sprintf("%s/%d/%d/", baseDir, logId, segmentId), true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 			// Get object size for logging
-			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 			if statErr == nil {
 				t.Logf("  Before close: %s (size: %d)", objInfo.FilePath, objSize)
 			} else {
 				t.Logf("  Before close: %s", objInfo.FilePath)
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 
 		// Simulate interruption by closing the writer without finalize
@@ -1744,7 +1744,7 @@ func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 			if !strings.HasSuffix(objInfo.FilePath, ".lock") {
 				objectCount++
 				// Get object size for logging
-				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+				objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 				if statErr == nil {
 					t.Logf("  After close: %s (size: %d)", objInfo.FilePath, objSize)
 				} else {
@@ -1752,7 +1752,7 @@ func TestAdvMinioFileWriter_RecoveryDebug(t *testing.T) {
 				}
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 		assert.Greater(t, objectCount, 0, "Should have created at least one data object")
 	})
@@ -2636,14 +2636,14 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 			}
 
 			// Get object size for logging
-			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath)
+			objSize, _, statErr := minioHdl.StatObject(ctx, testBucket, objInfo.FilePath, "test-ns", "0")
 			if statErr == nil {
 				t.Logf("Found object: %s (size: %d)", objInfo.FilePath, objSize)
 			} else {
 				t.Logf("Found object: %s", objInfo.FilePath)
 			}
 			return true // continue walking
-		})
+		}, "test-ns", "0")
 		require.NoError(t, err)
 
 		// Verify object structure

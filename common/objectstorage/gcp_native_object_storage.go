@@ -30,31 +30,31 @@ type GcpNativeObjectStorage struct {
 	client *minioHandler.MinioHandler
 }
 
-func (g *GcpNativeObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64) (minioHandler.FileReader, error) {
+func (g *GcpNativeObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (g *GcpNativeObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (g *GcpNativeObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string) error {
+func (g *GcpNativeObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) StatObject(ctx context.Context, bucketName, objectName string) (int64, bool, error) {
+func (g *GcpNativeObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) error {
+func (g *GcpNativeObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error {
 	panic("implement me")
 }
 
-func (g *GcpNativeObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string) error {
+func (g *GcpNativeObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
 	panic("implement me")
 }
 
