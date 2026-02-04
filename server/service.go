@@ -479,6 +479,15 @@ func (s *Server) GetServerNodeMemberlistStatus() string {
 	return "member not ready yet"
 }
 
+// GetMemberCount returns the number of members known to this server's memberlist.
+// Returns 0 if the server node is not yet initialized.
+func (s *Server) GetMemberCount() int {
+	if s.serverNode == nil {
+		return 0
+	}
+	return s.serverNode.GetMemberlist().NumMembers()
+}
+
 // GetServiceAdvertiseAddrPort use for test only
 func (s *Server) GetServiceAdvertiseAddrPort(ctx context.Context) string {
 	if s.serverNode == nil {
