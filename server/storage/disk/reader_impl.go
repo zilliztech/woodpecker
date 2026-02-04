@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,7 @@ type LocalFileReaderAdv struct {
 	logId        int64
 	segId        int64
 	logIdStr     string // for metrics only
+	nsStr        string // for metrics only
 	filePath     string
 	maxBatchSize int64
 
@@ -118,7 +120,8 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 	reader := &LocalFileReaderAdv{
 		logId:        logId,
 		segId:        segId,
-		logIdStr:     fmt.Sprintf("%d", logId),
+		logIdStr:     strconv.FormatInt(logId, 10),
+		nsStr:        baseDir,
 		filePath:     filePath,
 		maxBatchSize: maxBatchSize,
 		file:         file,
@@ -135,10 +138,11 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 		reader.closed.Store(true)
 		logger.Ctx(ctx).Warn("failed to parse footer and indexes",
 			zap.String("filePath", filePath),
-			zap.Error(err))
-		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
+			zap.Error(parseFooterErr))
+		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
+	metrics.WpFileReaders.WithLabelValues(reader.nsStr, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("local file readerAdv created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -611,8 +615,8 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -789,8 +793,8 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(r.nsStr, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -899,6 +903,7 @@ func (r *LocalFileReaderAdv) Close(ctx context.Context) error {
 		}
 		r.file = nil
 	}
+	metrics.WpFileReaders.WithLabelValues(r.nsStr, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

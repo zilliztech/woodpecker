@@ -13,16 +13,33 @@ package hardware
 
 import (
 	"context"
+	"flag"
+	syslog "log"
+	"runtime"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
+	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
-	"runtime"
 
 	"github.com/zilliztech/woodpecker/common/logger"
 )
+
+var (
+	icOnce sync.Once
+	ic     bool
+	icErr  error
+)
+
+// Initialize maxprocs
+func InitMaxprocs(serverType string, flags *flag.FlagSet) {
+	// Initialize maxprocs.
+	maxprocs.Set(maxprocs.Logger(syslog.Printf))
+}
 
 // GetCPUNum returns the count of cpu core.
 func GetCPUNum() int {
@@ -53,6 +70,36 @@ func GetCPUUsage() float64 {
 	return percents[0]
 }
 
+// GetMemoryCount returns the memory count in bytes.
+func GetMemoryCount() uint64 {
+	// get host memory by `gopsutil`
+	stats, err := mem.VirtualMemory()
+	if err != nil {
+		logger.Ctx(context.TODO()).Warn("failed to get memory count",
+			zap.Error(err))
+		return 0
+	}
+
+	// get container memory by `cgroups`
+	limit, err := getContainerMemLimit()
+	// in container, return min(hostMem, containerMem)
+	if limit > 0 && limit < stats.Total {
+		return limit
+	}
+
+	if err != nil || limit > stats.Total {
+		logger.Ctx(context.TODO()).Warn("failed to get container memory limit",
+			zap.Uint64("containerLimit", limit),
+			zap.Error(err))
+	}
+	return stats.Total
+}
+
+// GetFreeMemoryCount returns the free memory in bytes.
+func GetFreeMemoryCount() uint64 {
+	return GetMemoryCount() - GetUsedMemoryCount()
+}
+
 // GetDiskUsage Get Disk Usage in GB
 func GetDiskUsage(path string) (float64, float64, error) {
 	diskStats, err := disk.Usage(path)
@@ -78,4 +125,13 @@ func GetIOWait() (float64, error) {
 		return cpuTimes[0].Iowait, nil
 	}
 	return 0, nil
+}
+
+func GetMemoryUseRatio() float64 {
+	usedMemory := GetUsedMemoryCount()
+	totalMemory := GetMemoryCount()
+	if usedMemory > 0 && totalMemory > 0 {
+		return float64(usedMemory) / float64(totalMemory)
+	}
+	return 0
 }

@@ -20,6 +20,8 @@ package server
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,7 +104,7 @@ func (l *logStore) Start() error {
 	// Start background cleanup goroutine
 	l.startBackgroundCleanup()
 
-	metrics.WpLogStoreRunningTotal.WithLabelValues("default").Inc()
+	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.MetricsNamespace).Inc()
 
 	l.stopped.Store(false)
 	logger.Ctx(l.ctx).Info("LogStore service started successfully",
@@ -118,7 +120,7 @@ func (l *logStore) Stop() error {
 	l.cancel()
 
 	if !l.stopped.CompareAndSwap(false, true) {
-		logger.Ctx(l.ctx).Info("LogStore service is already stopped")
+		logger.Ctx(l.ctx).Debug("LogStore service is already stopped")
 	}
 
 	// Stop background cleanup goroutine and wait for it to finish
@@ -128,8 +130,8 @@ func (l *logStore) Stop() error {
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
 
-	const processorCloseTimeout = 15 * time.Second
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), processorCloseTimeout)
+	shutdownTimeout := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.ShutdownTimeout.Seconds()) * time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
 	totalProcessors := 0
@@ -143,7 +145,9 @@ func (l *logStore) Stop() error {
 	// Clear the maps
 	l.segmentProcessors = make(map[string]map[int64]processor.SegmentProcessor)
 
-	metrics.WpLogStoreRunningTotal.WithLabelValues("default").Dec()
+	metrics.WpLogStoreActiveLogs.Reset()
+	metrics.WpLogStoreActiveSegments.Reset()
+	metrics.WpLogStoreRunningTotal.WithLabelValues(metrics.MetricsNamespace).Dec()
 
 	logger.Ctx(l.ctx).Info("LogStore service stopped successfully",
 		zap.String("address", l.address),
@@ -153,6 +157,8 @@ func (l *logStore) Stop() error {
 }
 
 func (l *logStore) SetAddress(address string) {
+	l.spMu.Lock()
+	defer l.spMu.Unlock()
 	oldAddress := l.address
 	l.address = address
 	logger.Ctx(l.ctx).Info("LogStore address updated",
@@ -161,6 +167,8 @@ func (l *logStore) SetAddress(address string) {
 }
 
 func (l *logStore) GetAddress() string {
+	l.spMu.RLock()
+	defer l.spMu.RUnlock()
 	return l.address
 }
 
@@ -171,25 +179,26 @@ func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath str
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId) // Using logId as logName for metrics
+	logIdStr := strconv.FormatInt(logId, 10) // Using logId as logName for metrics
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, entry.SegId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "add_entry", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "add_entry", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
 		return -1, err
 	}
 	entryId, err := segmentProcessor.AddEntry(ctx, entry, syncedResultCh)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "add_entry", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "add_entry", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId), zap.Error(err))
 		return -1, err
 	}
 
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "add_entry", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "add_entry", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "add_entry", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "add_entry", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return entryId, nil
 }
 
@@ -198,12 +207,24 @@ func GetLogKey(bucketName string, rootPath string, logId int64) string {
 }
 
 func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (processor.SegmentProcessor, error) {
+	logKey := GetLogKey(bucketName, rootPath, logId)
+	ns := bucketName + "/" + rootPath
+
+	// Fast path: read lock to check if processor already exists
+	l.spMu.RLock()
+	if processors, logExists := l.segmentProcessors[logKey]; logExists {
+		if segProcessor, segExists := processors[segmentId]; segExists {
+			l.spMu.RUnlock()
+			return segProcessor, nil
+		}
+	}
+	l.spMu.RUnlock()
+
+	// Slow path: write lock to create new processor
 	l.spMu.Lock()
 	defer l.spMu.Unlock()
 
-	logKey := GetLogKey(bucketName, rootPath, logId)
-
-	// Check if segment processor already exists
+	// Double-check after acquiring write lock
 	if processors, logExists := l.segmentProcessors[logKey]; logExists {
 		if segProcessor, segExists := processors[segmentId]; segExists {
 			return segProcessor, nil
@@ -222,11 +243,13 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 	// Initialize log map if not exists
 	if _, exists := l.segmentProcessors[logKey]; !exists {
 		l.segmentProcessors[logKey] = make(map[int64]processor.SegmentProcessor)
+		metrics.WpLogStoreActiveLogs.WithLabelValues(ns).Inc()
 	}
 	l.segmentProcessors[logKey][segmentId] = s
+	metrics.WpLogStoreActiveSegments.WithLabelValues(ns, strconv.FormatInt(logId, 10)).Inc()
 
 	// Update metrics for active segment processors
-	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", logId)).Inc()
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(ns, strconv.FormatInt(logId, 10)).Inc()
 
 	logger.Ctx(ctx).Info("Segment processor created successfully",
 		zap.Int64("logId", logId),
@@ -236,9 +259,10 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 	return s, nil
 }
 
+// Test Only
 func (l *logStore) getExistsSegmentProcessor(bucketName string, rootPath string, logId int64, segmentId int64) processor.SegmentProcessor {
-	l.spMu.Lock()
-	defer l.spMu.Unlock()
+	l.spMu.RLock()
+	defer l.spMu.RUnlock()
 
 	logKey := GetLogKey(bucketName, rootPath, logId)
 	if processors, logExists := l.segmentProcessors[logKey]; logExists {
@@ -256,26 +280,27 @@ func (l *logStore) GetBatchEntriesAdv(ctx context.Context, bucketName string, ro
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetBatchEntriesAdv")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_batch_entries", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_batch_entries", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		return nil, err
 	}
 	batchData, err := segmentProcessor.ReadBatchEntriesAdv(ctx, fromEntryId, maxEntries, lastReadState)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_batch_entries", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_batch_entries", "error").Observe(float64(time.Since(start).Milliseconds()))
 		if !werr.ErrEntryNotFound.Is(err) && !werr.ErrFileReaderEndOfFile.Is(err) {
 			logger.Ctx(ctx).Warn("get batch entries failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("fromEntryId", fromEntryId), zap.Int64("maxEntries", maxEntries), zap.Error(err))
 		}
 		return nil, err
 	}
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_batch_entries", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_batch_entries", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_batch_entries", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_batch_entries", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return batchData, nil
 }
 
@@ -286,12 +311,13 @@ func (l *logStore) CompleteSegment(ctx context.Context, bucketName string, rootP
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompleteSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "complete", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "complete", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("complete segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
 	return segmentProcessor.Complete(ctx, lac)
@@ -304,22 +330,23 @@ func (l *logStore) FenceSegment(ctx context.Context, bucketName string, rootPath
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "FenceSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
-		logger.Ctx(ctx).Warn("add entry failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "fence", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "fence", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Warn("fence segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
 	lastEntryId, fenceErr := segmentProcessor.Fence(ctx)
 	if fenceErr != nil {
-		logger.Ctx(ctx).Info("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
+		logger.Ctx(ctx).Debug("fence segment skip", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(fenceErr))
 		return -1, fenceErr
 	}
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "fence", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "fence", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "fence", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return lastEntryId, nil
 }
 
@@ -330,23 +357,24 @@ func (l *logStore) GetSegmentLastAddConfirmed(ctx context.Context, bucketName st
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentLastAddConfirmed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_lac", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_lac", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_lac", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_lac", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment LAC failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
 	lac, err := segmentProcessor.GetSegmentLastAddConfirmed(ctx)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_lac", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_lac", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment LAC failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 	} else {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_lac", "success").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_lac", "success").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return lac, err
 }
@@ -358,12 +386,13 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, bucketName string, 
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "GetSegmentBlockCount")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_block_count", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_block_count", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment block count failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
@@ -374,14 +403,14 @@ func (l *logStore) GetSegmentBlockCount(ctx context.Context, bucketName string, 
 			// means there is no data yet
 			return 0, nil
 		}
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_block_count", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_block_count", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("get segment block count failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return -1, err
 	}
 
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "get_segment_block_count", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "get_segment_block_count", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "get_segment_block_count", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "get_segment_block_count", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return blockCount, nil
 }
 
@@ -393,25 +422,26 @@ func (l *logStore) CompactSegment(ctx context.Context, bucketName string, rootPa
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CompactSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "compact_segment", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "compact_segment", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "compact_segment", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "compact_segment", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("compact segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return nil, err
 	}
 	metadata, err := segmentProcessor.Compact(ctx)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "compact_segment", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "compact_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "compact_segment", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "compact_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("compact segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Error(err))
 		return nil, err
 	}
 
-	metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "compact_segment", "success").Inc()
-	metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "compact_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "compact_segment", "success").Inc()
+	metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "compact_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return metadata, nil
 }
 
@@ -422,48 +452,53 @@ func (l *logStore) CleanSegment(ctx context.Context, bucketName string, rootPath
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "CleanSegment")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "clean_segment", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "clean_segment", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "clean_segment", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "clean_segment", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("clean segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int("flag", flag), zap.Error(err))
 		return err
 	}
 	err = segmentProcessor.Clean(ctx, flag)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "clean_segment", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "clean_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "clean_segment", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "clean_segment", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("clean segment failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int("flag", flag), zap.Error(err))
 	} else {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "clean_segment", "success").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "clean_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "clean_segment", "success").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "clean_segment", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
 
 func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
+	if l.stopped.Load() {
+		return werr.ErrLogStoreShutdown
+	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "UpdateLastAddConfirmed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", logId)
+	logIdStr := strconv.FormatInt(logId, 10)
+	ns := bucketName + "/" + rootPath
 
 	segmentProcessor, err := l.getOrCreateSegmentProcessor(ctx, bucketName, rootPath, logId, segmentId)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "error_get_processor").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "update_lac", "error_get_processor").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "update_lac", "error_get_processor").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("update segment lac failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("lac", lac), zap.Error(err))
 		return err
 	}
 	err = segmentProcessor.UpdateSegmentLastAddConfirmed(ctx, lac)
 	if err != nil {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "error").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "update_lac", "error").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "update_lac", "error").Observe(float64(time.Since(start).Milliseconds()))
 		logger.Ctx(ctx).Warn("update segment lac failed", zap.Int64("logId", logId), zap.Int64("segId", segmentId), zap.Int64("lac", lac), zap.Error(err))
 	} else {
-		metrics.WpLogStoreOperationsTotal.WithLabelValues(logIdStr, "update_lac", "success").Inc()
-		metrics.WpLogStoreOperationLatency.WithLabelValues(logIdStr, "update_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpLogStoreOperationsTotal.WithLabelValues(ns, logIdStr, "update_lac", "success").Inc()
+		metrics.WpLogStoreOperationLatency.WithLabelValues(ns, logIdStr, "update_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
@@ -471,6 +506,8 @@ func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string
 // closeSegmentProcessorUnsafe closes a segment processor and updates metrics
 // This method should be called while holding the spMu lock
 func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey string, segmentId int64, processor processor.SegmentProcessor) {
+	ns := logKey[:strings.LastIndex(logKey, "/")]
+
 	logger.Ctx(ctx).Info("Closing segment processor",
 		zap.String("logKey", logKey),
 		zap.Int64("segmentId", segmentId))
@@ -488,16 +525,23 @@ func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey strin
 	}
 
 	// Update metrics
-	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(fmt.Sprintf("%d", processor.GetLogId())).Dec()
+	metrics.WpLogStoreActiveSegmentProcessors.WithLabelValues(ns, strconv.FormatInt(processor.GetLogId(), 10)).Dec()
+	metrics.WpLogStoreActiveSegments.WithLabelValues(ns, strconv.FormatInt(processor.GetLogId(), 10)).Dec()
 }
 
-// cleanupIdleSegmentProcessorsUnsafe removes segment processors that haven't been accessed for the specified duration
-// This method should be called while holding the spMu lock
-func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxIdleTime time.Duration) {
+// collectIdleSegmentProcessorsUnsafe collects idle segment processors and removes them from the map.
+// The actual closing of processors should be done outside the lock by the caller.
+// This method should be called while holding the spMu lock.
+func (l *logStore) collectIdleSegmentProcessorsUnsafe(ctx context.Context, maxIdleTime time.Duration) []struct {
+	logKey    string
+	segmentId int64
+	processor processor.SegmentProcessor
+} {
 	now := time.Now()
 	var toRemove []struct {
 		logKey    string
 		segmentId int64
+		processor processor.SegmentProcessor
 	}
 
 	logger.Ctx(ctx).Info("Scanning for idle segment processors to cleanup",
@@ -516,14 +560,14 @@ func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 		}
 
 		// Check each segment for cleanup eligibility
-		for segmentId, processor := range processors {
+		for segmentId, proc := range processors {
 			// Always protect the highest segment ID (most likely writing)
 			if segmentId == maxSegmentId {
 				continue
 			}
 
 			// Get last access time from processor
-			lastAccessTimeMs := processor.GetLastAccessTime()
+			lastAccessTimeMs := proc.GetLastAccessTime()
 			lastAccessTime := time.UnixMilli(lastAccessTimeMs)
 
 			// Check if idle time exceeds threshold
@@ -531,39 +575,33 @@ func (l *logStore) cleanupIdleSegmentProcessorsUnsafe(ctx context.Context, maxId
 				toRemove = append(toRemove, struct {
 					logKey    string
 					segmentId int64
-				}{logKey, segmentId})
+					processor processor.SegmentProcessor
+				}{logKey, segmentId, proc})
 			}
 		}
 	}
 
-	// Perform cleanup
+	// Remove from maps under the lock
 	for _, item := range toRemove {
 		if processors, logExists := l.segmentProcessors[item.logKey]; logExists {
-			if processor, segExists := processors[item.segmentId]; segExists {
-				// Close the processor
-				l.closeSegmentProcessorUnsafe(ctx, item.logKey, item.segmentId, processor)
-
-				// Remove from maps
-				delete(processors, item.segmentId)
-				if len(processors) == 0 {
-					delete(l.segmentProcessors, item.logKey)
-				}
-
-				logger.Ctx(ctx).Debug("cleaned up idle segment processor",
-					zap.String("logKey", item.logKey),
-					zap.Int64("segmentId", item.segmentId))
+			delete(processors, item.segmentId)
+			if len(processors) == 0 {
+				delete(l.segmentProcessors, item.logKey)
+				metrics.WpLogStoreActiveLogs.WithLabelValues(item.logKey[:strings.LastIndex(item.logKey, "/")]).Dec()
 			}
 		}
 	}
 
 	if len(toRemove) > 0 {
-		logger.Ctx(ctx).Info("Idle segment processor cleanup completed",
+		logger.Ctx(ctx).Info("Idle segment processors collected for cleanup",
 			zap.Int("cleanedCount", len(toRemove)),
 			zap.Int("remainingProcessors", l.getTotalProcessorCountUnsafe()))
 	} else {
-		logger.Ctx(ctx).Info("Idle segment processor cleanup completed - no processors cleaned",
+		logger.Ctx(ctx).Info("Idle segment processor cleanup completed - no processors to clean",
 			zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 	}
+
+	return toRemove
 }
 
 // getTotalProcessorCountUnsafe returns the total number of segment processors
@@ -598,6 +636,7 @@ func (l *logStore) RemoveSegmentProcessor(ctx context.Context, bucketName string
 			delete(processors, segmentId)
 			if len(processors) == 0 {
 				delete(l.segmentProcessors, logKey)
+				metrics.WpLogStoreActiveLogs.WithLabelValues(bucketName + "/" + rootPath).Dec()
 			}
 
 			logger.Ctx(ctx).Info("Segment processor removed successfully",
@@ -638,9 +677,9 @@ func (l *logStore) stopBackgroundCleanup() {
 func (l *logStore) backgroundCleanupLoop() {
 	defer l.cleanupWg.Done()
 
-	// Cleanup configuration
-	const cleanupInterval = 1 * time.Minute // How often to check for cleanup
-	const maxIdleTime = 5 * time.Minute     // How long a processor can be idle before cleanup
+	// Cleanup configuration from config
+	cleanupInterval := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.CleanupInterval.Seconds()) * time.Second
+	maxIdleTime := time.Duration(l.cfg.Woodpecker.Logstore.ProcessorCleanupPolicy.MaxIdleTime.Seconds()) * time.Second
 
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -665,8 +704,8 @@ func (l *logStore) backgroundCleanupLoop() {
 
 // performBackgroundCleanup performs the actual cleanup logic
 func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
+	// Phase 1: Under lock, collect idle processors and remove from map
 	l.spMu.Lock()
-	defer l.spMu.Unlock()
 
 	totalProcessors := l.getTotalProcessorCountUnsafe()
 
@@ -674,5 +713,15 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		zap.Int("totalProcessors", totalProcessors),
 		zap.Duration("maxIdleTime", maxIdleTime))
 
-	l.cleanupIdleSegmentProcessorsUnsafe(l.ctx, maxIdleTime)
+	idleProcessors := l.collectIdleSegmentProcessorsUnsafe(l.ctx, maxIdleTime)
+	l.spMu.Unlock()
+
+	// Phase 2: Close processors outside the lock to avoid blocking I/O under lock
+	for _, item := range idleProcessors {
+		l.closeSegmentProcessorUnsafe(l.ctx, item.logKey, item.segmentId, item.processor)
+
+		logger.Ctx(l.ctx).Info("cleaned up idle segment processor",
+			zap.String("logKey", item.logKey),
+			zap.Int64("segmentId", item.segmentId))
+	}
 }

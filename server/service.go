@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -57,7 +58,7 @@ type Server struct {
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
-func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) *Server {
+func NewServer(ctx context.Context, configuration *config.Configuration, bindPort int, servicePort int, gossipSeeds []string) (*Server, error) {
 	return NewServerWithConfig(ctx, configuration, &membership.ServerConfig{
 		NodeID:               "", // Will be set in Prepare()
 		BindPort:             bindPort,
@@ -71,14 +72,15 @@ func NewServer(ctx context.Context, configuration *config.Configuration, bindPor
 }
 
 // NewServerWithConfig creates a new server instance with custom configuration
-func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) *Server {
+func NewServerWithConfig(ctx context.Context, configuration *config.Configuration, serverConfig *membership.ServerConfig, gossipSeeds []string) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	var storageCli storageclient.ObjectStorage
 	if configuration.Woodpecker.Storage.IsStorageMinio() || configuration.Woodpecker.Storage.IsStorageService() {
 		var err error
 		storageCli, err = storageclient.NewObjectStorage(ctx, configuration)
 		if err != nil {
-			panic(err)
+			cancel()
+			return nil, err
 		}
 	}
 	s := &Server{
@@ -92,7 +94,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
 	s.gossipSeeds = gossipSeeds
-	return s
+	return s, nil
 }
 
 func (s *Server) Prepare() error {
@@ -145,15 +147,19 @@ func (s *Server) startGrpcLoop() {
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
 		grpc.ChainUnaryInterceptor(
 			s.shutdownUnaryInterceptor(),
+			grpc_prometheus.UnaryServerInterceptor,
 			otelgrpc.UnaryServerInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
 			s.shutdownStreamInterceptor(),
+			grpc_prometheus.StreamServerInterceptor,
 			otelgrpc.StreamServerInterceptor(),
 		),
 	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
+	grpc_prometheus.EnableHandlingTimeHistogram()
+	grpc_prometheus.Register(s.grpcServer)
 	funcutil.CheckGrpcReady(s.ctx, s.grpcErrChan)
 	logger.Ctx(s.ctx).Info("start grpc server", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.listener.Addr().String()))
 	if err := s.grpcServer.Serve(s.listener); err != nil {
@@ -321,6 +327,15 @@ func (s *Server) AddEntry(request *proto.AddEntryRequest, serverStream grpc.Serv
 			State:   proto.AddEntryState_Failed,
 			EntryId: id,
 			Status:  werr.Status(err),
+		},
+		)
+		return sendErr
+	}
+	if result.Err != nil {
+		sendErr = serverStream.Send(&proto.AddEntryResponse{
+			State:   proto.AddEntryState_Failed,
+			EntryId: result.SyncedId,
+			Status:  werr.Status(result.Err),
 		},
 		)
 		return sendErr

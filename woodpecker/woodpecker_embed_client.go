@@ -19,11 +19,13 @@ package woodpecker
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
@@ -280,7 +282,7 @@ func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration)
 	logger.InitLogger(config)
 	initTraceErr := tracer.InitTracer(config, "woodpecker", 1001)
 	if initTraceErr != nil {
-		logger.Ctx(ctx).Info("init tracer failed", zap.Error(initTraceErr))
+		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
 	if config.Woodpecker.Storage.IsStorageService() {
 		return nil, werr.ErrOperationNotSupported.WithCauseErrMsg("embed client not support service storage mode")
@@ -313,6 +315,14 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		}
 		cfg.Woodpecker.Logstore.FencePolicy.SetConditionWriteEnableOrNot(conditionWriteEnable)
 	}
+	// Register both client and server metrics for embed mode (runs both in one process).
+	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
+	if metrics.NodeID == "" {
+		hostname, _ := os.Hostname()
+		metrics.NodeID = hostname
+	}
+	metrics.RegisterWoodpeckerWithRegisterer(prometheus.DefaultRegisterer)
+
 	// start embedded logStore
 	managedByLogStore, err := startEmbedLogStore(cfg, storageClient)
 	if err != nil {
@@ -335,21 +345,14 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	if initErr != nil {
 		return nil, werr.ErrWoodpeckerClientInitFailed.WithCauseErr(initErr)
 	}
-	// Increment active connections metric
-	metrics.WpClientActiveConnections.WithLabelValues("default").Inc()
 	return &c, nil
 }
 
 func (c *woodpeckerEmbedClient) initClient(ctx context.Context) error {
-	start := time.Now()
 	initErr := c.Metadata.InitIfNecessary(ctx)
 	if initErr != nil {
-		metrics.WpClientOperationsTotal.WithLabelValues("init_client", "error").Inc()
-		metrics.WpClientOperationLatency.WithLabelValues("init_client", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return werr.ErrWoodpeckerClientInitFailed.WithCauseErr(initErr)
 	}
-	metrics.WpClientOperationsTotal.WithLabelValues("init_client", "success").Inc()
-	metrics.WpClientOperationLatency.WithLabelValues("init_client", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
@@ -413,6 +416,8 @@ func (c *woodpeckerEmbedClient) GetAllLogs(ctx context.Context) ([]string, error
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getAllLogsUnsafe(ctx, c.Metadata)
 }
 
@@ -422,6 +427,8 @@ func (c *woodpeckerEmbedClient) GetLogsWithPrefix(ctx context.Context, logNamePr
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return getLogsWithPrefix(ctx, c.Metadata, logNamePrefix)
 }
 
@@ -433,8 +440,6 @@ func (c *woodpeckerEmbedClient) Close(ctx context.Context) error {
 		return werr.ErrWoodpeckerClientClosed
 	}
 
-	// Decrement active connections metric
-	metrics.WpClientActiveConnections.WithLabelValues("default").Dec()
 	closeErr := c.Metadata.Close()
 	if closeErr != nil {
 		logger.Ctx(ctx).Info("close metadata failed", zap.Error(closeErr))

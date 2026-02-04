@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/metadata"
 	pb "google.golang.org/protobuf/proto"
 
 	"github.com/zilliztech/woodpecker/common/logger"
@@ -128,8 +129,8 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	ops = append(ops, clientv3.OpGet(VersionKey))
 	ops = append(ops, clientv3.OpGet(LogIdGeneratorKey))
 	ops = append(ops, clientv3.OpGet(QuorumIdGeneratorKey))
-	ctx1, cancel := e.getContextWithTimeout()
-	defer cancel()
+	ctx1, cancel1 := e.getContextWithTimeout(ctx)
+	defer cancel1()
 
 	log := logger.Ctx(ctx)
 	resp, err := e.client.Txn(ctx1).If().Then(ops...).Commit()
@@ -165,7 +166,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 				// idgen initial value is 0
 				initOps = append(initOps, clientv3.OpPut(keys[index], "0"))
 			}
-			log.Info("init service metadata warning, key not found", zap.String("key", keys[index]))
+			log.Debug("service metadata key not found, will initialize", zap.String("key", keys[index]))
 		}
 	}
 	if len(initOps) == 0 {
@@ -181,7 +182,9 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 		return err
 	}
 	// cluster not initialized, initialize it
-	initResp, initErr := e.client.Txn(ctx1).If().Then(initOps...).Commit()
+	ctx2, cancel2 := e.getContextWithTimeout(ctx)
+	defer cancel2()
+	initResp, initErr := e.client.Txn(ctx2).If().Then(initOps...).Commit()
 	if initErr != nil || !initResp.Succeeded {
 		err = werr.ErrMetadataInit.WithCauseErr(initErr)
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("init_if_necessary", "error").Inc()
@@ -199,7 +202,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 
 func (e *metadataProviderEtcd) GetVersionInfo(ctx context.Context) (*proto.Version, error) {
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, VersionKey)
 	if getErr != nil {
@@ -233,7 +236,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 	startTime := time.Now()
 	e.Lock()
 	defer e.Unlock()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Get the current id value from logIdGenerator
@@ -324,7 +327,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("create log transaction failed due to idgen mismatch")
-		return werr.ErrMetadataCreateLog.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
+		return werr.ErrMetadataCreateLogTxn.WithCauseErrMsg("transaction failed due to idgen mismatch, please try again")
 	}
 	logger.Ctx(ctx).Info("log created successfully", zap.String("logName", logName), zap.Int64("logId", logMeta.LogId))
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("create_log", "success").Inc()
@@ -347,7 +350,7 @@ func (e *metadataProviderEtcd) GetLogMeta(ctx context.Context, logName string) (
 	startTime := time.Now()
 
 	// Get log meta for the path = logs/<logName>
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logName))
 	if err != nil {
@@ -391,7 +394,7 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction to update the log metadata
 	txn := e.client.Txn(ctx1)
@@ -429,7 +432,7 @@ func (e *metadataProviderEtcd) OpenLog(ctx context.Context, logName string) (*Lo
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get log meta for the path = logs/<logName>
 	logMeta, err := e.GetLogMeta(ctx1, logName)
@@ -459,7 +462,7 @@ func (e *metadataProviderEtcd) CheckExists(ctx context.Context, logName string) 
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckExists")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get log meta for the path = logs/<logName>
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logName))
@@ -482,16 +485,16 @@ func (e *metadataProviderEtcd) ListLogs(ctx context.Context) ([]string, error) {
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	list, err := e.ListLogsWithPrefix(ctx1, "")
 	if err != nil {
-		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_exists", "error").Inc()
-		metrics.WpEtcdMetaOperationLatency.WithLabelValues("check_exists", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("ListLogs", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("ListLogs", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, err
 	}
-	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("check_exists", "success").Inc()
-	metrics.WpEtcdMetaOperationLatency.WithLabelValues("check_exists", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpEtcdMetaOperationsTotal.WithLabelValues("ListLogs", "success").Inc()
+	metrics.WpEtcdMetaOperationLatency.WithLabelValues("ListLogs", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return list, err
 }
 
@@ -499,7 +502,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "ListLogsWithPrefix")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	logResp, err := e.client.Get(ctx1, BuildLogKey(logNamePrefix), clientv3.WithPrefix())
 	if err != nil {
@@ -513,7 +516,7 @@ func (e *metadataProviderEtcd) ListLogsWithPrefix(ctx context.Context, logNamePr
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("list_logs_with_prefix", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 		return []string{}, nil
 	}
-	logs := make(map[string]int, 0)
+	logs := make(map[string]int)
 	for _, path := range logResp.Kvs {
 		logName, extractErr := extractLogName(string(path.Key))
 		if extractErr != nil {
@@ -552,7 +555,7 @@ func (e *metadataProviderEtcd) AcquireLogWriterLock(ctx context.Context, logName
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Check if lock already exists for this log using sync.Map
@@ -625,7 +628,7 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Load and delete atomically using sync.Map
@@ -675,7 +678,7 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -724,7 +727,7 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 		logger.Ctx(ctx).Warn("marshal segment metadata failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -762,7 +765,7 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, segmentKey)
 	if getErr != nil {
@@ -773,6 +776,8 @@ func (e *metadataProviderEtcd) GetSegmentMetadata(ctx context.Context, logName s
 	}
 	if len(getResp.Kvs) == 0 {
 		logger.Ctx(ctx).Warn("segment meta not found", zap.String("logName", logName), zap.Int64("segmentId", segmentId))
+		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_segment_metadata", "error").Inc()
+		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return nil, werr.ErrSegmentNotFound.WithCauseErrMsg(
 			fmt.Sprintf("segment meta not found for log:%s segment:%d", logName, segmentId))
 	}
@@ -797,7 +802,7 @@ func (e *metadataProviderEtcd) GetAllSegmentMetadata(ctx context.Context, logNam
 	defer sp.End()
 	startTime := time.Now()
 	segmentKey := BuildSegmentInstanceKey(logName, "")
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, segmentKey, clientv3.WithPrefix())
 	if getErr != nil {
@@ -840,7 +845,7 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "CheckSegmentExists")
 	defer sp.End()
 	startTime := time.Now()
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	segmentResp, err := e.client.Get(ctx1, BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId)))
 	if err != nil {
@@ -867,7 +872,7 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 	defer e.Unlock()
 
 	segmentKey := BuildSegmentInstanceKey(logName, fmt.Sprintf("%d", segmentId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -917,7 +922,7 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 		logger.Ctx(ctx).Warn("marshal quorum info failed", zap.Error(err))
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a transaction
 	txn := e.client.Txn(ctx1)
@@ -956,20 +961,20 @@ func (e *metadataProviderEtcd) GetQuorumInfo(ctx context.Context, quorumId int64
 	defer sp.End()
 	startTime := time.Now()
 	quorumKey := BuildQuorumInfoKey(fmt.Sprintf("%d", quorumId))
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	getResp, getErr := e.client.Get(ctx1, quorumKey)
 	if getErr != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("get quorum info failed", zap.Error(getErr))
-		return nil, werr.ErrMetadataEncode.WithCauseErr(getErr)
+		return nil, werr.ErrMetadataRead.WithCauseErr(getErr)
 	}
 	if len(getResp.Kvs) == 0 {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("get_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("get_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("quorum info not found", zap.Int64("quorumId", quorumId))
-		return nil, werr.ErrMetadataEncode.WithCauseErrMsg(fmt.Sprintf("quorum info not found for id:%d", quorumId))
+		return nil, werr.ErrMetadataRead.WithCauseErrMsg(fmt.Sprintf("quorum info not found for id:%d", quorumId))
 	}
 
 	quorumInfo := &proto.QuorumInfo{}
@@ -1013,7 +1018,7 @@ func (e *metadataProviderEtcd) CreateReaderTempInfo(ctx context.Context, readerN
 		return werr.ErrMetadataEncode.WithCauseErr(err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Create a lease with TTL of 60 seconds
 	lease, err := e.client.Grant(ctx1, 60)
@@ -1053,7 +1058,7 @@ func (e *metadataProviderEtcd) GetReaderTempInfo(ctx context.Context, logId int6
 	startTime := time.Now()
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get reader info from etcd
 	resp, err := e.client.Get(ctx1, readerKey)
@@ -1094,7 +1099,7 @@ func (e *metadataProviderEtcd) GetAllReaderTempInfoForLog(ctx context.Context, l
 	// Create the prefix for all readers of this log
 	readerPrefix := BuildLogAllReaderTempInfosKey(logId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get all reader infos with this prefix
 	resp, err := e.client.Get(ctx1, readerPrefix, clientv3.WithPrefix())
@@ -1133,7 +1138,7 @@ func (e *metadataProviderEtcd) UpdateReaderTempInfo(ctx context.Context, logId i
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Get the current reader info
 	resp, err := e.client.Get(ctx1, readerKey)
@@ -1210,7 +1215,7 @@ func (e *metadataProviderEtcd) DeleteReaderTempInfo(ctx context.Context, logId i
 	// Create the key path for the reader temporary information
 	readerKey := BuildLogReaderTempInfoKey(logId, readerName)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Delete the reader information
 	resp, err := e.client.Delete(ctx1, readerKey)
@@ -1280,7 +1285,9 @@ func (e *metadataProviderEtcd) Close() error {
 		}
 
 		// Close the associated session
+		leaseId := int64(-1)
 		if sessionLock.session != nil {
+			leaseId = int64(sessionLock.session.Lease())
 			closeErr := sessionLock.session.Close()
 			if closeErr != nil {
 				logger.Ctx(context.Background()).Warn("Failed to close lock session during close",
@@ -1288,9 +1295,7 @@ func (e *metadataProviderEtcd) Close() error {
 					zap.Error(closeErr))
 			}
 		}
-
-		logger.Ctx(context.Background()).Warn("Closed writer lock for log", zap.String("logName", logName), zap.Int64("leaseID", int64(sessionLock.session.Lease())))
-
+		logger.Ctx(context.Background()).Warn("Closed writer lock for log", zap.String("logName", logName), zap.Int64("leaseID", leaseId))
 		// Remove from map
 		e.logWriterLocks.Delete(logName)
 		return true
@@ -1315,7 +1320,7 @@ func (e *metadataProviderEtcd) CreateSegmentCleanupStatus(ctx context.Context, s
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a new transaction
 	txn := e.client.Txn(ctx1)
@@ -1358,7 +1363,7 @@ func (e *metadataProviderEtcd) UpdateSegmentCleanupStatus(ctx context.Context, s
 		return fmt.Errorf("failed to marshal segment cleanup status: %w", err)
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	// Start a new transaction
 	txn := e.client.Txn(ctx1)
@@ -1394,7 +1399,7 @@ func (e *metadataProviderEtcd) GetSegmentCleanupStatus(ctx context.Context, logI
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	resp, err := e.client.Get(ctx1, key)
 	if err != nil {
@@ -1431,7 +1436,7 @@ func (e *metadataProviderEtcd) DeleteSegmentCleanupStatus(ctx context.Context, l
 	startTime := time.Now()
 	key := BuildSegmentCleanupStatusKey(logId, segmentId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	_, err := e.client.Delete(ctx1, key)
 	if err != nil {
@@ -1454,7 +1459,7 @@ func (e *metadataProviderEtcd) ListSegmentCleanupStatus(ctx context.Context, log
 	// Create a prefix key for the log to retrieve all segments
 	prefix := BuildAllSegmentsCleanupStatusKey(logId)
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 	resp, err := e.client.Get(ctx1, prefix, clientv3.WithPrefix())
 	if err != nil {
@@ -1502,7 +1507,7 @@ func (e *metadataProviderEtcd) StoreOrGetConditionWriteResult(ctx context.Contex
 		valueToStore = "true"
 	}
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Start a transaction with CAS logic
@@ -1563,7 +1568,7 @@ func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (boo
 	defer sp.End()
 	startTime := time.Now()
 
-	ctx1, cancel := e.getContextWithTimeout()
+	ctx1, cancel := e.getContextWithTimeout(ctx)
 	defer cancel()
 
 	// Get the condition write key from etcd
@@ -1596,6 +1601,16 @@ func (e *metadataProviderEtcd) GetConditionWriteResult(ctx context.Context) (boo
 
 // getContextWithTimeout returns a context with timeout
 // NOTE: uniformly create etcd request context to avoid using upper-layer passed ctx with auth contamination
-func (e *metadataProviderEtcd) getContextWithTimeout() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), e.requestTimeout)
+func (e *metadataProviderEtcd) getContextWithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	// Use original ctx as base to preserve context values,
+	// but remove RBAC auth info to avoid auth contamination in etcd requests
+	newCtx := ctx
+
+	// Extract a metadata copy from incoming context and remove auth-related keys
+	if mdCopy, ok := metadata.FromIncomingContext(ctx); ok {
+		mdCopy.Delete("authorization")
+		mdCopy.Delete("token")
+		newCtx = metadata.NewIncomingContext(ctx, mdCopy)
+	}
+	return context.WithTimeout(newCtx, e.requestTimeout)
 }

@@ -38,15 +38,15 @@ const (
 
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio
 type MinioHandler interface {
-	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
-	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (FileReader, int64, int64, error)
-	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
-	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error)
-	PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error)
-	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
-	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error)
-	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
-	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
+	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (*minio.Object, error)
+	GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (FileReader, int64, int64, error)
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error)
+	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error)
+	PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error)
+	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions, operatingNamespace string, operatingLogId string) error
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (minio.ObjectInfo, error)
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error)
+	ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions, operatingNamespace string, operatingLogId string) <-chan minio.ObjectInfo
 }
 
 var _ MinioHandler = (*minioHandlerImpl)(nil)
@@ -74,67 +74,69 @@ func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, m
 	}, nil
 }
 
-func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (*minio.Object, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObject")
 	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return obj, nil
 }
 
-func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (FileReader, int64, int64, error) {
+func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (FileReader, int64, int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "GetObjectDataAndInfo")
 	defer sp.End()
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
 	info, err := obj.Stat()
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "error_stat").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "error_stat").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("get_object_data_info", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("get_object").Add(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "get_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "get_object").Observe(float64(info.Size))
 	return &ObjectReader{
 		Object: obj,
 	}, info.Size, info.LastModified.UnixMilli(), err
 }
 
-func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObject")
 	defer sp.End()
 	start := time.Now()
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
-func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
+func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutObjectIfNoneMatch")
 	defer sp.End()
 	// if condition write disable, fallback to put object directly, if put error,check obj state to see the reason
 	if m.cfg.Woodpecker.Logstore.FencePolicy.IsConditionWriteDisabled() {
-		return m.putObjectIfNoneMatchWhenConditionWriteDisabled(ctx, bucketName, objectName, reader, objectSize)
+		return m.putObjectIfNoneMatchWhenConditionWriteDisabled(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	}
 	start := time.Now()
 	opts := minio.PutObjectOptions{}
@@ -151,25 +153,27 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 			return info, werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-		metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
+		metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
-func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
-	info, err := m.PutObject(ctx, bucketName, objectName, reader, objectSize, minio.PutObjectOptions{})
+func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
+	info, err := m.PutObject(ctx, bucketName, objectName, reader, objectSize, minio.PutObjectOptions{}, operatingNamespace, operatingLogId)
 	if err != nil {
 		// check if object exists, some backend not support overwrite originally
 		// if exists, but object is fence object, return ErrSegmentFenced
@@ -195,7 +199,7 @@ func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx co
 	return info, nil
 }
 
-func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, objectName string) (minio.UploadInfo, error) {
+func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "PutFencedObject")
 	defer sp.End()
 	// construct fence object&opt
@@ -208,7 +212,7 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 	// put object directly if condition write disabled
 	// check the result to see the operation success or not
 	if m.cfg.Woodpecker.Logstore.FencePolicy.IsConditionWriteDisabled() {
-		return m.putFencedObjectWhenConditionWriteDisabled(ctx, bucketName, objectName, 1, fencedObjectReader, opts)
+		return m.putFencedObjectWhenConditionWriteDisabled(ctx, bucketName, objectName, 1, fencedObjectReader, opts, operatingNamespace, operatingLogId)
 	}
 	// put fence object using condition write
 	start := time.Now()
@@ -228,17 +232,18 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues("put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues("put_fenced_object").Add(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object").Observe(float64(info.Size))
 	return info, nil
 }
 
-func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, size int64, fencedObjectReader io.Reader, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, size int64, fencedObjectReader io.Reader, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	info, err := m.client.PutObject(ctx, bucketName, objectName, fencedObjectReader, size, opts)
 	if err != nil {
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
@@ -257,57 +262,57 @@ func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context
 	return info, nil
 }
 
-func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error {
+func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions, operatingNamespace string, operatingLogId string) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "RemoveObject")
 	defer sp.End()
 	start := time.Now()
 	err := m.client.RemoveObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("remove_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("remove_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("remove_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("remove_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
 
-func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
+func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (minio.ObjectInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "StatObject")
 	defer sp.End()
 	start := time.Now()
 	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("stat_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return info, err
 }
 
-func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOptions, src minio.CopySrcOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "CopyObject")
 	defer sp.End()
 	start := time.Now()
 	uploadInfo, err := m.client.CopyObject(ctx, dest, src)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("copy_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return uploadInfo, err
 }
 
-func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix string, recursive bool, opts minio.ListObjectsOptions, operatingNamespace string, operatingLogId string) <-chan minio.ObjectInfo {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ListObjects")
 	defer sp.End()
 	// We can't track completion metrics here as this returns a channel
 	// Instead, we'll increment the operation count for the method call
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues("list_objects", "called").Inc()
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "list_objects", "called").Inc()
 
 	opts.Recursive = recursive
 	opts.Prefix = prefix

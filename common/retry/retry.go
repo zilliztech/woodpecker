@@ -179,5 +179,5 @@ func Unrecoverable(err error) error {
 
 // IsRecoverable is used to judge whether the error is wrapped by unrecoverableError.
 func IsRecoverable(err error) bool {
-	return !errors.Is(err, errors.Unwrap(errUnrecoverable))
+	return !errors.Is(err, errUnrecoverable)
 }

@@ -37,7 +37,7 @@ const (
 )
 
 func createTestLogStore() *logStore {
-	cfg := &config.Configuration{}
+	cfg, _ := config.NewConfiguration()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	store := &logStore{
@@ -131,7 +131,10 @@ func TestLogStore_SegmentProcessorCleanup_IdleCleanup(t *testing.T) {
 	}
 
 	// Call cleanup with 5 minute max idle time
-	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	for _, item := range idleProcessors {
+		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
+	}
 
 	// Verify that segments 1,2,3 were removed (idle)
 	for i := int64(1); i <= 3; i++ {
@@ -342,7 +345,10 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	}
 
 	// Call cleanup
-	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	for _, item := range idleProcessors {
+		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
+	}
 
 	// Verify that segments 1,2,3,4 were removed
 	for i := int64(1); i <= 4; i++ {
@@ -391,7 +397,10 @@ func TestLogStore_SegmentProcessorCleanup_ProtectHighestSegment(t *testing.T) {
 	}
 
 	// Call cleanup
-	store.cleanupIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	for _, item := range idleProcessors {
+		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
+	}
 
 	// Verify that segments 1,2,3,4 were removed (idle and not highest)
 	for i := int64(1); i <= 4; i++ {

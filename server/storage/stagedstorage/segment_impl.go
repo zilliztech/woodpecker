@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,8 @@ type StagedSegmentImpl struct {
 	rootPath       string
 	segmentFileKey string
 	client         objectstorage.ObjectStorage
+	logIdStr       string // for metrics label only
+	nsStr          string // for metrics namespace label
 }
 
 // NewStagedSegmentImpl is used to create a new Segment, which is used to write data to both local and object storage
@@ -80,6 +83,8 @@ func NewStagedSegmentImpl(ctx context.Context, bucket string, rootPath string, l
 		rootPath:        rootPath,
 		segmentFileKey:  segmentFileKey,
 		client:          storageCli,
+		logIdStr:        strconv.FormatInt(logId, 10),
+		nsStr:           bucket + "/" + rootPath,
 	}
 	return segmentImpl
 }
@@ -91,7 +96,7 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 	defer rs.mu.Unlock()
 
 	startTime := time.Now()
-	logId := fmt.Sprintf("%d", rs.logId)
+	logId := strconv.FormatInt(rs.logId, 10)
 
 	logger.Ctx(ctx).Info("Starting to delete segment data (minio + local)",
 		zap.String("segmentDir", rs.segmentDir),
@@ -157,7 +162,11 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 
 	// List all objects in the segment directory
 	listPrefix := fmt.Sprintf("%s/%s", rs.rootPath, rs.segmentFileKey)
-	var objectsToDelete []string
+	type objectToDelete struct {
+		path string
+		size int64
+	}
+	var objectsToDelete []objectToDelete
 	var deletedCount int
 	var errorCount int
 
@@ -190,10 +199,10 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		}
 
 		if shouldDelete {
-			objectsToDelete = append(objectsToDelete, objInfo.FilePath)
+			objectsToDelete = append(objectsToDelete, objectToDelete{path: objInfo.FilePath, size: objInfo.Size})
 		}
 		return true // continue walking
-	})
+	}, rs.nsStr, rs.logIdStr)
 	if walkErr != nil {
 		logger.Ctx(ctx).Warn("error listing blocks during deletion",
 			zap.String("segmentFileKey", rs.segmentFileKey),
@@ -207,20 +216,22 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 		zap.Int("flag", flag))
 
 	// Delete objects
-	for _, objectKey := range objectsToDelete {
-		err := rs.client.RemoveObject(ctx, rs.bucket, objectKey)
+	for _, obj := range objectsToDelete {
+		err := rs.client.RemoveObject(ctx, rs.bucket, obj.path, rs.nsStr, rs.logIdStr)
 		if err != nil {
 			// Log error but continue with other deletions
 			logger.Ctx(ctx).Warn("failed to delete block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
-				zap.String("objectKey", objectKey),
+				zap.String("objectKey", obj.path),
 				zap.Error(err))
 			errorCount++
 		} else {
 			logger.Ctx(ctx).Debug("successfully deleted block",
 				zap.String("segmentFileKey", rs.segmentFileKey),
-				zap.String("objectKey", objectKey))
+				zap.String("objectKey", obj.path))
 			deletedCount++
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(rs.nsStr, rs.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(rs.nsStr, rs.logIdStr).Dec()
 		}
 	}
 
@@ -286,6 +297,15 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 
 		if shouldDelete {
 			filePath := filepath.Join(rs.segmentDir, fileName)
+			isDataFile := fileName == "data.log"
+
+			// Get file size before deleting (only needed for data files)
+			var fileSize int64
+			if isDataFile {
+				if info, infoErr := entry.Info(); infoErr == nil {
+					fileSize = info.Size()
+				}
+			}
 
 			// Delete file
 			if err := os.Remove(filePath); err != nil {
@@ -297,6 +317,10 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 				logger.Ctx(ctx).Debug("Successfully deleted local file",
 					zap.String("filePath", filePath))
 				deletedCount++
+				if isDataFile {
+					metrics.WpFileStoredBytes.WithLabelValues(rs.nsStr, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(rs.nsStr, rs.logIdStr).Dec()
+				}
 			}
 		}
 	}

@@ -1,0 +1,7 @@
+{
+  "name": "Prometheus",
+  "type": "prometheus",
+  "url": "__PROMETHEUS_URL__",
+  "access": "proxy",
+  "isDefault": true
+}

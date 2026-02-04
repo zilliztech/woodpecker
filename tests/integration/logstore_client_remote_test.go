@@ -99,7 +99,8 @@ func TestRemoteClient_BasicAppend(t *testing.T) {
 			listener.Close() // Close it so server can use it
 
 			// Create and start server
-			service := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			service, err := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			assert.NoError(t, err)
 
 			// Prepare server (sets up listener and gossip)
 			err = service.Prepare()
@@ -224,7 +225,8 @@ func TestRemoteClient_MultipleAppends(t *testing.T) {
 			listener.Close() // Close it so server can use it
 
 			// Create and start server
-			service := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			service, err := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			assert.NoError(t, err)
 
 			// Prepare server (sets up listener and gossip)
 			err = service.Prepare()
@@ -355,7 +357,8 @@ func TestRemoteClient_ClientClose(t *testing.T) {
 			listener.Close() // Close it so server can use it
 
 			// Create and start server
-			service := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			service, err := server.NewServer(ctx, cfg, 0, servicePort, []string{})
+			assert.NoError(t, err)
 
 			// Prepare server (sets up listener and gossip)
 			err = service.Prepare()

@@ -20,10 +20,21 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/zilliztech/woodpecker/common/metrics"
 )
+
+func TestMain(m *testing.M) {
+	metrics.NodeID = "test-node"
+	metrics.MetricsNamespace = "test-ns"
+	metrics.RegisterWoodpecker(prometheus.NewRegistry())
+	os.Exit(m.Run())
+}
 
 // testFileReader implements FileReader interface for testing
 type testFileReader struct {
@@ -126,7 +137,7 @@ func TestReadObjectFull(t *testing.T) {
 			}
 
 			// Call the function being tested
-			got, err := ReadObjectFull(context.TODO(), reader, 1024*1024)
+			got, err := ReadObjectFull(context.TODO(), reader, 1024*1024, "test-ns", "0")
 
 			// Verify results
 			if tt.wantErr {
@@ -144,7 +155,7 @@ func TestReadObjectFull(t *testing.T) {
 			readError: io.ErrClosedPipe, // Simulate a read error
 		}
 
-		_, err := ReadObjectFull(context.TODO(), reader, 1024*1024)
+		_, err := ReadObjectFull(context.TODO(), reader, 1024*1024, "test-ns", "0")
 		assert.Error(t, err)
 		assert.Equal(t, io.ErrClosedPipe, err)
 	})

@@ -27,9 +27,9 @@ func (_m *MinioHandler) EXPECT() *MinioHandler_Expecter {
 	return &MinioHandler_Expecter{mock: &_m.Mock}
 }
 
-// CopyObject provides a mock function with given fields: ctx, dst, src
-func (_m *MinioHandler) CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
-	ret := _m.Called(ctx, dst, src)
+// CopyObject provides a mock function with given fields: ctx, dst, src, operatingNamespace, operatingLogId
+func (_m *MinioHandler) CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
+	ret := _m.Called(ctx, dst, src, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CopyObject")
@@ -37,17 +37,17 @@ func (_m *MinioHandler) CopyObject(ctx context.Context, dst minio.CopyDestOption
 
 	var r0 minio.UploadInfo
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) (minio.UploadInfo, error)); ok {
-		return rf(ctx, dst, src)
+	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions, string, string) (minio.UploadInfo, error)); ok {
+		return rf(ctx, dst, src, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) minio.UploadInfo); ok {
-		r0 = rf(ctx, dst, src)
+	if rf, ok := ret.Get(0).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions, string, string) minio.UploadInfo); ok {
+		r0 = rf(ctx, dst, src, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(minio.UploadInfo)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) error); ok {
-		r1 = rf(ctx, dst, src)
+	if rf, ok := ret.Get(1).(func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions, string, string) error); ok {
+		r1 = rf(ctx, dst, src, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -64,13 +64,15 @@ type MinioHandler_CopyObject_Call struct {
 //   - ctx context.Context
 //   - dst minio.CopyDestOptions
 //   - src minio.CopySrcOptions
-func (_e *MinioHandler_Expecter) CopyObject(ctx interface{}, dst interface{}, src interface{}) *MinioHandler_CopyObject_Call {
-	return &MinioHandler_CopyObject_Call{Call: _e.mock.On("CopyObject", ctx, dst, src)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) CopyObject(ctx interface{}, dst interface{}, src interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_CopyObject_Call {
+	return &MinioHandler_CopyObject_Call{Call: _e.mock.On("CopyObject", ctx, dst, src, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_CopyObject_Call) Run(run func(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions)) *MinioHandler_CopyObject_Call {
+func (_c *MinioHandler_CopyObject_Call) Run(run func(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_CopyObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(minio.CopyDestOptions), args[2].(minio.CopySrcOptions))
+		run(args[0].(context.Context), args[1].(minio.CopyDestOptions), args[2].(minio.CopySrcOptions), args[3].(string), args[4].(string))
 	})
 	return _c
 }
@@ -80,14 +82,14 @@ func (_c *MinioHandler_CopyObject_Call) Return(_a0 minio.UploadInfo, _a1 error) 
 	return _c
 }
 
-func (_c *MinioHandler_CopyObject_Call) RunAndReturn(run func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions) (minio.UploadInfo, error)) *MinioHandler_CopyObject_Call {
+func (_c *MinioHandler_CopyObject_Call) RunAndReturn(run func(context.Context, minio.CopyDestOptions, minio.CopySrcOptions, string, string) (minio.UploadInfo, error)) *MinioHandler_CopyObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetObject provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) GetObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
-	ret := _m.Called(ctx, bucketName, objectName, opts)
+// GetObject provides a mock function with given fields: ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) GetObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (*minio.Object, error) {
+	ret := _m.Called(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetObject")
@@ -95,19 +97,19 @@ func (_m *MinioHandler) GetObject(ctx context.Context, bucketName string, object
 
 	var r0 *minio.Object
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (*minio.Object, error)); ok {
-		return rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) (*minio.Object, error)); ok {
+		return rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) *minio.Object); ok {
-		r0 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) *minio.Object); ok {
+		r0 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*minio.Object)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
-		r1 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -125,13 +127,15 @@ type MinioHandler_GetObject_Call struct {
 //   - bucketName string
 //   - objectName string
 //   - opts minio.GetObjectOptions
-func (_e *MinioHandler_Expecter) GetObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}) *MinioHandler_GetObject_Call {
-	return &MinioHandler_GetObject_Call{Call: _e.mock.On("GetObject", ctx, bucketName, objectName, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) GetObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_GetObject_Call {
+	return &MinioHandler_GetObject_Call{Call: _e.mock.On("GetObject", ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_GetObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions)) *MinioHandler_GetObject_Call {
+func (_c *MinioHandler_GetObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_GetObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions), args[4].(string), args[5].(string))
 	})
 	return _c
 }
@@ -141,14 +145,14 @@ func (_c *MinioHandler_GetObject_Call) Return(_a0 *minio.Object, _a1 error) *Min
 	return _c
 }
 
-func (_c *MinioHandler_GetObject_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (*minio.Object, error)) *MinioHandler_GetObject_Call {
+func (_c *MinioHandler_GetObject_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions, string, string) (*minio.Object, error)) *MinioHandler_GetObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// GetObjectDataAndInfo provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error) {
-	ret := _m.Called(ctx, bucketName, objectName, opts)
+// GetObjectDataAndInfo provides a mock function with given fields: ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (commonminio.FileReader, int64, int64, error) {
+	ret := _m.Called(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetObjectDataAndInfo")
@@ -158,31 +162,31 @@ func (_m *MinioHandler) GetObjectDataAndInfo(ctx context.Context, bucketName str
 	var r1 int64
 	var r2 int64
 	var r3 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error)); ok {
-		return rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) (commonminio.FileReader, int64, int64, error)); ok {
+		return rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) commonminio.FileReader); ok {
-		r0 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) commonminio.FileReader); ok {
+		r0 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(commonminio.FileReader)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions) int64); ok {
-		r1 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions, string, string) int64); ok {
+		r1 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Get(1).(int64)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, string, string, minio.GetObjectOptions) int64); ok {
-		r2 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(2).(func(context.Context, string, string, minio.GetObjectOptions, string, string) int64); ok {
+		r2 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r2 = ret.Get(2).(int64)
 	}
 
-	if rf, ok := ret.Get(3).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
-		r3 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(3).(func(context.Context, string, string, minio.GetObjectOptions, string, string) error); ok {
+		r3 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r3 = ret.Error(3)
 	}
@@ -200,13 +204,15 @@ type MinioHandler_GetObjectDataAndInfo_Call struct {
 //   - bucketName string
 //   - objectName string
 //   - opts minio.GetObjectOptions
-func (_e *MinioHandler_Expecter) GetObjectDataAndInfo(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}) *MinioHandler_GetObjectDataAndInfo_Call {
-	return &MinioHandler_GetObjectDataAndInfo_Call{Call: _e.mock.On("GetObjectDataAndInfo", ctx, bucketName, objectName, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) GetObjectDataAndInfo(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_GetObjectDataAndInfo_Call {
+	return &MinioHandler_GetObjectDataAndInfo_Call{Call: _e.mock.On("GetObjectDataAndInfo", ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions)) *MinioHandler_GetObjectDataAndInfo_Call {
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_GetObjectDataAndInfo_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions), args[4].(string), args[5].(string))
 	})
 	return _c
 }
@@ -216,22 +222,22 @@ func (_c *MinioHandler_GetObjectDataAndInfo_Call) Return(_a0 commonminio.FileRea
 	return _c
 }
 
-func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (commonminio.FileReader, int64, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
+func (_c *MinioHandler_GetObjectDataAndInfo_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions, string, string) (commonminio.FileReader, int64, int64, error)) *MinioHandler_GetObjectDataAndInfo_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// ListObjects provides a mock function with given fields: ctx, bucketName, prefix, recursive, opts
-func (_m *MinioHandler) ListObjects(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
-	ret := _m.Called(ctx, bucketName, prefix, recursive, opts)
+// ListObjects provides a mock function with given fields: ctx, bucketName, prefix, recursive, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) ListObjects(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions, operatingNamespace string, operatingLogId string) <-chan minio.ObjectInfo {
+	ret := _m.Called(ctx, bucketName, prefix, recursive, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListObjects")
 	}
 
 	var r0 <-chan minio.ObjectInfo
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, bool, minio.ListObjectsOptions) <-chan minio.ObjectInfo); ok {
-		r0 = rf(ctx, bucketName, prefix, recursive, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, bool, minio.ListObjectsOptions, string, string) <-chan minio.ObjectInfo); ok {
+		r0 = rf(ctx, bucketName, prefix, recursive, opts, operatingNamespace, operatingLogId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(<-chan minio.ObjectInfo)
@@ -252,13 +258,15 @@ type MinioHandler_ListObjects_Call struct {
 //   - prefix string
 //   - recursive bool
 //   - opts minio.ListObjectsOptions
-func (_e *MinioHandler_Expecter) ListObjects(ctx interface{}, bucketName interface{}, prefix interface{}, recursive interface{}, opts interface{}) *MinioHandler_ListObjects_Call {
-	return &MinioHandler_ListObjects_Call{Call: _e.mock.On("ListObjects", ctx, bucketName, prefix, recursive, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) ListObjects(ctx interface{}, bucketName interface{}, prefix interface{}, recursive interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_ListObjects_Call {
+	return &MinioHandler_ListObjects_Call{Call: _e.mock.On("ListObjects", ctx, bucketName, prefix, recursive, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_ListObjects_Call) Run(run func(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions)) *MinioHandler_ListObjects_Call {
+func (_c *MinioHandler_ListObjects_Call) Run(run func(ctx context.Context, bucketName string, prefix string, recursive bool, opts minio.ListObjectsOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_ListObjects_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(bool), args[4].(minio.ListObjectsOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(bool), args[4].(minio.ListObjectsOptions), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -268,14 +276,14 @@ func (_c *MinioHandler_ListObjects_Call) Return(_a0 <-chan minio.ObjectInfo) *Mi
 	return _c
 }
 
-func (_c *MinioHandler_ListObjects_Call) RunAndReturn(run func(context.Context, string, string, bool, minio.ListObjectsOptions) <-chan minio.ObjectInfo) *MinioHandler_ListObjects_Call {
+func (_c *MinioHandler_ListObjects_Call) RunAndReturn(run func(context.Context, string, string, bool, minio.ListObjectsOptions, string, string) <-chan minio.ObjectInfo) *MinioHandler_ListObjects_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// PutFencedObject provides a mock function with given fields: ctx, bucketName, objectName
-func (_m *MinioHandler) PutFencedObject(ctx context.Context, bucketName string, objectName string) (minio.UploadInfo, error) {
-	ret := _m.Called(ctx, bucketName, objectName)
+// PutFencedObject provides a mock function with given fields: ctx, bucketName, objectName, operatingNamespace, operatingLogId
+func (_m *MinioHandler) PutFencedObject(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
+	ret := _m.Called(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutFencedObject")
@@ -283,17 +291,17 @@ func (_m *MinioHandler) PutFencedObject(ctx context.Context, bucketName string, 
 
 	var r0 minio.UploadInfo
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) (minio.UploadInfo, error)); ok {
-		return rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) (minio.UploadInfo, error)); ok {
+		return rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) minio.UploadInfo); ok {
-		r0 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) minio.UploadInfo); ok {
+		r0 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(minio.UploadInfo)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -310,13 +318,15 @@ type MinioHandler_PutFencedObject_Call struct {
 //   - ctx context.Context
 //   - bucketName string
 //   - objectName string
-func (_e *MinioHandler_Expecter) PutFencedObject(ctx interface{}, bucketName interface{}, objectName interface{}) *MinioHandler_PutFencedObject_Call {
-	return &MinioHandler_PutFencedObject_Call{Call: _e.mock.On("PutFencedObject", ctx, bucketName, objectName)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) PutFencedObject(ctx interface{}, bucketName interface{}, objectName interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_PutFencedObject_Call {
+	return &MinioHandler_PutFencedObject_Call{Call: _e.mock.On("PutFencedObject", ctx, bucketName, objectName, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_PutFencedObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string)) *MinioHandler_PutFencedObject_Call {
+func (_c *MinioHandler_PutFencedObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string)) *MinioHandler_PutFencedObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string), args[4].(string))
 	})
 	return _c
 }
@@ -326,14 +336,14 @@ func (_c *MinioHandler_PutFencedObject_Call) Return(_a0 minio.UploadInfo, _a1 er
 	return _c
 }
 
-func (_c *MinioHandler_PutFencedObject_Call) RunAndReturn(run func(context.Context, string, string) (minio.UploadInfo, error)) *MinioHandler_PutFencedObject_Call {
+func (_c *MinioHandler_PutFencedObject_Call) RunAndReturn(run func(context.Context, string, string, string, string) (minio.UploadInfo, error)) *MinioHandler_PutFencedObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// PutObject provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, opts
-func (_m *MinioHandler) PutObject(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
-	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, opts)
+// PutObject provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) PutObject(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
+	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutObject")
@@ -341,17 +351,17 @@ func (_m *MinioHandler) PutObject(ctx context.Context, bucketName string, object
 
 	var r0 minio.UploadInfo
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)); ok {
-		return rf(ctx, bucketName, objectName, reader, objectSize, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions, string, string) (minio.UploadInfo, error)); ok {
+		return rf(ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) minio.UploadInfo); ok {
-		r0 = rf(ctx, bucketName, objectName, reader, objectSize, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions, string, string) minio.UploadInfo); ok {
+		r0 = rf(ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(minio.UploadInfo)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) error); ok {
-		r1 = rf(ctx, bucketName, objectName, reader, objectSize, opts)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -371,13 +381,15 @@ type MinioHandler_PutObject_Call struct {
 //   - reader io.Reader
 //   - objectSize int64
 //   - opts minio.PutObjectOptions
-func (_e *MinioHandler_Expecter) PutObject(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}, opts interface{}) *MinioHandler_PutObject_Call {
-	return &MinioHandler_PutObject_Call{Call: _e.mock.On("PutObject", ctx, bucketName, objectName, reader, objectSize, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) PutObject(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_PutObject_Call {
+	return &MinioHandler_PutObject_Call{Call: _e.mock.On("PutObject", ctx, bucketName, objectName, reader, objectSize, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_PutObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions)) *MinioHandler_PutObject_Call {
+func (_c *MinioHandler_PutObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_PutObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64), args[5].(minio.PutObjectOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64), args[5].(minio.PutObjectOptions), args[6].(string), args[7].(string))
 	})
 	return _c
 }
@@ -387,14 +399,14 @@ func (_c *MinioHandler_PutObject_Call) Return(_a0 minio.UploadInfo, _a1 error) *
 	return _c
 }
 
-func (_c *MinioHandler_PutObject_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)) *MinioHandler_PutObject_Call {
+func (_c *MinioHandler_PutObject_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions, string, string) (minio.UploadInfo, error)) *MinioHandler_PutObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// PutObjectIfNoneMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize
-func (_m *MinioHandler) PutObjectIfNoneMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64) (minio.UploadInfo, error) {
-	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize)
+// PutObjectIfNoneMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId
+func (_m *MinioHandler) PutObjectIfNoneMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
+	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutObjectIfNoneMatch")
@@ -402,17 +414,17 @@ func (_m *MinioHandler) PutObjectIfNoneMatch(ctx context.Context, bucketName str
 
 	var r0 minio.UploadInfo
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64) (minio.UploadInfo, error)); ok {
-		return rf(ctx, bucketName, objectName, reader, objectSize)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, string, string) (minio.UploadInfo, error)); ok {
+		return rf(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64) minio.UploadInfo); ok {
-		r0 = rf(ctx, bucketName, objectName, reader, objectSize)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, string, string) minio.UploadInfo); ok {
+		r0 = rf(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(minio.UploadInfo)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, io.Reader, int64) error); ok {
-		r1 = rf(ctx, bucketName, objectName, reader, objectSize)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, io.Reader, int64, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -431,13 +443,15 @@ type MinioHandler_PutObjectIfNoneMatch_Call struct {
 //   - objectName string
 //   - reader io.Reader
 //   - objectSize int64
-func (_e *MinioHandler_Expecter) PutObjectIfNoneMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}) *MinioHandler_PutObjectIfNoneMatch_Call {
-	return &MinioHandler_PutObjectIfNoneMatch_Call{Call: _e.mock.On("PutObjectIfNoneMatch", ctx, bucketName, objectName, reader, objectSize)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) PutObjectIfNoneMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_PutObjectIfNoneMatch_Call {
+	return &MinioHandler_PutObjectIfNoneMatch_Call{Call: _e.mock.On("PutObjectIfNoneMatch", ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_PutObjectIfNoneMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64)) *MinioHandler_PutObjectIfNoneMatch_Call {
+func (_c *MinioHandler_PutObjectIfNoneMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string)) *MinioHandler_PutObjectIfNoneMatch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -447,22 +461,22 @@ func (_c *MinioHandler_PutObjectIfNoneMatch_Call) Return(_a0 minio.UploadInfo, _
 	return _c
 }
 
-func (_c *MinioHandler_PutObjectIfNoneMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64) (minio.UploadInfo, error)) *MinioHandler_PutObjectIfNoneMatch_Call {
+func (_c *MinioHandler_PutObjectIfNoneMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64, string, string) (minio.UploadInfo, error)) *MinioHandler_PutObjectIfNoneMatch_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// RemoveObject provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) RemoveObject(ctx context.Context, bucketName string, objectName string, opts minio.RemoveObjectOptions) error {
-	ret := _m.Called(ctx, bucketName, objectName, opts)
+// RemoveObject provides a mock function with given fields: ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) RemoveObject(ctx context.Context, bucketName string, objectName string, opts minio.RemoveObjectOptions, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RemoveObject")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.RemoveObjectOptions) error); ok {
-		r0 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.RemoveObjectOptions, string, string) error); ok {
+		r0 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -480,13 +494,15 @@ type MinioHandler_RemoveObject_Call struct {
 //   - bucketName string
 //   - objectName string
 //   - opts minio.RemoveObjectOptions
-func (_e *MinioHandler_Expecter) RemoveObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}) *MinioHandler_RemoveObject_Call {
-	return &MinioHandler_RemoveObject_Call{Call: _e.mock.On("RemoveObject", ctx, bucketName, objectName, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) RemoveObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_RemoveObject_Call {
+	return &MinioHandler_RemoveObject_Call{Call: _e.mock.On("RemoveObject", ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_RemoveObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.RemoveObjectOptions)) *MinioHandler_RemoveObject_Call {
+func (_c *MinioHandler_RemoveObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.RemoveObjectOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_RemoveObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.RemoveObjectOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.RemoveObjectOptions), args[4].(string), args[5].(string))
 	})
 	return _c
 }
@@ -496,14 +512,14 @@ func (_c *MinioHandler_RemoveObject_Call) Return(_a0 error) *MinioHandler_Remove
 	return _c
 }
 
-func (_c *MinioHandler_RemoveObject_Call) RunAndReturn(run func(context.Context, string, string, minio.RemoveObjectOptions) error) *MinioHandler_RemoveObject_Call {
+func (_c *MinioHandler_RemoveObject_Call) RunAndReturn(run func(context.Context, string, string, minio.RemoveObjectOptions, string, string) error) *MinioHandler_RemoveObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// StatObject provides a mock function with given fields: ctx, bucketName, objectName, opts
-func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions) (minio.ObjectInfo, error) {
-	ret := _m.Called(ctx, bucketName, objectName, opts)
+// StatObject provides a mock function with given fields: ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId
+func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (minio.ObjectInfo, error) {
+	ret := _m.Called(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StatObject")
@@ -511,17 +527,17 @@ func (_m *MinioHandler) StatObject(ctx context.Context, bucketName string, objec
 
 	var r0 minio.ObjectInfo
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) (minio.ObjectInfo, error)); ok {
-		return rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) (minio.ObjectInfo, error)); ok {
+		return rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions) minio.ObjectInfo); ok {
-		r0 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, minio.GetObjectOptions, string, string) minio.ObjectInfo); ok {
+		r0 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(minio.ObjectInfo)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions) error); ok {
-		r1 = rf(ctx, bucketName, objectName, opts)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, minio.GetObjectOptions, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -539,13 +555,15 @@ type MinioHandler_StatObject_Call struct {
 //   - bucketName string
 //   - objectName string
 //   - opts minio.GetObjectOptions
-func (_e *MinioHandler_Expecter) StatObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}) *MinioHandler_StatObject_Call {
-	return &MinioHandler_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, objectName, opts)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *MinioHandler_Expecter) StatObject(ctx interface{}, bucketName interface{}, objectName interface{}, opts interface{}, operatingNamespace interface{}, operatingLogId interface{}) *MinioHandler_StatObject_Call {
+	return &MinioHandler_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, objectName, opts, operatingNamespace, operatingLogId)}
 }
 
-func (_c *MinioHandler_StatObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions)) *MinioHandler_StatObject_Call {
+func (_c *MinioHandler_StatObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string)) *MinioHandler_StatObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(minio.GetObjectOptions), args[4].(string), args[5].(string))
 	})
 	return _c
 }
@@ -555,7 +573,7 @@ func (_c *MinioHandler_StatObject_Call) Return(_a0 minio.ObjectInfo, _a1 error) 
 	return _c
 }
 
-func (_c *MinioHandler_StatObject_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions) (minio.ObjectInfo, error)) *MinioHandler_StatObject_Call {
+func (_c *MinioHandler_StatObject_Call) RunAndReturn(run func(context.Context, string, string, minio.GetObjectOptions, string, string) (minio.ObjectInfo, error)) *MinioHandler_StatObject_Call {
 	_c.Call.Return(run)
 	return _c
 }

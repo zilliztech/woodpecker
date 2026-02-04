@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,8 +143,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 }
 
 func (l *logHandleImpl) GetLastRecordId(ctx context.Context) (*LogMessageId, error) {
-	//TODO implement me
-	panic("implement me")
+	return nil, werr.ErrOperationNotSupported
 }
 
 func (l *logHandleImpl) GetName() string {
@@ -162,7 +162,7 @@ func (l *logHandleImpl) GetSegments(ctx context.Context) (map[int64]*meta.Segmen
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "GetSegments")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 	result, err := l.Metadata.GetAllSegmentMetadata(ctx, l.Name)
 	if err != nil {
 		metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "get_segments", "error").Inc()
@@ -242,7 +242,7 @@ func (l *logHandleImpl) openInternalLogWriter(ctx context.Context) (LogWriter, e
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenInternalLogWriter")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 	logger.Ctx(ctx).Info("open internal log writer start", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 
 	// Fence all active segments to prevent split-brain scenarios
@@ -456,7 +456,7 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 		}
 
 		// 3. return new segmentHandle
-		logger.Ctx(ctx).Debug("doAsyncRollingCloseAndCreateWritableSegmentHandleUnsafe success",
+		logger.Ctx(ctx).Info("segment rolling completed successfully",
 			zap.String("logName", l.Name),
 			zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
 			zap.Int64("newSegmentId", newSegmentHandle.GetId(ctx)))
@@ -523,7 +523,8 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
-	return nil, nil
+	logger.Ctx(ctx).Warn("get exists read only segment handle failed, no segmentMeta found", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", segmentId))
+	return nil, werr.ErrSegmentNotFound.WithCauseErrMsg("no segment meta found")
 }
 
 func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
@@ -536,7 +537,7 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context,
 	l.SegmentHandles[newSegMeta.Metadata.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.Metadata.SegNo
 	l.lastRolloverTimeMs = newSegMeta.Metadata.CreateTime
-	logger.Ctx(ctx).Debug("create and cache new SegmentHandle success", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.Metadata.SegNo))
+	logger.Ctx(ctx).Info("new writable segment created", zap.String("logName", l.Name), zap.Int64("segmentId", newSegMeta.Metadata.SegNo))
 	return newSegHandle, nil
 }
 
@@ -605,7 +606,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenLogReader")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 
 	readerName := fmt.Sprintf("%s-r-%d", l.Name, time.Now().UnixNano())
 	if len(readerBaseName) > 0 {
@@ -635,7 +636,7 @@ func (l *logHandleImpl) OpenLogReader(ctx context.Context, from *LogMessageId, r
 
 	metrics.WpLogHandleOperationsTotal.WithLabelValues(logIdStr, "open_log_reader", "success").Inc()
 	metrics.WpLogHandleOperationLatency.WithLabelValues(logIdStr, "open_log_reader", "success").Observe(float64(time.Since(start).Milliseconds()))
-	logger.Ctx(ctx).Debug("open log reader success", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName))
+	logger.Ctx(ctx).Info("open log reader success", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Int64("segmentId", startPoint.SegmentId), zap.Int64("entryId", startPoint.EntryId), zap.String("readerName", readerName))
 	return r, nil
 }
 
@@ -744,7 +745,7 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CheckAndSetSegmentTruncatedIfNeed")
 	defer sp.End()
 	start := time.Now()
-	logIdStr := fmt.Sprintf("%d", l.Id)
+	logIdStr := strconv.FormatInt(l.Id, 10)
 
 	// 1. Get current LogMeta
 	logMeta, err := l.Metadata.GetLogMeta(ctx, l.Name)
@@ -904,7 +905,7 @@ func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) er
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.ForceCompleteAndClose(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Info("Complete active segment failed when closing logHandle",
+			logger.Ctx(ctx).Warn("Complete active segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
@@ -939,7 +940,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.ForceCompleteAndClose(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Info("CompleteAndClose segment failed when closing logHandle",
+			logger.Ctx(ctx).Warn("CompleteAndClose segment failed when closing logHandle",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
@@ -1103,7 +1104,9 @@ func (l *logHandleImpl) cleanupIdleSegmentHandlesUnsafe(ctx context.Context, max
 	}
 }
 
-// TODO for Test only
+// Test only
 func (l *logHandleImpl) GetCurrentWritableSegmentHandle(ctx context.Context) segment.SegmentHandle {
+	l.RLock()
+	defer l.RUnlock()
 	return l.SegmentHandles[l.WritableSegmentId]
 }

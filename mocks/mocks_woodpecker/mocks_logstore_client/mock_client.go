@@ -373,6 +373,51 @@ func (_c *LogStoreClient_GetLastAddConfirmed_Call) RunAndReturn(run func(context
 	return _c
 }
 
+// IsRemoteClient provides a mock function with no fields
+func (_m *LogStoreClient) IsRemoteClient() bool {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsRemoteClient")
+	}
+
+	var r0 bool
+	if rf, ok := ret.Get(0).(func() bool); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	return r0
+}
+
+// LogStoreClient_IsRemoteClient_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsRemoteClient'
+type LogStoreClient_IsRemoteClient_Call struct {
+	*mock.Call
+}
+
+// IsRemoteClient is a helper method to define mock.On call
+func (_e *LogStoreClient_Expecter) IsRemoteClient() *LogStoreClient_IsRemoteClient_Call {
+	return &LogStoreClient_IsRemoteClient_Call{Call: _e.mock.On("IsRemoteClient")}
+}
+
+func (_c *LogStoreClient_IsRemoteClient_Call) Run(run func()) *LogStoreClient_IsRemoteClient_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *LogStoreClient_IsRemoteClient_Call) Return(_a0 bool) *LogStoreClient_IsRemoteClient_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *LogStoreClient_IsRemoteClient_Call) RunAndReturn(run func() bool) *LogStoreClient_IsRemoteClient_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ReadEntriesBatchAdv provides a mock function with given fields: ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState
 func (_m *LogStoreClient) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	ret := _m.Called(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)

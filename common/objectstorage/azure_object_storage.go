@@ -209,16 +209,16 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 	return client, nil
 }
 
-func (a *AzureObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64) (minioHandler.FileReader, error) {
+func (a *AzureObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
 	return NewBlobReaderWithSize(a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName), offset, size)
 }
 
-func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
 	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{})
 	return err
 }
 
-func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
 	start := time.Now()
 	eTagAny := azcore.ETag("*")
 	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{
@@ -230,7 +230,7 @@ func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketNam
 	})
 
 	if err != nil && a.IsPreconditionFailedError(err) {
-		objSize, isFencedObject, stateErr := a.StatObject(ctx, bucketName, objectName)
+		objSize, isFencedObject, stateErr := a.StatObject(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 		if stateErr != nil {
 			// return normal err, let task retry
 			return stateErr
@@ -240,22 +240,22 @@ func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketNam
 			return werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-		metrics.WpObjectStorageBytesTransferred.WithLabelValues("condition_put_object").Add(float64(objSize))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(objSize))
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("condition_put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
 	return err
 }
 
-func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string) error {
+func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
 	start := time.Now()
 	fencedObjectReader := bytes.NewReader([]byte("F"))
 	eTagAny := azcore.ETag("*")
@@ -271,7 +271,7 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 		},
 	})
 	if err != nil && a.IsPreconditionFailedError(err) {
-		_, isFenced, stateErr := a.StatObject(ctx, bucketName, objectName)
+		_, isFenced, stateErr := a.StatObject(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 		if stateErr != nil {
 			// return normal err
 			return stateErr
@@ -285,15 +285,15 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 		return werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues("put_fenced_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues("put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
 	return err
 }
 
-func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectName string) (int64, bool, error) {
+func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
 	info, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).GetProperties(ctx, &blob.GetPropertiesOptions{})
 	if err != nil {
 		return 0, false, err
@@ -305,7 +305,7 @@ func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectN
 	return *info.ContentLength, false, nil
 }
 
-func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) error {
+func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error {
 	if recursive {
 		pager := a.Client.NewContainerClient(bucketName).NewListBlobsFlatPager(&azblob.ListBlobsFlatOptions{
 			Prefix: &prefix,
@@ -316,7 +316,7 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 				return err
 			}
 			for _, blobItem := range pageResp.Segment.BlobItems {
-				if !walkFunc(&ChunkObjectInfo{FilePath: *blobItem.Name, ModifyTime: *blobItem.Properties.LastModified}) {
+				if !walkFunc(&ChunkObjectInfo{FilePath: *blobItem.Name, ModifyTime: *blobItem.Properties.LastModified, Size: *blobItem.Properties.ContentLength}) {
 					return nil
 				}
 			}
@@ -332,7 +332,7 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 			}
 
 			for _, blobItem := range pageResp.Segment.BlobItems {
-				if !walkFunc(&ChunkObjectInfo{FilePath: *blobItem.Name, ModifyTime: *blobItem.Properties.LastModified}) {
+				if !walkFunc(&ChunkObjectInfo{FilePath: *blobItem.Name, ModifyTime: *blobItem.Properties.LastModified, Size: *blobItem.Properties.ContentLength}) {
 					return nil
 				}
 			}
@@ -346,7 +346,7 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 	return nil
 }
 
-func (a *AzureObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string) error {
+func (a *AzureObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
 	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).Delete(ctx, &blob.DeleteOptions{})
 	return err
 }

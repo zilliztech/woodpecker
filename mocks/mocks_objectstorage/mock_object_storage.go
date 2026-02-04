@@ -25,9 +25,9 @@ func (_m *ObjectStorage) EXPECT() *ObjectStorage_Expecter {
 	return &ObjectStorage_Expecter{mock: &_m.Mock}
 }
 
-// GetObject provides a mock function with given fields: ctx, bucketName, objectName, offset, size
-func (_m *ObjectStorage) GetObject(ctx context.Context, bucketName string, objectName string, offset int64, size int64) (minio.FileReader, error) {
-	ret := _m.Called(ctx, bucketName, objectName, offset, size)
+// GetObject provides a mock function with given fields: ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) GetObject(ctx context.Context, bucketName string, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minio.FileReader, error) {
+	ret := _m.Called(ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetObject")
@@ -35,19 +35,19 @@ func (_m *ObjectStorage) GetObject(ctx context.Context, bucketName string, objec
 
 	var r0 minio.FileReader
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) (minio.FileReader, error)); ok {
-		return rf(ctx, bucketName, objectName, offset, size)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, string, string) (minio.FileReader, error)); ok {
+		return rf(ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64) minio.FileReader); ok {
-		r0 = rf(ctx, bucketName, objectName, offset, size)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, int64, int64, string, string) minio.FileReader); ok {
+		r0 = rf(ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(minio.FileReader)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64) error); ok {
-		r1 = rf(ctx, bucketName, objectName, offset, size)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, int64, int64, string, string) error); ok {
+		r1 = rf(ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -66,13 +66,15 @@ type ObjectStorage_GetObject_Call struct {
 //   - objectName string
 //   - offset int64
 //   - size int64
-func (_e *ObjectStorage_Expecter) GetObject(ctx interface{}, bucketName interface{}, objectName interface{}, offset interface{}, size interface{}) *ObjectStorage_GetObject_Call {
-	return &ObjectStorage_GetObject_Call{Call: _e.mock.On("GetObject", ctx, bucketName, objectName, offset, size)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) GetObject(ctx interface{}, bucketName interface{}, objectName interface{}, offset interface{}, size interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_GetObject_Call {
+	return &ObjectStorage_GetObject_Call{Call: _e.mock.On("GetObject", ctx, bucketName, objectName, offset, size, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_GetObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, offset int64, size int64)) *ObjectStorage_GetObject_Call {
+func (_c *ObjectStorage_GetObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string)) *ObjectStorage_GetObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(int64), args[4].(int64), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -82,7 +84,7 @@ func (_c *ObjectStorage_GetObject_Call) Return(_a0 minio.FileReader, _a1 error) 
 	return _c
 }
 
-func (_c *ObjectStorage_GetObject_Call) RunAndReturn(run func(context.Context, string, string, int64, int64) (minio.FileReader, error)) *ObjectStorage_GetObject_Call {
+func (_c *ObjectStorage_GetObject_Call) RunAndReturn(run func(context.Context, string, string, int64, int64, string, string) (minio.FileReader, error)) *ObjectStorage_GetObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -179,17 +181,17 @@ func (_c *ObjectStorage_IsPreconditionFailedError_Call) RunAndReturn(run func(er
 	return _c
 }
 
-// PutFencedObject provides a mock function with given fields: ctx, bucketName, objectName
-func (_m *ObjectStorage) PutFencedObject(ctx context.Context, bucketName string, objectName string) error {
-	ret := _m.Called(ctx, bucketName, objectName)
+// PutFencedObject provides a mock function with given fields: ctx, bucketName, objectName, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) PutFencedObject(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutFencedObject")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) error); ok {
+		r0 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -206,13 +208,15 @@ type ObjectStorage_PutFencedObject_Call struct {
 //   - ctx context.Context
 //   - bucketName string
 //   - objectName string
-func (_e *ObjectStorage_Expecter) PutFencedObject(ctx interface{}, bucketName interface{}, objectName interface{}) *ObjectStorage_PutFencedObject_Call {
-	return &ObjectStorage_PutFencedObject_Call{Call: _e.mock.On("PutFencedObject", ctx, bucketName, objectName)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) PutFencedObject(ctx interface{}, bucketName interface{}, objectName interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_PutFencedObject_Call {
+	return &ObjectStorage_PutFencedObject_Call{Call: _e.mock.On("PutFencedObject", ctx, bucketName, objectName, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_PutFencedObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string)) *ObjectStorage_PutFencedObject_Call {
+func (_c *ObjectStorage_PutFencedObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string)) *ObjectStorage_PutFencedObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string), args[4].(string))
 	})
 	return _c
 }
@@ -222,22 +226,22 @@ func (_c *ObjectStorage_PutFencedObject_Call) Return(_a0 error) *ObjectStorage_P
 	return _c
 }
 
-func (_c *ObjectStorage_PutFencedObject_Call) RunAndReturn(run func(context.Context, string, string) error) *ObjectStorage_PutFencedObject_Call {
+func (_c *ObjectStorage_PutFencedObject_Call) RunAndReturn(run func(context.Context, string, string, string, string) error) *ObjectStorage_PutFencedObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// PutObject provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize
-func (_m *ObjectStorage) PutObject(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64) error {
-	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize)
+// PutObject provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) PutObject(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutObject")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64) error); ok {
-		r0 = rf(ctx, bucketName, objectName, reader, objectSize)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, string, string) error); ok {
+		r0 = rf(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -256,13 +260,15 @@ type ObjectStorage_PutObject_Call struct {
 //   - objectName string
 //   - reader io.Reader
 //   - objectSize int64
-func (_e *ObjectStorage_Expecter) PutObject(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}) *ObjectStorage_PutObject_Call {
-	return &ObjectStorage_PutObject_Call{Call: _e.mock.On("PutObject", ctx, bucketName, objectName, reader, objectSize)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) PutObject(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_PutObject_Call {
+	return &ObjectStorage_PutObject_Call{Call: _e.mock.On("PutObject", ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_PutObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64)) *ObjectStorage_PutObject_Call {
+func (_c *ObjectStorage_PutObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string)) *ObjectStorage_PutObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -272,22 +278,22 @@ func (_c *ObjectStorage_PutObject_Call) Return(_a0 error) *ObjectStorage_PutObje
 	return _c
 }
 
-func (_c *ObjectStorage_PutObject_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64) error) *ObjectStorage_PutObject_Call {
+func (_c *ObjectStorage_PutObject_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64, string, string) error) *ObjectStorage_PutObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// PutObjectIfNoneMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize
-func (_m *ObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64) error {
-	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize)
+// PutObjectIfNoneMatch provides a mock function with given fields: ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PutObjectIfNoneMatch")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64) error); ok {
-		r0 = rf(ctx, bucketName, objectName, reader, objectSize)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, io.Reader, int64, string, string) error); ok {
+		r0 = rf(ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -306,13 +312,15 @@ type ObjectStorage_PutObjectIfNoneMatch_Call struct {
 //   - objectName string
 //   - reader io.Reader
 //   - objectSize int64
-func (_e *ObjectStorage_Expecter) PutObjectIfNoneMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}) *ObjectStorage_PutObjectIfNoneMatch_Call {
-	return &ObjectStorage_PutObjectIfNoneMatch_Call{Call: _e.mock.On("PutObjectIfNoneMatch", ctx, bucketName, objectName, reader, objectSize)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) PutObjectIfNoneMatch(ctx interface{}, bucketName interface{}, objectName interface{}, reader interface{}, objectSize interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_PutObjectIfNoneMatch_Call {
+	return &ObjectStorage_PutObjectIfNoneMatch_Call{Call: _e.mock.On("PutObjectIfNoneMatch", ctx, bucketName, objectName, reader, objectSize, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_PutObjectIfNoneMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64)) *ObjectStorage_PutObjectIfNoneMatch_Call {
+func (_c *ObjectStorage_PutObjectIfNoneMatch_Call) Run(run func(ctx context.Context, bucketName string, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string)) *ObjectStorage_PutObjectIfNoneMatch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(io.Reader), args[4].(int64), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -322,22 +330,22 @@ func (_c *ObjectStorage_PutObjectIfNoneMatch_Call) Return(_a0 error) *ObjectStor
 	return _c
 }
 
-func (_c *ObjectStorage_PutObjectIfNoneMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64) error) *ObjectStorage_PutObjectIfNoneMatch_Call {
+func (_c *ObjectStorage_PutObjectIfNoneMatch_Call) RunAndReturn(run func(context.Context, string, string, io.Reader, int64, string, string) error) *ObjectStorage_PutObjectIfNoneMatch_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// RemoveObject provides a mock function with given fields: ctx, bucketName, objectName
-func (_m *ObjectStorage) RemoveObject(ctx context.Context, bucketName string, objectName string) error {
-	ret := _m.Called(ctx, bucketName, objectName)
+// RemoveObject provides a mock function with given fields: ctx, bucketName, objectName, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) RemoveObject(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RemoveObject")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) error); ok {
+		r0 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -354,13 +362,15 @@ type ObjectStorage_RemoveObject_Call struct {
 //   - ctx context.Context
 //   - bucketName string
 //   - objectName string
-func (_e *ObjectStorage_Expecter) RemoveObject(ctx interface{}, bucketName interface{}, objectName interface{}) *ObjectStorage_RemoveObject_Call {
-	return &ObjectStorage_RemoveObject_Call{Call: _e.mock.On("RemoveObject", ctx, bucketName, objectName)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) RemoveObject(ctx interface{}, bucketName interface{}, objectName interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_RemoveObject_Call {
+	return &ObjectStorage_RemoveObject_Call{Call: _e.mock.On("RemoveObject", ctx, bucketName, objectName, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_RemoveObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string)) *ObjectStorage_RemoveObject_Call {
+func (_c *ObjectStorage_RemoveObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string)) *ObjectStorage_RemoveObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string), args[4].(string))
 	})
 	return _c
 }
@@ -370,14 +380,14 @@ func (_c *ObjectStorage_RemoveObject_Call) Return(_a0 error) *ObjectStorage_Remo
 	return _c
 }
 
-func (_c *ObjectStorage_RemoveObject_Call) RunAndReturn(run func(context.Context, string, string) error) *ObjectStorage_RemoveObject_Call {
+func (_c *ObjectStorage_RemoveObject_Call) RunAndReturn(run func(context.Context, string, string, string, string) error) *ObjectStorage_RemoveObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// StatObject provides a mock function with given fields: ctx, bucketName, objectName
-func (_m *ObjectStorage) StatObject(ctx context.Context, bucketName string, objectName string) (int64, bool, error) {
-	ret := _m.Called(ctx, bucketName, objectName)
+// StatObject provides a mock function with given fields: ctx, bucketName, objectName, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) StatObject(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
+	ret := _m.Called(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StatObject")
@@ -386,23 +396,23 @@ func (_m *ObjectStorage) StatObject(ctx context.Context, bucketName string, obje
 	var r0 int64
 	var r1 bool
 	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) (int64, bool, error)); ok {
-		return rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) (int64, bool, error)); ok {
+		return rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) int64); ok {
-		r0 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string) int64); ok {
+		r0 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, string) bool); ok {
-		r1 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(1).(func(context.Context, string, string, string, string) bool); ok {
+		r1 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r1 = ret.Get(1).(bool)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, string, string) error); ok {
-		r2 = rf(ctx, bucketName, objectName)
+	if rf, ok := ret.Get(2).(func(context.Context, string, string, string, string) error); ok {
+		r2 = rf(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 	} else {
 		r2 = ret.Error(2)
 	}
@@ -419,13 +429,15 @@ type ObjectStorage_StatObject_Call struct {
 //   - ctx context.Context
 //   - bucketName string
 //   - objectName string
-func (_e *ObjectStorage_Expecter) StatObject(ctx interface{}, bucketName interface{}, objectName interface{}) *ObjectStorage_StatObject_Call {
-	return &ObjectStorage_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, objectName)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) StatObject(ctx interface{}, bucketName interface{}, objectName interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_StatObject_Call {
+	return &ObjectStorage_StatObject_Call{Call: _e.mock.On("StatObject", ctx, bucketName, objectName, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_StatObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string)) *ObjectStorage_StatObject_Call {
+func (_c *ObjectStorage_StatObject_Call) Run(run func(ctx context.Context, bucketName string, objectName string, operatingNamespace string, operatingLogId string)) *ObjectStorage_StatObject_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string), args[4].(string))
 	})
 	return _c
 }
@@ -435,22 +447,22 @@ func (_c *ObjectStorage_StatObject_Call) Return(_a0 int64, _a1 bool, _a2 error) 
 	return _c
 }
 
-func (_c *ObjectStorage_StatObject_Call) RunAndReturn(run func(context.Context, string, string) (int64, bool, error)) *ObjectStorage_StatObject_Call {
+func (_c *ObjectStorage_StatObject_Call) RunAndReturn(run func(context.Context, string, string, string, string) (int64, bool, error)) *ObjectStorage_StatObject_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// WalkWithObjects provides a mock function with given fields: ctx, bucketName, prefix, recursive, walkFunc
-func (_m *ObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc objectstorage.ChunkObjectWalkFunc) error {
-	ret := _m.Called(ctx, bucketName, prefix, recursive, walkFunc)
+// WalkWithObjects provides a mock function with given fields: ctx, bucketName, prefix, recursive, walkFunc, operatingNamespace, operatingLogId
+func (_m *ObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc objectstorage.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error {
+	ret := _m.Called(ctx, bucketName, prefix, recursive, walkFunc, operatingNamespace, operatingLogId)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WalkWithObjects")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, bool, objectstorage.ChunkObjectWalkFunc) error); ok {
-		r0 = rf(ctx, bucketName, prefix, recursive, walkFunc)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, bool, objectstorage.ChunkObjectWalkFunc, string, string) error); ok {
+		r0 = rf(ctx, bucketName, prefix, recursive, walkFunc, operatingNamespace, operatingLogId)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -469,13 +481,15 @@ type ObjectStorage_WalkWithObjects_Call struct {
 //   - prefix string
 //   - recursive bool
 //   - walkFunc objectstorage.ChunkObjectWalkFunc
-func (_e *ObjectStorage_Expecter) WalkWithObjects(ctx interface{}, bucketName interface{}, prefix interface{}, recursive interface{}, walkFunc interface{}) *ObjectStorage_WalkWithObjects_Call {
-	return &ObjectStorage_WalkWithObjects_Call{Call: _e.mock.On("WalkWithObjects", ctx, bucketName, prefix, recursive, walkFunc)}
+//   - operatingNamespace string
+//   - operatingLogId string
+func (_e *ObjectStorage_Expecter) WalkWithObjects(ctx interface{}, bucketName interface{}, prefix interface{}, recursive interface{}, walkFunc interface{}, operatingNamespace interface{}, operatingLogId interface{}) *ObjectStorage_WalkWithObjects_Call {
+	return &ObjectStorage_WalkWithObjects_Call{Call: _e.mock.On("WalkWithObjects", ctx, bucketName, prefix, recursive, walkFunc, operatingNamespace, operatingLogId)}
 }
 
-func (_c *ObjectStorage_WalkWithObjects_Call) Run(run func(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc objectstorage.ChunkObjectWalkFunc)) *ObjectStorage_WalkWithObjects_Call {
+func (_c *ObjectStorage_WalkWithObjects_Call) Run(run func(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc objectstorage.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string)) *ObjectStorage_WalkWithObjects_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(bool), args[4].(objectstorage.ChunkObjectWalkFunc))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(bool), args[4].(objectstorage.ChunkObjectWalkFunc), args[5].(string), args[6].(string))
 	})
 	return _c
 }
@@ -485,7 +499,7 @@ func (_c *ObjectStorage_WalkWithObjects_Call) Return(_a0 error) *ObjectStorage_W
 	return _c
 }
 
-func (_c *ObjectStorage_WalkWithObjects_Call) RunAndReturn(run func(context.Context, string, string, bool, objectstorage.ChunkObjectWalkFunc) error) *ObjectStorage_WalkWithObjects_Call {
+func (_c *ObjectStorage_WalkWithObjects_Call) RunAndReturn(run func(context.Context, string, string, bool, objectstorage.ChunkObjectWalkFunc, string, string) error) *ObjectStorage_WalkWithObjects_Call {
 	_c.Call.Return(run)
 	return _c
 }

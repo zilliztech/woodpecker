@@ -12,29 +12,33 @@
 package hardware
 
 import (
-	"context"
+	"github.com/labstack/gommon/log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
-
-	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/logger"
 )
 
-func init() {
-	cfg, _ := config.NewConfiguration()
-	logger.InitLogger(cfg)
-}
-
 func Test_GetCPUCoreCount(t *testing.T) {
-	logger.Ctx(context.TODO()).Info("TestGetCPUCoreCount",
+	log.Info("TestGetCPUCoreCount",
 		zap.Int("physical CPUCoreCount", GetCPUNum()))
 }
 
 func Test_GetCPUUsage(t *testing.T) {
-	logger.Ctx(context.TODO()).Info("TestGetCPUUsage",
+	log.Info("TestGetCPUUsage",
 		zap.Float64("CPUUsage", GetCPUUsage()))
+}
+
+func Test_GetMemoryCount(t *testing.T) {
+	log.Info("TestGetMemoryCount",
+		zap.Uint64("MemoryCount", GetMemoryCount()))
+
+	assert.NotZero(t, GetMemoryCount())
+}
+
+func Test_GetUsedMemoryCount(t *testing.T) {
+	log.Info("TestGetUsedMemoryCount",
+		zap.Uint64("UsedMemoryCount", GetUsedMemoryCount()))
 }
 
 func TestGetDiskUsage(t *testing.T) {
@@ -53,4 +57,10 @@ func TestGetIOWait(t *testing.T) {
 	iowait, err := GetIOWait()
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, iowait, 0.0)
+}
+
+func Test_GetMemoryUsageRatio(t *testing.T) {
+	log.Info("TestGetMemoryUsageRatio",
+		zap.Float64("Memory usage ratio", GetMemoryUseRatio()))
+	assert.True(t, GetMemoryUseRatio() > 0)
 }

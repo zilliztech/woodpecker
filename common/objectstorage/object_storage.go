@@ -37,19 +37,20 @@ import (
 type ChunkObjectInfo struct {
 	FilePath   string
 	ModifyTime time.Time
+	Size       int64
 }
 
 type ChunkObjectWalkFunc func(chunkObjectInfo *ChunkObjectInfo) bool
 
 //go:generate mockery --dir=./common/objectstorage --name=ObjectStorage --structname=ObjectStorage --output=mocks/mocks_objectstorage --filename=mock_object_storage.go --with-expecter=true  --outpkg=mocks_objectstorage
 type ObjectStorage interface {
-	GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64) (minioHandler.FileReader, error)
-	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error
-	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error
-	PutFencedObject(ctx context.Context, bucketName, objectName string) error
-	StatObject(ctx context.Context, bucketName, objectName string) (int64, bool, error)
-	WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) error
-	RemoveObject(ctx context.Context, bucketName, objectName string) error
+	GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error)
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error
+	PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error
+	PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error
+	StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error)
+	WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error
+	RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error
 	IsObjectNotExistsError(err error) bool
 	IsPreconditionFailedError(err error) bool
 }
@@ -77,23 +78,26 @@ func CheckIfConditionWriteSupport(ctx context.Context, objectStorage ObjectStora
 }
 
 // doCheckIfConditionWriteSupport checks if ObjectStorage supports PutObjectIfNoneMatch and PutFencedObject
-// This function will panic if the ObjectStorage does not support conditional write features
+// This function will check if the ObjectStorage support conditional write features
 func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient ObjectStorage, bucketName string, basePath string) (bool, error) {
 	// Test object keys
 	checkID := generateUniqueTestID()
 	testObjectKey := fmt.Sprintf("%s/conditional_write_%s", basePath, checkID)
 	fencedObjectKey := fmt.Sprintf("%s/conditional_write_fenced_%s", basePath, checkID)
 
+	requestNamespace := fmt.Sprintf("%s/%s", bucketName, basePath)
+	requestLogId := "default" // only for checking
+
 	defer func() {
 		// Clean up test objects
-		_ = objectStorageClient.RemoveObject(ctx, bucketName, testObjectKey)
-		_ = objectStorageClient.RemoveObject(ctx, bucketName, fencedObjectKey)
+		_ = objectStorageClient.RemoveObject(ctx, bucketName, testObjectKey, requestNamespace, requestLogId)
+		_ = objectStorageClient.RemoveObject(ctx, bucketName, fencedObjectKey, requestNamespace, requestLogId)
 	}()
 
 	// Test 1: PutObjectIfNoneMatch should succeed for non-existing object
 	testData := "test-conditional-write-data"
 	testReader := strings.NewReader(testData)
-	err := objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader, int64(len(testData)))
+	err := objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader, int64(len(testData)), requestNamespace, requestLogId)
 	if err != nil {
 		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch not supported or failed. "+
 			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, testObjectKey, err)
@@ -101,7 +105,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 
 	// Test 2: PutObjectIfNoneMatch should fail for existing object
 	testReader2 := strings.NewReader(testData)
-	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader2, int64(len(testData)))
+	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, testObjectKey, testReader2, int64(len(testData)), requestNamespace, requestLogId)
 	if err == nil {
 		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for existing object, " +
 			"but it succeeded unexpectedly")
@@ -113,19 +117,19 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 	}
 
 	// Test: put fence block with the same objectName should fail
-	err = objectStorageClient.PutFencedObject(ctx, bucketName, testObjectKey)
+	err = objectStorageClient.PutFencedObject(ctx, bucketName, testObjectKey, requestNamespace, requestLogId)
 	if err == nil {
-		panic("CheckIfConditionWriteSupport failed: PutFencedObject should return error for existing object, " +
-			"but it succeeded. This indicates fenced object detection is not working properly.")
+		return false, fmt.Errorf("checkIfConditionWriteSupport failed: PutFencedObject should return error for existing object," +
+			"but it succeeded. This indicates fenced object detection is not working properly")
 	}
 
 	if !werr.ErrObjectAlreadyExists.Is(err) {
-		panic(fmt.Sprintf("CheckIfConditionWriteSupport failed: PutFencedObject should return ErrObjectAlreadyExists "+
-			"for existing object, but got: %v. This indicates the error handling for fenced object is incorrect.", err))
+		return false, fmt.Errorf("checkIfConditionWriteSupport failed: PutFencedObject should return ErrObjectAlreadyExists for existing object,"+
+			"but got: %v. This indicates the error handling for fenced object is incorrect", err)
 	}
 
 	// Test 3: PutFencedObject should succeed
-	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey)
+	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey, requestNamespace, requestLogId)
 	if err != nil {
 		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutFencedObject not supported or failed. "+
 			"BucketName: %s, ObjectKey: %s, Error: %v", bucketName, fencedObjectKey, err)
@@ -133,7 +137,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 
 	// Test 4: PutObjectIfNoneMatch should fail for fenced object
 	testReader3 := strings.NewReader(testData)
-	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, fencedObjectKey, testReader3, int64(len(testData)))
+	err = objectStorageClient.PutObjectIfNoneMatch(ctx, bucketName, fencedObjectKey, testReader3, int64(len(testData)), requestNamespace, requestLogId)
 	if err == nil {
 		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutObjectIfNoneMatch should return error for fenced object, " +
 			"but it succeeded unexpectedly")
@@ -144,7 +148,7 @@ func doCheckIfConditionWriteSupport(ctx context.Context, objectStorageClient Obj
 	}
 
 	// Test 5: PutFencedObject should be idempotent
-	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey)
+	err = objectStorageClient.PutFencedObject(ctx, bucketName, fencedObjectKey, requestNamespace, requestLogId)
 	if err != nil {
 		return false, fmt.Errorf("CheckIfConditionWriteSupport failed: PutFencedObject should be idempotent "+
 			"for existing fenced object, but got error: %v", err)

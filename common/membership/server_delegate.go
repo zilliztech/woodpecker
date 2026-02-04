@@ -37,8 +37,8 @@ func NewServerDelegate(meta *proto.NodeMeta) *ServerDelegate {
 
 // NodeMeta returns node metadata for gossip propagation
 func (d *ServerDelegate) NodeMeta(limit int) []byte {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	d.meta.Version = d.metaVersion
 	d.meta.LastUpdate = time.Now().UnixMilli() // Convert to Unix timestamp in milliseconds

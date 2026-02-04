@@ -67,6 +67,7 @@ var (
 	ErrAppendOpMaxConcurrentOpsReached = newWoodpeckerError("maximum concurrent operations reached", 1301, true)
 	ErrAppendOpQuorumFailed            = newWoodpeckerError("quorum write failed", 1302, true)
 	ErrAppendOpTimeout                 = newWoodpeckerError("append operation timeout", 1303, true)
+	ErrAppendOpRetrySubmitFailed       = newWoodpeckerError("retry submit failed, executor closed or context cancelled", 1304, false)
 
 	// log_writer errors (1400-1499)
 	ErrLogWriterClosed         = newWoodpeckerError("log writer is closed", 1400, false)

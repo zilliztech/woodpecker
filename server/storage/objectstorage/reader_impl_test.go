@@ -120,7 +120,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EOF_CompletedFile(t *testing.
 	reader.isCompleted.Store(true)
 
 	// Mock StatObject to return "not found" (no blocks to read)
-	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, mockNoSuchKeyError()).
 		Maybe()
 
@@ -163,7 +163,7 @@ func TestMinioFileReaderAdv_readDataBlocks_NoError_EntryNotFound_IncompleteFile(
 	reader.isFenced.Store(false)
 
 	// Mock StatObject to return "not found" (no blocks to read and no footer)
-	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, mockNoSuchKeyError()).
 		Maybe()
 
@@ -205,7 +205,7 @@ func TestMinioFileReaderAdv_readDataBlocks_WithStatError_ShouldReturnEntryNotFou
 
 	// Mock StatObject to return a network error (not "not found")
 	statError := errors.New("network timeout")
-	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, statError).
 		Once()
 
@@ -246,7 +246,7 @@ func TestMinioFileReaderAdv_readBlockBatch_ErrorHandling(t *testing.T) {
 
 	// Test StatObject error
 	statError := errors.New("stat failed")
-	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), false, statError).
 		Once()
 
@@ -513,7 +513,7 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 			// Setup mock expectations
 			if tc.hasReadError {
 				// Mock StatObject to return a general error (not object not found)
-				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 					Return(int64(0), false, errors.New("mock error")).
 					Once()
 
@@ -523,7 +523,7 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 					Maybe()
 			} else if tc.objectNotFound {
 				// Mock StatObject to return "not found"
-				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 					Return(int64(0), false, mockNoSuchKeyError()).
 					Maybe()
 
@@ -535,20 +535,20 @@ func TestMinioFileReaderAdv_ErrorHandling_MultipleScenarios(t *testing.T) {
 				// For compaction detection scenarios, mock footer refresh
 				if tc.mockCompactionDetection {
 					// Mock footer.blk StatObject and GetObject for compaction detection
-					mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/footer.blk").
+					mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-segment/footer.blk", mock.Anything, mock.Anything).
 						Return(int64(100), false, nil).
 						Maybe()
 
 					// Create a mock compacted footer response
 					compactedFooterData := createMockCompactedFooterData()
 					mockFooterObj := &mockFileReader{data: compactedFooterData}
-					mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-segment/footer.blk", int64(0), int64(100)).
+					mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-segment/footer.blk", int64(0), int64(100), mock.Anything, mock.Anything).
 						Return(mockFooterObj, nil).
 						Maybe()
 				}
 			} else {
 				// No specific error expected, mock normal behavior
-				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything).
+				mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything).
 					Return(int64(0), false, mockNoSuchKeyError()).
 					Maybe()
 

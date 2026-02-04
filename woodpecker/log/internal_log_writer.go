@@ -59,6 +59,7 @@ type internalLogWriterImpl struct {
 	// Mutex to ensure only one truncation cleanup task is running at a time
 	cleanupMutex      sync.Mutex
 	cleanupInProgress bool
+	closeOnce         sync.Once
 }
 
 func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
@@ -84,7 +85,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 
 	// Monitor keepAlive channel
 	go w.runAuditor()
-	logger.Ctx(ctx).Debug("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
+	logger.Ctx(ctx).Info("log writer created", zap.String("logName", logHandle.GetName()), zap.Int64("logId", logHandle.GetId()))
 	return w
 }
 
@@ -233,7 +234,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 			ctx, sp := logger.NewIntentCtx(WriterScopeName, fmt.Sprintf("auditor_%d", l.logHandle.GetId()))
 			startAudit := time.Now()
 
-			logger.Ctx(ctx).Info("Starting auditor cycle",
+			logger.Ctx(ctx).Debug("Starting auditor cycle",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()))
 
@@ -252,12 +253,14 @@ func (l *internalLogWriterImpl) runAuditor() {
 				continue
 			}
 
-			logger.Ctx(ctx).Info("Auditor loaded segment metadata",
+			logger.Ctx(ctx).Debug("Auditor loaded segment metadata",
 				zap.String("logName", l.logHandle.GetName()),
 				zap.Int64("logId", l.logHandle.GetId()),
 				zap.Int("totalSegments", len(segmentMetaList)))
 
 			// compact/recover if necessary
+			// NOTE: Segments are compacted sequentially by design to minimize per-log resource usage.
+			// The cluster may host many logs, so keeping each log's background work lightweight is preferred.
 			truncatedSegmentExists := make([]int64, 0)
 			segmentsProcessed := 0
 			segmentsCompacted := 0
@@ -488,7 +491,9 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 		zap.Int("count", len(segmentIdsToClean)),
 		zap.Int64s("segmentIds", segmentIdsToClean))
 
-	// Start concurrent cleanup of all eligible segments
+	// Clean up eligible segments sequentially.
+	// NOTE: Sequential cleanup is intentional to minimize per-log resource usage.
+	// The cluster may host many logs, so keeping each log's cleanup work lightweight is preferred.
 	cleanupStartTime := time.Now()
 	successCount := 0
 	failureCount := 0
@@ -531,29 +536,34 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScopeName, "Close")
 	defer sp.End()
-	start := time.Now()
-	logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
 
-	l.isWriterValid.Store(false)
-	l.writerClose <- struct{}{}
-	close(l.writerClose)
-	status := "success"
-	closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
-	if closeErr != nil {
-		logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
-		status = "error"
-		if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
-			closeErr = nil
-			status = "success"
+	var result error
+	l.closeOnce.Do(func() {
+		start := time.Now()
+		logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+
+		l.isWriterValid.Store(false)
+		l.writerClose <- struct{}{}
+		close(l.writerClose)
+		status := "success"
+		closeErr := l.logHandle.CompleteAllActiveSegmentIfExists(ctx)
+		if closeErr != nil {
+			logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
+			status = "error"
+			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
+				closeErr = nil
+				status = "success"
+			}
 		}
-	}
-	closeLogHandleErr := l.logHandle.Close(ctx)
-	if closeLogHandleErr != nil {
-		logger.Ctx(ctx).Warn(fmt.Sprintf("failed to close log handle of the writer for logName:%s", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-		status = "error"
-	}
+		closeLogHandleErr := l.logHandle.Close(ctx)
+		if closeLogHandleErr != nil {
+			logger.Ctx(ctx).Warn("failed to close log handle of the writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+			status = "error"
+		}
 
-	logger.Ctx(ctx).Info("log writer closed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
-	metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
-	return werr.Combine(closeErr, closeLogHandleErr)
+		logger.Ctx(ctx).Info("log writer closed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+		metrics.WpLogWriterOperationLatency.WithLabelValues(l.logIdStr, "close", status).Observe(float64(time.Since(start).Milliseconds()))
+		result = werr.Combine(closeErr, closeLogHandleErr)
+	})
+	return result
 }
