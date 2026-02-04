@@ -2286,7 +2286,27 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 		}
 	}()
 
-	// Write helper with retries
+	// reopenWriter closes the current writer and opens a new one.
+	// This is needed when the writer's lock session expires after a node failure.
+	reopenWriter := func() error {
+		t.Helper()
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+		newWriter, err := logHandle.OpenLogWriter(ctx)
+		if err != nil {
+			return err
+		}
+		logWriter = newWriter
+		t.Logf("Reopened log writer successfully")
+		return nil
+	}
+
+	// Write helper with retries.
+	// When the writer's lock session has expired (expected after killing a quorum node),
+	// the application should close the old writer and reopen a new one.
 	writeN := func(count int, prefix string) int {
 		t.Helper()
 		written := 0
@@ -2296,6 +2316,12 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 			result := logWriter.Write(context.Background(), &log.WriteMessage{Payload: data})
 			if result.Err != nil {
 				t.Logf("Write attempt %d failed (%s): %v", attempt+1, prefix, result.Err)
+				if werr.ErrLogWriterLockLost.Is(result.Err) {
+					t.Logf("Writer lock lost, reopening writer...")
+					if reopenErr := reopenWriter(); reopenErr != nil {
+						t.Logf("Failed to reopen writer: %v", reopenErr)
+					}
+				}
 				time.Sleep(2 * time.Second)
 				continue
 			}
