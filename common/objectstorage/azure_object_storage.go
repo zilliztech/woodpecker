@@ -240,15 +240,15 @@ func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketNam
 			return werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-		metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(objSize))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object").Add(float64(objSize))
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
@@ -285,8 +285,8 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 		return werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 

@@ -39,7 +39,7 @@ import (
 // triggering storage client initialization or other side effects.
 func createTestServer(ctx context.Context, serverConfig *membership.ServerConfig) *Server {
 	ctx, cancel := context.WithCancel(ctx)
-	cfg := &config.Configuration{}
+	cfg, _ := config.NewConfiguration()
 	return &Server{
 		cfg:          cfg,
 		ctx:          ctx,
@@ -371,7 +371,7 @@ func (m *mockLogStore) Stop() error {
 // during server shutdown (and is not accidentally skipped).
 func TestStop_LogStoreStoppedAfterGrpc(t *testing.T) {
 	ctx := context.Background()
-	cfg := &config.Configuration{}
+	cfg, _ := config.NewConfiguration()
 	ctx, cancel := context.WithCancel(ctx)
 	realLogStore := NewLogStore(ctx, cfg, nil)
 	mock := &mockLogStore{LogStore: realLogStore}
@@ -419,12 +419,12 @@ type mockServerStream struct {
 	ctx context.Context
 }
 
-func (m *mockServerStream) Context() context.Context       { return m.ctx }
-func (m *mockServerStream) SetHeader(metadata.MD) error    { return nil }
-func (m *mockServerStream) SendHeader(metadata.MD) error   { return nil }
-func (m *mockServerStream) SetTrailer(metadata.MD)         {}
-func (m *mockServerStream) SendMsg(interface{}) error      { return nil }
-func (m *mockServerStream) RecvMsg(interface{}) error       { return nil }
+func (m *mockServerStream) Context() context.Context     { return m.ctx }
+func (m *mockServerStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockServerStream) SendHeader(metadata.MD) error { return nil }
+func (m *mockServerStream) SetTrailer(metadata.MD)       {}
+func (m *mockServerStream) SendMsg(interface{}) error    { return nil }
+func (m *mockServerStream) RecvMsg(interface{}) error    { return nil }
 
 // TestShutdownInterceptor_CancelsStreamContext verifies that the shutdown stream
 // interceptor cancels handler contexts when the server context is cancelled.
@@ -488,4 +488,3 @@ func TestShutdownInterceptor_CancelsStreamContext(t *testing.T) {
 		t.Fatal("handler did not return after context cancellation")
 	}
 }
-

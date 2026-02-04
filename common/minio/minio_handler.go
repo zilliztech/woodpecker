@@ -80,12 +80,12 @@ func (m *minioHandlerImpl) GetObject(ctx context.Context, bucketName, objectName
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return obj, nil
 }
 
@@ -95,20 +95,20 @@ func (m *minioHandlerImpl) GetObjectDataAndInfo(ctx context.Context, bucketName,
 	start := time.Now()
 	obj, err := m.client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
 	info, err := obj.Stat()
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "error_stat").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, 0, -1, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "get_object").Add(float64(info.Size))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "get_object").Observe(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object_data_info", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object").Observe(float64(info.Size))
 	return &ObjectReader{
 		Object: obj,
 	}, info.Size, info.LastModified.UnixMilli(), err
@@ -120,14 +120,14 @@ func (m *minioHandlerImpl) PutObject(ctx context.Context, bucketName, objectName
 	start := time.Now()
 	info, err := m.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "put_object").Add(float64(info.Size))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "put_object").Observe(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
@@ -153,22 +153,22 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 			return info, werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-		metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
-		metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
+		metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
 		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "condition_put_object").Observe(float64(info.Size))
 	return info, nil
 }
 
@@ -232,14 +232,14 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 		return info, werr.ErrObjectAlreadyExists
 	}
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return info, err
 	}
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object").Add(float64(info.Size))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "put_fenced_object").Observe(float64(info.Size))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object").Add(float64(info.Size))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object").Observe(float64(info.Size))
 	return info, nil
 }
 
@@ -268,11 +268,11 @@ func (m *minioHandlerImpl) RemoveObject(ctx context.Context, bucketName, objectN
 	start := time.Now()
 	err := m.client.RemoveObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "remove_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
 }
@@ -283,11 +283,11 @@ func (m *minioHandlerImpl) StatObject(ctx context.Context, bucketName, objectNam
 	start := time.Now()
 	info, err := m.client.StatObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return info, err
 }
@@ -298,11 +298,11 @@ func (m *minioHandlerImpl) CopyObject(ctx context.Context, dest minio.CopyDestOp
 	start := time.Now()
 	uploadInfo, err := m.client.CopyObject(ctx, dest, src)
 	if err != nil {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "error").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "copy_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "copy_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 	} else {
-		metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "success").Inc()
-		metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "copy_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "copy_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return uploadInfo, err
 }
@@ -312,7 +312,7 @@ func (m *minioHandlerImpl) ListObjects(ctx context.Context, bucketName, prefix s
 	defer sp.End()
 	// We can't track completion metrics here as this returns a channel
 	// Instead, we'll increment the operation count for the method call
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "list_objects", "called").Inc()
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "list_objects", "called").Inc()
 
 	opts.Recursive = recursive
 	opts.Prefix = prefix

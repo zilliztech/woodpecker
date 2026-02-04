@@ -24,8 +24,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/meta"
 )
+
+func testMetaCfg() *config.Configuration {
+	cfg, _ := config.NewConfiguration()
+	return cfg
+}
 
 func TestLogWriterLock(t *testing.T) {
 	logName := "test_log_for_metadata_it"
@@ -38,9 +44,9 @@ func TestLogWriterLock(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 	})
 	assert.NoError(t, err)
-	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli1, 10000)
+	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli1, testMetaCfg())
 	defer metaProvider.Close()
-	metaProvider2 := meta.NewMetadataProvider(context.Background(), etcdCli2, 10000)
+	metaProvider2 := meta.NewMetadataProvider(context.Background(), etcdCli2, testMetaCfg())
 	defer metaProvider2.Close()
 	_ = metaProvider.InitIfNecessary(context.TODO())
 	exists, err := metaProvider.CheckExists(context.Background(), logName)

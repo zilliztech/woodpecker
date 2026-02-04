@@ -113,7 +113,7 @@ func NewMinioFileReaderAdv(ctx context.Context, bucket string, baseDir string, l
 		return nil, readFooterErr
 	}
 
-	metrics.WpFileReaders.WithLabelValues(reader.nsStr, reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Info("create new minio file readerAdv finish", zap.String("segmentFileKey", segmentFileKey), zap.Int64("logId", logId), zap.Int64("segId", segId), zap.Int64("maxBatchSize", maxBatchSize), zap.Int("maxFetchThreads", maxFetchThreads))
 	return reader, nil
 }
@@ -330,8 +330,8 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfoUnsafe(ctx context.Cont
 	}
 
 	logger.Ctx(ctx).Debug("prefetch block infos", zap.String("segmentFileKey", f.segmentFileKey), zap.Int("blocks", len(f.blocks)), zap.Int64("lastBlockID", blockID-1))
-	metrics.WpFileOperationsTotal.WithLabelValues(f.nsStr, f.logIdStr, "loadIncr", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(f.nsStr, f.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "loadIncr", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "loadIncr", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return existsNewBlock, fetchedLastBlock, nil
 }
 
@@ -508,7 +508,7 @@ func (f *MinioFileReaderAdv) Close(ctx context.Context) error {
 	if f.pool != nil {
 		f.pool.Release()
 	}
-	metrics.WpFileReaders.WithLabelValues(f.nsStr, f.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", f.logId), zap.Int64("segId", f.segmentId))
 	return nil
 }
@@ -690,8 +690,8 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		zap.Int64("totalCollectedSize", totalCollectedSize),
 		zap.Any("lastBlockInfo", lastBlockInfo))
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(f.nsStr, f.logIdStr).Add(float64(totalReadBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(f.nsStr, f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(totalReadBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState

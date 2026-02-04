@@ -22,202 +22,158 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// Client metrics are initialized at package level so they are always safe to use.
+// Calling RegisterClientMetricsWithRegisterer makes them actually scraped by a registry;
+// without registration they silently collect data that goes nowhere.
 var (
 	WpClientRegisterOnce sync.Once
-
-	// --- Client metrics (initialized by initClientMetrics with namespace ConstLabel) ---
-
-	WpLogNameIdMapping              *prometheus.GaugeVec
-	WpClientAppendRequestsTotal     *prometheus.CounterVec
-	WpClientAppendEntriesTotal      *prometheus.CounterVec
-	WpClientAppendBytes             *prometheus.HistogramVec
-	WpClientAppendLatency           *prometheus.HistogramVec
-	WpLogHandleOperationsTotal      *prometheus.CounterVec
-	WpLogHandleOperationLatency     *prometheus.HistogramVec
-	WpClientReadRequestsTotal       *prometheus.CounterVec
-	WpClientReadEntriesTotal        *prometheus.CounterVec
-	WpClientReadLatency             *prometheus.HistogramVec
-	WpLogReaderBytesRead            *prometheus.CounterVec
-	WpLogReaderOperationLatency     *prometheus.HistogramVec
-	WpLogWriterBytesWritten         *prometheus.CounterVec
-	WpLogWriterOperationLatency     *prometheus.HistogramVec
-	WpSegmentHandleOperationsTotal  *prometheus.CounterVec
-	WpSegmentHandleOperationLatency *prometheus.HistogramVec
-	WpSegmentHandlePendingAppendOps *prometheus.GaugeVec
-	WpEtcdMetaOperationsTotal       *prometheus.CounterVec
-	WpEtcdMetaOperationLatency      *prometheus.HistogramVec
-)
-
-// initClientMetrics creates all client-side metrics with a namespace ConstLabel.
-func initClientMetrics() {
-	constLabels := prometheus.Labels{"namespace": MetricsNamespace}
 
 	// Log name-id mapping
 	// WARNING: In large-scale deployments with many logs, the "log_name" label
 	// may cause high cardinality issues. Consider removing or sampling if the
 	// number of distinct log names exceeds a few thousand.
 	WpLogNameIdMapping = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "log_name_id_mapping",
-		Help:        "Mapping between log name and id",
-		ConstLabels: constLabels,
-	}, []string{"log_name"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "log_name_id_mapping",
+		Help:      "Mapping between log name and id",
+	}, []string{"namespace", "log_name"})
 
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "append_requests_total",
-		Help:        "Total number of append requests",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "append_requests_total",
+		Help:      "Total number of append requests",
+	}, []string{"namespace", "log_id"})
 	WpClientAppendEntriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "append_entries_total",
-		Help:        "Total number of entries appended",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "append_entries_total",
+		Help:      "Total number of entries appended",
+	}, []string{"namespace", "log_id"})
 	WpClientAppendBytes = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "append_bytes",
-		Help:        "Size of append operations in bytes",
-		Buckets:     prometheus.ExponentialBuckets(256, 4, 8), // 256B ~ 4MB
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "append_bytes",
+		Help:      "Size of append operations in bytes",
+		Buckets:   prometheus.ExponentialBuckets(256, 4, 8), // 256B ~ 4MB
+	}, []string{"namespace", "log_id"})
 	WpClientAppendLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "append_latency",
-		Help:        "Latency of append operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "append_latency",
+		Help:      "Latency of append operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id"})
 
 	// LogHandle metrics
 	WpLogHandleOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "log_handle_operations_total",
-		Help:        "Total number of log handle operations",
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "log_handle_operations_total",
+		Help:      "Total number of log handle operations",
+	}, []string{"namespace", "log_id", "operation", "status"})
 	WpLogHandleOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "log_handle_operation_latency",
-		Help:        "Latency of log handle operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "log_handle_operation_latency",
+		Help:      "Latency of log handle operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id", "operation", "status"})
 
 	// Client read metrics
 	WpClientReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "read_requests_total",
-		Help:        "Total number of read requests",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_requests_total",
+		Help:      "Total number of read requests",
+	}, []string{"namespace", "log_id"})
 	WpClientReadEntriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "read_entries_total",
-		Help:        "Total number of entries read",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_entries_total",
+		Help:      "Total number of entries read",
+	}, []string{"namespace", "log_id"})
 	WpClientReadLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "read_latency",
-		Help:        "Latency of read operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "read_latency",
+		Help:      "Latency of read operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id"})
 
 	// LogReader metrics
 	WpLogReaderBytesRead = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "reader_bytes_read",
-		Help:        "Total bytes read by log readers",
-		ConstLabels: constLabels,
-	}, []string{"log_id", "reader_name"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_bytes_read",
+		Help:      "Total bytes read by log readers",
+	}, []string{"namespace", "log_id", "reader_name"})
 	WpLogReaderOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "reader_operation_latency",
-		Help:        "Latency of log reader operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "reader_operation_latency",
+		Help:      "Latency of log reader operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id", "operation", "status"})
 
 	// LogWriter metrics
 	WpLogWriterBytesWritten = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "writer_bytes_written",
-		Help:        "Total bytes written by log writers",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "writer_bytes_written",
+		Help:      "Total bytes written by log writers",
+	}, []string{"namespace", "log_id"})
 	WpLogWriterOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "writer_operation_latency",
-		Help:        "Latency of log writer operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "writer_operation_latency",
+		Help:      "Latency of log writer operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id", "operation", "status"})
 
 	// SegmentHandle metrics
 	WpSegmentHandleOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "segment_handle_operations_total",
-		Help:        "Total number of segment handle operations",
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_handle_operations_total",
+		Help:      "Total number of segment handle operations",
+	}, []string{"namespace", "log_id", "operation", "status"})
 	WpSegmentHandleOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "segment_handle_operation_latency",
-		Help:        "Latency of segment handle operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"log_id", "operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_handle_operation_latency",
+		Help:      "Latency of segment handle operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id", "operation", "status"})
 	WpSegmentHandlePendingAppendOps = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "segment_handle_pending_append_ops",
-		Help:        "Number of pending append operations in segment handles",
-		ConstLabels: constLabels,
-	}, []string{"log_id"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_handle_pending_append_ops",
+		Help:      "Number of pending append operations in segment handles",
+	}, []string{"namespace", "log_id"})
 
 	// Etcd Meta metrics
 	WpEtcdMetaOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "etcd_meta_operations_total",
-		Help:        "Total number of etcd meta related operations",
-		ConstLabels: constLabels,
-	}, []string{"operation", "status"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "etcd_meta_operations_total",
+		Help:      "Total number of etcd meta related operations",
+	}, []string{"namespace", "operation", "status"})
 	WpEtcdMetaOperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   clientRole,
-		Name:        "etcd_meta_operation_latency",
-		Help:        "Latency of etcd meta related operations",
-		Buckets:     prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
-		ConstLabels: constLabels,
-	}, []string{"operation", "status"})
-}
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "etcd_meta_operation_latency",
+		Help:      "Latency of etcd meta related operations",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "operation", "status"})
+)
 
-// RegisterClientMetricsWithRegisterer initializes and registers all client-side metrics.
+// RegisterClientMetricsWithRegisterer registers all client-side metrics with the given registerer.
+// Without calling this, metrics still work but are not scraped by any registry.
 func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpClientRegisterOnce.Do(func() {
-		initClientMetrics()
-
 		// log name-id mapping
 		registerer.MustRegister(WpLogNameIdMapping)
 
@@ -247,9 +203,4 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpEtcdMetaOperationsTotal)
 		registerer.MustRegister(WpEtcdMetaOperationLatency)
 	})
-}
-
-// RegisterClientMetrics is a convenience wrapper that registers client metrics with a specific registry.
-func RegisterClientMetrics(registry *prometheus.Registry) {
-	RegisterClientMetricsWithRegisterer(registry)
 }

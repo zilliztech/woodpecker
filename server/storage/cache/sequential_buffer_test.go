@@ -31,13 +31,12 @@ import (
 
 // TestNewSequentialBuffer tests the creation of a new SequentialBuffer.
 func TestNewSequentialBuffer(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 	assert.NotNil(t, buffer)
 	assert.Equal(t, int64(1), buffer.FirstEntryId)
 	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
 	assert.Len(t, buffer.Entries, 5) // test entry slots
 	assert.Equal(t, int64(5), buffer.MaxEntries)
-
 }
 
 // TestNewSequentialBufferWithData tests the creation of a new SequentialBuffer with initial data.
@@ -50,7 +49,7 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 		{EntryId: 4, Data: []byte("data4"), NotifyChan: nil},
 		{EntryId: 5, Data: []byte("data5"), NotifyChan: nil},
 	}
-	buffer := NewSequentialBufferWithData(1, 0, 1, 5, data)
+	buffer := NewSequentialBufferWithData(1, 0, 1, 5, data, "")
 	assert.NotNil(t, buffer)
 	assert.Equal(t, int64(1), buffer.FirstEntryId)
 	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
@@ -70,7 +69,7 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 		nil,
 		{EntryId: 5, Data: []byte("data5"), NotifyChan: nil},
 	}
-	buffer2 := NewSequentialBufferWithData(1, 0, 2, 5, data2)
+	buffer2 := NewSequentialBufferWithData(1, 0, 2, 5, data2, "")
 	assert.NotNil(t, buffer2)
 	assert.Equal(t, int64(2), buffer2.FirstEntryId)
 	assert.Equal(t, int64(2), buffer2.ExpectedNextEntryId.Load())
@@ -89,7 +88,7 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 
 // TestWriteEntry tests the WriteEntry method.
 func TestWriteEntry(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Test writing a valid entry
 	id, err := buffer.WriteEntryWithNotify(1, []byte("data1"), nil)
@@ -120,12 +119,11 @@ func TestWriteEntry(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(3), id)
 	assert.Equal(t, int64(5), buffer.ExpectedNextEntryId.Load())
-
 }
 
 // TestWriteEntryWithNotify tests the WriteEntryWithNotify method.
 func TestWriteEntryWithNotify(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Test writing a valid entry with notification channel
 	resultChannel := channel.NewLocalResultChannel("1/0/1")
@@ -150,7 +148,7 @@ func TestWriteEntryWithNotify(t *testing.T) {
 
 // TestReadEntry tests the ReadEntry method.
 func TestReadEntry(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 	buffer.WriteEntryWithNotify(1, []byte("data1"), nil)
 	buffer.WriteEntryWithNotify(2, []byte("data2"), nil)
 	buffer.WriteEntryWithNotify(4, []byte("data4"), nil)
@@ -190,7 +188,7 @@ func TestReadEntry(t *testing.T) {
 
 // TestReadEntriesToLast tests the ReadEntriesToLast method.
 func TestReadEntriesToLast(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 	buffer.WriteEntryWithNotify(1, []byte("data1"), nil)
 	buffer.WriteEntryWithNotify(2, []byte("data2"), nil)
 	buffer.WriteEntryWithNotify(3, []byte("data3"), nil)
@@ -259,7 +257,7 @@ func TestReadEntriesToLast(t *testing.T) {
 
 // TestReadEntriesRange tests the ReadEntriesRange method.
 func TestReadEntriesRange(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 	buffer.WriteEntryWithNotify(1, []byte("data1"), nil)
 	buffer.WriteEntryWithNotify(2, []byte("data2"), nil)
 	buffer.WriteEntryWithNotify(3, []byte("data3"), nil)
@@ -334,7 +332,7 @@ func TestReadEntriesRange(t *testing.T) {
 
 // TestReset tests the Reset method.
 func TestReset(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -366,7 +364,7 @@ func TestReset(t *testing.T) {
 
 // TestNotifyEntriesInRange tests the NotifyEntriesInRange method.
 func TestNotifyEntriesInRange(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -401,7 +399,7 @@ func TestNotifyEntriesInRange(t *testing.T) {
 
 // TestNotifyAllPendingEntries tests the NotifyAllPendingEntries method.
 func TestNotifyAllPendingEntries(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -431,7 +429,7 @@ func TestNotifyAllPendingEntries(t *testing.T) {
 
 // TestEntryIdDebugging demonstrates how the EntryId field helps with debugging
 func TestEntryIdDebugging(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 10, 5)
+	buffer := NewSequentialBuffer(1, 0, 10, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/10")
@@ -469,7 +467,7 @@ func TestEntryIdDebugging(t *testing.T) {
 
 // TestNotifyWithError tests that error notifications send the error result instead of EntryId
 func TestNotifyWithError(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -493,7 +491,7 @@ func TestNotifyWithError(t *testing.T) {
 
 // TestNotifyAllPendingEntriesWithError tests error notifications for all pending entries
 func TestNotifyAllPendingEntriesWithError(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -517,7 +515,7 @@ func TestNotifyAllPendingEntriesWithError(t *testing.T) {
 
 // TestNotificationBehaviorDemo demonstrates the new notification behavior
 func TestNotificationBehaviorDemo(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 100, 10)
+	buffer := NewSequentialBuffer(1, 0, 100, 10, "")
 
 	// Add entries with notification channels
 	resultChannels := make([]channel.ResultChannel, 5)
@@ -558,7 +556,7 @@ func TestNotificationBehaviorDemo(t *testing.T) {
 
 // TestNotifyEntriesInRangeWithClosedChannels tests notification behavior when channels are closed
 func TestNotifyEntriesInRangeWithClosedChannels(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -593,7 +591,7 @@ func TestNotifyEntriesInRangeWithClosedChannels(t *testing.T) {
 
 // TestNotifyAllPendingEntriesWithClosedChannels tests NotifyAllPendingEntries with closed channels
 func TestNotifyAllPendingEntriesWithClosedChannels(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -628,7 +626,7 @@ func TestNotifyAllPendingEntriesWithClosedChannels(t *testing.T) {
 
 // TestResetWithClosedChannels tests Reset method with closed channels
 func TestResetWithClosedChannels(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with notification channels
 	rc1 := channel.NewLocalResultChannel("1/0/1")
@@ -665,7 +663,7 @@ func TestResetWithClosedChannels(t *testing.T) {
 
 // TestMixedClosedAndFullChannels tests behavior with both closed and full channels
 func TestMixedClosedAndFullChannels(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 5)
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
 
 	// Add entries with different channel states
 	closedRc := channel.NewLocalResultChannel("1/0/1")
@@ -693,7 +691,7 @@ func TestMixedClosedAndFullChannels(t *testing.T) {
 
 // TestConcurrentNotificationWithClosedChannels tests concurrent notifications with closed channels
 func TestConcurrentNotificationWithClosedChannels(t *testing.T) {
-	buffer := NewSequentialBuffer(1, 0, 1, 10)
+	buffer := NewSequentialBuffer(1, 0, 1, 10, "")
 
 	// Add multiple entries
 	resultChannels := make([]channel.ResultChannel, 5)

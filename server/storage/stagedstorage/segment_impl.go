@@ -96,7 +96,6 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 	defer rs.mu.Unlock()
 
 	startTime := time.Now()
-	logId := strconv.FormatInt(rs.logId, 10)
 
 	logger.Ctx(ctx).Info("Starting to delete segment data (minio + local)",
 		zap.String("segmentDir", rs.segmentDir),
@@ -131,11 +130,11 @@ func (rs *StagedSegmentImpl) DeleteFileData(ctx context.Context, flag int) (int,
 
 	// Update metrics
 	if len(allErrors) > 0 {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_segment", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 	} else {
-		metrics.WpFileOperationsTotal.WithLabelValues(logId, "delete_segment", "success").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(logId, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr, "delete_segment", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	}
 
 	logger.Ctx(ctx).Info("Completed quorum segment deletion",
@@ -230,8 +229,8 @@ func (rs *StagedSegmentImpl) deleteMinioObjects(ctx context.Context, flag int) (
 				zap.String("segmentFileKey", rs.segmentFileKey),
 				zap.String("objectKey", obj.path))
 			deletedCount++
-			metrics.WpObjectStorageStoredBytes.WithLabelValues(rs.nsStr, rs.logIdStr).Sub(float64(obj.size))
-			metrics.WpObjectStorageStoredObjects.WithLabelValues(rs.nsStr, rs.logIdStr).Dec()
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
 		}
 	}
 
@@ -318,8 +317,8 @@ func (rs *StagedSegmentImpl) deleteLocalFiles(ctx context.Context, flag int) (in
 					zap.String("filePath", filePath))
 				deletedCount++
 				if isDataFile {
-					metrics.WpFileStoredBytes.WithLabelValues(rs.nsStr, rs.logIdStr).Sub(float64(fileSize))
-					metrics.WpFileStoredCount.WithLabelValues(rs.nsStr, rs.logIdStr).Dec()
+					metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Sub(float64(fileSize))
+					metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, rs.nsStr, rs.logIdStr).Dec()
 				}
 			}
 		}

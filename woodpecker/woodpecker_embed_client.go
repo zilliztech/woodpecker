@@ -19,20 +19,17 @@ package woodpecker
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/etcd"
 	"github.com/zilliztech/woodpecker/common/logger"
-	"github.com/zilliztech/woodpecker/common/metrics"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/retry"
 	"github.com/zilliztech/woodpecker/common/tracer"
@@ -305,7 +302,7 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 	// init logger
 	logger.InitLogger(cfg)
 	// Initialize metadata provider
-	metadataProvider := meta.NewMetadataProvider(ctx, etcdCli, cfg.Etcd.RequestTimeout.Milliseconds())
+	metadataProvider := meta.NewMetadataProvider(ctx, etcdCli, cfg)
 	// Detect and store condition write capability if storage client is available
 	// Note: only perform condition write capability detection for embed mode with minio storage backend
 	if storageClient != nil && cfg.Woodpecker.Storage.IsStorageMinio() {
@@ -315,13 +312,6 @@ func NewEmbedClient(ctx context.Context, cfg *config.Configuration, etcdCli *cli
 		}
 		cfg.Woodpecker.Logstore.FencePolicy.SetConditionWriteEnableOrNot(conditionWriteEnable)
 	}
-	// Register both client and server metrics for embed mode (runs both in one process).
-	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
-	if metrics.NodeID == "" {
-		hostname, _ := os.Hostname()
-		metrics.NodeID = hostname
-	}
-	metrics.RegisterWoodpeckerWithRegisterer(prometheus.DefaultRegisterer)
 
 	// start embedded logStore
 	managedByLogStore, err := startEmbedLogStore(cfg, storageClient)
