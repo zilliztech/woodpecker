@@ -52,7 +52,7 @@ looks like:
 ├── 1.blk              ← block 1
 ├── 2.blk              ← block 2
 ├── ...
-├── checkpoint.blk     ← intermediate checkpoint (removed after finalize)
+├── checkpoint.blk     ← checkpoint with extensible sections
 └── footer.blk         ← final metadata (index records + footer record)
 ```
 
@@ -88,9 +88,11 @@ footer record:
 Written periodically during normal operation to snapshot the writer's progress.
 Uses the self-describing checkpoint format (see `checkpoint/README.md`) which
 wraps the same index+footer payload with JSON metadata and a "CKPT" magic
-trailer, enabling future extensibility with additional sections.
+trailer, enabling future extensibility with additional sections (e.g.
+asynchronous index building results).
 
-Deleted after successful `Finalize()`.
+Retained after `Finalize()` so that future asynchronous tasks can continue to
+read or append sections to it.
 
 ## Recovery
 

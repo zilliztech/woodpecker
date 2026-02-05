@@ -1634,21 +1634,6 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	f.finalized.Store(true)
 
-	// Best-effort async cleanup of checkpoint.blk now that footer.blk exists
-	segKey := f.segmentFileKey
-	bucket := f.bucket
-	client := f.client
-	nsStr := f.nsStr
-	logIdStr := f.logIdStr
-	go func() {
-		cpKey := getCheckpointBlockKey(segKey)
-		if rmErr := client.RemoveObject(context.Background(), bucket, cpKey, nsStr, logIdStr); rmErr != nil {
-			logger.Ctx(ctx).Debug("failed to remove checkpoint.blk after finalize (best-effort)",
-				zap.String("checkpointKey", cpKey),
-				zap.Error(rmErr))
-		}
-	}()
-
 	return f.GetLastEntryId(ctx), nil
 }
 

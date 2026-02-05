@@ -1636,7 +1636,7 @@ func TestMinioFileWriter_CompactionWithCleanup(t *testing.T) {
 			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
 				if strings.Contains(objInfo.FilePath, "m_") {
 					mergedBlocks++
-				} else if !strings.HasSuffix(objInfo.FilePath, ".lock") {
+				} else if !strings.HasSuffix(objInfo.FilePath, ".lock") && !strings.Contains(objInfo.FilePath, "checkpoint.blk") {
 					originalBlocks++
 				}
 			}
@@ -2220,29 +2220,6 @@ func TestMinioFileWriter_CheckpointRecovery(t *testing.T) {
 		require.NoError(t, writer2.Close(ctx))
 	})
 
-	// ---- Step 5: finalize cleans up checkpoint.blk ----
-	t.Run("CheckpointDeletedAfterFinalize", func(t *testing.T) {
-		writer3, err := objectstorage.NewMinioFileWriterWithMode(
-			ctx, testBucket, baseDir, logId, segmentId, minioHdl, cfg, true)
-		require.NoError(t, err)
-
-		_, err = writer3.Finalize(ctx, -1)
-		require.NoError(t, err)
-
-		// Let async deletion complete.
-		time.Sleep(500 * time.Millisecond)
-
-		var hasCheckpoint bool
-		err = minioHdl.WalkWithObjects(ctx, testBucket, segmentPrefix, true, func(obj *storageclient.ChunkObjectInfo) bool {
-			if strings.HasSuffix(obj.FilePath, "checkpoint.blk") {
-				hasCheckpoint = true
-				return false
-			}
-			return true
-		}, "test-ns", "0")
-		require.NoError(t, err)
-		assert.False(t, hasCheckpoint, "checkpoint.blk should be deleted after finalize")
-
-		require.NoError(t, writer3.Close(ctx))
-	})
+	// checkpoint.blk is intentionally retained after finalize so that future
+	// asynchronous tasks (e.g. index building) can add their own sections to it.
 }
