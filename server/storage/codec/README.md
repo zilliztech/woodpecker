@@ -2,34 +2,25 @@
 
 ## Overview
 
-Codec is a streaming storage format designed for efficient data storage and retrieval across different backends (local
-filesystem, S3, MinIO). It implements a block-based architecture with sparse indexing and block metadata for optimal
+Codec is a streaming storage format designed for efficient data storage and
+retrieval across different backends (local filesystem, S3, MinIO). It implements
+a block-based architecture with sparse indexing and block metadata for optimal
 performance and recovery.
 
 ## Key Features
 
 - **Multi-backend Support**: Works with local filesystem, S3, and MinIO
-- **Block-based Architecture**: Organizes data in 2MB blocks for efficient access
-- **Block Metadata**: Each block ends with metadata for efficient recovery
+- **Block-based Architecture**: Organizes data in blocks for efficient access
+- **Block Metadata**: Each block starts with a BlockHeaderRecord for efficient recovery
 - **Sparse Indexing**: One index record per block instead of per record
-- **Multipart Upload**: For S3/MinIO, each block becomes a separate object
+- **Object-per-Block**: For S3/MinIO, each block becomes a separate object
 - **Streaming Support**: Supports both streaming writes and reads
-- **CRC32 Integrity**: Every record includes CRC32 checksum for data integrity
+- **CRC32 Integrity**: Every record includes a CRC32 checksum for data integrity
+- **Checkpoint Support**: Periodic intermediate snapshots for fast writer recovery (see `checkpoint/`)
 
-## Architecture
+## Record Format
 
-### Logical File Structure
-
-```
-[HeaderRecord] [DataRecord...] [BlockLastRecord] [DataRecord...] [BlockLastRecord] ... [IndexRecord...] [FooterRecord]
-```
-
-### Physical Storage
-
-- **Local FS**: Single file containing all data
-- **S3/MinIO**: Multi objects where each 2MB block is a separate part
-
-### Record Format
+Every record shares the same 9-byte header:
 
 ```
 [CRC32:4][Type:1][Length:4][Payload:variable]
@@ -37,85 +28,95 @@ performance and recovery.
 
 ## Record Types
 
-1. **HeaderRecord** (Type 1): File metadata and version info
-2. **DataRecord** (Type 2): Actual data payload
-3. **IndexRecord** (Type 3): Block-level index information
-4. **FooterRecord** (Type 4): File summary and index location
-5. **BlockHeaderRecord** (Type 5): Block metadata at the start of each block
+| Type | Name                | Payload Size | Description                                |
+|------|---------------------|--------------|--------------------------------------------|
+| 1    | HeaderRecord        | 16 bytes     | File metadata: Version(2) + Flags(2) + FirstEntryID(8) + Magic(4) |
+| 2    | DataRecord          | variable     | Actual data payload                        |
+| 3    | IndexRecord         | 32 bytes     | Block-level index: BlockNumber(4) + StartOffset(8) + BlockSize(4) + FirstEntryID(8) + LastEntryID(8) |
+| 4    | FooterRecord        | 36/44 bytes  | File summary: V5 (36B) or V6 with LAC (44B) |
+| 5    | BlockHeaderRecord   | 28 bytes     | Block metadata: BlockNumber(4) + FirstEntryID(8) + LastEntryID(8) + BlockLength(4) + BlockCrc(4) |
 
-## Block Management
+### Format Versioning
 
-- Data is organized in 2MB blocks
-- When a record would exceed the 2MB boundary, a new block is started
-- Each block ends with a **BlockLastRecord** containing:
-    - First and last entry IDs in the block
-    - Block number can be inferred from the block sequence (0, 1, 2, ...)
-    - Start offset can be calculated as: BlockNumber * 2MB (for traditional storage)
-    - Block length can be calculated from the BlockLastRecord position
-
-## Recovery Optimization
-
-### Object Storage (S3/MinIO)
-
-1. **Efficient Block Recovery**: Read only the last few bytes of each object to get BlockLastRecord
-2. **No Cross-Object Reads**: Each object is self-contained with its metadata
-3. **Parallel Recovery**: Can recover multiple blocks concurrently
-4. **Minimal Data Transfer**: Only read metadata, not entire blocks
-
-### Traditional Storage
-
-1. **Footer First**: Read footer from end of file to get metadata
-2. **Block Indexing**: Use sparse indexes to locate approximate data position
-3. **Sequential Access**: Blocks are accessed sequentially within the file
-
-## Query Optimization
-
-1. **Footer First**: Read footer from end of file to get metadata
-2. **Block Metadata**: Use BlockHeaderRecord to quickly identify block boundaries and entry ranges
-3. **S3/MinIO Optimization**:
-    - List objects to determine number of logical file parts
-    - Read last part to get footer
-    - Read block metadata from object tails for efficient range queries
-
-## Benefits
-
-- **Efficient Range Queries**: Block-level indexing allows quick seeking
-- **Fast Recovery**: Block metadata enables efficient recovery without reading entire blocks
-- **Parallel Operations**: S3/MinIO enables concurrent object uploads and recovery
-- **Memory Efficient**: Streaming design with bounded memory usage
-- **Fast Metadata Access**: Footer and block metadata contain complete statistics
-- **Cross-Platform**: Works consistently across different storage systems
-- **Self-Contained Blocks**: Each block contains its own metadata for independent processing
-
-## File Structure Example
-
-```
-Offset 0:     [HeaderRecord]
-Offset 16:    [BlockHeaderRecord]
-Offset 42:    [DataRecord 1]
-Offset 50:    [DataRecord 2]
-...
-Offset 2MB-25: [BlockHeaderRecord]
-Offset 2MB:    [DataRecord N] (starts new block)
-...
-Offset 4MB-25: [BlockHeaderRecord]
-...
-Offset 20MB:   [IndexRecord Block 0]
-Offset 20MB+29:[IndexRecord Block 1]
-...
-Offset 21MB:  [FooterRecord]
-```
+- **Version 5**: Base footer format (36 bytes payload)
+- **Version 6** (current): Adds LAC — Last Add Confirmed entry ID (44 bytes payload)
 
 ## Object Storage Layout
 
-For S3/MinIO, each 2MB block becomes a separate object:
+For S3/MinIO, each block is stored as a separate object. A segment's key space
+looks like:
 
 ```
-Object 1: [HeaderRecord] [BlockHeaderRecord][DataRecord][DataRecord][DataRecord]
-Object 2: [BlockHeaderRecord][DataRecord][DataRecord][DataRecord][DataRecord][DataRecord]
-Object 3: [BlockHeaderRecord][DataRecord][DataRecord][DataRecord]
-...
-Object N: [IndexRecord...] [FooterRecord]
+{segmentFileKey}/
+├── 0.blk              ← block 0
+├── 1.blk              ← block 1
+├── 2.blk              ← block 2
+├── ...
+├── checkpoint.blk     ← intermediate checkpoint (removed after finalize)
+└── footer.blk         ← final metadata (index records + footer record)
 ```
 
-Recovery only needs to read the tail of each object to get BlockLastRecord.
+### Block Object Layout
+
+Each block object starts with a BlockHeaderRecord, followed by data records.
+Block 0 additionally starts with a HeaderRecord before the BlockHeaderRecord.
+
+**Block 0:**
+```
+[HeaderRecord (25B)] [BlockHeaderRecord (37B)] [DataRecord] [DataRecord] ...
+```
+
+**Block N (N > 0):**
+```
+[BlockHeaderRecord (37B)] [DataRecord] [DataRecord] ...
+```
+
+The BlockHeaderRecord at the beginning allows efficient metadata access by
+reading only the first few bytes of each object, without loading the full block.
+
+### footer.blk
+
+Written once during `Finalize()`. Contains all index records followed by a
+footer record:
+
+```
+[IndexRecord 0 (41B)] [IndexRecord 1 (41B)] ... [IndexRecord N (41B)] [FooterRecord (53B)]
+```
+
+### checkpoint.blk
+
+Written periodically during normal operation to snapshot the writer's progress.
+Uses the self-describing checkpoint format (see `checkpoint/README.md`) which
+wraps the same index+footer payload with JSON metadata and a "CKPT" magic
+trailer, enabling future extensibility with additional sections.
+
+Deleted after successful `Finalize()`.
+
+## Recovery
+
+### With Checkpoint (fast path)
+
+1. Read `checkpoint.blk`; detect format via trailing "CKPT" magic.
+2. Extract the `block_indexes` section to restore block index records.
+3. Scan only blocks written after the checkpoint's max block ID.
+
+### Without Checkpoint (full scan)
+
+1. Sequentially stat block objects starting from `0.blk`.
+2. Read the BlockHeaderRecord (first bytes) of each block to recover entry range
+   and block metadata.
+3. Stop when a block object does not exist (end of continuous sequence).
+
+### From footer.blk (finalized segment)
+
+1. Read `footer.blk` and parse the FooterRecord from the tail.
+2. Decode all IndexRecords preceding the footer.
+
+## Query Optimization
+
+1. **Footer First**: Read `footer.blk` from the finalized segment to get full
+   metadata.
+2. **Block Metadata**: Read the BlockHeaderRecord at the start of each block
+   object to quickly identify entry ranges without loading the full block.
+3. **Sparse Index**: Use IndexRecords for block-level seeking — one entry per
+   block rather than per record.

@@ -48,6 +48,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/codec/checkpoint"
 )
 
 var (
@@ -362,9 +363,10 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 	return nil
 }
 
-// recoverFromCheckpoint reads checkpoint.blk (same format as footer.blk),
-// restores blockIndexes from it, then scans only the blocks written after the
-// checkpoint, avoiding a full sequential scan.
+// recoverFromCheckpoint reads checkpoint.blk, restores blockIndexes from it,
+// then scans only the blocks written after the checkpoint, avoiding a full
+// sequential scan. It supports both the new self-describing format (with JSON
+// metadata trailer and "CKPT" magic) and the legacy raw footer+indexes format.
 func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromCheckpoint")
 	defer sp.End()
@@ -390,32 +392,50 @@ func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
 		return err
 	}
 
-	// Parse footer record from the tail of checkpoint data
+	// Determine checkpoint format and extract the block_indexes section data.
+	var indexData []byte
+	if checkpoint.IsFormat(cpData) {
+		// New self-describing format with JSON metadata trailer.
+		cp, cpErr := checkpoint.Parse(cpData)
+		if cpErr != nil {
+			return fmt.Errorf("failed to parse checkpoint: %w", cpErr)
+		}
+		secData, secErr := cp.GetSectionData(checkpoint.SectionBlockIndexes)
+		if secErr != nil {
+			return fmt.Errorf("failed to get block_indexes section: %w", secErr)
+		}
+		indexData = secData
+	} else {
+		// Old format: raw footer+indexes (backward compatibility).
+		indexData = cpData
+	}
+
+	// Parse footer record from the tail of the section data.
 	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
-	if len(cpData) < minFooterSize {
-		return fmt.Errorf("checkpoint.blk too small: %d bytes", len(cpData))
+	if len(indexData) < minFooterSize {
+		return fmt.Errorf("checkpoint.blk too small: %d bytes", len(indexData))
 	}
 	maxFooterSize := codec.GetMaxFooterReadSize()
-	footerData := cpData[len(cpData)-maxFooterSize:]
+	footerData := indexData[len(indexData)-maxFooterSize:]
 	cpFooter, err := codec.ParseFooterFromBytes(footerData)
 	if err != nil {
 		return fmt.Errorf("failed to parse checkpoint footer: %w", err)
 	}
 
-	// Parse index records
+	// Parse index records preceding the footer.
 	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(cpFooter.Version)
-	indexData := cpData[:len(cpData)-actualFooterSize]
+	idxRecords := indexData[:len(indexData)-actualFooterSize]
 
 	offset := 0
 	var firstEntryID int64 = -1
 	var lastEntryID int64 = -1
 	var maxBlockID int64 = -1
 
-	for offset < len(indexData) {
-		if offset+codec.RecordHeaderSize > len(indexData) {
+	for offset < len(idxRecords) {
+		if offset+codec.RecordHeaderSize > len(idxRecords) {
 			break
 		}
-		record, err := codec.DecodeRecord(indexData[offset:])
+		record, err := codec.DecodeRecord(idxRecords[offset:])
 		if err != nil {
 			break
 		}
@@ -1321,7 +1341,11 @@ func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
 
 		snapshotCount := int32(len(snapshot))
 		cpKey := getCheckpointBlockKey(f.segmentFileKey)
-		data, _ := serializeFooterAndIndexes(ctx, snapshot)
+
+		cp := checkpoint.New()
+		sectionData, _ := serializeFooterAndIndexes(ctx, snapshot)
+		cp.SetSection(checkpoint.SectionBlockIndexes, sectionData)
+		data := cp.Serialize()
 
 		writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.nsStr, f.logIdStr)
