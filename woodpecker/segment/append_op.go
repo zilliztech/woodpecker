@@ -53,14 +53,15 @@ var _ Operation = (*AppendOp)(nil)
 // If it is, it sends an acknowledgment back to the application.
 // If a LogStore fails, it retries multiple times.
 type AppendOp struct {
-	mu         sync.Mutex
-	bucketName string
-	rootPath   string
-	logId      int64
-	segmentId  int64
-	entryId    int64
-	value      []byte
-	callback   func(segmentId int64, entryId int64, err error)
+	mu               sync.Mutex
+	bucketName       string
+	rootPath         string
+	logId            int64
+	segmentId        int64
+	entryId          int64
+	value            []byte
+	callback         func(segmentId int64, entryId int64, err error)
+	metricsNamespace string
 
 	clientPool      client.LogStoreClientPool
 	handle          SegmentHandle
@@ -78,13 +79,14 @@ type AppendOp struct {
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
 	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
 	op := &AppendOp{
-		bucketName: bucketName,
-		rootPath:   rootPath,
-		logId:      logId,
-		segmentId:  segmentId,
-		entryId:    entryId,
-		value:      value,
-		callback:   callback,
+		bucketName:       bucketName,
+		rootPath:         rootPath,
+		logId:            logId,
+		segmentId:        segmentId,
+		entryId:          entryId,
+		value:            value,
+		callback:         callback,
+		metricsNamespace: metrics.BuildMetricsNamespace(bucketName, rootPath),
 
 		clientPool:      clientPool,
 		handle:          handle,
@@ -213,8 +215,8 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 			if op.completed.CompareAndSwap(false, true) {
 				op.handle.SendAppendSuccessCallbacks(ctx, op.entryId)
 				cost := time.Since(startRequestTime)
-				metrics.WpClientAppendLatency.WithLabelValues(strconv.FormatInt(op.logId, 10)).Observe(float64(cost.Milliseconds()))
-				metrics.WpClientAppendBytes.WithLabelValues(strconv.FormatInt(op.logId, 10)).Observe(float64(len(op.value)))
+				metrics.WpClientAppendLatency.WithLabelValues(op.metricsNamespace, strconv.FormatInt(op.logId, 10)).Observe(float64(cost.Milliseconds()))
+				metrics.WpClientAppendBytes.WithLabelValues(op.metricsNamespace, strconv.FormatInt(op.logId, 10)).Observe(float64(len(op.value)))
 			}
 		}
 		logger.Ctx(ctx).Debug("synced received",

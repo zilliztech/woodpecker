@@ -51,16 +51,27 @@ type NodeConfig struct {
 	AZ            string
 }
 
-// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster
+// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster.
+// It verifies availability on both TCP and UDP (on 0.0.0.0) since memberlist requires both.
 func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 	maxRetries := 50 // Try up to 50 times to find a unique port
 	for i := 0; i < maxRetries; i++ {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// Listen on TCP to get an OS-assigned free port
+		tcpListener, err := net.Listen("tcp", "0.0.0.0:0")
 		if err != nil {
 			continue
 		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		port := tcpListener.Addr().(*net.TCPAddr).Port
+
+		// Verify UDP is also available on the same port (memberlist binds both)
+		udpAddr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+		udpConn, err := net.ListenUDP("udp", udpAddr)
+		if err != nil {
+			tcpListener.Close()
+			continue // UDP port occupied, try another
+		}
+		udpConn.Close()
+		tcpListener.Close()
 
 		// Check if this port is already allocated in this cluster
 		if !cluster.allocatedPorts[port] {
@@ -204,10 +215,50 @@ func StartMiniClusterWithCustomNodesAndCfg(t *testing.T, nodeConfigs []NodeConfi
 			allocation.nodeConfig.AZ, allocation.nodeConfig.ResourceGroup)
 	}
 
-	// Wait for all nodes to start
-	time.Sleep(2 * time.Second)
+	// Wait for all nodes to discover each other via gossip
+	expectedNodes := len(nodeConfigs)
+	waitClusterReady(t, cluster, expectedNodes)
 
 	return cluster, cfg, gossipSeeds, serviceSeeds
+}
+
+// waitClusterReady polls until every active node in the cluster sees the
+// expected number of members via its memberlist, or fails the test after a
+// timeout.
+func waitClusterReady(t *testing.T, cluster *MiniCluster, expectedNodes int) {
+	t.Helper()
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 30 * time.Second
+	)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for nodeIndex, srv := range cluster.Servers {
+			if srv == nil {
+				continue
+			}
+			count := srv.GetMemberCount()
+			if count < expectedNodes {
+				allReady = false
+				t.Logf("Waiting for cluster: node %d sees %d/%d members",
+					nodeIndex, count, expectedNodes)
+				break
+			}
+		}
+		if allReady {
+			t.Logf("All %d nodes have discovered each other", expectedNodes)
+			return
+		}
+		time.Sleep(pollInterval)
+	}
+	// Log final state for debugging before failing
+	for nodeIndex, srv := range cluster.Servers {
+		if srv != nil {
+			t.Logf("Node %d final member count: %d", nodeIndex, srv.GetMemberCount())
+		}
+	}
+	t.Fatalf("Cluster not ready after %v: not all nodes see %d members", timeout, expectedNodes)
 }
 
 // StopMultiNodeCluster stops all nodes in the cluster
@@ -290,9 +341,6 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 		}
 	}(nodeServer, nodeIndex)
 
-	// Wait a bit for the node to fully start
-	time.Sleep(1 * time.Second)
-
 	// Add to cluster
 	cluster.Servers[nodeIndex] = nodeServer
 	cluster.UsedPorts[nodeIndex] = servicePort
@@ -310,6 +358,9 @@ func (cluster *MiniCluster) JoinNodeWithIndex(t *testing.T, nodeIndex int, gossi
 	// Get advertise address
 	advertiseAddr := fmt.Sprintf("127.0.0.1:%d", gossipPort)
 	cluster.UsedAddresses[nodeIndex] = advertiseAddr // Record the address
+
+	// Wait for the new node to discover all active nodes
+	waitClusterReady(t, cluster, cluster.GetActiveNodes())
 
 	t.Logf("Joined new node %d on port %d with address %s", nodeIndex, gossipPort, advertiseAddr)
 

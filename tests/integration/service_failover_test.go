@@ -170,16 +170,13 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 		t.Logf("Cluster cleanup completed")
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	// Setup etcd client
 	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	assert.NoError(t, err)
 	defer etcdCli.Close()
 
 	// Create woodpecker client
-	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	woodpeckerClient, err := woodpecker.NewClient(context.Background(), cfg, etcdCli, true)
 	assert.NoError(t, err)
 	defer func() {
 		if woodpeckerClient != nil {
@@ -194,18 +191,18 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	t.Logf("Creating log: %s", logName)
 
 	// Create and open log
-	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	createErr := woodpeckerClient.CreateLog(context.Background(), logName)
 	if createErr != nil {
 		assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Unexpected error: %v", createErr)
 	}
 
-	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	logHandle, openErr := woodpeckerClient.OpenLog(context.Background(), logName)
 	assert.NoError(t, openErr)
 	assert.NotNil(t, logHandle)
 
 	// Phase 1: Write some initial entries successfully
 	t.Logf("Phase 1: Writing initial entries...")
-	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 	assert.NoError(t, openWriterErr)
 	defer func() {
 		if logWriter != nil {
@@ -220,7 +217,9 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 		data := []byte(fmt.Sprintf("test data entry %d", i))
 		writeMsg := &log.WriteMessage{Payload: data}
 
-		result := logWriter.Write(ctx, writeMsg)
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		result := logWriter.Write(writeCtx, writeMsg)
+		writeCancel()
 		assert.NoError(t, result.Err, "Failed to write entry %d", i)
 		assert.NotNil(t, result.LogMessageId)
 		t.Logf("Successfully wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
@@ -230,13 +229,13 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	t.Logf("Phase 2: Simulating node failure...")
 
 	// Get current quorum information (if available)
-	if currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx); currentSegmentHandle != nil {
-		segmentMetadata := currentSegmentHandle.GetMetadata(ctx)
+	if currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(context.Background()); currentSegmentHandle != nil {
+		segmentMetadata := currentSegmentHandle.GetMetadata(context.Background())
 		if segmentMetadata != nil {
 			t.Logf("Current segment ID: %d", segmentMetadata.Metadata.SegNo)
 		}
 
-		quorumInfo, qErr := currentSegmentHandle.GetQuorumInfo(ctx)
+		quorumInfo, qErr := currentSegmentHandle.GetQuorumInfo(context.Background())
 		if qErr == nil && quorumInfo != nil {
 			t.Logf("Current quorum nodes: %v", quorumInfo.Nodes)
 		}
@@ -263,7 +262,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 
 		// Use without ctx timeout for individual writes
 		// it should wait for response until operation timeout(3 retry*30s=90s)
-		writeCtx, writeCancel := context.WithTimeout(ctx, 100*time.Second)
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), 100*time.Second)
 		result := logWriter.Write(writeCtx, writeMsg)
 		writeCancel()
 		if result.Err != nil {
@@ -280,8 +279,9 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	t.Logf("Phase 4: Verifying basic read functionality...")
 
 	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
-	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-simple-reader")
-	assert.NoError(t, openReaderErr)
+	logReader, openReaderErr := logHandle.OpenLogReader(context.Background(), startMsgId, "test-simple-reader")
+	require.NoError(t, openReaderErr)
+	require.NotNil(t, logReader)
 	defer func() {
 		if logReader != nil {
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -294,7 +294,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	readCount := 0
 	maxReads := 10
 	for i := 0; i < maxReads; i++ {
-		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		msg, readErr := logReader.ReadNext(readCtx)
 		readCancel()
 
@@ -2286,7 +2286,27 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 		}
 	}()
 
-	// Write helper with retries
+	// reopenWriter closes the current writer and opens a new one.
+	// This is needed when the writer's lock session expires after a node failure.
+	reopenWriter := func() error {
+		t.Helper()
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+		newWriter, err := logHandle.OpenLogWriter(ctx)
+		if err != nil {
+			return err
+		}
+		logWriter = newWriter
+		t.Logf("Reopened log writer successfully")
+		return nil
+	}
+
+	// Write helper with retries.
+	// When the writer's lock session has expired (expected after killing a quorum node),
+	// the application should close the old writer and reopen a new one.
 	writeN := func(count int, prefix string) int {
 		t.Helper()
 		written := 0
@@ -2296,6 +2316,12 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 			result := logWriter.Write(context.Background(), &log.WriteMessage{Payload: data})
 			if result.Err != nil {
 				t.Logf("Write attempt %d failed (%s): %v", attempt+1, prefix, result.Err)
+				if werr.ErrLogWriterLockLost.Is(result.Err) {
+					t.Logf("Writer lock lost, reopening writer...")
+					if reopenErr := reopenWriter(); reopenErr != nil {
+						t.Logf("Failed to reopen writer: %v", reopenErr)
+					}
+				}
 				time.Sleep(2 * time.Second)
 				continue
 			}

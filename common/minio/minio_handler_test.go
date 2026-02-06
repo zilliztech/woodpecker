@@ -20,21 +20,10 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/zilliztech/woodpecker/common/metrics"
 )
-
-func TestMain(m *testing.M) {
-	metrics.NodeID = "test-node"
-	metrics.MetricsNamespace = "test-ns"
-	metrics.RegisterWoodpecker(prometheus.NewRegistry())
-	os.Exit(m.Run())
-}
 
 // testFileReader implements FileReader interface for testing
 type testFileReader struct {

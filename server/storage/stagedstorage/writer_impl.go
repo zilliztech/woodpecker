@@ -245,11 +245,11 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
 		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err == nil {
-			metrics.WpFileStoredCount.WithLabelValues(writer.nsStr, writer.logIdStr).Inc()
+			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.nsStr, writer.logIdStr).Inc()
 		}
 	}
 
-	initialBuffer := cache.NewSequentialBuffer(logId, segmentId, startEntryId, writer.maxBufferEntries)
+	initialBuffer := cache.NewSequentialBuffer(logId, segmentId, startEntryId, writer.maxBufferEntries, writer.nsStr)
 	writer.buffer.Store(initialBuffer)
 
 	if err != nil {
@@ -301,7 +301,7 @@ func (w *StagedFileWriter) run() {
 	ticker := time.NewTicker(time.Duration(w.maxIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	metrics.WpFileWriters.WithLabelValues(w.nsStr, w.logIdStr).Inc()
+	metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
 
 	logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine started",
 		zap.Int64("logId", w.logId),
@@ -312,21 +312,21 @@ func (w *StagedFileWriter) run() {
 		case <-w.runCtx.Done():
 			// Context cancelled, exit
 			logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to context cancellation")
-			metrics.WpFileWriters.WithLabelValues(w.nsStr, w.logIdStr).Dec()
+			metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
 			return
 		case flushTask, ok := <-w.flushTaskChan:
 			// Process flush tasks with higher priority
 			if !ok {
 				// Channel closed, exit
 				logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to channel close")
-				metrics.WpFileWriters.WithLabelValues(w.nsStr, w.logIdStr).Dec()
+				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
 				return
 			}
 			if flushTask.entries == nil {
 				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
 					zap.String("segmentFilePath", w.segmentFilePath))
 				w.allUploadingTaskDone.Store(true)
-				metrics.WpFileWriters.WithLabelValues(w.nsStr, w.logIdStr).Dec()
+				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
 				return
 			}
 			// Process flush task synchronously
@@ -383,8 +383,8 @@ func (w *StagedFileWriter) Sync(ctx context.Context) error {
 		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "sync", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }
@@ -428,7 +428,7 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 		return
 	}
 	restDataFirstEntryId := expectedNextEntryId
-	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData)
+	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.nsStr)
 
 	// Submit flush task
 	logger.Ctx(ctx).Debug("Submitting flush task to channel",
@@ -463,8 +463,8 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "rollBuffer", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 }
 
 // processFlushTask processes a flush task by writing data to disk
@@ -634,9 +634,9 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
 	// update metrics
-	metrics.WpFileFlushBytesWritten.WithLabelValues(w.nsStr, w.logIdStr).Add(float64(actualDataSize))
-	metrics.WpFileFlushLatency.WithLabelValues(w.nsStr, w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
-	metrics.WpFileStoredBytes.WithLabelValues(w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+	metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(task.entries)
@@ -927,8 +927,8 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, erro
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "finalize", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized staged file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.recoveredFooter = footer
 	w.finalized.Store(true)
@@ -986,8 +986,8 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 	// Close channels
 	close(w.flushTaskChan)
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "close", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -1018,8 +1018,8 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "fence", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return lastEntryId, nil
 }
@@ -1110,8 +1110,8 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int64("maxCompactedBlockSize", maxCompactedBlockSize),
 		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "compact", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return totalSize, nil
 }
@@ -1333,10 +1333,10 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	// Update compaction metrics
 	totalTime := time.Since(startTime)
 	blockSize := int64(len(mergedData))
-	metrics.WpFileCompactLatency.WithLabelValues(w.nsStr, w.logIdStr).Observe(float64(totalTime.Milliseconds()))
-	metrics.WpFileCompactBytesWritten.WithLabelValues(w.nsStr, w.logIdStr).Add(float64(blockSize))
-	metrics.WpObjectStorageStoredBytes.WithLabelValues(w.nsStr, w.logIdStr).Add(float64(blockSize))
-	metrics.WpObjectStorageStoredObjects.WithLabelValues(w.nsStr, w.logIdStr).Inc()
+	metrics.WpFileCompactLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(totalTime.Milliseconds()))
+	metrics.WpFileCompactBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
+	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
 
 	logger.Ctx(ctx).Debug("uploaded merged block",
 		zap.String("segmentFilePath", w.segmentFilePath),
@@ -1412,8 +1412,8 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 	if err != nil {
 		return 0, fmt.Errorf("failed to upload footer: %w", err)
 	}
-	metrics.WpObjectStorageStoredBytes.WithLabelValues(w.nsStr, w.logIdStr).Add(float64(len(footerData)))
-	metrics.WpObjectStorageStoredObjects.WithLabelValues(w.nsStr, w.logIdStr).Inc()
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(len(footerData)))
+	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
 
 	logger.Ctx(ctx).Info("uploaded compacted footer",
 		zap.String("segmentFilePath", w.segmentFilePath),
@@ -1616,8 +1616,8 @@ func (w *StagedFileWriter) recoverBlocksFromFooterUnsafe(ctx context.Context, fi
 		zap.Int64("firstEntryID", w.firstEntryID.Load()),
 		zap.Int64("lastEntryID", w.lastEntryID.Load()))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "recover_footer", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_footer", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	w.recovered.Store(true)
 	return nil
@@ -1759,8 +1759,8 @@ exitLoop:
 	}
 
 	// update metrics
-	metrics.WpFileOperationsTotal.WithLabelValues(w.nsStr, w.logIdStr, "recover_raw", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(w.nsStr, w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_raw", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "recover_raw", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return nil
 }

@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,90 +26,73 @@ import (
 	"github.com/zilliztech/woodpecker/common/hardware"
 )
 
-// System metrics — initialized by initSystemMetrics with node_id ConstLabel.
+// System metrics are initialized at package level so they are always safe to use.
+// node_id is a regular label whose value comes from the NodeID package variable.
 var (
-	WpSystemCPUUsage         prometheus.Gauge
-	WpSystemCPUNum           prometheus.Gauge
-	WpSystemMemoryTotalBytes prometheus.Gauge
-	WpSystemMemoryUsedBytes  prometheus.Gauge
-	WpSystemMemoryUsageRatio prometheus.Gauge
-	WpSystemDiskTotalBytes   *prometheus.GaugeVec
-	WpSystemDiskUsedBytes    *prometheus.GaugeVec
-	WpSystemIOWait           prometheus.Gauge
-)
+	WpSystemRegisterOnce sync.Once
 
-func initSystemMetrics() {
-	constLabels := prometheus.Labels{"node_id": NodeID}
-
-	WpSystemCPUUsage = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_cpu_usage",
-		Help:        "Current CPU usage percentage",
-		ConstLabels: constLabels,
-	})
-	WpSystemCPUNum = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_cpu_num",
-		Help:        "Number of CPU cores available",
-		ConstLabels: constLabels,
-	})
-	WpSystemMemoryTotalBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_memory_total_bytes",
-		Help:        "Total system memory in bytes",
-		ConstLabels: constLabels,
-	})
-	WpSystemMemoryUsedBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_memory_used_bytes",
-		Help:        "Used system memory in bytes",
-		ConstLabels: constLabels,
-	})
-	WpSystemMemoryUsageRatio = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_memory_usage_ratio",
-		Help:        "Memory usage ratio (used/total)",
-		ConstLabels: constLabels,
-	})
+	WpSystemCPUUsage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_cpu_usage",
+		Help:      "Current CPU usage percentage",
+	}, []string{"node_id"})
+	WpSystemCPUNum = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_cpu_num",
+		Help:      "Number of CPU cores available",
+	}, []string{"node_id"})
+	WpSystemMemoryTotalBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_memory_total_bytes",
+		Help:      "Total system memory in bytes",
+	}, []string{"node_id"})
+	WpSystemMemoryUsedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_memory_used_bytes",
+		Help:      "Used system memory in bytes",
+	}, []string{"node_id"})
+	WpSystemMemoryUsageRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_memory_usage_ratio",
+		Help:      "Memory usage ratio (used/total)",
+	}, []string{"node_id"})
 	WpSystemDiskTotalBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_disk_total_bytes",
-		Help:        "Total disk space in bytes",
-		ConstLabels: constLabels,
-	}, []string{"path"})
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_disk_total_bytes",
+		Help:      "Total disk space in bytes",
+	}, []string{"node_id", "path"})
 	WpSystemDiskUsedBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_disk_used_bytes",
-		Help:        "Used disk space in bytes",
-		ConstLabels: constLabels,
-	}, []string{"path"})
-	WpSystemIOWait = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   woodpeckerNamespace,
-		Subsystem:   serverRole,
-		Name:        "system_io_wait",
-		Help:        "IO wait percentage",
-		ConstLabels: constLabels,
-	})
-}
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_disk_used_bytes",
+		Help:      "Used disk space in bytes",
+	}, []string{"node_id", "path"})
+	WpSystemIOWait = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "system_io_wait",
+		Help:      "IO wait percentage",
+	}, []string{"node_id"})
+)
 
 // RegisterSystemMetrics registers all system metrics with the given registerer.
 func RegisterSystemMetrics(registerer prometheus.Registerer) {
-	initSystemMetrics()
-	registerer.MustRegister(WpSystemCPUUsage)
-	registerer.MustRegister(WpSystemCPUNum)
-	registerer.MustRegister(WpSystemMemoryTotalBytes)
-	registerer.MustRegister(WpSystemMemoryUsedBytes)
-	registerer.MustRegister(WpSystemMemoryUsageRatio)
-	registerer.MustRegister(WpSystemDiskTotalBytes)
-	registerer.MustRegister(WpSystemDiskUsedBytes)
-	registerer.MustRegister(WpSystemIOWait)
+	WpSystemRegisterOnce.Do(func() {
+		registerer.MustRegister(WpSystemCPUUsage)
+		registerer.MustRegister(WpSystemCPUNum)
+		registerer.MustRegister(WpSystemMemoryTotalBytes)
+		registerer.MustRegister(WpSystemMemoryUsedBytes)
+		registerer.MustRegister(WpSystemMemoryUsageRatio)
+		registerer.MustRegister(WpSystemDiskTotalBytes)
+		registerer.MustRegister(WpSystemDiskUsedBytes)
+		registerer.MustRegister(WpSystemIOWait)
+	})
 }
 
 // StartSystemMetricsCollector starts a background goroutine that periodically collects
@@ -134,26 +118,26 @@ func StartSystemMetricsCollector(ctx context.Context, dataPath string, interval 
 
 func collectSystemMetrics(dataPath string) {
 	// CPU
-	WpSystemCPUUsage.Set(hardware.GetCPUUsage())
-	WpSystemCPUNum.Set(float64(hardware.GetCPUNum()))
+	WpSystemCPUUsage.WithLabelValues(NodeID).Set(hardware.GetCPUUsage())
+	WpSystemCPUNum.WithLabelValues(NodeID).Set(float64(hardware.GetCPUNum()))
 
 	// Memory
-	WpSystemMemoryTotalBytes.Set(float64(hardware.GetMemoryCount()))
-	WpSystemMemoryUsedBytes.Set(float64(hardware.GetUsedMemoryCount()))
-	WpSystemMemoryUsageRatio.Set(hardware.GetMemoryUseRatio())
+	WpSystemMemoryTotalBytes.WithLabelValues(NodeID).Set(float64(hardware.GetMemoryCount()))
+	WpSystemMemoryUsedBytes.WithLabelValues(NodeID).Set(float64(hardware.GetUsedMemoryCount()))
+	WpSystemMemoryUsageRatio.WithLabelValues(NodeID).Set(hardware.GetMemoryUseRatio())
 
 	// Disk
 	if dataPath != "" {
 		usedGB, totalGB, err := hardware.GetDiskUsage(dataPath)
 		if err == nil {
-			WpSystemDiskTotalBytes.WithLabelValues(dataPath).Set(totalGB * 1e9)
-			WpSystemDiskUsedBytes.WithLabelValues(dataPath).Set(usedGB * 1e9)
+			WpSystemDiskTotalBytes.WithLabelValues(NodeID, dataPath).Set(totalGB * 1e9)
+			WpSystemDiskUsedBytes.WithLabelValues(NodeID, dataPath).Set(usedGB * 1e9)
 		}
 	}
 
 	// IO Wait
 	ioWait, err := hardware.GetIOWait()
 	if err == nil {
-		WpSystemIOWait.Set(ioWait)
+		WpSystemIOWait.WithLabelValues(NodeID).Set(ioWait)
 	}
 }

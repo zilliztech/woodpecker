@@ -27,8 +27,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/meta"
 )
+
+func testMetaCfg() *config.Configuration {
+	cfg, _ := config.NewConfiguration()
+	return cfg
+}
 
 // TestShowEtcd Test only for debug etcd
 func TestShowEtcd(t *testing.T) {
@@ -63,7 +69,7 @@ func TestCheckLogExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metaProvider := meta.NewMetadataProvider(context.Background(), cli, 10000)
+	metaProvider := meta.NewMetadataProvider(context.Background(), cli, testMetaCfg())
 	defer metaProvider.Close()
 	exists, err := metaProvider.CheckExists(context.Background(), logName)
 	assert.NoError(t, err)
@@ -89,7 +95,7 @@ func printDirContents(ctx context.Context, cli *clientv3.Client, prefix string, 
 }
 
 func printMetaContents(t *testing.T, ctx context.Context, cli *clientv3.Client) {
-	metaProvider := meta.NewMetadataProvider(ctx, cli, 10000)
+	metaProvider := meta.NewMetadataProvider(ctx, cli, testMetaCfg())
 	defer metaProvider.Close()
 	logs, err := metaProvider.ListLogs(ctx)
 	assert.NoError(t, err)
@@ -147,7 +153,7 @@ func TestAcquireLogWriterLockPerformance(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 	})
 	assert.NoError(t, err)
-	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli, 10000)
+	metaProvider := meta.NewMetadataProvider(context.Background(), etcdCli, testMetaCfg())
 	defer metaProvider.Close()
 	_ = metaProvider.InitIfNecessary(context.TODO())
 	exists, err := metaProvider.CheckExists(context.Background(), logName)

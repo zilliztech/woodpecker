@@ -155,8 +155,8 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 				zap.String("segmentFileKey", s.segmentFileKey),
 				zap.String("objectKey", obj.path))
 			deletedCount++
-			metrics.WpObjectStorageStoredBytes.WithLabelValues(s.nsStr, s.logIdStr).Sub(float64(obj.size))
-			metrics.WpObjectStorageStoredObjects.WithLabelValues(s.nsStr, s.logIdStr).Dec()
+			metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, s.nsStr, s.logIdStr).Sub(float64(obj.size))
+			metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, s.nsStr, s.logIdStr).Dec()
 		}
 	}
 

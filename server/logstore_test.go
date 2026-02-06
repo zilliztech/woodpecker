@@ -61,11 +61,11 @@ func TestLogStore_SegmentProcessorCleanup_Stop(t *testing.T) {
 
 	// Set up expectations for Close calls and GetLogId
 	mockProcessor1.EXPECT().Close(mock.Anything).Return(nil).Once()
-	mockProcessor1.EXPECT().GetLogId().Return(int64(1)).Once()
+	mockProcessor1.EXPECT().GetLogId().Return(int64(1)).Times(2)
 	mockProcessor2.EXPECT().Close(mock.Anything).Return(nil).Once()
-	mockProcessor2.EXPECT().GetLogId().Return(int64(1)).Once()
+	mockProcessor2.EXPECT().GetLogId().Return(int64(1)).Times(2)
 	mockProcessor3.EXPECT().Close(mock.Anything).Return(nil).Once()
-	mockProcessor3.EXPECT().GetLogId().Return(int64(2)).Once()
+	mockProcessor3.EXPECT().GetLogId().Return(int64(2)).Times(2)
 
 	// Add processors to store
 	logKey1 := GetLogKey(testBucketName, testRootPath, 1)
@@ -108,7 +108,7 @@ func TestLogStore_SegmentProcessorCleanup_IdleCleanup(t *testing.T) {
 	// Processor 5 is protected (highest segment ID)
 	for i := int64(1); i <= 3; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
-		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Once()
+		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Times(2)
 	}
 
 	// Add processors with different access times
@@ -198,7 +198,7 @@ func TestLogStore_RemoveSegmentProcessor(t *testing.T) {
 
 	// Set up expectations
 	mockProcessor1.EXPECT().Close(mock.Anything).Return(nil).Once()
-	mockProcessor1.EXPECT().GetLogId().Return(testLogId).Once()
+	mockProcessor1.EXPECT().GetLogId().Return(testLogId).Times(2)
 
 	// Add processors
 	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
@@ -225,7 +225,7 @@ func TestLogStore_RemoveSegmentProcessor_LastProcessor(t *testing.T) {
 	// Create mock processor
 	mockProcessor := mocks_segment.NewSegmentProcessor(t)
 	mockProcessor.EXPECT().Close(mock.Anything).Return(nil).Once()
-	mockProcessor.EXPECT().GetLogId().Return(testLogId).Once()
+	mockProcessor.EXPECT().GetLogId().Return(testLogId).Times(2)
 
 	// Add single processor
 	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
@@ -301,7 +301,7 @@ func TestLogStore_CloseSegmentProcessorUnsafe_CloseError(t *testing.T) {
 	// Create mock processor that returns error on close
 	mockProcessor := mocks_segment.NewSegmentProcessor(t)
 	mockProcessor.EXPECT().Close(mock.Anything).Return(assert.AnError).Once()
-	mockProcessor.EXPECT().GetLogId().Return(testLogId).Once()
+	mockProcessor.EXPECT().GetLogId().Return(testLogId).Times(2)
 
 	// Should not panic even if close fails
 	store.closeSegmentProcessorUnsafe(context.Background(), logKey, 10, mockProcessor)
@@ -327,7 +327,7 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	// Processor 5 will be protected (highest segment ID)
 	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
-		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Once()
+		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Times(2)
 	}
 
 	// Add processors with all being idle (old access time)
@@ -379,7 +379,7 @@ func TestLogStore_SegmentProcessorCleanup_ProtectHighestSegment(t *testing.T) {
 	// Processor 5 will be protected (highest segment ID)
 	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
-		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Once()
+		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Times(2)
 	}
 
 	// Add processors with old access times (all idle)
@@ -453,7 +453,7 @@ func TestLogStore_BackgroundCleanup_PerformCleanup(t *testing.T) {
 	// Processor 5 will be protected (highest segment ID)
 	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
-		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Once()
+		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Times(2)
 	}
 
 	// Add processors with old access times

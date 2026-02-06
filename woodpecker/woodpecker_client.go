@@ -84,13 +84,12 @@ func NewClient(ctx context.Context, cfg *config.Configuration, etcdClient *clien
 		logger.Ctx(ctx).Warn("init tracer failed", zap.Error(initTraceErr))
 	}
 	// Register client metrics so they are available before initClient() touches etcd metadata.
-	metrics.MetricsNamespace = cfg.Minio.BucketName + "/" + cfg.Minio.RootPath
 	metrics.RegisterClientMetricsWithRegisterer(prometheus.DefaultRegisterer)
 
 	clientPool := client.NewLogStoreClientPool(cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxSendSize(), cfg.Woodpecker.Logstore.GRPCConfig.GetClientMaxRecvSize())
 	c := &woodpeckerClient{
 		cfg:        cfg,
-		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg.Etcd.RequestTimeout.Milliseconds()),
+		Metadata:   meta.NewMetadataProvider(ctx, etcdClient, cfg),
 		clientPool: clientPool,
 		managedCli: managed,
 		etcdCli:    etcdClient,
@@ -200,7 +199,7 @@ func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName 
 		return nil, err
 	}
 	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc)
-	metrics.WpLogNameIdMapping.WithLabelValues(logName).Set(float64(logMeta.Metadata.GetLogId()))
+	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
 }
 

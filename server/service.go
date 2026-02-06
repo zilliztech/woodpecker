@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -42,6 +41,7 @@ import (
 
 type Server struct {
 	cfg          *config.Configuration
+	serverNodeMu sync.RWMutex
 	serverNode   *membership.ServerNode
 	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
 	gossipSeeds  []string                 // Seeds for cluster joining
@@ -147,19 +147,15 @@ func (s *Server) startGrpcLoop() {
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
 		grpc.ChainUnaryInterceptor(
 			s.shutdownUnaryInterceptor(),
-			grpc_prometheus.UnaryServerInterceptor,
 			otelgrpc.UnaryServerInterceptor(),
 		),
 		grpc.ChainStreamInterceptor(
 			s.shutdownStreamInterceptor(),
-			grpc_prometheus.StreamServerInterceptor,
 			otelgrpc.StreamServerInterceptor(),
 		),
 	}
 	s.grpcServer = grpc.NewServer(grpcOpts...)
 	proto.RegisterLogStoreServer(s.grpcServer, s)
-	grpc_prometheus.EnableHandlingTimeHistogram()
-	grpc_prometheus.Register(s.grpcServer)
 	funcutil.CheckGrpcReady(s.ctx, s.grpcErrChan)
 	logger.Ctx(s.ctx).Info("start grpc server", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.listener.Addr().String()))
 	if err := s.grpcServer.Serve(s.listener); err != nil {
@@ -193,12 +189,15 @@ func (s *Server) Stop() error {
 	}
 
 	// 2. Leave and shutdown the gossip cluster
-	if s.serverNode != nil {
-		leaveErr := s.serverNode.Leave()
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		leaveErr := node.Leave()
 		if leaveErr != nil {
 			logger.Ctx(s.ctx).Error("server node leave failed", zap.Error(leaveErr))
 		}
-		shutdownErr := s.serverNode.Shutdown()
+		shutdownErr := node.Shutdown()
 		if shutdownErr != nil {
 			logger.Ctx(s.ctx).Error("server node shutdown failed", zap.Error(shutdownErr))
 		}
@@ -415,10 +414,13 @@ func (s *Server) UpdateLastAddConfirmed(ctx context.Context, request *proto.Upda
 }
 
 func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequest) (*proto.SelectNodesResponse, error) {
-	if s.serverNode == nil {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node == nil {
 		return &proto.SelectNodesResponse{Status: werr.Status(werr.ErrServiceInsufficientQuorum.WithCauseErrMsg("node not ready yet"))}, nil
 	}
-	discovery := s.serverNode.GetDiscovery()
+	discovery := node.GetDiscovery()
 
 	// Use the new protobuf-based approach
 	var allServers []*proto.NodeMeta
@@ -473,19 +475,37 @@ func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequ
 
 // GetServerNodeMemberlistStatus returns the server's ServerNode memberlist status
 func (s *Server) GetServerNodeMemberlistStatus() string {
-	if s.serverNode != nil {
-		return s.serverNode.GetMemberlistStatus()
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		return node.GetMemberlistStatus()
 	}
 	return "member not ready yet"
 }
 
+// GetMemberCount returns the number of members known to this server's memberlist.
+// Returns 0 if the server node is not yet initialized.
+func (s *Server) GetMemberCount() int {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node == nil {
+		return 0
+	}
+	return node.GetMemberlist().NumMembers()
+}
+
 // GetServiceAdvertiseAddrPort use for test only
 func (s *Server) GetServiceAdvertiseAddrPort(ctx context.Context) string {
-	if s.serverNode == nil {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node == nil {
 		return ""
 	}
 	// Get the actual service endpoint from the node metadata (which contains the resolved address)
-	return s.serverNode.GetMeta().Endpoint
+	return node.GetMeta().Endpoint
 }
 
 // GetAdvertiseAddrPort Use for test only
@@ -588,7 +608,9 @@ func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 			zap.String("currentNodeID", currentNodeID),
 			zap.Int("attempt", attempt+1),
 			zap.String("initMemberlist", node.GetMemberlistStatus()))
+		s.serverNodeMu.Lock()
 		s.serverNode = node
+		s.serverNodeMu.Unlock()
 		return nil
 	}
 
@@ -597,7 +619,9 @@ func (s *Server) waitAndStartCurrentNode(ctx context.Context) error {
 
 func (s *Server) monitorAndJoinSeeds(ctx context.Context, seeds []string) {
 	currentNodeID := s.serverConfig.NodeID
+	s.serverNodeMu.RLock()
 	node := s.serverNode
+	s.serverNodeMu.RUnlock()
 	const (
 		minBackoff     = 500 * time.Millisecond // Fastest check interval when issues detected
 		normalBackoff  = 5 * time.Second        // Normal check interval when all healthy

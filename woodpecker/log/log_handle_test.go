@@ -1049,6 +1049,10 @@ func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWr
 				Auditor: config.AuditorConfig{
 					MaxInterval: config.NewDurationSecondsFromInt(5),
 				},
+				SessionMonitor: config.SessionMonitorConfig{
+					CheckInterval: config.NewDurationSecondsFromInt(5),
+					MaxFailures:   3,
+				},
 			},
 			Storage: config.StorageConfig{
 				Type: storageType,

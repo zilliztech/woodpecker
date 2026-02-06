@@ -26,15 +26,12 @@ import (
 )
 
 func TestCollectSystemMetrics(t *testing.T) {
-	// Initialize system metrics so the gauges are non-nil
-	initSystemMetrics()
 	// Just verify collectSystemMetrics doesn't panic
 	collectSystemMetrics("/tmp")
 	collectSystemMetrics("")
 }
 
 func TestStartSystemMetricsCollector(t *testing.T) {
-	initSystemMetrics()
 	ctx, cancel := context.WithCancel(context.Background())
 	StartSystemMetricsCollector(ctx, "/tmp", 100*time.Millisecond)
 

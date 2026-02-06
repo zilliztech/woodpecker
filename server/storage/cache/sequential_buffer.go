@@ -38,7 +38,7 @@ type BufferEntry struct {
 	EntryId     int64                 // The entry ID for this buffer entry
 	Data        []byte                // The actual data
 	NotifyChan  channel.ResultChannel // Channel to notify when this entry is synced
-	EnqueueTime time.Time            // Time when the entry was enqueued for buffer wait latency tracking
+	EnqueueTime time.Time             // Time when the entry was enqueued for buffer wait latency tracking
 }
 
 // SequentialBuffer is a buffer that stores entries in a sequential manner.
@@ -58,12 +58,12 @@ type SequentialBuffer struct {
 	ExpectedNextEntryId atomic.Int64
 }
 
-func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEntries int64) *SequentialBuffer {
+func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEntries int64, operatingNamespace string) *SequentialBuffer {
 	b := &SequentialBuffer{
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        metrics.MetricsNamespace,
+		nsStr:        operatingNamespace,
 		Entries:      make([]*BufferEntry, maxEntries),
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -72,7 +72,7 @@ func NewSequentialBuffer(logId int64, segmentId int64, startEntryId int64, maxEn
 	return b
 }
 
-func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int64, maxEntries int64, restData []*BufferEntry) *SequentialBuffer {
+func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int64, maxEntries int64, restData []*BufferEntry, operatingNamespace string) *SequentialBuffer {
 	entries := make([]*BufferEntry, maxEntries)
 	// copy restData refs
 	if len(restData) > 0 {
@@ -83,7 +83,7 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		logId:        logId,
 		segmentId:    segmentId,
 		logIdStr:     strconv.FormatInt(logId, 10),
-		nsStr:        metrics.MetricsNamespace,
+		nsStr:        operatingNamespace,
 		Entries:      entries,
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
@@ -181,7 +181,7 @@ func (b *SequentialBuffer) NotifyEntriesInRange(ctx context.Context, startEntryI
 		if entry != nil && entry.NotifyChan != nil {
 			// Track buffer wait latency
 			if !entry.EnqueueTime.IsZero() {
-				metrics.WpServerBufferWaitLatency.WithLabelValues(b.nsStr, b.logIdStr).
+				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.nsStr, b.logIdStr).
 					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
 			}
 
@@ -239,7 +239,7 @@ func (b *SequentialBuffer) NotifyAllPendingEntries(ctx context.Context, result i
 		if entry != nil && entry.NotifyChan != nil {
 			// Track buffer wait latency
 			if !entry.EnqueueTime.IsZero() {
-				metrics.WpServerBufferWaitLatency.WithLabelValues(b.nsStr, b.logIdStr).
+				metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, b.nsStr, b.logIdStr).
 					Observe(float64(time.Since(entry.EnqueueTime).Milliseconds()))
 			}
 
@@ -391,7 +391,7 @@ func (b *SequentialBuffer) notifyAllPendingEntriesUnsafe(ctx context.Context, re
 func NotifyPendingEntryDirectly(ctx context.Context, logId, segId, entryId int64, notifyChan channel.ResultChannel, result int64, resultErr error, nsStr string, enqueueTime time.Time) {
 	// Track buffer wait latency
 	if !enqueueTime.IsZero() && nsStr != "" {
-		metrics.WpServerBufferWaitLatency.WithLabelValues(nsStr, strconv.FormatInt(logId, 10)).
+		metrics.WpServerBufferWaitLatency.WithLabelValues(metrics.NodeID, nsStr, strconv.FormatInt(logId, 10)).
 			Observe(float64(time.Since(enqueueTime).Milliseconds()))
 	}
 

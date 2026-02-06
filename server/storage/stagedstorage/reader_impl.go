@@ -169,7 +169,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
 	}
 
-	metrics.WpFileReaders.WithLabelValues(reader.nsStr, reader.logIdStr).Inc()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()
 	logger.Ctx(ctx).Debug("staged file reader created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("currentFileSize", currentSize),
@@ -857,8 +857,8 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 		zap.Int64("fileSize", currentFileSize),
 		zap.Int64("scannedOffset", currentOffset))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr, "loadAll", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -1084,8 +1084,8 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 			zap.Any("lastBlockInfo", lastBlockInfo))
 	}
 
-	metrics.WpFileReadBatchBytes.WithLabelValues(r.nsStr, r.logIdStr).Add(float64(readBytes))
-	metrics.WpFileReadBatchLatency.WithLabelValues(r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 
 	// Create batch with proper error handling for nil lastBlockInfo
 	var lastReadState *proto.LastReadState
@@ -1199,7 +1199,7 @@ func (r *StagedFileReaderAdv) Close(ctx context.Context) error {
 	if r.pool != nil {
 		r.pool.Release()
 	}
-	metrics.WpFileReaders.WithLabelValues(r.nsStr, r.logIdStr).Dec()
+	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Dec()
 	logger.Ctx(ctx).Info("segment reader closed", zap.Int64("logId", r.logId), zap.Int64("segId", r.segId))
 	return nil
 }

@@ -275,17 +275,17 @@ func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSiz
 			break
 		} else if err != nil {
 			// Error occurred
-			metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "error").Inc()
-			metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read_object_full", "error").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read_object_full", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return nil, err
 		}
 	}
 
 	// Track metrics for successful read
-	metrics.WpObjectStorageOperationsTotal.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "success").Inc()
-	metrics.WpObjectStorageOperationLatency.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
-	metrics.WpObjectStorageBytesTransferred.WithLabelValues(operatingNamespace, operatingLogId, "read").Add(float64(bytesRead))
-	metrics.WpObjectStorageRequestBytes.WithLabelValues(operatingNamespace, operatingLogId, "read_object_full").Observe(float64(bytesRead))
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read_object_full", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read_object_full", "success").Observe(float64(time.Since(start).Milliseconds()))
+	metrics.WpObjectStorageBytesTransferred.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read").Add(float64(bytesRead))
+	metrics.WpObjectStorageRequestBytes.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "read_object_full").Observe(float64(bytesRead))
 
 	return buf, nil
 }
