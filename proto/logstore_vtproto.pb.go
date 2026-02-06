@@ -66,6 +66,7 @@ func (m *LogMessageLayout) CloneVT() *LogMessageLayout {
 		return (*LogMessageLayout)(nil)
 	}
 	r := new(LogMessageLayout)
+	r.IdempotencyId = m.IdempotencyId
 	if rhs := m.Payload; rhs != nil {
 		tmpBytes := make([]byte, len(rhs))
 		copy(tmpBytes, rhs)
@@ -721,6 +722,9 @@ func (this *LogMessageLayout) EqualVT(that *LogMessageLayout) bool {
 		if vx != vy {
 			return false
 		}
+	}
+	if this.IdempotencyId != that.IdempotencyId {
+		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
@@ -1646,6 +1650,13 @@ func (m *LogMessageLayout) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if len(m.IdempotencyId) > 0 {
+		i -= len(m.IdempotencyId)
+		copy(dAtA[i:], m.IdempotencyId)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.IdempotencyId)))
+		i--
+		dAtA[i] = 0x1a
 	}
 	if len(m.Properties) > 0 {
 		for k := range m.Properties {
@@ -3312,6 +3323,10 @@ func (m *LogMessageLayout) SizeVT() (n int) {
 			n += mapEntrySize + 1 + protohelpers.SizeOfVarint(uint64(mapEntrySize))
 		}
 	}
+	l = len(m.IdempotencyId)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -4347,6 +4362,38 @@ func (m *LogMessageLayout) UnmarshalVT(dAtA []byte) error {
 				}
 			}
 			m.Properties[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field IdempotencyId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.IdempotencyId = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -9012,6 +9059,42 @@ func (m *LogMessageLayout) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 			}
 			m.Properties[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field IdempotencyId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.IdempotencyId = stringValue
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

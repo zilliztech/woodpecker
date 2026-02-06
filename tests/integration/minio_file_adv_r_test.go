@@ -2631,7 +2631,7 @@ func TestAdvMinioFileWriter_Compaction(t *testing.T) {
 				footerFound = true
 			} else if strings.Contains(objInfo.FilePath, "/m_") && strings.HasSuffix(objInfo.FilePath, ".blk") {
 				mergedBlocks = append(mergedBlocks, objInfo.FilePath)
-			} else if strings.HasSuffix(objInfo.FilePath, ".blk") {
+			} else if strings.HasSuffix(objInfo.FilePath, ".blk") && !strings.Contains(objInfo.FilePath, "checkpoint.blk") {
 				regularBlocks = append(regularBlocks, objInfo.FilePath)
 			}
 
