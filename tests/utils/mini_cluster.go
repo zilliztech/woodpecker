@@ -51,16 +51,27 @@ type NodeConfig struct {
 	AZ            string
 }
 
-// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster
+// allocateUniquePort allocates a free port and ensures it's not already allocated in this cluster.
+// It verifies availability on both TCP and UDP (on 0.0.0.0) since memberlist requires both.
 func (cluster *MiniCluster) allocateUniquePort() (int, error) {
 	maxRetries := 50 // Try up to 50 times to find a unique port
 	for i := 0; i < maxRetries; i++ {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// Listen on TCP to get an OS-assigned free port
+		tcpListener, err := net.Listen("tcp", "0.0.0.0:0")
 		if err != nil {
 			continue
 		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		port := tcpListener.Addr().(*net.TCPAddr).Port
+
+		// Verify UDP is also available on the same port (memberlist binds both)
+		udpAddr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+		udpConn, err := net.ListenUDP("udp", udpAddr)
+		if err != nil {
+			tcpListener.Close()
+			continue // UDP port occupied, try another
+		}
+		udpConn.Close()
+		tcpListener.Close()
 
 		// Check if this port is already allocated in this cluster
 		if !cluster.allocatedPorts[port] {
