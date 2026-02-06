@@ -86,6 +86,7 @@ woodpecker:
       retryInterval: 1000 # Maximum interval between two retries in milliseconds
       maxFlushSize: 2000000 # Maximum size of a block in bytes to flush, default is 2MB, which is the best practice for cloud storage
       maxFlushThreads: 32 # Maximum number of threads to flush data
+      checkpointThreshold: 10 # Number of new blocks that triggers a checkpoint write, used for fast recovery
     segmentCompactionPolicy:
       maxBytes: 2000000 # Maximum size of a merged block in bytes after compact, default is 2M
       maxParallelUploads: 4 # Maximum number of parallel upload threads for compaction, default is 4

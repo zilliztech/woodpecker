@@ -155,6 +155,7 @@ type SegmentSyncPolicyConfig struct {
 	RetryInterval              DurationMilliseconds `yaml:"retryInterval"`
 	MaxFlushSize               ByteSize             `yaml:"maxFlushSize"`
 	MaxFlushThreads            int                  `yaml:"maxFlushThreads"`
+	CheckpointThreshold        int                  `yaml:"checkpointThreshold"`
 }
 
 type SegmentCompactionPolicy struct {
@@ -715,6 +716,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
 				MaxFlushSize:               ByteSize(16000000),
 				MaxFlushThreads:            8,
+				CheckpointThreshold:        10,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
 				MaxBytes:           ByteSize(32000000),
