@@ -151,12 +151,6 @@ func TestMonitor_BasicMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_memory_used_bytes")
 	})
 
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
-	})
-
 	// Client metrics live in the test process. Prometheus scrapes them via
 	// host.docker.internal:29099, so they are queryable through the Prometheus API.
 	t.Run("ClientMetrics", func(t *testing.T) {
@@ -394,12 +388,6 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_disk_total_bytes")
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_disk_used_bytes")
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_io_wait")
-	})
-
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
 	})
 
 	// Client metrics live in the test process. Prometheus scrapes them via

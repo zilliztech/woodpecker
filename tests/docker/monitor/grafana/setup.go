@@ -36,9 +36,6 @@ var clientDashboardTemplate string
 //go:embed templates/dashboard_server.json
 var serverDashboardTemplate string
 
-//go:embed templates/dashboard_server_ns.json
-var serverNSDashboardTemplate string
-
 type dashboardDef struct {
 	template string
 	uid      string
@@ -48,8 +45,7 @@ type dashboardDef struct {
 func getDashboards() []dashboardDef {
 	return []dashboardDef{
 		{clientDashboardTemplate, "woodpecker-client-ns", "woodpecker-client-ns"},
-		{serverDashboardTemplate, "woodpecker-server", "woodpecker-server"},
-		{serverNSDashboardTemplate, "woodpecker-server-ns", "woodpecker-server-ns"},
+		{serverDashboardTemplate, "woodpecker-server-ns", "woodpecker-server-ns"},
 	}
 }
 
