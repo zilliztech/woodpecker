@@ -225,7 +225,7 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(1), nil).Maybe()
 	mockClient.EXPECT().IsRemoteClient().Return(true).Maybe()
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	for i := 0; i < 5; i++ {
 		ch := make(chan int64, 1)
@@ -336,7 +336,7 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 // - The bug causes the callback to receive nil error instead of timeout error
 func TestAppendAsync_TimeoutBug(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(1), nil).Maybe()
@@ -699,7 +699,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 
 func TestSegmentHandleFenceAndClosed(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
@@ -936,7 +936,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 // with partial success based on lastEntryId returned from FenceSegment
 func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
@@ -1042,7 +1042,7 @@ func TestFence_WithPendingAppendOps_PartialSuccess(t *testing.T) {
 // and verifies that lastEntryId is still used correctly for partial success
 func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(1), nil).Maybe()
@@ -1142,7 +1142,7 @@ func TestFence_AlreadyFencedError_WithPendingAppendOps(t *testing.T) {
 // new append operations are rejected with ErrSegmentHandleSegmentRolling
 func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(-1), nil).Maybe()
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(-1), nil)
@@ -1204,7 +1204,7 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 // and all pending appendOps are completed, the segment automatically calls doCompleteAndCloseUnsafe
 func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
@@ -1314,7 +1314,7 @@ func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 // 4. Verify auto-close when queue becomes empty
 func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
@@ -1420,7 +1420,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 // TestSegmentHandle_Rolling_ErrorTriggersRolling tests that an error in appendOp can trigger rolling
 func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
@@ -1534,7 +1534,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 // when segment is in rolling state
 func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
@@ -1597,7 +1597,7 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 // TestSegmentHandle_Rolling_ConcurrentAppends tests rolling behavior with concurrent append attempts
 func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
@@ -1672,7 +1672,7 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 // TestSegmentHandle_Rolling_StateTransitions tests the state transitions during rolling
 func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), nil)
@@ -1917,7 +1917,7 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 
 	// Mock UpdateSegmentMetadata for rolling state
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(&meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{
 			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 2,
@@ -2127,7 +2127,7 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Maybe()
 
 	// Mock UpdateSegmentMetadata for rolling state
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(&meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{
 			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 0,
@@ -2355,7 +2355,7 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 
 	// Mock UpdateSegmentMetadata for rolling state
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(&meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{
 			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 2,
@@ -2569,7 +2569,7 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 	mockClient3.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 
 	// Mock UpdateSegmentMetadata for rolling state
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(&meta.SegmentMeta{
 		Metadata: &proto.SegmentMetadata{
 			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 2,

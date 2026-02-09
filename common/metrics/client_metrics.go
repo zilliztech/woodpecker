@@ -39,6 +39,14 @@ var (
 		Help:      "Mapping between log name and id",
 	}, []string{"namespace", "log_name"})
 
+	// Segment state tracking: gauge value = number of segments in that state
+	WpClientSegmentState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "segment_state",
+		Help:      "Number of segments in each state per log",
+	}, []string{"namespace", "log_id", "state"})
+
 	// client append data to log
 	WpClientAppendRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
@@ -176,6 +184,8 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 	WpClientRegisterOnce.Do(func() {
 		// log name-id mapping
 		registerer.MustRegister(WpLogNameIdMapping)
+		// segment state tracking
+		registerer.MustRegister(WpClientSegmentState)
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
@@ -203,4 +213,11 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpEtcdMetaOperationsTotal)
 		registerer.MustRegister(WpEtcdMetaOperationLatency)
 	})
+}
+
+// UpdateSegmentState transitions the segment state gauge: decrements the old state count
+// and increments the new state count for the given namespace and log.
+func UpdateSegmentState(namespace, logId, oldState, newState string) {
+	WpClientSegmentState.WithLabelValues(namespace, logId, oldState).Dec()
+	WpClientSegmentState.WithLabelValues(namespace, logId, newState).Inc()
 }

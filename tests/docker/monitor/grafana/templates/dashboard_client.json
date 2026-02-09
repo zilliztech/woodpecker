@@ -479,7 +479,7 @@
           "refId": "A"
         }
       ],
-      "title": "Log Name → Log ID Mapping",
+      "title": "Log Name \u2192 Log ID Mapping",
       "transformations": [
         {
           "id": "organize",
@@ -499,6 +499,55 @@
         }
       ],
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "__DATASOURCE_UID__"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "woodpecker_client_segment_state{namespace=~\"$namespace\"}",
+          "legendFormat": "logID={{log_id}} {{state}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Segment State Count by Log",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",

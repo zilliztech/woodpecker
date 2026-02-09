@@ -668,7 +668,7 @@ func (e *metadataProviderEtcd) ReleaseLogWriterLock(ctx context.Context, logName
 	return nil
 }
 
-func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error {
+func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "StoreSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
@@ -714,10 +714,13 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 	segmentMeta.Revision = txnResp.Header.Revision
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	// Update segment state metric: new segment created
+	logIdStr := strconv.FormatInt(logId, 10)
+	metrics.WpClientSegmentState.WithLabelValues(e.metricsNamespace, logIdStr, segmentMeta.Metadata.State.String()).Inc()
 	return nil
 }
 
-func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error {
+func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta, oldState proto.SegmentState) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "UpdateSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
@@ -761,6 +764,12 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 	}
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "update_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "update_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	// Update segment state metric if state changed
+	newState := segmentMeta.Metadata.State
+	if oldState != newState {
+		logIdStr := strconv.FormatInt(logId, 10)
+		metrics.UpdateSegmentState(e.metricsNamespace, logIdStr, oldState.String(), newState.String())
+	}
 	return nil
 }
 
@@ -868,7 +877,7 @@ func (e *metadataProviderEtcd) CheckSegmentExists(ctx context.Context, logName s
 
 // DeleteSegmentMetadata deletes a segment metadata entry.
 // It returns an error if the segment does not exist or if the deletion fails.
-func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error {
+func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logName string, logId int64, segmentId int64, oldState proto.SegmentState) error {
 	ctx, sp := otel.Tracer(CurrentScopeName).Start(ctx, "DeleteSegmentMetadata")
 	defer sp.End()
 	startTime := time.Now()
@@ -911,6 +920,9 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 
 	metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_segment_metadata", "success").Inc()
 	metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_segment_metadata", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+	// Update segment state metric: decrement old state count
+	logIdStr := strconv.FormatInt(logId, 10)
+	metrics.WpClientSegmentState.WithLabelValues(e.metricsNamespace, logIdStr, oldState.String()).Dec()
 	return nil
 }
 

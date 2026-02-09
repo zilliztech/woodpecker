@@ -140,6 +140,7 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		selectQuorumFunc:   selectQuorumFunc,
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
+
 	l.startBackgroundCleanup()
 	return l
 }
@@ -385,9 +386,10 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	// Update metadata for successfully fenced segments
 	for segmentId, lastEntryId := range fencedSegments {
 		segMeta := segments[segmentId]
+		oldState := segMeta.Metadata.State
 		segMeta.Metadata.State = proto.SegmentState_Completed
 		segMeta.Metadata.LastEntryId = lastEntryId
-		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMeta)
+		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, l.Id, segMeta, oldState)
 		if err != nil {
 			logger.Ctx(ctx).Warn("failed to update segment metadata after fence",
 				zap.String("logName", l.Name),
@@ -580,10 +582,11 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.Segment
 		Revision: 0,
 	}
 	// create segment metadata
-	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, segMeta)
+	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, l.Id, segMeta)
 	if err != nil {
 		return nil, err
 	}
+
 	return segMeta, nil
 }
 
@@ -791,9 +794,12 @@ func (l *logHandleImpl) CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) e
 			continue
 		}
 
+		// Capture old state before changing
+		oldState := segMetadata.Metadata.State
+
 		// Mark this segment as truncated
 		segMetadata.Metadata.State = proto.SegmentState_Truncated
-		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, segMetadata)
+		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, l.Id, segMetadata, oldState)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to update segment metadata during truncation",
 				zap.String("logName", l.Name),

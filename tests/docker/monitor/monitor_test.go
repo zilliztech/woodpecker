@@ -407,6 +407,9 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricExists(t, cluster, "woodpecker_client_append_latency_count")
 		// Read path
 		assertMetricExists(t, cluster, "woodpecker_client_read_requests_total")
+		// Segment state tracking (populated by Store/Update/DeleteSegmentMetadata;
+		// truncation above ensures at least the Truncated state is represented)
+		assertMetricExists(t, cluster, "woodpecker_client_segment_state")
 	})
 
 	t.Log("ComprehensiveMetricsVerification passed: all metrics verified")
