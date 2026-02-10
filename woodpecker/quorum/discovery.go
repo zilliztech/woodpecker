@@ -312,8 +312,11 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 		return d.fillRemainingNodes(ctx, allSelectedNodes, selectedSet)
 	}
 
-	// Trim to exact required number if we got more
+	// Trim to exact required number if we got more (random to avoid bias toward first pools)
 	if len(allSelectedNodes) > requiredNodes {
+		rand.Shuffle(len(allSelectedNodes), func(i, j int) {
+			allSelectedNodes[i], allSelectedNodes[j] = allSelectedNodes[j], allSelectedNodes[i]
+		})
 		allSelectedNodes = allSelectedNodes[:requiredNodes]
 	}
 

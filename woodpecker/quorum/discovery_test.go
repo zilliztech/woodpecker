@@ -860,6 +860,70 @@ func TestQuorumDiscovery_CustomPlacement_DeduplicateFails(t *testing.T) {
 		"error should mention dedup failure, got: %s", err.Error())
 }
 
+func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
+	// Bug fix: when cross-region selection got more nodes than required,
+	// it always kept the first pools' nodes and discarded later ones.
+	// Now it shuffles before trimming for fair distribution.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3, // es=3, 2 pools → pool A gets 2, pool B gets 1
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	// Server returns MORE nodes than the filter Limit requests:
+	// Pool A asked for 2, returns 3 nodes
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+		{Endpoint: "nodeA2:8080"},
+		{Endpoint: "nodeA3:8080"},
+	}, nil).Maybe()
+
+	// Pool B asked for 1, returns 2 nodes
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+		{Endpoint: "nodeB2:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run many times and track which nodes appear in the trimmed result.
+	// Before the fix, nodeB1 and nodeB2 would NEVER appear (always trimmed).
+	// After the fix, all 5 nodes should appear at least once.
+	nodeCounts := make(map[string]int)
+	iterations := 500
+	for i := 0; i < iterations; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+		for _, node := range result.Nodes {
+			nodeCounts[node]++
+		}
+	}
+
+	// All 5 nodes should appear at least once across 500 iterations
+	allNodes := []string{"nodeA1:8080", "nodeA2:8080", "nodeA3:8080", "nodeB1:8080", "nodeB2:8080"}
+	for _, node := range allNodes {
+		assert.Greater(t, nodeCounts[node], 0,
+			"node %s was never selected in %d iterations — trim is biased", node, iterations)
+	}
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}
