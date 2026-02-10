@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -537,6 +538,77 @@ func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
 	assert.Contains(t, result.Nodes, "nodeA1:8080")
 	assert.Contains(t, result.Nodes, "nodeA2:8080")
 	assert.Contains(t, result.Nodes, "nodeB1:8080")
+}
+
+func TestQuorumDiscovery_SingleRegion_RandomPoolSelection(t *testing.T) {
+	// Bug fix: selectSingleRegionQuorum used to hardcode BufferPools[0].
+	// Now it randomly selects a pool, distributing load across pools.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "pool-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "pool-b", Seeds: []string{"seed-b:8080"}},
+			{Name: "pool-c", Seeds: []string{"seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-c:8080").Return(mockClientC, nil).Maybe()
+
+	// Track which seeds get called
+	seedsUsed := make(map[string]int)
+	mu := &sync.Mutex{}
+
+	selectNodesFn := func(seedName string) func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+		return func(ctx context.Context, st proto.StrategyType, am proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+			mu.Lock()
+			seedsUsed[seedName]++
+			mu.Unlock()
+			return []*proto.NodeMeta{
+				{Endpoint: "node1:8080"},
+				{Endpoint: "node2:8080"},
+				{Endpoint: "node3:8080"},
+			}, nil
+		}
+	}
+
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-a")).Maybe()
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-b")).Maybe()
+	mockClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-c")).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run many times to verify random pool distribution
+	for i := 0; i < 100; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+	}
+
+	// With random selection across 3 pools over 100 iterations,
+	// each pool should be used at least a few times
+	mu.Lock()
+	defer mu.Unlock()
+	poolsUsed := len(seedsUsed)
+	t.Logf("Pool usage distribution: %v", seedsUsed)
+	assert.GreaterOrEqual(t, poolsUsed, 2, "At least 2 different pools should be used over 100 iterations")
+
+	for seed, count := range seedsUsed {
+		assert.Greater(t, count, 5, "Pool %s should be used more than 5 times out of 100", seed)
+	}
 }
 
 func TestQuorumDiscovery_Close(t *testing.T) {

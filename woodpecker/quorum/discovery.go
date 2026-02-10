@@ -228,8 +228,8 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 }
 
 func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	// Use the first available buffer pool
-	pool := d.cfg.BufferPools[0]
+	// Randomly select a buffer pool for load distribution
+	pool := d.cfg.BufferPools[rand.Intn(len(d.cfg.BufferPools))]
 	if len(pool.Seeds) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for pool %s", pool.Name))
 	}
