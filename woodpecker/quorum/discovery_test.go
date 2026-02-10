@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -291,6 +292,636 @@ func TestQuorumDiscovery_SelectQuorumNodes_gRPCTimeout(t *testing.T) {
 	assert.Nil(t, result)
 	// Should timeout due to retry mechanism with network errors
 	assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "temporary network error"))
+}
+
+func TestQuorumDiscovery_FillRemainingNodes_ContinuesAcrossPools(t *testing.T) {
+	// Bug fix: fillRemainingNodes used to break after the first successful pool
+	// even if it returned fewer nodes than needed. Now it continues to try other pools.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     5, // Need 5 nodes total
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed-b:8080").Return(mockClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed-c:8080").Return(mockClientC, nil).Maybe()
+
+	// First round (cross-region distribution): 5 nodes / 3 pools = 2,2,1
+	// Region A returns 2 nodes as expected
+	mockClientA.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+		{Endpoint: "nodeA2:8080"},
+	}, nil).Once()
+
+	// Region B returns only 1 node (less than the 2 requested) - simulates partial availability
+	mockClientB.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Once()
+
+	// Region C returns 1 node as expected
+	mockClientC.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeC1:8080"},
+	}, nil).Once()
+
+	// Now we have 4 nodes, need 1 more. fillRemainingNodes kicks in.
+	// The fill loop will try pools again. We need to allow a second call.
+	// Region A returns the extra node on the fill call
+	mockClientA.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA3:8080"},
+	}, nil).Maybe()
+	// Region B may also be called during fill
+	mockClientB.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB2:8080"},
+	}, nil).Maybe()
+	// Region C may also be called during fill
+	mockClientC.EXPECT().SelectNodes(ctx, proto.StrategyType_CROSS_REGION, proto.AffinityMode_SOFT, mock.AnythingOfType("[]*proto.NodeFilter")).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeC2:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 5, len(result.Nodes), "Should have 5 nodes after fill from multiple pools")
+}
+
+func TestQuorumDiscovery_FillRemainingNodes_FirstPoolFails_TriesNext(t *testing.T) {
+	// Verify that when the first pool in fill loop fails,
+	// the loop continues to the next pool to get remaining nodes.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+			{Name: "region-c", Seeds: []string{"seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-c:8080").Return(mockClientC, nil).Maybe()
+
+	// First round: 3 nodes / 3 pools = 1 per region
+	// Region A: returns 1 node OK
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+	}, nil)
+
+	// Region B: fails completely — returns error
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("region-b unavailable")).Once()
+
+	// Region C: returns 1 node OK
+	mockClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeC1:8080"},
+	}, nil)
+
+	// After first round: 2 nodes, need 1 more → fillRemainingNodes
+	// Fill will try pools in order; region-b may fail again, but others succeed
+	// Allow region-b to succeed on the fill call
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 3, len(result.Nodes), "Should fill remaining nodes from other pools")
+}
+
+func TestQuorumDiscovery_CrossRegion_DeduplicatesNodes(t *testing.T) {
+	// Bug fix: cross-region fallback could return duplicate endpoints when
+	// fillRemainingNodes queries a pool that already contributed nodes.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	// First round: 3/2 = 1 per region + 1 extra for first
+	// Region A asked for 2: returns 2 nodes
+	// Region B asked for 1: returns 1 node but it's the SAME endpoint as one from region A
+	// (this simulates a shared node visible from both regions)
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "shared-node:8080"},
+		{Endpoint: "nodeA1:8080"},
+	}, nil)
+
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "shared-node:8080"}, // duplicate!
+	}, nil).Once()
+
+	// Fill round: region B returns a unique node
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify no duplicates in result
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "Duplicate endpoint found: %s", node)
+		seen[node] = true
+	}
+
+	assert.Equal(t, 3, len(result.Nodes), "Should have exactly 3 unique nodes")
+}
+
+func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
+	// Verify deduplication also works in the fill phase specifically:
+	// when first round gets 1 node, fill queries the same pool and gets the same node back.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	callCountA := 0
+	// Region A: first round returns 1 node, fill round returns the SAME node (duplicate)
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, st proto.StrategyType, am proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+			callCountA++
+			if callCountA == 1 {
+				return []*proto.NodeMeta{{Endpoint: "nodeA1:8080"}}, nil
+			}
+			// Fill: returns same node as before (duplicate) plus a new one
+			return []*proto.NodeMeta{
+				{Endpoint: "nodeA1:8080"}, // duplicate — should be skipped
+				{Endpoint: "nodeA2:8080"}, // new
+			}, nil
+		}).Maybe()
+
+	// Region B: first round fails, fill round returns a unique node
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{}, errors.New("region down")).Once()
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify no duplicates
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "Duplicate endpoint found in fill phase: %s", node)
+		seen[node] = true
+	}
+
+	assert.Equal(t, 3, len(result.Nodes), "Should have exactly 3 unique nodes after dedup")
+	assert.Contains(t, result.Nodes, "nodeA1:8080")
+	assert.Contains(t, result.Nodes, "nodeA2:8080")
+	assert.Contains(t, result.Nodes, "nodeB1:8080")
+}
+
+func TestQuorumDiscovery_SingleRegion_RandomPoolSelection(t *testing.T) {
+	// Bug fix: selectSingleRegionQuorum used to hardcode BufferPools[0].
+	// Now it randomly selects a pool, distributing load across pools.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "pool-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "pool-b", Seeds: []string{"seed-b:8080"}},
+			{Name: "pool-c", Seeds: []string{"seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-c:8080").Return(mockClientC, nil).Maybe()
+
+	// Track which seeds get called
+	seedsUsed := make(map[string]int)
+	mu := &sync.Mutex{}
+
+	selectNodesFn := func(seedName string) func(context.Context, proto.StrategyType, proto.AffinityMode, []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+		return func(ctx context.Context, st proto.StrategyType, am proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+			mu.Lock()
+			seedsUsed[seedName]++
+			mu.Unlock()
+			return []*proto.NodeMeta{
+				{Endpoint: "node1:8080"},
+				{Endpoint: "node2:8080"},
+				{Endpoint: "node3:8080"},
+			}, nil
+		}
+	}
+
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-a")).Maybe()
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-b")).Maybe()
+	mockClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(selectNodesFn("seed-c")).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run many times to verify random pool distribution
+	for i := 0; i < 100; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+	}
+
+	// With random selection across 3 pools over 100 iterations,
+	// each pool should be used at least a few times
+	mu.Lock()
+	defer mu.Unlock()
+	poolsUsed := len(seedsUsed)
+	t.Logf("Pool usage distribution: %v", seedsUsed)
+	assert.GreaterOrEqual(t, poolsUsed, 2, "At least 2 different pools should be used over 100 iterations")
+
+	for seed, count := range seedsUsed {
+		assert.Greater(t, count, 5, "Pool %s should be used more than 5 times out of 100", seed)
+	}
+}
+
+func TestQuorumDiscovery_SeedRotation_SkipsDeadSeed(t *testing.T) {
+	// Bug fix: previously a single random seed was picked per request.
+	// If that seed was dead, the request failed even though other seeds were healthy.
+	// Now requestNodesFromPool tries all seeds in shuffled order.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{
+				Name:  "region-a",
+				Seeds: []string{"dead-seed:8080", "healthy-seed:8080"},
+			},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockDeadClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed:8080").Return(mockDeadClient, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed:8080").Return(mockHealthyClient, nil).Maybe()
+
+	// Dead seed always fails
+	mockDeadClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("connection refused")).Maybe()
+
+	// Healthy seed always succeeds
+	mockHealthyClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "node1:8080"},
+		{Endpoint: "node2:8080"},
+		{Endpoint: "node3:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run multiple times — should always succeed because the healthy seed is tried
+	for i := 0; i < 20; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err, "Iteration %d should succeed via healthy seed", i)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+	}
+}
+
+func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
+	// When all seeds in a pool are dead, the error should propagate properly.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{
+				Name:  "region-a",
+				Seeds: []string{"dead1:8080", "dead2:8080", "dead3:8080"},
+			},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient3 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead1:8080").Return(mockClient1, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead2:8080").Return(mockClient2, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead3:8080").Return(mockClient3, nil).Maybe()
+
+	// All seeds fail
+	mockClient1.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead1 refused")).Maybe()
+	mockClient2.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead2 refused")).Maybe()
+	mockClient3.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead3 refused")).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err, "Should fail when all seeds are dead")
+	assert.Nil(t, result)
+}
+
+func TestQuorumDiscovery_CustomPlacement_SeedRotation(t *testing.T) {
+	// Bug fix: selectCustomPlacementQuorum previously picked a single random seed.
+	// If that seed was dead, the entire custom placement failed.
+	// Now it uses requestNodesFromPool which tries all seeds in shuffled order.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"dead-seed-a:8080", "healthy-seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"healthy-seed-b:8080"}},
+			{Name: "region-c", Seeds: []string{"dead-seed-c:8080", "healthy-seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
+				{Region: "region-c", Az: "az-3", ResourceGroup: "rg-3"},
+			},
+		},
+	}
+
+	mockDeadClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockDeadClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	// Client pool returns appropriate clients
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed-a:8080").Return(mockDeadClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-a:8080").Return(mockHealthyClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-b:8080").Return(mockHealthyClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed-c:8080").Return(mockDeadClientC, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-c:8080").Return(mockHealthyClientC, nil).Maybe()
+
+	// Dead seeds always fail
+	mockDeadClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused")).Maybe()
+	mockDeadClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused")).Maybe()
+
+	// Healthy seeds always succeed
+	mockHealthyClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-a:8080"}}, nil).Maybe()
+	mockHealthyClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-b:8080"}}, nil).Maybe()
+	mockHealthyClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-c:8080"}}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run multiple times — should always succeed because healthy seeds are tried
+	for i := 0; i < 20; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err, "iteration %d should succeed via healthy seeds", i)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+		assert.Contains(t, result.Nodes, "node-a:8080")
+		assert.Contains(t, result.Nodes, "node-b:8080")
+		assert.Contains(t, result.Nodes, "node-c:8080")
+	}
+}
+
+func TestQuorumDiscovery_CustomPlacement_DeduplicatesNodes(t *testing.T) {
+	// Bug fix: when two custom placement rules resolve to the same region+az+rg,
+	// the server could return the same node for both. The client must deduplicate
+	// and pick different nodes from the candidates.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClient, nil).Maybe()
+
+	// Server returns 3 different nodes for the same az+rg (since we request Limit=es=3)
+	mockClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "node1:8080"},
+		{Endpoint: "node2:8080"},
+		{Endpoint: "node3:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 3, len(result.Nodes))
+
+	// Verify all nodes are unique
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "duplicate node in quorum: %s", node)
+		seen[node] = true
+	}
+}
+
+func TestQuorumDiscovery_CustomPlacement_DeduplicateFails(t *testing.T) {
+	// When all candidates are duplicates, the error should be clear.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClient, nil).Maybe()
+
+	// Server only has 1 node — second rule will fail dedup
+	mockClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "only-node:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, strings.Contains(err.Error(), "no unique node available") || strings.Contains(err.Error(), "already selected"),
+		"error should mention dedup failure, got: %s", err.Error())
+}
+
+func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
+	// Bug fix: when cross-region selection got more nodes than required,
+	// it always kept the first pools' nodes and discarded later ones.
+	// Now it shuffles before trimming for fair distribution.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3, // es=3, 2 pools → pool A gets 2, pool B gets 1
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	// Server returns MORE nodes than the filter Limit requests:
+	// Pool A asked for 2, returns 3 nodes
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+		{Endpoint: "nodeA2:8080"},
+		{Endpoint: "nodeA3:8080"},
+	}, nil).Maybe()
+
+	// Pool B asked for 1, returns 2 nodes
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+		{Endpoint: "nodeB2:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run many times and track which nodes appear in the trimmed result.
+	// Before the fix, nodeB1 and nodeB2 would NEVER appear (always trimmed).
+	// After the fix, all 5 nodes should appear at least once.
+	nodeCounts := make(map[string]int)
+	iterations := 500
+	for i := 0; i < iterations; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+		for _, node := range result.Nodes {
+			nodeCounts[node]++
+		}
+	}
+
+	// All 5 nodes should appear at least once across 500 iterations
+	allNodes := []string{"nodeA1:8080", "nodeA2:8080", "nodeA3:8080", "nodeB1:8080", "nodeB2:8080"}
+	for _, node := range allNodes {
+		assert.Greater(t, nodeCounts[node], 0,
+			"node %s was never selected in %d iterations — trim is biased", node, iterations)
+	}
 }
 
 func TestQuorumDiscovery_Close(t *testing.T) {

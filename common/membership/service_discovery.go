@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -528,6 +530,76 @@ func (sd *ServiceDiscovery) SelectCustom(filter *proto.NodeFilter, affinityMode 
 	return sd.SelectRandom(filter, affinityMode)
 }
 
+// SelectRandomGroup pre-partitions candidates into non-overlapping groups of `limit` size,
+// then randomly picks one group. This reduces overlap across selections compared to pure random.
+func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+
+	// 1. Collect all candidates (same as SelectRandom)
+	var allCandidates []*proto.NodeMeta
+	candidateAZs := sd.getCandidateAZs(filter)
+	for _, az := range candidateAZs {
+		candidateRGs := sd.getCandidateRGsInAZ(az, filter)
+		for _, rg := range candidateRGs {
+			nodes := sd.azRgIndex[az][rg]
+			filteredNodes := sd.filterByTags(nodes, filter.Tags)
+			allCandidates = append(allCandidates, filteredNodes...)
+		}
+	}
+
+	if len(allCandidates) == 0 {
+		if affinityMode == proto.AffinityMode_HARD {
+			return nil, fmt.Errorf("no matching nodes found")
+		}
+		return []*proto.NodeMeta{}, nil
+	}
+
+	limit := int(filter.Limit)
+	if limit == 0 || limit >= len(allCandidates) {
+		return allCandidates, nil
+	}
+
+	// 2. Sort by NodeId (deterministic, stable grouping)
+	sort.Slice(allCandidates, func(i, j int) bool {
+		return allCandidates[i].NodeId < allCandidates[j].NodeId
+	})
+
+	// 3. Partition into groups of `limit` size
+	numGroups := len(allCandidates) / limit
+	if numGroups == 0 {
+		numGroups = 1
+	}
+
+	// 4. Randomly pick a group
+	groupIdx := rand.Intn(numGroups)
+	start := groupIdx * limit
+	end := start + limit
+
+	if end <= len(allCandidates) {
+		// Full group — return exactly `limit` nodes
+		return allCandidates[start:end], nil
+	}
+
+	// 5. Partial last group — take what's available, fill from remaining
+	selected := make([]*proto.NodeMeta, 0, limit)
+	selected = append(selected, allCandidates[start:]...)
+
+	// Fill from other nodes (those not in this group)
+	remaining := make([]*proto.NodeMeta, 0, start)
+	remaining = append(remaining, allCandidates[:start]...)
+
+	needed := limit - len(selected)
+	if needed > len(remaining) {
+		needed = len(remaining)
+	}
+	// Random fill from remaining
+	filled := sd.randomSelectNodes(remaining, needed)
+	selected = append(selected, filled...)
+
+	return selected, nil
+}
+
 // === Helper method implementations ===
 
 // Get candidate AZ list (supports regex matching)
@@ -861,19 +933,14 @@ func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int
 		return nodes
 	}
 
-	// Fast random selection
-	selected := make([]*proto.NodeMeta, 0, limit)
-	used := make(map[int]bool)
-
-	for len(selected) < limit {
-		idx := rand.Intn(len(nodes))
-		if !used[idx] {
-			used[idx] = true
-			selected = append(selected, nodes[idx])
-		}
+	// Fisher-Yates partial shuffle: O(limit) guaranteed, no retries
+	shuffled := make([]*proto.NodeMeta, len(nodes))
+	copy(shuffled, nodes)
+	for i := 0; i < limit; i++ {
+		j := i + rand.Intn(len(shuffled)-i)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
-
-	return selected
+	return shuffled[:limit]
 }
 
 func (sd *ServiceDiscovery) randomSelectStrings(strs []string, limit int) []string {
@@ -885,18 +952,14 @@ func (sd *ServiceDiscovery) randomSelectStrings(strs []string, limit int) []stri
 		return strs
 	}
 
-	selected := make([]string, 0, limit)
-	used := make(map[int]bool)
-
-	for len(selected) < limit {
-		idx := rand.Intn(len(strs))
-		if !used[idx] {
-			used[idx] = true
-			selected = append(selected, strs[idx])
-		}
+	// Fisher-Yates partial shuffle: O(limit) guaranteed, no retries
+	shuffled := make([]string, len(strs))
+	copy(shuffled, strs)
+	for i := 0; i < limit; i++ {
+		j := i + rand.Intn(len(shuffled)-i)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
-
-	return selected
+	return shuffled[:limit]
 }
 
 func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[string]string) []*proto.NodeMeta {
@@ -924,18 +987,9 @@ func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[strin
 
 func (sd *ServiceDiscovery) isRegexLike(pattern string) bool {
 	// Simple regular expression detection
-	regexChars := []string{".", "*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\"}
+	regexChars := []string{"*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\"}
 	for _, char := range regexChars {
-		if len(pattern) > 0 && contains(pattern, char) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
+		if len(pattern) > 0 && strings.Contains(pattern, char) {
 			return true
 		}
 	}
@@ -951,7 +1005,11 @@ func (sd *ServiceDiscovery) getCompiledRegex(pattern string) (*regexp.Regexp, er
 		return regex, nil
 	}
 
-	regex, err := regexp.Compile(pattern)
+	// Anchor for full-string matching: MatchString does substring match by default,
+	// which would cause "rg[12]" to match "rg1-extra". Wrapping with ^(?:...)$
+	// ensures AZ/RG names are matched as complete strings.
+	anchored := "^(?:" + pattern + ")$"
+	regex, err := regexp.Compile(anchored)
 	if err != nil {
 		return nil, err
 	}
@@ -960,11 +1018,3 @@ func (sd *ServiceDiscovery) getCompiledRegex(pattern string) (*regexp.Regexp, er
 	return regex, nil
 }
 
-// === Utility methods ===
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

@@ -83,6 +83,7 @@ const (
 	StrategyType_MULTI_AZ_MULTI_RG   StrategyType = 4
 	StrategyType_CROSS_REGION        StrategyType = 5
 	StrategyType_CUSTOM              StrategyType = 6
+	StrategyType_RANDOM_GROUP        StrategyType = 7
 )
 
 // Enum value maps for StrategyType.
@@ -95,6 +96,7 @@ var (
 		4: "MULTI_AZ_MULTI_RG",
 		5: "CROSS_REGION",
 		6: "CUSTOM",
+		7: "RANDOM_GROUP",
 	}
 	StrategyType_value = map[string]int32{
 		"RANDOM":              0,
@@ -104,6 +106,7 @@ var (
 		"MULTI_AZ_MULTI_RG":   4,
 		"CROSS_REGION":        5,
 		"CUSTOM":              6,
+		"RANDOM_GROUP":        7,
 	}
 )
 
