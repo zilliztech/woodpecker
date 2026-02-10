@@ -16,6 +16,7 @@ import (
 	"math/rand"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -988,16 +989,7 @@ func (sd *ServiceDiscovery) isRegexLike(pattern string) bool {
 	// Simple regular expression detection
 	regexChars := []string{"*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\"}
 	for _, char := range regexChars {
-		if len(pattern) > 0 && contains(pattern, char) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
+		if len(pattern) > 0 && strings.Contains(pattern, char) {
 			return true
 		}
 	}
