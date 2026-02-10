@@ -106,6 +106,8 @@ func (d *quorumDiscovery) parseStrategyType() error {
 		d.strategyType = proto.StrategyType_CROSS_REGION
 	case "custom":
 		d.strategyType = proto.StrategyType_CUSTOM
+	case "random-group":
+		d.strategyType = proto.StrategyType_RANDOM_GROUP
 	case "random", "": // Default to random for empty values
 		d.strategyType = proto.StrategyType_RANDOM
 	default:

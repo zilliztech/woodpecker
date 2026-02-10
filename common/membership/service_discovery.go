@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"sort"
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -526,6 +527,76 @@ func (sd *ServiceDiscovery) SelectRandom(filter *proto.NodeFilter, affinityMode 
 func (sd *ServiceDiscovery) SelectCustom(filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
 	// Custom strategy is equivalent to SelectRandom, but can be extended with special logic
 	return sd.SelectRandom(filter, affinityMode)
+}
+
+// SelectRandomGroup pre-partitions candidates into non-overlapping groups of `limit` size,
+// then randomly picks one group. This reduces overlap across selections compared to pure random.
+func (sd *ServiceDiscovery) SelectRandomGroup(filter *proto.NodeFilter, affinityMode proto.AffinityMode) ([]*proto.NodeMeta, error) {
+	sd.mu.RLock()
+	defer sd.mu.RUnlock()
+
+	// 1. Collect all candidates (same as SelectRandom)
+	var allCandidates []*proto.NodeMeta
+	candidateAZs := sd.getCandidateAZs(filter)
+	for _, az := range candidateAZs {
+		candidateRGs := sd.getCandidateRGsInAZ(az, filter)
+		for _, rg := range candidateRGs {
+			nodes := sd.azRgIndex[az][rg]
+			filteredNodes := sd.filterByTags(nodes, filter.Tags)
+			allCandidates = append(allCandidates, filteredNodes...)
+		}
+	}
+
+	if len(allCandidates) == 0 {
+		if affinityMode == proto.AffinityMode_HARD {
+			return nil, fmt.Errorf("no matching nodes found")
+		}
+		return []*proto.NodeMeta{}, nil
+	}
+
+	limit := int(filter.Limit)
+	if limit == 0 || limit >= len(allCandidates) {
+		return allCandidates, nil
+	}
+
+	// 2. Sort by NodeId (deterministic, stable grouping)
+	sort.Slice(allCandidates, func(i, j int) bool {
+		return allCandidates[i].NodeId < allCandidates[j].NodeId
+	})
+
+	// 3. Partition into groups of `limit` size
+	numGroups := len(allCandidates) / limit
+	if numGroups == 0 {
+		numGroups = 1
+	}
+
+	// 4. Randomly pick a group
+	groupIdx := rand.Intn(numGroups)
+	start := groupIdx * limit
+	end := start + limit
+
+	if end <= len(allCandidates) {
+		// Full group — return exactly `limit` nodes
+		return allCandidates[start:end], nil
+	}
+
+	// 5. Partial last group — take what's available, fill from remaining
+	selected := make([]*proto.NodeMeta, 0, limit)
+	selected = append(selected, allCandidates[start:]...)
+
+	// Fill from other nodes (those not in this group)
+	remaining := make([]*proto.NodeMeta, 0, start)
+	remaining = append(remaining, allCandidates[:start]...)
+
+	needed := limit - len(selected)
+	if needed > len(remaining) {
+		needed = len(remaining)
+	}
+	// Random fill from remaining
+	filled := sd.randomSelectNodes(remaining, needed)
+	selected = append(selected, filled...)
+
+	return selected, nil
 }
 
 // === Helper method implementations ===

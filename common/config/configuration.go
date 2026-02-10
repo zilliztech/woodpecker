@@ -526,6 +526,7 @@ func (c *Configuration) validateQuorumConfig() error {
 		"multi-az-multi-rg":   true,
 		"cross-region":        true,
 		"custom":              true,
+		"random-group":        true,
 		"random":              true,
 		"":                    true, // Allow empty for backward compatibility
 	}

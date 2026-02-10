@@ -450,6 +450,8 @@ func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequ
 			servers, err = discovery.SelectMultiAzMultiRg(filter, request.AffinityMode)
 		case proto.StrategyType_CUSTOM:
 			servers, err = discovery.SelectCustom(filter, request.AffinityMode)
+		case proto.StrategyType_RANDOM_GROUP:
+			servers, err = discovery.SelectRandomGroup(filter, request.AffinityMode)
 		default:
 			// Default to random
 			servers, err = discovery.SelectRandom(filter, request.AffinityMode)

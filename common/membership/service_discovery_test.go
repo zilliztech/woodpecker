@@ -1227,6 +1227,190 @@ func TestRetryMechanismEffectiveness(t *testing.T) {
 	})
 }
 
+// === SelectRandomGroup tests ===
+
+func TestSelectRandomGroup_BasicGrouping(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 9 nodes across different AZs/RGs
+	for i := 1; i <= 9; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		rg := fmt.Sprintf("rg%d", (i-1)%3+1)
+		az := fmt.Sprintf("az%d", (i-1)/3+1)
+		node := createFinalTestNode(nodeID, rg, az, map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	// Select groups of 3 from 9 nodes → should form 3 non-overlapping groups
+	filter := &proto.NodeFilter{Limit: 3}
+	nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(nodes), "Should return exactly limit nodes")
+
+	// Verify all returned nodes are from the same group (consecutive in sorted order)
+	// Since nodes are sorted by NodeId, the groups should be deterministic
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.NodeId
+	}
+
+	// Verify nodes are sorted within the group (they come from a sorted slice)
+	for i := 1; i < len(nodeIDs); i++ {
+		assert.True(t, nodeIDs[i-1] < nodeIDs[i], "Nodes within a group should be in sorted order")
+	}
+}
+
+func TestSelectRandomGroup_NoOverlapBetweenGroups(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 6 nodes
+	for i := 1; i <= 6; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		node := createFinalTestNode(nodeID, "rg1", "az1", map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	// With limit=3, should form 2 groups: [node1,node2,node3] and [node4,node5,node6]
+	filter := &proto.NodeFilter{Limit: 3}
+
+	// Track which groups we see over multiple runs
+	groupSeen := make(map[string]int) // group key → count
+	iterations := 100
+
+	for i := 0; i < iterations; i++ {
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, len(nodes))
+
+		// Build a group key from sorted node IDs
+		ids := make([]string, len(nodes))
+		for j, n := range nodes {
+			ids[j] = n.NodeId
+		}
+		key := fmt.Sprintf("%v", ids)
+		groupSeen[key]++
+	}
+
+	// Should see exactly 2 distinct groups
+	assert.Equal(t, 2, len(groupSeen), "Should see exactly 2 non-overlapping groups")
+
+	// Both groups should be selected roughly equally (with some randomness tolerance)
+	for key, count := range groupSeen {
+		t.Logf("Group %s: selected %d/%d times", key, count, iterations)
+		assert.Greater(t, count, 10, "Each group should be selected a reasonable number of times")
+	}
+}
+
+func TestSelectRandomGroup_PartialGroup(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 7 nodes → with limit=3, groups are [0-2], [3-5], partial [6]
+	for i := 1; i <= 7; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		node := createFinalTestNode(nodeID, "rg1", "az1", map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	filter := &proto.NodeFilter{Limit: 3}
+
+	// Run multiple times - should always return exactly 3 nodes
+	for i := 0; i < 50; i++ {
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, len(nodes), "Should always return exactly limit nodes even with partial last group")
+	}
+}
+
+func TestSelectRandomGroup_FilteredNodes(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create nodes across different AZs and RGs with different tags
+	sd.UpdateServer("node1", createFinalTestNode("node1", "rg1", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node2", createFinalTestNode("node2", "rg1", "az1", map[string]string{"env": "staging"}))
+	sd.UpdateServer("node3", createFinalTestNode("node3", "rg1", "az2", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node4", createFinalTestNode("node4", "rg2", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node5", createFinalTestNode("node5", "rg2", "az2", map[string]string{"env": "prod"}))
+
+	// Filter by AZ
+	t.Run("AZ filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{Az: "az1", Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+		for _, n := range nodes {
+			assert.Equal(t, "az1", n.Az)
+		}
+	})
+
+	// Filter by tags
+	t.Run("Tag filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "prod"}, Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+		for _, n := range nodes {
+			assert.Equal(t, "prod", n.Tags["env"])
+		}
+	})
+
+	// Filter by RG
+	t.Run("RG filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{ResourceGroup: "rg1", Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.LessOrEqual(t, len(nodes), 2)
+	})
+}
+
+func TestSelectRandomGroup_InsufficientNodes(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Only 2 nodes but limit=3
+	sd.UpdateServer("node1", createFinalTestNode("node1", "rg1", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node2", createFinalTestNode("node2", "rg1", "az1", map[string]string{"env": "prod"}))
+
+	t.Run("Limit exceeds candidates returns all", func(t *testing.T) {
+		filter := &proto.NodeFilter{Limit: 3}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes), "Should return all available nodes when limit exceeds count")
+	})
+
+	t.Run("No matching nodes HARD mode", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "nonexistent"}, Limit: 1}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_HARD)
+		assert.Error(t, err)
+		assert.Nil(t, nodes)
+		assert.Contains(t, err.Error(), "no matching nodes found")
+	})
+
+	t.Run("No matching nodes SOFT mode", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "nonexistent"}, Limit: 1}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(nodes))
+	})
+
+	t.Run("Limit zero returns all", func(t *testing.T) {
+		filter := &proto.NodeFilter{Limit: 0}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("Empty service discovery", func(t *testing.T) {
+		emptySd := NewServiceDiscovery()
+		filter := &proto.NodeFilter{Limit: 3}
+		nodes, err := emptySd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(nodes))
+
+		nodes, err = emptySd.SelectRandomGroup(filter, proto.AffinityMode_HARD)
+		assert.Error(t, err)
+		assert.Nil(t, nodes)
+	})
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()
