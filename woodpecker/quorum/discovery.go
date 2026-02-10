@@ -234,15 +234,12 @@ func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for pool %s", pool.Name))
 	}
 
-	// Select a random seed to query
-	selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
-
 	// Use pre-built filter (should have exactly one filter for single-region strategies)
 	if len(d.filters) != 1 {
 		return nil, fmt.Errorf("expected 1 filter for single-region strategy, got %d", len(d.filters))
 	}
 
-	return d.requestNodesFromSeed(ctx, selectedSeed, d.filters[0], int(d.wq))
+	return d.requestNodesFromPool(ctx, pool, d.filters[0], int(d.wq))
 }
 
 func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
@@ -278,9 +275,6 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			continue
 		}
 
-		// Select a random seed from this region
-		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
-
 		// Create region-specific filter by adjusting the limit
 		regionFilter := &proto.NodeFilter{
 			Limit:         int32(regionNodes),
@@ -288,15 +282,14 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			ResourceGroup: baseFilter.ResourceGroup,
 		}
 
-		// Request nodes from this region
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, regionFilter, 0)
+		// Request nodes from this region (tries all seeds in the pool)
+		regionResult, err := d.requestNodesFromPool(ctx, pool, regionFilter, 0)
 		if err != nil {
 			if d.affinityMode == proto.AffinityMode_HARD {
 				return nil, err
 			}
 			logger.Ctx(ctx).Warn("Failed to get nodes from region, continuing with soft affinity",
 				zap.String("poolName", pool.Name),
-				zap.String("seed", selectedSeed),
 				zap.Error(err))
 			continue
 		}
@@ -456,9 +449,8 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			continue
 		}
 
-		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
 		fillFilter.Limit = int32(requiredNodes - len(currentNodes))
-		fillResult, err := d.requestNodesFromSeed(ctx, selectedSeed, fillFilter, 0)
+		fillResult, err := d.requestNodesFromPool(ctx, pool, fillFilter, 0)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get remaining nodes from pool, continuing with soft affinity",
 				zap.String("poolName", pool.Name),
@@ -492,6 +484,29 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 	}
 
 	return result, nil
+}
+
+// requestNodesFromPool tries all seeds in a pool in shuffled order, returning on the first success.
+// This ensures that a single dead seed doesn't block the request when other seeds are healthy.
+func (d *quorumDiscovery) requestNodesFromPool(ctx context.Context, pool config.QuorumBufferPool, filter *proto.NodeFilter, expectedAtLeast int) (*proto.QuorumInfo, error) {
+	// Shuffle seeds to avoid always hitting the same one
+	seeds := make([]string, len(pool.Seeds))
+	copy(seeds, pool.Seeds)
+	rand.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
+
+	var lastErr error
+	for _, seed := range seeds {
+		result, err := d.requestNodesFromSeed(ctx, seed, filter, expectedAtLeast)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		logger.Ctx(ctx).Debug("Seed failed, trying next",
+			zap.String("failedSeed", seed),
+			zap.String("poolName", pool.Name),
+			zap.Error(err))
+	}
+	return nil, fmt.Errorf("all seeds in pool %s failed, last error: %w", pool.Name, lastErr)
 }
 
 func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string, filter *proto.NodeFilter, expectedAtLeast int) (*proto.QuorumInfo, error) {

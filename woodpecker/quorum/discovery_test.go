@@ -611,6 +611,99 @@ func TestQuorumDiscovery_SingleRegion_RandomPoolSelection(t *testing.T) {
 	}
 }
 
+func TestQuorumDiscovery_SeedRotation_SkipsDeadSeed(t *testing.T) {
+	// Bug fix: previously a single random seed was picked per request.
+	// If that seed was dead, the request failed even though other seeds were healthy.
+	// Now requestNodesFromPool tries all seeds in shuffled order.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{
+				Name:  "region-a",
+				Seeds: []string{"dead-seed:8080", "healthy-seed:8080"},
+			},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockDeadClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed:8080").Return(mockDeadClient, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed:8080").Return(mockHealthyClient, nil).Maybe()
+
+	// Dead seed always fails
+	mockDeadClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("connection refused")).Maybe()
+
+	// Healthy seed always succeeds
+	mockHealthyClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "node1:8080"},
+		{Endpoint: "node2:8080"},
+		{Endpoint: "node3:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run multiple times — should always succeed because the healthy seed is tried
+	for i := 0; i < 20; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err, "Iteration %d should succeed via healthy seed", i)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+	}
+}
+
+func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
+	// When all seeds in a pool are dead, the error should propagate properly.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{
+				Name:  "region-a",
+				Seeds: []string{"dead1:8080", "dead2:8080", "dead3:8080"},
+			},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient3 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead1:8080").Return(mockClient1, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead2:8080").Return(mockClient2, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead3:8080").Return(mockClient3, nil).Maybe()
+
+	// All seeds fail
+	mockClient1.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead1 refused")).Maybe()
+	mockClient2.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead2 refused")).Maybe()
+	mockClient3.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
+		[]*proto.NodeMeta{}, errors.New("dead3 refused")).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err, "Should fail when all seeds are dead")
+	assert.Nil(t, result)
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}
