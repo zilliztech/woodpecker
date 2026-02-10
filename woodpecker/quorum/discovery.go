@@ -368,11 +368,8 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for custom placement rule %d (region: %s)", i, placement.Region))
 		}
 
-		// Select a random seed from this region
-		selectedSeed := targetPool.Seeds[rand.Intn(len(targetPool.Seeds))]
-
-		// Use pre-built filter for this placement
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, d.filters[i], int(d.filters[i].Limit))
+		// Use pre-built filter for this placement (tries all seeds in the pool)
+		regionResult, err := d.requestNodesFromPool(ctx, *targetPool, d.filters[i], int(d.filters[i].Limit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to select node for custom placement rule %d (region: %s, az: %s, rg: %s): %w",
 				i, placement.Region, placement.Az, placement.ResourceGroup, err)
@@ -392,7 +389,6 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 			zap.String("region", placement.Region),
 			zap.String("az", placement.Az),
 			zap.String("resourceGroup", placement.ResourceGroup),
-			zap.String("selectedSeed", selectedSeed),
 			zap.String("selectedNode", selectedNode))
 	}
 

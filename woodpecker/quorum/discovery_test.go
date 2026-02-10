@@ -704,6 +704,72 @@ func TestQuorumDiscovery_SeedRotation_AllSeedsDead(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestQuorumDiscovery_CustomPlacement_SeedRotation(t *testing.T) {
+	// Bug fix: selectCustomPlacementQuorum previously picked a single random seed.
+	// If that seed was dead, the entire custom placement failed.
+	// Now it uses requestNodesFromPool which tries all seeds in shuffled order.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"dead-seed-a:8080", "healthy-seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"healthy-seed-b:8080"}},
+			{Name: "region-c", Seeds: []string{"dead-seed-c:8080", "healthy-seed-c:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-b", Az: "az-2", ResourceGroup: "rg-2"},
+				{Region: "region-c", Az: "az-3", ResourceGroup: "rg-3"},
+			},
+		},
+	}
+
+	mockDeadClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockDeadClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockHealthyClientC := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	// Client pool returns appropriate clients
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed-a:8080").Return(mockDeadClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-a:8080").Return(mockHealthyClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-b:8080").Return(mockHealthyClientB, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "dead-seed-c:8080").Return(mockDeadClientC, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "healthy-seed-c:8080").Return(mockHealthyClientC, nil).Maybe()
+
+	// Dead seeds always fail
+	mockDeadClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused")).Maybe()
+	mockDeadClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused")).Maybe()
+
+	// Healthy seeds always succeed
+	mockHealthyClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-a:8080"}}, nil).Maybe()
+	mockHealthyClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-b:8080"}}, nil).Maybe()
+	mockHealthyClientC.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "node-c:8080"}}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	// Run multiple times — should always succeed because healthy seeds are tried
+	for i := 0; i < 20; i++ {
+		result, err := discovery.SelectQuorum(ctx)
+		assert.NoError(t, err, "iteration %d should succeed via healthy seeds", i)
+		assert.NotNil(t, result)
+		assert.Equal(t, 3, len(result.Nodes))
+		assert.Contains(t, result.Nodes, "node-a:8080")
+		assert.Contains(t, result.Nodes, "node-b:8080")
+		assert.Contains(t, result.Nodes, "node-c:8080")
+	}
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}
