@@ -443,6 +443,7 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 		}
 
 		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
+		fillFilter.Limit = int32(requiredNodes - len(currentNodes))
 		fillResult, err := d.requestNodesFromSeed(ctx, selectedSeed, fillFilter, 0)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get remaining nodes from pool, continuing with soft affinity",
@@ -452,7 +453,9 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 		}
 		if fillResult != nil {
 			currentNodes = append(currentNodes, fillResult.Nodes...)
-			break
+			if len(currentNodes) >= requiredNodes {
+				break
+			}
 		}
 	}
 
