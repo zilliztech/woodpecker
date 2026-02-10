@@ -986,7 +986,7 @@ func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[strin
 
 func (sd *ServiceDiscovery) isRegexLike(pattern string) bool {
 	// Simple regular expression detection
-	regexChars := []string{".", "*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\"}
+	regexChars := []string{"*", "+", "?", "[", "]", "(", ")", "{", "}", "^", "$", "|", "\\"}
 	for _, char := range regexChars {
 		if len(pattern) > 0 && contains(pattern, char) {
 			return true

@@ -1547,6 +1547,70 @@ func TestRandomSelectStrings_FisherYates(t *testing.T) {
 	})
 }
 
+func TestIsRegexLike(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	t.Run("Plain names are not regex", func(t *testing.T) {
+		// Simple names
+		assert.False(t, sd.isRegexLike("us-east-1"))
+		assert.False(t, sd.isRegexLike("az1"))
+		assert.False(t, sd.isRegexLike("rg-prod"))
+		assert.False(t, sd.isRegexLike(""))
+	})
+
+	t.Run("Dotted hostnames are not regex", func(t *testing.T) {
+		// This was the bug: dots in hostnames caused false positives
+		assert.False(t, sd.isRegexLike("us-east-1.aws"))
+		assert.False(t, sd.isRegexLike("az.1"))
+		assert.False(t, sd.isRegexLike("node1.cluster.local"))
+		assert.False(t, sd.isRegexLike("192.168.1.1"))
+	})
+
+	t.Run("Actual regex patterns are detected", func(t *testing.T) {
+		assert.True(t, sd.isRegexLike("us-east-.*"))
+		assert.True(t, sd.isRegexLike("az[12]"))
+		assert.True(t, sd.isRegexLike("^prod"))
+		assert.True(t, sd.isRegexLike("rg-prod|rg-staging"))
+		assert.True(t, sd.isRegexLike("node.+"))
+		assert.True(t, sd.isRegexLike("az(1|2)"))
+		assert.True(t, sd.isRegexLike("rg?"))
+		assert.True(t, sd.isRegexLike("prod$"))
+		assert.True(t, sd.isRegexLike("\\d+"))
+		assert.True(t, sd.isRegexLike("node{1,3}"))
+	})
+}
+
+func TestIsRegexLike_AZFilterIntegration(t *testing.T) {
+	// Verify that dotted AZ names work correctly with exact match (not regex)
+	sd := NewServiceDiscovery()
+
+	node1 := createFinalTestNode("n1", "rg1", "us-east-1.aws", nil)
+	node2 := createFinalTestNode("n2", "rg1", "us-west-2.aws", nil)
+	sd.UpdateServer("n1", node1)
+	sd.UpdateServer("n2", node2)
+
+	t.Run("Exact match with dotted AZ", func(t *testing.T) {
+		filter := &proto.NodeFilter{
+			Az:    "us-east-1.aws",
+			Limit: 10,
+		}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(nodes))
+		assert.Equal(t, "n1", nodes[0].NodeId)
+	})
+
+	t.Run("Regex still works for AZ", func(t *testing.T) {
+		filter := &proto.NodeFilter{
+			Az:    "us-.*",
+			Limit: 10,
+		}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+	})
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()
