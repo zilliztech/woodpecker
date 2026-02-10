@@ -54,11 +54,15 @@ type MetadataProvider interface {
 	CheckSessionLockAlive(ctx context.Context, sessionLock *SessionLock) (bool, error)
 
 	// StoreSegmentMetadata stores the metadata for a specific segment.
-	StoreSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
+	// logId is used for metrics labeling. The new segment's state is read from segmentMeta.
+	StoreSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta) error
 	// UpdateSegmentMetadata updates the metadata for a specific segment.
-	UpdateSegmentMetadata(ctx context.Context, logName string, segmentMeta *SegmentMeta) error
+	// logId is used for metrics labeling. oldState is the segment's state before this update;
+	// the new state is read from segmentMeta.
+	UpdateSegmentMetadata(ctx context.Context, logName string, logId int64, segmentMeta *SegmentMeta, oldState proto.SegmentState) error
 	// DeleteSegmentMetadata deletes the metadata for a specific segment.
-	DeleteSegmentMetadata(ctx context.Context, logName string, segmentId int64) error
+	// logId is used for metrics labeling. oldState is the segment's state before deletion.
+	DeleteSegmentMetadata(ctx context.Context, logName string, logId int64, segmentId int64, oldState proto.SegmentState) error
 	// GetSegmentMetadata returns the metadata for a specific segment.
 	GetSegmentMetadata(ctx context.Context, logName string, segmentId int64) (*SegmentMeta, error)
 	// GetAllSegmentMetadata returns all segment metadata for a specific log.

@@ -335,7 +335,7 @@ func testStoreSegmentMeta(t *testing.T) {
 			SegNo: 1,
 		},
 	}
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 
 	// test get segmentMeta
@@ -379,7 +379,7 @@ func testUpdateSegmentMeta(t *testing.T) {
 			State: proto.SegmentState_Active,
 		},
 	}
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 	// test get segmentMeta
 	{
@@ -397,7 +397,7 @@ func testUpdateSegmentMeta(t *testing.T) {
 
 	// Update the state and use the current revision
 	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
-	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
+	updateErr := provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), currentSegmentMeta, proto.SegmentState_Active)
 	assert.NoError(t, updateErr)
 	{
 		getSegmentMeta, getErr := provider.GetSegmentMetadata(context.Background(), logName, 1)
@@ -433,7 +433,7 @@ func testDeleteSegmentMeta(t *testing.T) {
 		},
 	}
 
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), segmentMeta)
 	assert.NoError(t, storeErr)
 
 	// Verify segment exists
@@ -442,7 +442,7 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.True(t, exists)
 
 	// Delete the segment
-	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, segmentMeta.Metadata.SegNo)
+	deleteErr := provider.DeleteSegmentMetadata(context.Background(), logName, int64(1), segmentMeta.Metadata.SegNo, proto.SegmentState_Active)
 	assert.NoError(t, deleteErr)
 
 	// Verify segment no longer exists
@@ -456,13 +456,13 @@ func testDeleteSegmentMeta(t *testing.T) {
 	assert.True(t, werr.ErrSegmentNotFound.Is(getErr))
 
 	// Attempt to delete a non-existent segment should result in error
-	deleteErr = provider.DeleteSegmentMetadata(context.Background(), logName, 999)
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), logName, int64(1), 999, proto.SegmentState_Truncated)
 	assert.Error(t, deleteErr)
 	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
 
 	// Test deleting from a non-existent log
 	nonExistentLogName := "non_existent_log"
-	deleteErr = provider.DeleteSegmentMetadata(context.Background(), nonExistentLogName, 1)
+	deleteErr = provider.DeleteSegmentMetadata(context.Background(), nonExistentLogName, int64(1), 1, proto.SegmentState_Truncated)
 	assert.Error(t, deleteErr)
 	assert.True(t, werr.ErrSegmentNotFound.Is(deleteErr))
 }
@@ -1309,7 +1309,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 		},
 	}
 
-	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, initialSegmentMeta)
+	storeErr := provider.StoreSegmentMetadata(context.Background(), logName, int64(1), initialSegmentMeta)
 	assert.NoError(t, storeErr)
 
 	// Get the current segment metadata to get the correct revision
@@ -1327,7 +1327,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 	}
 
 	// Try to update with wrong revision - should fail
-	err = provider.UpdateSegmentMetadata(context.Background(), logName, wrongRevisionSegmentMeta)
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), wrongRevisionSegmentMeta, proto.SegmentState_Active)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "segment metadata revision is invalid or outdated")
 
@@ -1338,7 +1338,7 @@ func testUpdateSegmentMetaWithWrongRevision(t *testing.T) {
 
 	// Now try with correct revision - should succeed
 	currentSegmentMeta.Metadata.State = proto.SegmentState_Sealed
-	err = provider.UpdateSegmentMetadata(context.Background(), logName, currentSegmentMeta)
+	err = provider.UpdateSegmentMetadata(context.Background(), logName, int64(1), currentSegmentMeta, proto.SegmentState_Active)
 	assert.NoError(t, err)
 
 	// Verify the update was successful

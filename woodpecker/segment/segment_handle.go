@@ -742,7 +742,7 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		Metadata: newSegmentMetadata,
 		Revision: currentSegmentMeta.Revision,
 	}
-	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	err := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentSegmentMeta.Metadata.State)
 	if err != nil && werr.ErrMetadataRevisionInvalid.Is(err) {
 		// metadata revision is invalid or outdated, some one updated it, trigger fence this segmentHandle to let client reopen new writer
 		// new append will fail with ErrSegmentFenced, and application client should reopen new logWriter instead.
@@ -1422,7 +1422,7 @@ func (s *segmentHandleImpl) FenceAndComplete(ctx context.Context) (int64, error)
 		Metadata: newSegmentMetadata,
 		Revision: currentMeta.Revision,
 	}
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentMeta.Metadata.State)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after fence",
 			zap.String("logName", s.logName),
@@ -1580,7 +1580,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 		Metadata: newSegmentMetadata,
 		Revision: currentSegmentMeta.Revision,
 	}
-	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, newSegMeta)
+	updateMetaErr := s.metadata.UpdateSegmentMetadata(ctx, s.logName, s.logId, newSegMeta, currentSegmentMeta.Metadata.State)
 	if updateMetaErr != nil {
 		logger.Ctx(ctx).Warn("Failed to update segment metadata after compaction",
 			zap.String("logName", s.logName),

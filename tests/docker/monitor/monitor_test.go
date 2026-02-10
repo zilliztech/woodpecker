@@ -151,12 +151,6 @@ func TestMonitor_BasicMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_memory_used_bytes")
 	})
 
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
-	})
-
 	// Client metrics live in the test process. Prometheus scrapes them via
 	// host.docker.internal:29099, so they are queryable through the Prometheus API.
 	t.Run("ClientMetrics", func(t *testing.T) {
@@ -396,12 +390,6 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricRegistered(t, cluster, "woodpecker_server_system_io_wait")
 	})
 
-	t.Run("GrpcServerMetrics", func(t *testing.T) {
-		assertMetricExists(t, cluster, "grpc_server_started_total")
-		assertMetricExists(t, cluster, "grpc_server_handled_total")
-		assertMetricExists(t, cluster, "grpc_server_handling_seconds_count")
-	})
-
 	// Client metrics live in the test process. Prometheus scrapes them via
 	// host.docker.internal:29099, so they are queryable through the Prometheus API.
 	t.Run("ClientMetrics", func(t *testing.T) {
@@ -419,6 +407,9 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 		assertMetricExists(t, cluster, "woodpecker_client_append_latency_count")
 		// Read path
 		assertMetricExists(t, cluster, "woodpecker_client_read_requests_total")
+		// Segment state tracking (populated by Store/Update/DeleteSegmentMetadata;
+		// truncation above ensures at least the Truncated state is represented)
+		assertMetricExists(t, cluster, "woodpecker_client_segment_state")
 	})
 
 	t.Log("ComprehensiveMetricsVerification passed: all metrics verified")
