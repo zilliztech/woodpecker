@@ -1018,11 +1018,3 @@ func (sd *ServiceDiscovery) getCompiledRegex(pattern string) (*regexp.Regexp, er
 	return regex, nil
 }
 
-// === Utility methods ===
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
