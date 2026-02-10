@@ -450,6 +450,10 @@ func (s *Server) SelectNodes(ctx context.Context, request *proto.SelectNodesRequ
 			servers, err = discovery.SelectMultiAzMultiRg(filter, request.AffinityMode)
 		case proto.StrategyType_CUSTOM:
 			servers, err = discovery.SelectCustom(filter, request.AffinityMode)
+		case proto.StrategyType_CROSS_REGION:
+			// Cross-region orchestration is done client-side; each per-region
+			// request just needs random local selection.
+			servers, err = discovery.SelectRandom(filter, request.AffinityMode)
 		case proto.StrategyType_RANDOM_GROUP:
 			servers, err = discovery.SelectRandomGroup(filter, request.AffinityMode)
 		default:
