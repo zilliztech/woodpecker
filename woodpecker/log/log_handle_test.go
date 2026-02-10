@@ -60,7 +60,7 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 			Es:    1,
 			Nodes: []string{"127.0.0.1:59456"},
 		}, nil
-	}).(*logHandleImpl)
+	}, nil).(*logHandleImpl)
 
 	// Ensure background cleanup goroutine is stopped when the test finishes,
 	// preventing panics from mock calls after test completion.
@@ -1075,7 +1075,7 @@ func createMockLogHandleWithConfig(t *testing.T, storageType string, conditionWr
 	}
 
 	segments := map[int64]*meta.SegmentMeta{}
-	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, nil).(*logHandleImpl)
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, nil, nil).(*logHandleImpl)
 
 	return logHandle, mockMeta
 }

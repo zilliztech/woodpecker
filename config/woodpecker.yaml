@@ -35,6 +35,13 @@ woodpecker:
     sessionMonitor:
       checkInterval: 3 # How often to check session health in seconds, default is 3 seconds
       maxFailures: 5 # Consecutive failures before marking session invalid, default is 5
+    # Direct read configuration for sealed segments in service mode.
+    # When enabled, the client reads sealed segments directly from object storage (S3/MinIO)
+    # instead of going through quorum nodes via gRPC, reducing latency and quorum node load.
+    directRead:
+      enabled: false # Whether to enable direct read from object storage for sealed segments, default is false
+      maxBatchSize: 16777216 # Maximum batch size in bytes for direct read operations, default is 16MB
+      maxFetchThreads: 4 # Maximum number of concurrent fetch threads for direct read, default is 4
     # Advanced Quorum Configuration for Service storage backend mode
     # This configuration supports complex node selection strategies and buffer pools
     quorum:
