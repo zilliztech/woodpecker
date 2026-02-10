@@ -417,6 +417,128 @@ func TestQuorumDiscovery_FillRemainingNodes_FirstPoolFails_TriesNext(t *testing.
 	assert.Equal(t, 3, len(result.Nodes), "Should fill remaining nodes from other pools")
 }
 
+func TestQuorumDiscovery_CrossRegion_DeduplicatesNodes(t *testing.T) {
+	// Bug fix: cross-region fallback could return duplicate endpoints when
+	// fillRemainingNodes queries a pool that already contributed nodes.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	// First round: 3/2 = 1 per region + 1 extra for first
+	// Region A asked for 2: returns 2 nodes
+	// Region B asked for 1: returns 1 node but it's the SAME endpoint as one from region A
+	// (this simulates a shared node visible from both regions)
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "shared-node:8080"},
+		{Endpoint: "nodeA1:8080"},
+	}, nil)
+
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "shared-node:8080"}, // duplicate!
+	}, nil).Once()
+
+	// Fill round: region B returns a unique node
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify no duplicates in result
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "Duplicate endpoint found: %s", node)
+		seen[node] = true
+	}
+
+	assert.Equal(t, 3, len(result.Nodes), "Should have exactly 3 unique nodes")
+}
+
+func TestQuorumDiscovery_CrossRegion_FillDeduplicatesNodes(t *testing.T) {
+	// Verify deduplication also works in the fill phase specifically:
+	// when first round gets 1 node, fill queries the same pool and gets the same node back.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	callCountA := 0
+	// Region A: first round returns 1 node, fill round returns the SAME node (duplicate)
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, st proto.StrategyType, am proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+			callCountA++
+			if callCountA == 1 {
+				return []*proto.NodeMeta{{Endpoint: "nodeA1:8080"}}, nil
+			}
+			// Fill: returns same node as before (duplicate) plus a new one
+			return []*proto.NodeMeta{
+				{Endpoint: "nodeA1:8080"}, // duplicate — should be skipped
+				{Endpoint: "nodeA2:8080"}, // new
+			}, nil
+		}).Maybe()
+
+	// Region B: first round fails, fill round returns a unique node
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{}, errors.New("region down")).Once()
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify no duplicates
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "Duplicate endpoint found in fill phase: %s", node)
+		seen[node] = true
+	}
+
+	assert.Equal(t, 3, len(result.Nodes), "Should have exactly 3 unique nodes after dedup")
+	assert.Contains(t, result.Nodes, "nodeA1:8080")
+	assert.Contains(t, result.Nodes, "nodeA2:8080")
+	assert.Contains(t, result.Nodes, "nodeB1:8080")
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}

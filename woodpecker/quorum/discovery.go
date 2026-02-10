@@ -253,6 +253,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	remainingNodes := requiredNodes % len(d.cfg.BufferPools)
 
 	var allSelectedNodes []string
+	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	// Use pre-built filter as template, but adjust limit per region
 	if len(d.filters) != 1 {
@@ -301,7 +302,12 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 		}
 
 		if regionResult != nil {
-			allSelectedNodes = append(allSelectedNodes, regionResult.Nodes...)
+			for _, node := range regionResult.Nodes {
+				if !selectedSet[node] {
+					selectedSet[node] = true
+					allSelectedNodes = append(allSelectedNodes, node)
+				}
+			}
 		}
 	}
 
@@ -310,7 +316,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes across regions: got %d, required %d", len(allSelectedNodes), requiredNodes))
 		}
 		// In soft mode, try to fill remaining nodes from any available region
-		return d.fillRemainingNodes(ctx, allSelectedNodes)
+		return d.fillRemainingNodes(ctx, allSelectedNodes, selectedSet)
 	}
 
 	// Trim to exact required number if we got more
@@ -417,7 +423,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 	return result, nil
 }
 
-func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es)
 	remainingNeeded := requiredNodes - len(currentNodes)
 	if remainingNeeded <= 0 {
@@ -429,6 +435,14 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			Es:    d.es,
 		}
 		return result, nil
+	}
+
+	// Initialize selectedSet if nil (defensive)
+	if selectedSet == nil {
+		selectedSet = make(map[string]bool)
+		for _, node := range currentNodes {
+			selectedSet[node] = true
+		}
 	}
 
 	// Create a temporary filter for remaining nodes
@@ -452,7 +466,12 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			continue
 		}
 		if fillResult != nil {
-			currentNodes = append(currentNodes, fillResult.Nodes...)
+			for _, node := range fillResult.Nodes {
+				if !selectedSet[node] {
+					selectedSet[node] = true
+					currentNodes = append(currentNodes, node)
+				}
+			}
 			if len(currentNodes) >= requiredNodes {
 				break
 			}
