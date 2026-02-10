@@ -1411,6 +1411,142 @@ func TestSelectRandomGroup_InsufficientNodes(t *testing.T) {
 	})
 }
 
+func TestRandomSelectNodes_FisherYates(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 10 nodes
+	nodes := make([]*proto.NodeMeta, 10)
+	for i := 0; i < 10; i++ {
+		nodes[i] = &proto.NodeMeta{NodeId: fmt.Sprintf("node-%d", i)}
+	}
+
+	t.Run("Returns exactly limit nodes", func(t *testing.T) {
+		result := sd.randomSelectNodes(nodes, 3)
+		assert.Equal(t, 3, len(result))
+	})
+
+	t.Run("No duplicates in result", func(t *testing.T) {
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectNodes(nodes, 5)
+			seen := make(map[string]bool)
+			for _, n := range result {
+				assert.False(t, seen[n.NodeId], "duplicate node: %s", n.NodeId)
+				seen[n.NodeId] = true
+			}
+		}
+	})
+
+	t.Run("All results are from input", func(t *testing.T) {
+		inputSet := make(map[string]bool)
+		for _, n := range nodes {
+			inputSet[n.NodeId] = true
+		}
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectNodes(nodes, 4)
+			for _, n := range result {
+				assert.True(t, inputSet[n.NodeId], "unexpected node: %s", n.NodeId)
+			}
+		}
+	})
+
+	t.Run("Does not modify original slice", func(t *testing.T) {
+		original := make([]string, len(nodes))
+		for i, n := range nodes {
+			original[i] = n.NodeId
+		}
+		for trial := 0; trial < 50; trial++ {
+			sd.randomSelectNodes(nodes, 3)
+		}
+		for i, n := range nodes {
+			assert.Equal(t, original[i], n.NodeId, "original slice was modified at index %d", i)
+		}
+	})
+
+	t.Run("Uniform distribution across nodes", func(t *testing.T) {
+		counts := make(map[string]int)
+		iterations := 10000
+		limit := 3
+		for i := 0; i < iterations; i++ {
+			result := sd.randomSelectNodes(nodes, limit)
+			for _, n := range result {
+				counts[n.NodeId]++
+			}
+		}
+		// Expected count per node: iterations * limit / len(nodes) = 10000 * 3 / 10 = 3000
+		expected := float64(iterations) * float64(limit) / float64(len(nodes))
+		for _, node := range nodes {
+			count := counts[node.NodeId]
+			// Allow 20% deviation from expected
+			assert.InDelta(t, expected, float64(count), expected*0.2,
+				"node %s count %d deviates too much from expected %.0f", node.NodeId, count, expected)
+		}
+	})
+
+	t.Run("Edge cases", func(t *testing.T) {
+		// Empty input
+		result := sd.randomSelectNodes([]*proto.NodeMeta{}, 3)
+		assert.Equal(t, 0, len(result))
+
+		// Limit 0 returns all
+		result = sd.randomSelectNodes(nodes, 0)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Limit >= len returns all
+		result = sd.randomSelectNodes(nodes, 15)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Limit == len returns all
+		result = sd.randomSelectNodes(nodes, 10)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Single node, limit 1
+		single := []*proto.NodeMeta{{NodeId: "only"}}
+		result = sd.randomSelectNodes(single, 1)
+		assert.Equal(t, 1, len(result))
+		assert.Equal(t, "only", result[0].NodeId)
+	})
+}
+
+func TestRandomSelectStrings_FisherYates(t *testing.T) {
+	sd := NewServiceDiscovery()
+	strs := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+
+	t.Run("Returns exactly limit strings", func(t *testing.T) {
+		result := sd.randomSelectStrings(strs, 3)
+		assert.Equal(t, 3, len(result))
+	})
+
+	t.Run("No duplicates in result", func(t *testing.T) {
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectStrings(strs, 4)
+			seen := make(map[string]bool)
+			for _, s := range result {
+				assert.False(t, seen[s], "duplicate string: %s", s)
+				seen[s] = true
+			}
+		}
+	})
+
+	t.Run("Does not modify original slice", func(t *testing.T) {
+		original := make([]string, len(strs))
+		copy(original, strs)
+		for trial := 0; trial < 50; trial++ {
+			sd.randomSelectStrings(strs, 3)
+		}
+		assert.Equal(t, original, strs, "original slice was modified")
+	})
+
+	t.Run("Edge cases", func(t *testing.T) {
+		// Empty input
+		result := sd.randomSelectStrings([]string{}, 3)
+		assert.Equal(t, 0, len(result))
+
+		// Limit >= len returns all
+		result = sd.randomSelectStrings(strs, 10)
+		assert.Equal(t, len(strs), len(result))
+	})
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()

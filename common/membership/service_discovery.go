@@ -932,19 +932,14 @@ func (sd *ServiceDiscovery) randomSelectNodes(nodes []*proto.NodeMeta, limit int
 		return nodes
 	}
 
-	// Fast random selection
-	selected := make([]*proto.NodeMeta, 0, limit)
-	used := make(map[int]bool)
-
-	for len(selected) < limit {
-		idx := rand.Intn(len(nodes))
-		if !used[idx] {
-			used[idx] = true
-			selected = append(selected, nodes[idx])
-		}
+	// Fisher-Yates partial shuffle: O(limit) guaranteed, no retries
+	shuffled := make([]*proto.NodeMeta, len(nodes))
+	copy(shuffled, nodes)
+	for i := 0; i < limit; i++ {
+		j := i + rand.Intn(len(shuffled)-i)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
-
-	return selected
+	return shuffled[:limit]
 }
 
 func (sd *ServiceDiscovery) randomSelectStrings(strs []string, limit int) []string {
@@ -956,18 +951,14 @@ func (sd *ServiceDiscovery) randomSelectStrings(strs []string, limit int) []stri
 		return strs
 	}
 
-	selected := make([]string, 0, limit)
-	used := make(map[int]bool)
-
-	for len(selected) < limit {
-		idx := rand.Intn(len(strs))
-		if !used[idx] {
-			used[idx] = true
-			selected = append(selected, strs[idx])
-		}
+	// Fisher-Yates partial shuffle: O(limit) guaranteed, no retries
+	shuffled := make([]string, len(strs))
+	copy(shuffled, strs)
+	for i := 0; i < limit; i++ {
+		j := i + rand.Intn(len(shuffled)-i)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
-
-	return selected
+	return shuffled[:limit]
 }
 
 func (sd *ServiceDiscovery) filterByTags(nodes []*proto.NodeMeta, tags map[string]string) []*proto.NodeMeta {
