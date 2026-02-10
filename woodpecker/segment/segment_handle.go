@@ -32,9 +32,12 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
+	"github.com/zilliztech/woodpecker/server/storage/objectstorage"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
 )
 
@@ -91,21 +94,22 @@ type SegmentHandle interface {
 	SetWriterInvalidationNotifier(ctx context.Context, f func(ctx context.Context, reason string))
 }
 
-func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool) SegmentHandle {
+func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, canWrite bool, objectStorageClient storageclient.ObjectStorage) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
-		bucketName:       cfg.Minio.BucketName,
-		rootPath:         cfg.Minio.RootPath,
-		logId:            logId,
-		logName:          logName,
-		segmentId:        segmentMeta.Metadata.SegNo,
-		metadata:         metadata,
-		ClientPool:       clientPool,
-		appendOpsQueue:   list.New(),
-		quorumInfo:       segmentMeta.Metadata.Quorum,
-		executor:         NewSequentialExecutor(executeRequestMaxQueueSize),
-		cfg:              cfg,
-		metricsNamespace: metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		bucketName:          cfg.Minio.BucketName,
+		rootPath:            cfg.Minio.RootPath,
+		logId:               logId,
+		logName:             logName,
+		segmentId:           segmentMeta.Metadata.SegNo,
+		metadata:            metadata,
+		ClientPool:          clientPool,
+		appendOpsQueue:      list.New(),
+		quorumInfo:          segmentMeta.Metadata.Quorum,
+		executor:            NewSequentialExecutor(executeRequestMaxQueueSize),
+		cfg:                 cfg,
+		metricsNamespace:    metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
+		objectStorageClient: objectStorageClient,
 	}
 	segmentHandle.lastPushed.Store(segmentMeta.Metadata.LastEntryId)
 	segmentHandle.lastAddConfirmed.Store(segmentMeta.Metadata.LastEntryId)
@@ -131,14 +135,14 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
-		bucketName:       cfg.Minio.BucketName,
-		rootPath:         cfg.Minio.RootPath,
-		logId:            logId,
-		logName:          logName,
-		segmentId:        segmentMeta.Metadata.SegNo,
-		metadata:         metadata,
-		ClientPool:       clientPool,
-		appendOpsQueue:   testAppendOpsQueue,
+		bucketName:     cfg.Minio.BucketName,
+		rootPath:       cfg.Minio.RootPath,
+		logId:          logId,
+		logName:        logName,
+		segmentId:      segmentMeta.Metadata.SegNo,
+		metadata:       metadata,
+		ClientPool:     clientPool,
+		appendOpsQueue: testAppendOpsQueue,
 		quorumInfo: &proto.QuorumInfo{
 			Id: 1,
 			Wq: 1,
@@ -196,6 +200,12 @@ type segmentHandleImpl struct {
 	doingCompact atomic.Bool
 
 	lastAccessTime atomic.Int64
+
+	// Direct read from object storage for sealed segments
+	objectStorageClient storageclient.ObjectStorage
+	directReader        *objectstorage.MinioFileReaderAdv
+	directReaderOnce    sync.Once
+	directReaderErr     error
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -454,7 +464,76 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 	defer sp.End()
 	s.updateAccessTime()
 	logger.Ctx(ctx).Debug("start read batch", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("from", from), zap.Int64("maxEntries", maxEntries))
-	// write data to quorum
+
+	// Use direct read from object storage for sealed segments when enabled
+	if s.canDirectRead() {
+		logIdStr := strconv.FormatInt(s.logId, 10)
+		start := time.Now()
+		result, err := s.directReadBatch(ctx, from, maxEntries, lastReadState)
+		if err != nil {
+			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "error").Inc()
+			logger.Ctx(ctx).Warn("direct read batch failed",
+				zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+				zap.Error(err))
+			return nil, err
+		}
+		metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "success").Inc()
+		metrics.WpClientDirectReadLatency.WithLabelValues(s.metricsNamespace, logIdStr).Observe(float64(time.Since(start).Milliseconds()))
+		logger.Ctx(ctx).Debug("direct read batch success",
+			zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+			zap.Int("count", len(result.Entries)))
+		return result, nil
+	}
+
+	return s.quorumReadBatch(ctx, from, maxEntries, lastReadState)
+}
+
+// canDirectRead returns true if the segment can be read directly from object storage.
+// This requires: objectStorageClient is available, direct read is enabled in config,
+// and the segment is in the Sealed state.
+func (s *segmentHandleImpl) canDirectRead() bool {
+	if s.objectStorageClient == nil {
+		return false
+	}
+	if !s.cfg.Woodpecker.Client.DirectRead.Enabled {
+		return false
+	}
+	currentMeta := s.segmentMetaCache.Load()
+	return currentMeta.Metadata.State == proto.SegmentState_Sealed
+}
+
+// getOrCreateDirectReader lazily creates and caches a MinioFileReaderAdv for direct reads.
+func (s *segmentHandleImpl) getOrCreateDirectReader(ctx context.Context) (*objectstorage.MinioFileReaderAdv, error) {
+	s.directReaderOnce.Do(func() {
+		maxBatchSize := s.cfg.Woodpecker.Client.DirectRead.MaxBatchSize.Int64()
+		maxFetchThreads := s.cfg.Woodpecker.Client.DirectRead.MaxFetchThreads
+		s.directReader, s.directReaderErr = objectstorage.NewMinioFileReaderAdv(
+			ctx, s.bucketName, s.rootPath, s.logId, s.segmentId,
+			s.objectStorageClient, maxBatchSize, maxFetchThreads,
+		)
+	})
+	return s.directReader, s.directReaderErr
+}
+
+// directReadBatch reads a batch of entries directly from object storage.
+func (s *segmentHandleImpl) directReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	reader, err := s.getOrCreateDirectReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	opt := storage.ReaderOpt{
+		StartEntryID:    from,
+		MaxBatchEntries: maxEntries,
+	}
+
+	return reader.ReadNextBatchAdv(ctx, opt, lastReadState)
+}
+
+// quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
+func (s *segmentHandleImpl) quorumReadBatch(ctx context.Context, from int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
 		return nil, err

@@ -1248,7 +1248,10 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 	return tasks
 }
 
-// processMergeTask processes a single merge task: read blocks, merge and upload
+// processMergeTask processes a single merge task: read blocks, merge and upload.
+// The merged block preserves the original per-block structure (BlockHeaderRecord + DataRecords
+// for each original block), and prepends a HeaderRecord with compacted flag for the first merged block.
+// Format: [HeaderRecord (if first)] + [{BlkHeaderRecord+DataRecords}, {BlkHeaderRecord+DataRecords}, ...]
 func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64) *mergedBlockUploadResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processMergeTask")
 	defer sp.End()
@@ -1271,9 +1274,7 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	// Submit all block read tasks to the pool
 	var readFutures []*conc.Future[*blockReadResult]
 	for _, blockIndex := range task.blocks {
-		// Capture variable for closure
 		blockIndexCopy := blockIndex
-
 		future := readPool.Submit(func() (*blockReadResult, error) {
 			return w.readBlockDataFromLocalFile(ctx, blockIndexCopy), nil
 		})
@@ -1375,7 +1376,6 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		blockSize:  blockSize,
 		error:      nil,
 	}
-
 }
 
 // readBlockDataFromLocalFile reads data for a specific block from the local file

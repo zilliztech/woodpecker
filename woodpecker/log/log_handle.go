@@ -30,6 +30,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
@@ -108,10 +109,14 @@ type logHandleImpl struct {
 
 	// select quorumNode
 	selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)
+
+	// object storage client for direct read of sealed segments (nil if disabled)
+	objectStorageClient storageclient.ObjectStorage
 }
 
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
-	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) LogHandle {
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
+	objectStorageClient storageclient.ObjectStorage) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds()
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64(), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
@@ -136,8 +141,9 @@ func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta
 		metricsNamespace:   metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		ctx:                ctx,
 		cancel:             cancel,
-		cleanupDone:        make(chan struct{}),
-		selectQuorumFunc:   selectQuorumFunc,
+		cleanupDone:         make(chan struct{}),
+		selectQuorumFunc:    selectQuorumFunc,
+		objectStorageClient: objectStorageClient,
 	}
 	l.LastSegmentId.Store(lastSegmentNo)
 
@@ -523,7 +529,7 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 		return nil, err
 	}
 	if segMeta != nil {
-		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false)
+		handle := segment.NewSegmentHandle(ctx, l.Id, l.Name, segMeta, l.Metadata, l.ClientPool, l.cfg, false, l.objectStorageClient)
 		l.SegmentHandles[segmentId] = handle
 		return handle, nil
 	}
@@ -536,7 +542,7 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
+	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true, nil)
 	newSegHandle.SetWriterInvalidationNotifier(ctx, writerInvalidationNotifier)
 	l.SegmentHandles[newSegMeta.Metadata.SegNo] = newSegHandle
 	l.WritableSegmentId = newSegMeta.Metadata.SegNo
