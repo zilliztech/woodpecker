@@ -770,6 +770,96 @@ func TestQuorumDiscovery_CustomPlacement_SeedRotation(t *testing.T) {
 	}
 }
 
+func TestQuorumDiscovery_CustomPlacement_DeduplicatesNodes(t *testing.T) {
+	// Bug fix: when two custom placement rules resolve to the same region+az+rg,
+	// the server could return the same node for both. The client must deduplicate
+	// and pick different nodes from the candidates.
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"}, // Same az+rg
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClient, nil).Maybe()
+
+	// Server returns 3 different nodes for the same az+rg (since we request Limit=es=3)
+	mockClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "node1:8080"},
+		{Endpoint: "node2:8080"},
+		{Endpoint: "node3:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 3, len(result.Nodes))
+
+	// Verify all nodes are unique
+	seen := make(map[string]bool)
+	for _, node := range result.Nodes {
+		assert.False(t, seen[node], "duplicate node in quorum: %s", node)
+		seen[node] = true
+	}
+}
+
+func TestQuorumDiscovery_CustomPlacement_DeduplicateFails(t *testing.T) {
+	// When all candidates are duplicates, the error should be clear.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "custom",
+			AffinityMode: "hard",
+			Replicas:     3,
+			CustomPlacement: []config.CustomPlacement{
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+				{Region: "region-a", Az: "az-1", ResourceGroup: "rg-1"},
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClient, nil).Maybe()
+
+	// Server only has 1 node — second rule will fail dedup
+	mockClient.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "only-node:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, strings.Contains(err.Error(), "no unique node available") || strings.Contains(err.Error(), "already selected"),
+		"error should mention dedup failure, got: %s", err.Error())
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}

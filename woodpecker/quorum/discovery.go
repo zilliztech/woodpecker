@@ -343,6 +343,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 	}
 
 	var allSelectedNodes []string
+	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	for i, placement := range d.cfg.SelectStrategy.CustomPlacement {
 		logger.Ctx(ctx).Debug("Processing active custom placement rule",
@@ -368,8 +369,15 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for custom placement rule %d (region: %s)", i, placement.Region))
 		}
 
+		// Request extra candidates to allow deduplication across placement rules
+		placementFilter := &proto.NodeFilter{
+			Limit:         d.es, // Request more than 1 to have alternatives if first is a duplicate
+			Az:            d.filters[i].Az,
+			ResourceGroup: d.filters[i].ResourceGroup,
+		}
+
 		// Use pre-built filter for this placement (tries all seeds in the pool)
-		regionResult, err := d.requestNodesFromPool(ctx, *targetPool, d.filters[i], int(d.filters[i].Limit))
+		regionResult, err := d.requestNodesFromPool(ctx, *targetPool, placementFilter, 1)
 		if err != nil {
 			return nil, fmt.Errorf("failed to select node for custom placement rule %d (region: %s, az: %s, rg: %s): %w",
 				i, placement.Region, placement.Az, placement.ResourceGroup, err)
@@ -380,8 +388,21 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 				i, placement.Region, placement.Az, placement.ResourceGroup))
 		}
 
-		// Each rule must produce exactly one node
-		selectedNode := regionResult.Nodes[0]
+		// Pick the first non-duplicate node from candidates
+		var selectedNode string
+		for _, node := range regionResult.Nodes {
+			if !selectedSet[node] {
+				selectedNode = node
+				break
+			}
+		}
+		if selectedNode == "" {
+			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf(
+				"no unique node available for custom placement rule %d (region: %s, az: %s, rg: %s): all %d candidates already selected by prior rules",
+				i, placement.Region, placement.Az, placement.ResourceGroup, len(regionResult.Nodes)))
+		}
+
+		selectedSet[selectedNode] = true
 		allSelectedNodes = append(allSelectedNodes, selectedNode)
 
 		logger.Ctx(ctx).Debug("Successfully selected node for active custom placement rule",
