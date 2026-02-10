@@ -236,6 +236,7 @@ enum StrategyType {
   MULTI_AZ_MULTI_RG = 4;
   CROSS_REGION = 5;
   CUSTOM = 6;
+  RANDOM_GROUP = 7;
 }
 
 // Affinity mode for node selection

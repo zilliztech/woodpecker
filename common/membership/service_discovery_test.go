@@ -1227,6 +1227,469 @@ func TestRetryMechanismEffectiveness(t *testing.T) {
 	})
 }
 
+// === SelectRandomGroup tests ===
+
+func TestSelectRandomGroup_BasicGrouping(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 9 nodes across different AZs/RGs
+	for i := 1; i <= 9; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		rg := fmt.Sprintf("rg%d", (i-1)%3+1)
+		az := fmt.Sprintf("az%d", (i-1)/3+1)
+		node := createFinalTestNode(nodeID, rg, az, map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	// Select groups of 3 from 9 nodes → should form 3 non-overlapping groups
+	filter := &proto.NodeFilter{Limit: 3}
+	nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(nodes), "Should return exactly limit nodes")
+
+	// Verify all returned nodes are from the same group (consecutive in sorted order)
+	// Since nodes are sorted by NodeId, the groups should be deterministic
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.NodeId
+	}
+
+	// Verify nodes are sorted within the group (they come from a sorted slice)
+	for i := 1; i < len(nodeIDs); i++ {
+		assert.True(t, nodeIDs[i-1] < nodeIDs[i], "Nodes within a group should be in sorted order")
+	}
+}
+
+func TestSelectRandomGroup_NoOverlapBetweenGroups(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 6 nodes
+	for i := 1; i <= 6; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		node := createFinalTestNode(nodeID, "rg1", "az1", map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	// With limit=3, should form 2 groups: [node1,node2,node3] and [node4,node5,node6]
+	filter := &proto.NodeFilter{Limit: 3}
+
+	// Track which groups we see over multiple runs
+	groupSeen := make(map[string]int) // group key → count
+	iterations := 100
+
+	for i := 0; i < iterations; i++ {
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, len(nodes))
+
+		// Build a group key from sorted node IDs
+		ids := make([]string, len(nodes))
+		for j, n := range nodes {
+			ids[j] = n.NodeId
+		}
+		key := fmt.Sprintf("%v", ids)
+		groupSeen[key]++
+	}
+
+	// Should see exactly 2 distinct groups
+	assert.Equal(t, 2, len(groupSeen), "Should see exactly 2 non-overlapping groups")
+
+	// Both groups should be selected roughly equally (with some randomness tolerance)
+	for key, count := range groupSeen {
+		t.Logf("Group %s: selected %d/%d times", key, count, iterations)
+		assert.Greater(t, count, 10, "Each group should be selected a reasonable number of times")
+	}
+}
+
+func TestSelectRandomGroup_PartialGroup(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 7 nodes → with limit=3, groups are [0-2], [3-5], partial [6]
+	for i := 1; i <= 7; i++ {
+		nodeID := fmt.Sprintf("node%d", i)
+		node := createFinalTestNode(nodeID, "rg1", "az1", map[string]string{"env": "prod"})
+		sd.UpdateServer(nodeID, node)
+	}
+
+	filter := &proto.NodeFilter{Limit: 3}
+
+	// Run multiple times - should always return exactly 3 nodes
+	for i := 0; i < 50; i++ {
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, len(nodes), "Should always return exactly limit nodes even with partial last group")
+	}
+}
+
+func TestSelectRandomGroup_FilteredNodes(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create nodes across different AZs and RGs with different tags
+	sd.UpdateServer("node1", createFinalTestNode("node1", "rg1", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node2", createFinalTestNode("node2", "rg1", "az1", map[string]string{"env": "staging"}))
+	sd.UpdateServer("node3", createFinalTestNode("node3", "rg1", "az2", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node4", createFinalTestNode("node4", "rg2", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node5", createFinalTestNode("node5", "rg2", "az2", map[string]string{"env": "prod"}))
+
+	// Filter by AZ
+	t.Run("AZ filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{Az: "az1", Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+		for _, n := range nodes {
+			assert.Equal(t, "az1", n.Az)
+		}
+	})
+
+	// Filter by tags
+	t.Run("Tag filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "prod"}, Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+		for _, n := range nodes {
+			assert.Equal(t, "prod", n.Tags["env"])
+		}
+	})
+
+	// Filter by RG
+	t.Run("RG filter", func(t *testing.T) {
+		filter := &proto.NodeFilter{ResourceGroup: "rg1", Limit: 2}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.LessOrEqual(t, len(nodes), 2)
+	})
+}
+
+func TestSelectRandomGroup_InsufficientNodes(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Only 2 nodes but limit=3
+	sd.UpdateServer("node1", createFinalTestNode("node1", "rg1", "az1", map[string]string{"env": "prod"}))
+	sd.UpdateServer("node2", createFinalTestNode("node2", "rg1", "az1", map[string]string{"env": "prod"}))
+
+	t.Run("Limit exceeds candidates returns all", func(t *testing.T) {
+		filter := &proto.NodeFilter{Limit: 3}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes), "Should return all available nodes when limit exceeds count")
+	})
+
+	t.Run("No matching nodes HARD mode", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "nonexistent"}, Limit: 1}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_HARD)
+		assert.Error(t, err)
+		assert.Nil(t, nodes)
+		assert.Contains(t, err.Error(), "no matching nodes found")
+	})
+
+	t.Run("No matching nodes SOFT mode", func(t *testing.T) {
+		filter := &proto.NodeFilter{Tags: map[string]string{"env": "nonexistent"}, Limit: 1}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(nodes))
+	})
+
+	t.Run("Limit zero returns all", func(t *testing.T) {
+		filter := &proto.NodeFilter{Limit: 0}
+		nodes, err := sd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("Empty service discovery", func(t *testing.T) {
+		emptySd := NewServiceDiscovery()
+		filter := &proto.NodeFilter{Limit: 3}
+		nodes, err := emptySd.SelectRandomGroup(filter, proto.AffinityMode_SOFT)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(nodes))
+
+		nodes, err = emptySd.SelectRandomGroup(filter, proto.AffinityMode_HARD)
+		assert.Error(t, err)
+		assert.Nil(t, nodes)
+	})
+}
+
+func TestRandomSelectNodes_FisherYates(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Create 10 nodes
+	nodes := make([]*proto.NodeMeta, 10)
+	for i := 0; i < 10; i++ {
+		nodes[i] = &proto.NodeMeta{NodeId: fmt.Sprintf("node-%d", i)}
+	}
+
+	t.Run("Returns exactly limit nodes", func(t *testing.T) {
+		result := sd.randomSelectNodes(nodes, 3)
+		assert.Equal(t, 3, len(result))
+	})
+
+	t.Run("No duplicates in result", func(t *testing.T) {
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectNodes(nodes, 5)
+			seen := make(map[string]bool)
+			for _, n := range result {
+				assert.False(t, seen[n.NodeId], "duplicate node: %s", n.NodeId)
+				seen[n.NodeId] = true
+			}
+		}
+	})
+
+	t.Run("All results are from input", func(t *testing.T) {
+		inputSet := make(map[string]bool)
+		for _, n := range nodes {
+			inputSet[n.NodeId] = true
+		}
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectNodes(nodes, 4)
+			for _, n := range result {
+				assert.True(t, inputSet[n.NodeId], "unexpected node: %s", n.NodeId)
+			}
+		}
+	})
+
+	t.Run("Does not modify original slice", func(t *testing.T) {
+		original := make([]string, len(nodes))
+		for i, n := range nodes {
+			original[i] = n.NodeId
+		}
+		for trial := 0; trial < 50; trial++ {
+			sd.randomSelectNodes(nodes, 3)
+		}
+		for i, n := range nodes {
+			assert.Equal(t, original[i], n.NodeId, "original slice was modified at index %d", i)
+		}
+	})
+
+	t.Run("Uniform distribution across nodes", func(t *testing.T) {
+		counts := make(map[string]int)
+		iterations := 10000
+		limit := 3
+		for i := 0; i < iterations; i++ {
+			result := sd.randomSelectNodes(nodes, limit)
+			for _, n := range result {
+				counts[n.NodeId]++
+			}
+		}
+		// Expected count per node: iterations * limit / len(nodes) = 10000 * 3 / 10 = 3000
+		expected := float64(iterations) * float64(limit) / float64(len(nodes))
+		for _, node := range nodes {
+			count := counts[node.NodeId]
+			// Allow 20% deviation from expected
+			assert.InDelta(t, expected, float64(count), expected*0.2,
+				"node %s count %d deviates too much from expected %.0f", node.NodeId, count, expected)
+		}
+	})
+
+	t.Run("Edge cases", func(t *testing.T) {
+		// Empty input
+		result := sd.randomSelectNodes([]*proto.NodeMeta{}, 3)
+		assert.Equal(t, 0, len(result))
+
+		// Limit 0 returns all
+		result = sd.randomSelectNodes(nodes, 0)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Limit >= len returns all
+		result = sd.randomSelectNodes(nodes, 15)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Limit == len returns all
+		result = sd.randomSelectNodes(nodes, 10)
+		assert.Equal(t, len(nodes), len(result))
+
+		// Single node, limit 1
+		single := []*proto.NodeMeta{{NodeId: "only"}}
+		result = sd.randomSelectNodes(single, 1)
+		assert.Equal(t, 1, len(result))
+		assert.Equal(t, "only", result[0].NodeId)
+	})
+}
+
+func TestRandomSelectStrings_FisherYates(t *testing.T) {
+	sd := NewServiceDiscovery()
+	strs := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+
+	t.Run("Returns exactly limit strings", func(t *testing.T) {
+		result := sd.randomSelectStrings(strs, 3)
+		assert.Equal(t, 3, len(result))
+	})
+
+	t.Run("No duplicates in result", func(t *testing.T) {
+		for trial := 0; trial < 100; trial++ {
+			result := sd.randomSelectStrings(strs, 4)
+			seen := make(map[string]bool)
+			for _, s := range result {
+				assert.False(t, seen[s], "duplicate string: %s", s)
+				seen[s] = true
+			}
+		}
+	})
+
+	t.Run("Does not modify original slice", func(t *testing.T) {
+		original := make([]string, len(strs))
+		copy(original, strs)
+		for trial := 0; trial < 50; trial++ {
+			sd.randomSelectStrings(strs, 3)
+		}
+		assert.Equal(t, original, strs, "original slice was modified")
+	})
+
+	t.Run("Edge cases", func(t *testing.T) {
+		// Empty input
+		result := sd.randomSelectStrings([]string{}, 3)
+		assert.Equal(t, 0, len(result))
+
+		// Limit >= len returns all
+		result = sd.randomSelectStrings(strs, 10)
+		assert.Equal(t, len(strs), len(result))
+	})
+}
+
+func TestIsRegexLike(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	t.Run("Plain names are not regex", func(t *testing.T) {
+		// Simple names
+		assert.False(t, sd.isRegexLike("us-east-1"))
+		assert.False(t, sd.isRegexLike("az1"))
+		assert.False(t, sd.isRegexLike("rg-prod"))
+		assert.False(t, sd.isRegexLike(""))
+	})
+
+	t.Run("Dotted hostnames are not regex", func(t *testing.T) {
+		// This was the bug: dots in hostnames caused false positives
+		assert.False(t, sd.isRegexLike("us-east-1.aws"))
+		assert.False(t, sd.isRegexLike("az.1"))
+		assert.False(t, sd.isRegexLike("node1.cluster.local"))
+		assert.False(t, sd.isRegexLike("192.168.1.1"))
+	})
+
+	t.Run("Actual regex patterns are detected", func(t *testing.T) {
+		assert.True(t, sd.isRegexLike("us-east-.*"))
+		assert.True(t, sd.isRegexLike("az[12]"))
+		assert.True(t, sd.isRegexLike("^prod"))
+		assert.True(t, sd.isRegexLike("rg-prod|rg-staging"))
+		assert.True(t, sd.isRegexLike("node.+"))
+		assert.True(t, sd.isRegexLike("az(1|2)"))
+		assert.True(t, sd.isRegexLike("rg?"))
+		assert.True(t, sd.isRegexLike("prod$"))
+		assert.True(t, sd.isRegexLike("\\d+"))
+		assert.True(t, sd.isRegexLike("node{1,3}"))
+	})
+}
+
+func TestIsRegexLike_AZFilterIntegration(t *testing.T) {
+	// Verify that dotted AZ names work correctly with exact match (not regex)
+	sd := NewServiceDiscovery()
+
+	node1 := createFinalTestNode("n1", "rg1", "us-east-1.aws", nil)
+	node2 := createFinalTestNode("n2", "rg1", "us-west-2.aws", nil)
+	sd.UpdateServer("n1", node1)
+	sd.UpdateServer("n2", node2)
+
+	t.Run("Exact match with dotted AZ", func(t *testing.T) {
+		filter := &proto.NodeFilter{
+			Az:    "us-east-1.aws",
+			Limit: 10,
+		}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(nodes))
+		assert.Equal(t, "n1", nodes[0].NodeId)
+	})
+
+	t.Run("Regex still works for AZ", func(t *testing.T) {
+		filter := &proto.NodeFilter{
+			Az:    "us-.*",
+			Limit: 10,
+		}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(nodes))
+	})
+}
+
+func TestRegexAnchoring(t *testing.T) {
+	// Bug fix: MatchString does substring matching, so "rg[12]" would match
+	// "rg1-extra". After anchoring with ^(?:...)$, only full-string matches succeed.
+	sd := NewServiceDiscovery()
+
+	// Setup nodes with names that could cause substring false positives
+	sd.UpdateServer("n1", createFinalTestNode("n1", "rg1", "az1", nil))
+	sd.UpdateServer("n2", createFinalTestNode("n2", "rg1-extra", "az1-extended", nil))
+	sd.UpdateServer("n3", createFinalTestNode("n3", "rg2", "az2", nil))
+	sd.UpdateServer("n4", createFinalTestNode("n4", "xrg1", "xaz1", nil))
+
+	t.Run("RG regex does not substring match", func(t *testing.T) {
+		// "rg[12]" should match "rg1" and "rg2" ONLY, not "rg1-extra" or "xrg1"
+		filter := &proto.NodeFilter{ResourceGroup: "rg[12]", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg[12]")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg[12]")
+		assert.False(t, nodeIDs["n2"], "rg1-extra should NOT match rg[12]")
+		assert.False(t, nodeIDs["n4"], "xrg1 should NOT match rg[12]")
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("AZ regex does not substring match", func(t *testing.T) {
+		// "az[12]" should match "az1" and "az2" ONLY
+		filter := &proto.NodeFilter{Az: "az[12]", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "az1 should match az[12]")
+		assert.True(t, nodeIDs["n3"], "az2 should match az[12]")
+		assert.False(t, nodeIDs["n2"], "az1-extended should NOT match az[12]")
+		assert.False(t, nodeIDs["n4"], "xaz1 should NOT match az[12]")
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("Wildcard regex still works correctly", func(t *testing.T) {
+		// "rg.*" should match rg1, rg1-extra, rg2 but NOT xrg1
+		filter := &proto.NodeFilter{ResourceGroup: "rg.*", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg.*")
+		assert.True(t, nodeIDs["n2"], "rg1-extra should match rg.*")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg.*")
+		assert.False(t, nodeIDs["n4"], "xrg1 should NOT match rg.*")
+		assert.Equal(t, 3, len(nodes))
+	})
+
+	t.Run("Alternation regex anchored correctly", func(t *testing.T) {
+		// "rg1|rg2" should match exactly rg1 and rg2
+		filter := &proto.NodeFilter{ResourceGroup: "rg1|rg2", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg1|rg2")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg1|rg2")
+		assert.False(t, nodeIDs["n2"], "rg1-extra should NOT match rg1|rg2")
+		assert.Equal(t, 2, len(nodes))
+	})
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()

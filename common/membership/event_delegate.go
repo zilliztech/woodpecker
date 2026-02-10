@@ -44,6 +44,8 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 			} else {
 				log.Printf("[SERVER-EVENT] Server[%s] joined: %s (RG: %s, AZ: %s)", e.addrPort, node.Name, meta.ResourceGroup, meta.Az)
 			}
+		} else {
+			log.Printf("[%s-EVENT] Error: failed to unmarshal metadata for joined node %s (metaLen=%d): %v", string(e.role), node.Name, len(node.Meta), err)
 		}
 	} else { // no meta, indicating a client role joining
 		if e.role == RoleServer {
@@ -73,6 +75,8 @@ func (e *EventDelegate) NotifyUpdate(node *memberlist.Node) {
 			} else {
 				log.Printf("[SERVER-EVENT] Server updated: %s (Version: %d)", node.Name, meta.Version)
 			}
+		} else {
+			log.Printf("[%s-EVENT] Error: failed to unmarshal metadata for updated node %s (metaLen=%d): %v", string(e.role), node.Name, len(node.Meta), err)
 		}
 	}
 }

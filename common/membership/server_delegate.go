@@ -49,8 +49,8 @@ func (d *ServerDelegate) NodeMeta(limit int) []byte {
 		return nil
 	}
 	if len(data) > limit {
-		log.Printf("Warning: meta data size %d exceeds limit %d", len(data), limit)
-		return data[:limit]
+		log.Fatalf("FATAL: node metadata size %d exceeds memberlist limit %d bytes. Reduce tags or other metadata fields. NodeId=%s, ResourceGroup=%s, AZ=%s",
+			len(data), limit, d.meta.NodeId, d.meta.ResourceGroup, d.meta.Az)
 	}
 	return data
 }

@@ -106,6 +106,8 @@ func (d *quorumDiscovery) parseStrategyType() error {
 		d.strategyType = proto.StrategyType_CROSS_REGION
 	case "custom":
 		d.strategyType = proto.StrategyType_CUSTOM
+	case "random-group":
+		d.strategyType = proto.StrategyType_RANDOM_GROUP
 	case "random", "": // Default to random for empty values
 		d.strategyType = proto.StrategyType_RANDOM
 	default:
@@ -226,21 +228,18 @@ func (d *quorumDiscovery) SelectQuorum(ctx context.Context) (*proto.QuorumInfo, 
 }
 
 func (d *quorumDiscovery) selectSingleRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
-	// Use the first available buffer pool
-	pool := d.cfg.BufferPools[0]
+	// Randomly select a buffer pool for load distribution
+	pool := d.cfg.BufferPools[rand.Intn(len(d.cfg.BufferPools))]
 	if len(pool.Seeds) == 0 {
 		return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for pool %s", pool.Name))
 	}
-
-	// Select a random seed to query
-	selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
 
 	// Use pre-built filter (should have exactly one filter for single-region strategies)
 	if len(d.filters) != 1 {
 		return nil, fmt.Errorf("expected 1 filter for single-region strategy, got %d", len(d.filters))
 	}
 
-	return d.requestNodesFromSeed(ctx, selectedSeed, d.filters[0], int(d.wq))
+	return d.requestNodesFromPool(ctx, pool, d.filters[0], int(d.wq))
 }
 
 func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.QuorumInfo, error) {
@@ -251,6 +250,7 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 	remainingNodes := requiredNodes % len(d.cfg.BufferPools)
 
 	var allSelectedNodes []string
+	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	// Use pre-built filter as template, but adjust limit per region
 	if len(d.filters) != 1 {
@@ -275,9 +275,6 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			continue
 		}
 
-		// Select a random seed from this region
-		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
-
 		// Create region-specific filter by adjusting the limit
 		regionFilter := &proto.NodeFilter{
 			Limit:         int32(regionNodes),
@@ -285,21 +282,25 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			ResourceGroup: baseFilter.ResourceGroup,
 		}
 
-		// Request nodes from this region
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, regionFilter, 0)
+		// Request nodes from this region (tries all seeds in the pool)
+		regionResult, err := d.requestNodesFromPool(ctx, pool, regionFilter, 0)
 		if err != nil {
 			if d.affinityMode == proto.AffinityMode_HARD {
 				return nil, err
 			}
 			logger.Ctx(ctx).Warn("Failed to get nodes from region, continuing with soft affinity",
 				zap.String("poolName", pool.Name),
-				zap.String("seed", selectedSeed),
 				zap.Error(err))
 			continue
 		}
 
 		if regionResult != nil {
-			allSelectedNodes = append(allSelectedNodes, regionResult.Nodes...)
+			for _, node := range regionResult.Nodes {
+				if !selectedSet[node] {
+					selectedSet[node] = true
+					allSelectedNodes = append(allSelectedNodes, node)
+				}
+			}
 		}
 	}
 
@@ -308,11 +309,14 @@ func (d *quorumDiscovery) selectCrossRegionQuorum(ctx context.Context) (*proto.Q
 			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf("insufficient nodes across regions: got %d, required %d", len(allSelectedNodes), requiredNodes))
 		}
 		// In soft mode, try to fill remaining nodes from any available region
-		return d.fillRemainingNodes(ctx, allSelectedNodes)
+		return d.fillRemainingNodes(ctx, allSelectedNodes, selectedSet)
 	}
 
-	// Trim to exact required number if we got more
+	// Trim to exact required number if we got more (random to avoid bias toward first pools)
 	if len(allSelectedNodes) > requiredNodes {
+		rand.Shuffle(len(allSelectedNodes), func(i, j int) {
+			allSelectedNodes[i], allSelectedNodes[j] = allSelectedNodes[j], allSelectedNodes[i]
+		})
 		allSelectedNodes = allSelectedNodes[:requiredNodes]
 	}
 
@@ -342,6 +346,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 	}
 
 	var allSelectedNodes []string
+	selectedSet := make(map[string]bool) // Track selected endpoints to avoid duplicates
 
 	for i, placement := range d.cfg.SelectStrategy.CustomPlacement {
 		logger.Ctx(ctx).Debug("Processing active custom placement rule",
@@ -367,11 +372,15 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 			return nil, werr.ErrWoodpeckerClientConnectionFailed.WithCauseErrMsg(fmt.Sprintf("no seeds configured for custom placement rule %d (region: %s)", i, placement.Region))
 		}
 
-		// Select a random seed from this region
-		selectedSeed := targetPool.Seeds[rand.Intn(len(targetPool.Seeds))]
+		// Request extra candidates to allow deduplication across placement rules
+		placementFilter := &proto.NodeFilter{
+			Limit:         d.es, // Request more than 1 to have alternatives if first is a duplicate
+			Az:            d.filters[i].Az,
+			ResourceGroup: d.filters[i].ResourceGroup,
+		}
 
-		// Use pre-built filter for this placement
-		regionResult, err := d.requestNodesFromSeed(ctx, selectedSeed, d.filters[i], int(d.filters[i].Limit))
+		// Use pre-built filter for this placement (tries all seeds in the pool)
+		regionResult, err := d.requestNodesFromPool(ctx, *targetPool, placementFilter, 1)
 		if err != nil {
 			return nil, fmt.Errorf("failed to select node for custom placement rule %d (region: %s, az: %s, rg: %s): %w",
 				i, placement.Region, placement.Az, placement.ResourceGroup, err)
@@ -382,8 +391,21 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 				i, placement.Region, placement.Az, placement.ResourceGroup))
 		}
 
-		// Each rule must produce exactly one node
-		selectedNode := regionResult.Nodes[0]
+		// Pick the first non-duplicate node from candidates
+		var selectedNode string
+		for _, node := range regionResult.Nodes {
+			if !selectedSet[node] {
+				selectedNode = node
+				break
+			}
+		}
+		if selectedNode == "" {
+			return nil, werr.ErrServiceInsufficientQuorum.WithCauseErrMsg(fmt.Sprintf(
+				"no unique node available for custom placement rule %d (region: %s, az: %s, rg: %s): all %d candidates already selected by prior rules",
+				i, placement.Region, placement.Az, placement.ResourceGroup, len(regionResult.Nodes)))
+		}
+
+		selectedSet[selectedNode] = true
 		allSelectedNodes = append(allSelectedNodes, selectedNode)
 
 		logger.Ctx(ctx).Debug("Successfully selected node for active custom placement rule",
@@ -391,7 +413,6 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 			zap.String("region", placement.Region),
 			zap.String("az", placement.Az),
 			zap.String("resourceGroup", placement.ResourceGroup),
-			zap.String("selectedSeed", selectedSeed),
 			zap.String("selectedNode", selectedNode))
 	}
 
@@ -415,7 +436,7 @@ func (d *quorumDiscovery) selectCustomPlacementQuorum(ctx context.Context) (*pro
 	return result, nil
 }
 
-func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string) (*proto.QuorumInfo, error) {
+func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes []string, selectedSet map[string]bool) (*proto.QuorumInfo, error) {
 	requiredNodes := int(d.es)
 	remainingNeeded := requiredNodes - len(currentNodes)
 	if remainingNeeded <= 0 {
@@ -429,6 +450,14 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 		return result, nil
 	}
 
+	// Initialize selectedSet if nil (defensive)
+	if selectedSet == nil {
+		selectedSet = make(map[string]bool)
+		for _, node := range currentNodes {
+			selectedSet[node] = true
+		}
+	}
+
 	// Create a temporary filter for remaining nodes
 	fillFilter := &proto.NodeFilter{
 		Limit: int32(remainingNeeded),
@@ -440,8 +469,8 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			continue
 		}
 
-		selectedSeed := pool.Seeds[rand.Intn(len(pool.Seeds))]
-		fillResult, err := d.requestNodesFromSeed(ctx, selectedSeed, fillFilter, 0)
+		fillFilter.Limit = int32(requiredNodes - len(currentNodes))
+		fillResult, err := d.requestNodesFromPool(ctx, pool, fillFilter, 0)
 		if err != nil {
 			logger.Ctx(ctx).Warn("Failed to get remaining nodes from pool, continuing with soft affinity",
 				zap.String("poolName", pool.Name),
@@ -449,8 +478,15 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 			continue
 		}
 		if fillResult != nil {
-			currentNodes = append(currentNodes, fillResult.Nodes...)
-			break
+			for _, node := range fillResult.Nodes {
+				if !selectedSet[node] {
+					selectedSet[node] = true
+					currentNodes = append(currentNodes, node)
+				}
+			}
+			if len(currentNodes) >= requiredNodes {
+				break
+			}
 		}
 	}
 
@@ -468,6 +504,29 @@ func (d *quorumDiscovery) fillRemainingNodes(ctx context.Context, currentNodes [
 	}
 
 	return result, nil
+}
+
+// requestNodesFromPool tries all seeds in a pool in shuffled order, returning on the first success.
+// This ensures that a single dead seed doesn't block the request when other seeds are healthy.
+func (d *quorumDiscovery) requestNodesFromPool(ctx context.Context, pool config.QuorumBufferPool, filter *proto.NodeFilter, expectedAtLeast int) (*proto.QuorumInfo, error) {
+	// Shuffle seeds to avoid always hitting the same one
+	seeds := make([]string, len(pool.Seeds))
+	copy(seeds, pool.Seeds)
+	rand.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
+
+	var lastErr error
+	for _, seed := range seeds {
+		result, err := d.requestNodesFromSeed(ctx, seed, filter, expectedAtLeast)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		logger.Ctx(ctx).Debug("Seed failed, trying next",
+			zap.String("failedSeed", seed),
+			zap.String("poolName", pool.Name),
+			zap.Error(err))
+	}
+	return nil, fmt.Errorf("all seeds in pool %s failed, last error: %w", pool.Name, lastErr)
 }
 
 func (d *quorumDiscovery) requestNodesFromSeed(ctx context.Context, seed string, filter *proto.NodeFilter, expectedAtLeast int) (*proto.QuorumInfo, error) {
