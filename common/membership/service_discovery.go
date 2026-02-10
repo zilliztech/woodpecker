@@ -1013,7 +1013,11 @@ func (sd *ServiceDiscovery) getCompiledRegex(pattern string) (*regexp.Regexp, er
 		return regex, nil
 	}
 
-	regex, err := regexp.Compile(pattern)
+	// Anchor for full-string matching: MatchString does substring match by default,
+	// which would cause "rg[12]" to match "rg1-extra". Wrapping with ^(?:...)$
+	// ensures AZ/RG names are matched as complete strings.
+	anchored := "^(?:" + pattern + ")$"
+	regex, err := regexp.Compile(anchored)
 	if err != nil {
 		return nil, err
 	}

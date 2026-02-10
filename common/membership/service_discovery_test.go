@@ -1611,6 +1611,85 @@ func TestIsRegexLike_AZFilterIntegration(t *testing.T) {
 	})
 }
 
+func TestRegexAnchoring(t *testing.T) {
+	// Bug fix: MatchString does substring matching, so "rg[12]" would match
+	// "rg1-extra". After anchoring with ^(?:...)$, only full-string matches succeed.
+	sd := NewServiceDiscovery()
+
+	// Setup nodes with names that could cause substring false positives
+	sd.UpdateServer("n1", createFinalTestNode("n1", "rg1", "az1", nil))
+	sd.UpdateServer("n2", createFinalTestNode("n2", "rg1-extra", "az1-extended", nil))
+	sd.UpdateServer("n3", createFinalTestNode("n3", "rg2", "az2", nil))
+	sd.UpdateServer("n4", createFinalTestNode("n4", "xrg1", "xaz1", nil))
+
+	t.Run("RG regex does not substring match", func(t *testing.T) {
+		// "rg[12]" should match "rg1" and "rg2" ONLY, not "rg1-extra" or "xrg1"
+		filter := &proto.NodeFilter{ResourceGroup: "rg[12]", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg[12]")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg[12]")
+		assert.False(t, nodeIDs["n2"], "rg1-extra should NOT match rg[12]")
+		assert.False(t, nodeIDs["n4"], "xrg1 should NOT match rg[12]")
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("AZ regex does not substring match", func(t *testing.T) {
+		// "az[12]" should match "az1" and "az2" ONLY
+		filter := &proto.NodeFilter{Az: "az[12]", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "az1 should match az[12]")
+		assert.True(t, nodeIDs["n3"], "az2 should match az[12]")
+		assert.False(t, nodeIDs["n2"], "az1-extended should NOT match az[12]")
+		assert.False(t, nodeIDs["n4"], "xaz1 should NOT match az[12]")
+		assert.Equal(t, 2, len(nodes))
+	})
+
+	t.Run("Wildcard regex still works correctly", func(t *testing.T) {
+		// "rg.*" should match rg1, rg1-extra, rg2 but NOT xrg1
+		filter := &proto.NodeFilter{ResourceGroup: "rg.*", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg.*")
+		assert.True(t, nodeIDs["n2"], "rg1-extra should match rg.*")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg.*")
+		assert.False(t, nodeIDs["n4"], "xrg1 should NOT match rg.*")
+		assert.Equal(t, 3, len(nodes))
+	})
+
+	t.Run("Alternation regex anchored correctly", func(t *testing.T) {
+		// "rg1|rg2" should match exactly rg1 and rg2
+		filter := &proto.NodeFilter{ResourceGroup: "rg1|rg2", Limit: 10}
+		nodes, err := sd.SelectRandom(filter, proto.AffinityMode_HARD)
+		assert.NoError(t, err)
+
+		nodeIDs := make(map[string]bool)
+		for _, n := range nodes {
+			nodeIDs[n.NodeId] = true
+		}
+		assert.True(t, nodeIDs["n1"], "rg1 should match rg1|rg2")
+		assert.True(t, nodeIDs["n3"], "rg2 should match rg1|rg2")
+		assert.False(t, nodeIDs["n2"], "rg1-extra should NOT match rg1|rg2")
+		assert.Equal(t, 2, len(nodes))
+	})
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()
