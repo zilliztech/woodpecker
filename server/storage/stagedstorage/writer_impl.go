@@ -1248,7 +1248,10 @@ func (w *StagedFileWriter) planMergeBlockTasks(targetBlockSize int64) []*mergeBl
 	return tasks
 }
 
-// processMergeTask processes a single merge task: read blocks, merge and upload
+// processMergeTask processes a single merge task: read blocks, merge and upload.
+// The merged block preserves the original per-block structure (BlockHeaderRecord + DataRecords
+// for each original block), and prepends a HeaderRecord with compacted flag for the first merged block.
+// Format: [HeaderRecord (if first)] + [{BlkHeaderRecord+DataRecords}, {BlkHeaderRecord+DataRecords}, ...]
 func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBlockTask, mergedBlockID int64) *mergedBlockUploadResult {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processMergeTask")
 	defer sp.End()
@@ -1271,17 +1274,19 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	// Submit all block read tasks to the pool
 	var readFutures []*conc.Future[*blockReadResult]
 	for _, blockIndex := range task.blocks {
-		// Capture variable for closure
 		blockIndexCopy := blockIndex
-
 		future := readPool.Submit(func() (*blockReadResult, error) {
 			return w.readBlockDataFromLocalFile(ctx, blockIndexCopy), nil
 		})
 		readFutures = append(readFutures, future)
 	}
 
-	// Collect block data from all futures
-	var allBlockData [][]byte
+	// Collect raw block data from all futures
+	type rawBlockData struct {
+		blockIndex *codec.IndexRecord
+		data       []byte // raw BlockHeaderRecord + DataRecords
+	}
+	var allRawBlocks []rawBlockData
 	firstEntryID := int64(-1)
 	lastEntryID := int64(-1)
 
@@ -1293,7 +1298,10 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 			}
 		}
 
-		allBlockData = append(allBlockData, result.blockData)
+		allRawBlocks = append(allRawBlocks, rawBlockData{
+			blockIndex: result.blockIndex,
+			data:       result.blockData,
+		})
 
 		// Track entry ID range
 		if firstEntryID == -1 || result.blockIndex.FirstEntryID < firstEntryID {
@@ -1304,17 +1312,34 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		}
 	}
 
-	// Merge block data
-	mergedData := make([]byte, 0)
-	for _, blockData := range allBlockData {
-		mergedData = append(mergedData, blockData...)
+	// Sort by block number to maintain order
+	sort.Slice(allRawBlocks, func(i, j int) bool {
+		return allRawBlocks[i].blockIndex.BlockNumber < allRawBlocks[j].blockIndex.BlockNumber
+	})
+
+	// Build the complete merged block data
+	// Format: [HeaderRecord (if first merged block)] + raw block data (preserving original structure)
+	var completeBlockData []byte
+	if mergedBlockID == 0 {
+		// First merged block: prepend HeaderRecord with compacted flag
+		headerRecord := &codec.HeaderRecord{
+			Version:      codec.FormatVersion,
+			Flags:        codec.SetCompacted(0),
+			FirstEntryID: firstEntryID,
+		}
+		completeBlockData = append(completeBlockData, codec.EncodeRecord(headerRecord)...)
+	}
+
+	// Concatenate raw block data as-is (each contains BlockHeaderRecord + DataRecords)
+	for _, rb := range allRawBlocks {
+		completeBlockData = append(completeBlockData, rb.data...)
 	}
 
 	// Create block key for upload
 	blockKey := w.getCompactedBlockKey(mergedBlockID)
 
 	// Upload merged block to minio
-	err := w.storageCli.PutObject(ctx, w.bucket, blockKey, bytes.NewReader(mergedData), int64(len(mergedData)), w.nsStr, w.logIdStr)
+	err := w.storageCli.PutObject(ctx, w.bucket, blockKey, bytes.NewReader(completeBlockData), int64(len(completeBlockData)), w.nsStr, w.logIdStr)
 	if err != nil {
 		return &mergedBlockUploadResult{
 			error: fmt.Errorf("failed to upload merged block: %w", err),
@@ -1325,14 +1350,14 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	newBlockIndex := &codec.IndexRecord{
 		BlockNumber:  int32(mergedBlockID),
 		StartOffset:  0, // For object storage, offset is not meaningful
-		BlockSize:    uint32(len(mergedData)),
+		BlockSize:    uint32(len(completeBlockData)),
 		FirstEntryID: firstEntryID,
 		LastEntryID:  lastEntryID,
 	}
 
 	// Update compaction metrics
 	totalTime := time.Since(startTime)
-	blockSize := int64(len(mergedData))
+	blockSize := int64(len(completeBlockData))
 	metrics.WpFileCompactLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(totalTime.Milliseconds()))
 	metrics.WpFileCompactBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
 	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(blockSize))
@@ -1351,7 +1376,6 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		blockSize:  blockSize,
 		error:      nil,
 	}
-
 }
 
 // readBlockDataFromLocalFile reads data for a specific block from the local file

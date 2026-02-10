@@ -162,6 +162,21 @@ var (
 		Help:      "Number of pending append operations in segment handles",
 	}, []string{"namespace", "log_id"})
 
+	// Direct read metrics (client reads sealed segments directly from object storage)
+	WpClientDirectReadRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "direct_read_requests_total",
+		Help:      "Total number of direct read requests from object storage for sealed segments",
+	}, []string{"namespace", "log_id", "status"})
+	WpClientDirectReadLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: clientRole,
+		Name:      "direct_read_latency",
+		Help:      "Latency of direct read operations from object storage for sealed segments",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 10), // 1ms to 1024ms
+	}, []string{"namespace", "log_id"})
+
 	// Etcd Meta metrics
 	WpEtcdMetaOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: woodpeckerNamespace,
@@ -209,6 +224,9 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpSegmentHandleOperationsTotal)
 		registerer.MustRegister(WpSegmentHandleOperationLatency)
 		registerer.MustRegister(WpSegmentHandlePendingAppendOps)
+		// Direct read metrics
+		registerer.MustRegister(WpClientDirectReadRequestsTotal)
+		registerer.MustRegister(WpClientDirectReadLatency)
 		// etcd meta metrics
 		registerer.MustRegister(WpEtcdMetaOperationsTotal)
 		registerer.MustRegister(WpEtcdMetaOperationLatency)

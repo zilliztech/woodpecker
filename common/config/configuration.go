@@ -43,6 +43,15 @@ type SegmentAppendConfig struct {
 	MaxRetries int `yaml:"maxRetries"`
 }
 
+// DirectReadConfig stores the direct read configuration for sealed segments.
+// When enabled in service mode, the client reads sealed segments directly from
+// object storage instead of going through quorum nodes via gRPC.
+type DirectReadConfig struct {
+	Enabled         bool     `yaml:"enabled"`         // default: false
+	MaxBatchSize    ByteSize `yaml:"maxBatchSize"`    // default: 16MB
+	MaxFetchThreads int      `yaml:"maxFetchThreads"` // default: 4
+}
+
 // ClientConfig stores the client configuration.
 type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
@@ -50,6 +59,7 @@ type ClientConfig struct {
 	Auditor              AuditorConfig              `yaml:"auditor"`
 	Quorum               QuorumConfig               `yaml:"quorum"`
 	SessionMonitor       SessionMonitorConfig       `yaml:"sessionMonitor"`
+	DirectRead           DirectReadConfig           `yaml:"directRead"`
 }
 
 type AuditorConfig struct {
@@ -703,6 +713,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SessionMonitor: SessionMonitorConfig{
 				CheckInterval: DurationSeconds{Duration: Duration{duration: 3 * time.Second}},
 				MaxFailures:   5,
+			},
+			DirectRead: DirectReadConfig{
+				Enabled:         false,
+				MaxBatchSize:    ByteSize(16 * 1024 * 1024), // 16MB
+				MaxFetchThreads: 4,
 			},
 		},
 		Logstore: LogstoreConfig{

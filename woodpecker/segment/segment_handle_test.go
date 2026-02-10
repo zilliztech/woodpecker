@@ -65,7 +65,7 @@ func TestNewSegmentHandle(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	assert.Equal(t, "testLog", segmentHandle.GetLogName())
 	assert.Equal(t, int64(1), segmentHandle.GetId(context.Background()))
 }
@@ -104,7 +104,7 @@ func TestAppendAsync_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	callbackCalled := false
 	callback := func(segmentId int64, entryId int64, err error) {
 		callbackCalled = true
@@ -173,7 +173,7 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
@@ -273,7 +273,7 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	failedAttempts := 0
 	successAttempts := 0
@@ -391,7 +391,7 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results
 	callbackResults := make(map[int64]error)
@@ -561,7 +561,7 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	callbackCalled := 0
 	successCount := 0
@@ -642,7 +642,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
@@ -747,7 +747,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 		Revision: 2,
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	lastEntryId, fenceErr := segmentHandle.FenceAndComplete(context.Background())
 	assert.NoError(t, fenceErr)
 	assert.Equal(t, int64(0), lastEntryId)
@@ -1174,7 +1174,7 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Mark segment as rolling
 	segmentHandle.SetRollingReady(context.Background())
@@ -1569,7 +1569,7 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 	}
 
 	// Create a writable segment handle (canWrite=true is needed for ForceCompleteAndClose to work)
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Verify initial state
 	writable, err := segmentHandle.IsWritable(context.Background())
@@ -1630,7 +1630,7 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// First mark segment as rolling
 	segmentHandle.SetRollingReady(context.Background())
@@ -1705,7 +1705,7 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Initial state
 	assert.False(t, segmentHandle.IsForceRollingReady(context.Background()))
@@ -1808,7 +1808,7 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -1991,7 +1991,7 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2201,7 +2201,7 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2429,7 +2429,7 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2643,7 +2643,7 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)

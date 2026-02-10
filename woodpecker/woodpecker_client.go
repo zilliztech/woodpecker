@@ -29,6 +29,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
@@ -72,6 +73,10 @@ type woodpeckerClient struct {
 
 	// quorum discovery implementation
 	quorumDiscovery quorum.QuorumDiscovery
+
+	// object storage client for direct read of sealed segments
+	objectStorageOnce   sync.Once
+	objectStorageClient storageclient.ObjectStorage
 
 	// close state
 	closeState atomic.Bool
@@ -180,6 +185,26 @@ func createLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logNam
 	return lastErr
 }
 
+// getOrCreateObjectStorageClient lazily creates and caches an object storage client
+// for direct read of sealed segments. Returns nil if direct read is not enabled.
+func (c *woodpeckerClient) getOrCreateObjectStorageClient(ctx context.Context) storageclient.ObjectStorage {
+	if !c.cfg.Woodpecker.Client.DirectRead.Enabled {
+		return nil
+	}
+	c.objectStorageOnce.Do(func() {
+		var err error
+		c.objectStorageClient, err = storageclient.NewObjectStorage(ctx, c.cfg)
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to create object storage client for direct read, direct read will be disabled",
+				zap.Error(err))
+			c.objectStorageClient = nil
+		} else {
+			logger.Ctx(ctx).Info("object storage client created for direct read of sealed segments")
+		}
+	})
+	return c.objectStorageClient
+}
+
 // OpenLog opens an existing log with the specified name and returns a log handle.
 func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.LogHandle, error) {
 	c.mu.Lock()
@@ -187,18 +212,20 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+	objStorageClient := c.getOrCreateObjectStorageClient(ctx)
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, objStorageClient)
 }
 
 func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
-	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) (log.LogHandle, error) {
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
+	objectStorageClient storageclient.ObjectStorage) (log.LogHandle, error) {
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
 	if err != nil {
 		logger.Ctx(ctx).Warn("open log failed", zap.String("logName", logName), zap.Error(err))
 		return nil, err
 	}
-	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc)
+	newLogHandle := log.NewLogHandle(logName, logMeta.Metadata.GetLogId(), segmentsMeta, metadata, clientPool, cfg, selectQuorumFunc, objectStorageClient)
 	metrics.WpLogNameIdMapping.WithLabelValues(metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath), logName).Set(float64(logMeta.Metadata.GetLogId()))
 	return newLogHandle, nil
 }
