@@ -2844,3 +2844,113 @@ func TestSegmentHandle_HandleAppendRequestFailure_RetrySubmitFailed(t *testing.T
 	// Release the worker
 	workerBlocked.Done()
 }
+
+func TestCalculateLAC(t *testing.T) {
+	s := &segmentHandleImpl{}
+
+	tests := []struct {
+		name      string
+		results   []int64
+		ackQuorum int
+		expected  int64
+	}{
+		{
+			name:      "normal 3 nodes",
+			results:   []int64{4, 6, 7},
+			ackQuorum: 2,
+			expected:  6,
+		},
+		{
+			name:      "all same value",
+			results:   []int64{5, 5, 5},
+			ackQuorum: 2,
+			expected:  5,
+		},
+		{
+			name:      "one node empty returns -1",
+			results:   []int64{0, -1},
+			ackQuorum: 2,
+			expected:  0,
+		},
+		{
+			name:      "bug scenario: fence with [0, -1] ackQuorum=2",
+			results:   []int64{0, -1},
+			ackQuorum: 2,
+			expected:  0,
+		},
+		{
+			name:      "two valid one empty",
+			results:   []int64{-1, 0, 0},
+			ackQuorum: 2,
+			expected:  0,
+		},
+		{
+			name:      "multiple entries with one empty node",
+			results:   []int64{2, -1},
+			ackQuorum: 2,
+			expected:  2,
+		},
+		{
+			name:      "all nodes empty",
+			results:   []int64{-1, -1},
+			ackQuorum: 2,
+			expected:  -1,
+		},
+		{
+			name:      "single empty node",
+			results:   []int64{-1},
+			ackQuorum: 1,
+			expected:  -1,
+		},
+		{
+			name:      "empty results",
+			results:   []int64{},
+			ackQuorum: 2,
+			expected:  -1,
+		},
+		{
+			name:      "single valid node",
+			results:   []int64{0},
+			ackQuorum: 1,
+			expected:  0,
+		},
+		{
+			name:      "ackQuorum exceeds valid count uses index 0",
+			results:   []int64{3},
+			ackQuorum: 2,
+			expected:  3,
+		},
+		{
+			name:      "three valid nodes ackQuorum=2",
+			results:   []int64{10, 8, 5},
+			ackQuorum: 2,
+			expected:  8,
+		},
+		{
+			name:      "negative sentinel other than -1",
+			results:   []int64{0, -2, 3},
+			ackQuorum: 2,
+			expected:  0,
+		},
+		{
+			name:      "does not mutate input",
+			results:   []int64{7, 3, 5},
+			ackQuorum: 2,
+			expected:  5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// copy input to verify no mutation
+			original := make([]int64, len(tt.results))
+			copy(original, tt.results)
+
+			got := s.calculateLAC(tt.results, tt.ackQuorum)
+			assert.Equal(t, tt.expected, got)
+
+			// verify input slice is not mutated
+			assert.Equal(t, original, tt.results, "input slice should not be mutated")
+		})
+	}
+}
