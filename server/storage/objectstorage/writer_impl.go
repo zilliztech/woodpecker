@@ -48,6 +48,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
+	"github.com/zilliztech/woodpecker/server/storage/codec/checkpoint"
 )
 
 var (
@@ -89,6 +90,13 @@ type MinioFileWriter struct {
 	footerRecord     *codec.FooterRecord // exists if the segment is finalized
 	headerWritten    atomic.Bool         // Ensure a header record is written before writing data
 	lastModifiedTime atomic.Int64        // lastModifiedTime
+
+	// checkpoint – coalescing async writer
+	checkpointThreshold       int
+	lastCheckpointBlockCount  atomic.Int32
+	checkpointMu              sync.Mutex           // guards checkpointRunning and checkpointPendingSnapshot
+	checkpointRunning         bool                 // true while a checkpoint goroutine is active
+	checkpointPendingSnapshot []*codec.IndexRecord // latest snapshot waiting to be written; nil means nothing pending
 
 	// async upload blocks task pool
 	syncMu                        sync.Mutex
@@ -144,6 +152,8 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 		pool:                conc.NewPool[*blockUploadResult](cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads, conc.WithPreAlloc(true)),
 
 		flushingTaskList: make(chan *blockUploadTask, cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads),
+
+		checkpointThreshold: syncPolicyConfig.CheckpointThreshold,
 	}
 	segmentFileWriter.firstEntryID.Store(-1)
 	segmentFileWriter.lastEntryID.Store(-1)
@@ -206,6 +216,14 @@ func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 	footerBlockKey := getFooterBlockKey(f.segmentFileKey)
 	footerBlockSize, _, err := f.client.StatObject(ctx, f.bucket, footerBlockKey, f.nsStr, f.logIdStr)
 	if err != nil && f.client.IsObjectNotExistsError(err) {
+		// No footer – try checkpoint for faster recovery
+		cpErr := f.recoverFromCheckpoint(ctx)
+		if cpErr == nil {
+			return nil
+		}
+		logger.Ctx(ctx).Debug("checkpoint recovery not available, falling back to full listing",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Error(cpErr))
 		return f.recoverFromFullListing(ctx)
 	}
 	return f.recoverFromFooter(ctx, footerBlockKey, footerBlockSize)
@@ -342,6 +360,182 @@ func (f *MinioFileWriter) recoverFromFooter(ctx context.Context, footerBlockKey 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "recover_footer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "recover_footer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
+	return nil
+}
+
+// recoverFromCheckpoint reads checkpoint.blk, restores blockIndexes from it,
+// then scans only the blocks written after the checkpoint, avoiding a full
+// sequential scan. It supports both the new self-describing format (with JSON
+// metadata trailer and "CKPT" magic) and the legacy raw footer+indexes format.
+func (f *MinioFileWriter) recoverFromCheckpoint(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "recoverFromCheckpoint")
+	defer sp.End()
+	startTime := time.Now()
+
+	cpKey := getCheckpointBlockKey(f.segmentFileKey)
+	cpSize, _, err := f.client.StatObject(ctx, f.bucket, cpKey, f.nsStr, f.logIdStr)
+	if err != nil {
+		if f.client.IsObjectNotExistsError(err) {
+			return errors.New("checkpoint.blk not found")
+		}
+		return err
+	}
+
+	cpObj, err := f.client.GetObject(ctx, f.bucket, cpKey, 0, cpSize, f.nsStr, f.logIdStr)
+	if err != nil {
+		return err
+	}
+	defer cpObj.Close()
+
+	cpData, err := minioHandler.ReadObjectFull(ctx, cpObj, cpSize, f.nsStr, f.logIdStr)
+	if err != nil {
+		return err
+	}
+
+	// Determine checkpoint format and extract the block_indexes section data.
+	var indexData []byte
+	if checkpoint.IsFormat(cpData) {
+		// New self-describing format with JSON metadata trailer.
+		cp, cpErr := checkpoint.Parse(cpData)
+		if cpErr != nil {
+			return fmt.Errorf("failed to parse checkpoint: %w", cpErr)
+		}
+		secData, secErr := cp.GetSectionData(checkpoint.SectionBlockIndexes)
+		if secErr != nil {
+			return fmt.Errorf("failed to get block_indexes section: %w", secErr)
+		}
+		indexData = secData
+	} else {
+		// Old format: raw footer+indexes (backward compatibility).
+		indexData = cpData
+	}
+
+	// Parse footer record from the tail of the section data.
+	minFooterSize := codec.RecordHeaderSize + codec.FooterRecordSizeV5
+	if len(indexData) < minFooterSize {
+		return fmt.Errorf("checkpoint.blk too small: %d bytes", len(indexData))
+	}
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	footerData := indexData[len(indexData)-maxFooterSize:]
+	cpFooter, err := codec.ParseFooterFromBytes(footerData)
+	if err != nil {
+		return fmt.Errorf("failed to parse checkpoint footer: %w", err)
+	}
+
+	// Parse index records preceding the footer.
+	actualFooterSize := codec.RecordHeaderSize + codec.GetFooterRecordSize(cpFooter.Version)
+	idxRecords := indexData[:len(indexData)-actualFooterSize]
+
+	offset := 0
+	var firstEntryID int64 = -1
+	var lastEntryID int64 = -1
+	var maxBlockID int64 = -1
+
+	for offset < len(idxRecords) {
+		if offset+codec.RecordHeaderSize > len(idxRecords) {
+			break
+		}
+		record, err := codec.DecodeRecord(idxRecords[offset:])
+		if err != nil {
+			break
+		}
+		if record.Type() != codec.IndexRecordType {
+			break
+		}
+		indexRecord := record.(*codec.IndexRecord)
+		f.blockIndexes = append(f.blockIndexes, indexRecord)
+
+		if firstEntryID == -1 || indexRecord.FirstEntryID < firstEntryID {
+			firstEntryID = indexRecord.FirstEntryID
+		}
+		if indexRecord.LastEntryID > lastEntryID {
+			lastEntryID = indexRecord.LastEntryID
+		}
+		if int64(indexRecord.BlockNumber) > maxBlockID {
+			maxBlockID = int64(indexRecord.BlockNumber)
+		}
+
+		recordSize := codec.RecordHeaderSize + codec.IndexRecordSize
+		offset += recordSize
+	}
+
+	logger.Ctx(ctx).Info("recovered checkpoint, scanning incremental blocks",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("checkpointBlocks", len(f.blockIndexes)),
+		zap.Int64("maxBlockID", maxBlockID))
+
+	// Scan blocks after maxBlockID+1
+	fenceBlockId := int64(-1)
+	blockID := maxBlockID + 1
+	for {
+		blockKey := getBlockKey(f.segmentFileKey, blockID)
+		objSize, isFenced, stateErr := f.client.StatObject(ctx, f.bucket, blockKey, f.nsStr, f.logIdStr)
+		if stateErr != nil {
+			if f.client.IsObjectNotExistsError(stateErr) {
+				break
+			}
+			return stateErr
+		}
+		if isFenced {
+			fenceBlockId = blockID
+			break
+		}
+
+		blockHeaderRecord, parseErr := f.parseBlockHeaderRecord(ctx, blockID, blockKey)
+		if parseErr != nil {
+			return parseErr
+		}
+
+		indexRecord := &codec.IndexRecord{
+			BlockNumber:  int32(blockID),
+			StartOffset:  blockID,
+			BlockSize:    uint32(objSize),
+			FirstEntryID: blockHeaderRecord.FirstEntryID,
+			LastEntryID:  blockHeaderRecord.LastEntryID,
+		}
+		f.blockIndexes = append(f.blockIndexes, indexRecord)
+
+		if firstEntryID == -1 || blockHeaderRecord.FirstEntryID < firstEntryID {
+			firstEntryID = blockHeaderRecord.FirstEntryID
+		}
+		if blockHeaderRecord.LastEntryID > lastEntryID {
+			lastEntryID = blockHeaderRecord.LastEntryID
+		}
+		if blockID > maxBlockID {
+			maxBlockID = blockID
+		}
+
+		blockID++
+	}
+
+	if fenceBlockId > -1 {
+		f.fenced.Store(true)
+	}
+
+	// Update writer state
+	if firstEntryID != -1 {
+		f.firstEntryID.Store(firstEntryID)
+	}
+	if lastEntryID != -1 {
+		f.lastEntryID.Store(lastEntryID)
+	}
+	if maxBlockID != -1 {
+		f.lastBlockID.Store(maxBlockID)
+		f.lastSubmittedUploadingBlockID.Store(maxBlockID)
+		f.lastSubmittedUploadingEntryID.Store(lastEntryID)
+	}
+	f.lastModifiedTime.Store(time.Now().UnixMilli())
+	f.lastCheckpointBlockCount.Store(int32(len(f.blockIndexes)))
+
+	logger.Ctx(ctx).Info("successfully recovered from checkpoint",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int("totalBlocks", len(f.blockIndexes)),
+		zap.Int64("firstEntryID", firstEntryID),
+		zap.Int64("lastEntryID", lastEntryID),
+		zap.Int64("lastBlockID", maxBlockID))
+
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "recover_checkpoint", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "recover_checkpoint", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil
 }
 
@@ -1080,8 +1274,100 @@ func (f *MinioFileWriter) fastFlushSuccessUnsafe(ctx context.Context, blockInfo 
 		FirstEntryID: blockInfo.FirstEntryID,
 		LastEntryID:  blockInfo.LastEntryID,
 	})
+	f.maybeWriteCheckpointAsync(ctx)
 	for _, item := range blockData {
 		cache.NotifyPendingEntryDirectly(ctx, f.logId, f.segmentId, item.EntryId, item.NotifyChan, item.EntryId, nil, f.nsStr, item.EnqueueTime)
+	}
+}
+
+// maybeWriteCheckpointAsync checks whether enough new blocks have been written
+// since the last checkpoint and, if so, stores a snapshot of blockIndexes and
+// ensures a background goroutine will write it out. When a write is already
+// in-flight, the new snapshot simply replaces the pending one so that multiple
+// triggers coalesce into a single follow-up PutObject call. This keeps the
+// mechanism lightweight even under very high write throughput.
+func (f *MinioFileWriter) maybeWriteCheckpointAsync(ctx context.Context) {
+	if f.checkpointThreshold <= 0 {
+		return
+	}
+	blockCount := int32(len(f.blockIndexes))
+	if int(blockCount-f.lastCheckpointBlockCount.Load()) < f.checkpointThreshold {
+		return
+	}
+
+	// Snapshot the slice – IndexRecord pointers are immutable after creation.
+	snapshot := make([]*codec.IndexRecord, len(f.blockIndexes))
+	copy(snapshot, f.blockIndexes)
+
+	f.checkpointMu.Lock()
+	f.checkpointPendingSnapshot = snapshot
+	if f.checkpointRunning {
+		// A goroutine is already active; it will pick up this snapshot.
+		f.checkpointMu.Unlock()
+		return
+	}
+	f.checkpointRunning = true
+	f.checkpointMu.Unlock()
+
+	go f.writeCheckpointLoop(ctx)
+}
+
+// writeCheckpointLoop drains pending checkpoint snapshots and writes them.
+// Multiple triggers that arrive while a PutObject is in-flight are coalesced:
+// only the latest snapshot is kept and written in the next iteration. The loop
+// exits when no pending snapshot remains or the writer is closed/finalized.
+// Each PutObject call is bounded by a 30-second timeout to avoid hanging on
+// unresponsive object storage.
+func (f *MinioFileWriter) writeCheckpointLoop(ctx context.Context) {
+	for {
+		// Stop immediately if the writer has been closed or finalized.
+		if f.closed.Load() || f.finalized.Load() {
+			f.checkpointMu.Lock()
+			f.checkpointPendingSnapshot = nil
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+
+		f.checkpointMu.Lock()
+		snapshot := f.checkpointPendingSnapshot
+		f.checkpointPendingSnapshot = nil
+		if snapshot == nil {
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+		f.checkpointMu.Unlock()
+
+		snapshotCount := int32(len(snapshot))
+		cpKey := getCheckpointBlockKey(f.segmentFileKey)
+
+		cp := checkpoint.New()
+		sectionData, _ := serializeFooterAndIndexes(ctx, snapshot)
+		cp.SetSection(checkpoint.SectionBlockIndexes, sectionData)
+		data := cp.Serialize()
+
+		writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := f.client.PutObject(writeCtx, f.bucket, cpKey, bytes.NewReader(data), int64(len(data)), f.nsStr, f.logIdStr)
+		cancel()
+
+		if err != nil {
+			logger.Ctx(ctx).Warn("failed to write checkpoint.blk (best-effort)",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.String("checkpointKey", cpKey),
+				zap.Error(err))
+			// On error, clear any pending snapshot and stop the loop;
+			// the next trigger from the ack goroutine will retry.
+			f.checkpointMu.Lock()
+			f.checkpointPendingSnapshot = nil
+			f.checkpointRunning = false
+			f.checkpointMu.Unlock()
+			return
+		}
+		f.lastCheckpointBlockCount.Store(snapshotCount)
+		logger.Ctx(ctx).Debug("checkpoint.blk written",
+			zap.String("segmentFileKey", f.segmentFileKey),
+			zap.Int32("blockCount", snapshotCount))
 	}
 }
 
@@ -1347,6 +1633,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	f.finalized.Store(true)
+
 	return f.GetLastEntryId(ctx), nil
 }
 
@@ -1358,6 +1645,10 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
+	// Discard any pending checkpoint so the loop exits without starting a new PutObject.
+	f.checkpointMu.Lock()
+	f.checkpointPendingSnapshot = nil
+	f.checkpointMu.Unlock()
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
@@ -2391,6 +2682,10 @@ func getSegmentLockKey(segmentFileKey string) string {
 
 func getFooterBlockKey(segmentFileKey string) string {
 	return fmt.Sprintf("%s/footer.blk", segmentFileKey)
+}
+
+func getCheckpointBlockKey(segmentFileKey string) string {
+	return fmt.Sprintf("%s/checkpoint.blk", segmentFileKey)
 }
 
 // utils to parse object key

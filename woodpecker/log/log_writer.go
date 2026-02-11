@@ -652,8 +652,3 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 func (l *logWriterImpl) GetWriterSessionForTest() *concurrency.Session {
 	return l.sessionLock.GetSession()
 }
-
-type WriteResult struct {
-	LogMessageId *LogMessageId
-	Err          error
-}

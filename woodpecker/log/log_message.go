@@ -69,15 +69,23 @@ func LatestLogMessageID() LogMessageId {
 
 // LogMessage represents a log message with an ID and a payload.
 type LogMessage struct {
-	Id         *LogMessageId     // The unique identifier for this log message.
-	Payload    []byte            // The payload of the log message.
-	Properties map[string]string // Properties attach application defined properties on the message
+	Id            *LogMessageId     // The unique identifier for this log message.
+	Payload       []byte            // The payload of the log message.
+	Properties    map[string]string // Properties attach application defined properties on the message
+	IdempotencyId string            // Optional idempotency identifier for dedup support.
 }
 
 // WriteMessage abstraction used in LogWriter
 type WriteMessage struct {
-	Payload    []byte
-	Properties map[string]string
+	Payload       []byte
+	Properties    map[string]string
+	IdempotencyId string // Optional idempotency identifier for dedup support.
+}
+
+// WriteResult represents the result of a write operation.
+type WriteResult struct {
+	LogMessageId *LogMessageId
+	Err          error
 }
 
 func MarshalMessage(m *WriteMessage) ([]byte, error) {
@@ -86,8 +94,9 @@ func MarshalMessage(m *WriteMessage) ([]byte, error) {
 	}
 
 	msgLayout := &pb.LogMessageLayout{
-		Payload:    m.Payload,
-		Properties: m.Properties,
+		Payload:       m.Payload,
+		Properties:    m.Properties,
+		IdempotencyId: m.IdempotencyId,
 	}
 	data, err := proto.Marshal(msgLayout)
 	if err != nil {
@@ -103,8 +112,9 @@ func UnmarshalMessage(data []byte) (*LogMessage, error) {
 		return nil, err
 	}
 	m := &LogMessage{
-		Payload:    msgLayout.Payload,
-		Properties: msgLayout.Properties,
+		Payload:       msgLayout.Payload,
+		Properties:    msgLayout.Properties,
+		IdempotencyId: msgLayout.IdempotencyId,
 	}
 	return m, nil
 }

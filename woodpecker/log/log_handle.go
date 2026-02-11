@@ -30,10 +30,12 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/woodpecker/client"
+	"github.com/zilliztech/woodpecker/woodpecker/log/idempotent"
 	"github.com/zilliztech/woodpecker/woodpecker/segment"
 )
 
@@ -47,6 +49,9 @@ type LogHandle interface {
 	GetSegments(ctx context.Context) (map[int64]*meta.SegmentMeta, error)
 	// OpenLogWriter opens an appropriate log writer based on fence policy configuration.
 	OpenLogWriter(ctx context.Context) (LogWriter, error)
+	// OpenIdempotentWriter opens an idempotent log writer with dedup support.
+	// Returns error if storage mode is local (no object storage for snapshot persistence).
+	OpenIdempotentWriter(ctx context.Context) (LogWriter, error)
 	// OpenLogReader opens a reader for the log with the specified log message ID.
 	OpenLogReader(ctx context.Context, from *LogMessageId, readerBaseName string) (LogReader, error)
 	// GetLastRecordId returns the last record ID of the log.
@@ -262,6 +267,70 @@ func (l *logHandleImpl) openInternalLogWriter(ctx context.Context) (LogWriter, e
 	metrics.WpLogHandleOperationLatency.WithLabelValues(l.metricsNamespace, logIdStr, "open_log_writer", "success").Observe(float64(time.Since(start).Milliseconds()))
 	logger.Ctx(ctx).Info("open log writer success", zap.String("logName", l.Name), zap.Int64("logId", l.Id))
 	return NewInternalLogWriter(ctx, l, l.cfg), nil
+}
+
+// OpenIdempotentWriter opens an idempotent log writer with dedup support.
+// Returns error if storage mode is local (no object storage for snapshot persistence).
+func (l *logHandleImpl) OpenIdempotentWriter(ctx context.Context) (LogWriter, error) {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "OpenIdempotentWriter")
+	defer sp.End()
+
+	// Check if storage mode supports idempotent write (requires object storage)
+	if l.cfg.Woodpecker.Storage.IsStorageLocal() {
+		return nil, werr.ErrIdempotentWriteNotSupported.WithCauseErrMsg(
+			"idempotent write requires object storage for snapshot persistence, but storage mode is local")
+	}
+
+	// Open a regular log writer first
+	innerWriter, err := l.OpenLogWriter(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create idempotent writer config from configuration
+	idempotentConfig := IdempotentWriterConfig{
+		DedupWindowConfig: idempotent.DedupWindowConfig{
+			WindowDuration: time.Duration(l.cfg.Woodpecker.Client.IdempotentWrite.WindowDuration.Seconds()) * time.Second,
+			MaxKeys:        l.cfg.Woodpecker.Client.IdempotentWrite.MaxKeys,
+		},
+		SnapshotInterval:  time.Duration(l.cfg.Woodpecker.Client.IdempotentWrite.SnapshotInterval.Seconds()) * time.Second,
+		SnapshotThreshold: l.cfg.Woodpecker.Client.IdempotentWrite.SnapshotThreshold,
+	}
+
+	// Create object storage client for snapshot persistence
+	objStorage, err := objectstorage.NewObjectStorage(ctx, l.cfg)
+	if err != nil {
+		innerWriter.Close(ctx)
+		return nil, werr.ErrIdempotentWriteNotSupported.WithCauseErr(
+			fmt.Errorf("failed to create object storage for snapshot persistence: %w", err))
+	}
+
+	// Create snapshot manager
+	basePath := fmt.Sprintf("%s/%s", l.cfg.Minio.RootPath, l.Name)
+	snapshotManager := idempotent.NewDedupSnapshotManager(
+		l.Id,
+		l.cfg.Minio.BucketName,
+		basePath,
+		objStorage,
+	)
+
+	// Create idempotent writer
+	idempotentWriter := NewIdempotentWriter(l.Id, innerWriter, snapshotManager, idempotentConfig)
+
+	// Recover dedup window from snapshot + gap data
+	if recoverableWriter, ok := idempotentWriter.(*idempotentWriterImpl); ok {
+		if err := recoverableWriter.Recover(ctx, l); err != nil {
+			innerWriter.Close(ctx)
+			return nil, werr.ErrIdempotentWriteRecoveryFailed.WithCauseErr(err)
+		}
+	}
+
+	logger.Ctx(ctx).Info("opened idempotent writer",
+		zap.String("logName", l.Name),
+		zap.Int64("logId", l.Id),
+	)
+
+	return idempotentWriter, nil
 }
 
 // fenceAllActiveSegments fences all active segments to prevent split-brain scenarios

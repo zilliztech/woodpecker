@@ -43,6 +43,15 @@ type SegmentAppendConfig struct {
 	MaxRetries int `yaml:"maxRetries"`
 }
 
+// IdempotentWriteConfig stores the idempotent write configuration.
+type IdempotentWriteConfig struct {
+	Enabled           bool            `yaml:"enabled"`           // Enable idempotent write support (default: false)
+	WindowDuration    DurationSeconds `yaml:"windowDuration"`    // Dedup window duration (default: 10m)
+	MaxKeys           int             `yaml:"maxKeys"`           // Max number of idempotencyIds to track (default: 100000)
+	SnapshotInterval  DurationSeconds `yaml:"snapshotInterval"`  // Interval between snapshots (default: 30s)
+	SnapshotThreshold int             `yaml:"snapshotThreshold"` // Number of new entries before triggering a snapshot (default: 10000)
+}
+
 // ClientConfig stores the client configuration.
 type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
@@ -50,6 +59,7 @@ type ClientConfig struct {
 	Auditor              AuditorConfig              `yaml:"auditor"`
 	Quorum               QuorumConfig               `yaml:"quorum"`
 	SessionMonitor       SessionMonitorConfig       `yaml:"sessionMonitor"`
+	IdempotentWrite      IdempotentWriteConfig      `yaml:"idempotentWrite"`
 }
 
 type AuditorConfig struct {
@@ -155,6 +165,7 @@ type SegmentSyncPolicyConfig struct {
 	RetryInterval              DurationMilliseconds `yaml:"retryInterval"`
 	MaxFlushSize               ByteSize             `yaml:"maxFlushSize"`
 	MaxFlushThreads            int                  `yaml:"maxFlushThreads"`
+	CheckpointThreshold        int                  `yaml:"checkpointThreshold"`
 }
 
 type SegmentCompactionPolicy struct {
@@ -705,6 +716,13 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				CheckInterval: DurationSeconds{Duration: Duration{duration: 3 * time.Second}},
 				MaxFailures:   5,
 			},
+			IdempotentWrite: IdempotentWriteConfig{
+				Enabled:           false,
+				WindowDuration:    DurationSeconds{Duration: Duration{duration: 10 * time.Minute}},
+				MaxKeys:           100000,
+				SnapshotInterval:  DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
+				SnapshotThreshold: 10000,
+			},
 		},
 		Logstore: LogstoreConfig{
 			SegmentSyncPolicy: SegmentSyncPolicyConfig{
@@ -716,6 +734,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				RetryInterval:              DurationMilliseconds{Duration: Duration{duration: 2000 * 1000000}}, // 2000ms
 				MaxFlushSize:               ByteSize(16000000),
 				MaxFlushThreads:            8,
+				CheckpointThreshold:        10,
 			},
 			SegmentCompactionPolicy: SegmentCompactionPolicy{
 				MaxBytes:           ByteSize(32000000),
