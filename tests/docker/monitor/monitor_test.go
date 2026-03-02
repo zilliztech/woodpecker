@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	"github.com/zilliztech/woodpecker/tests/docker/framework"
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
@@ -280,6 +282,7 @@ func TestMonitor_ComprehensiveMetricsVerification(t *testing.T) {
 	// Start a lightweight Prometheus endpoint in the test process so that
 	// client-side metrics can be scraped, just like a real application would.
 	startTestMetricsEndpoint(t)
+	metrics.RegisterClientMetricsWithRegisterer(prometheus.DefaultRegisterer)
 
 	// Wait for Prometheus to be ready
 	cluster.WaitForPrometheusReady(t, 60*time.Second)

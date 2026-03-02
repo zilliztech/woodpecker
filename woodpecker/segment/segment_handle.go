@@ -131,14 +131,14 @@ func NewSegmentHandleWithAppendOpsQueue(ctx context.Context, logId int64, logNam
 func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId int64, logName string, segmentMeta *meta.SegmentMeta, metadata meta.MetadataProvider, clientPool client.LogStoreClientPool, cfg *config.Configuration, testAppendOpsQueue *list.List, writable bool) SegmentHandle {
 	executeRequestMaxQueueSize := cfg.Woodpecker.Client.SegmentAppend.QueueSize
 	segmentHandle := &segmentHandleImpl{
-		bucketName:       cfg.Minio.BucketName,
-		rootPath:         cfg.Minio.RootPath,
-		logId:            logId,
-		logName:          logName,
-		segmentId:        segmentMeta.Metadata.SegNo,
-		metadata:         metadata,
-		ClientPool:       clientPool,
-		appendOpsQueue:   testAppendOpsQueue,
+		bucketName:     cfg.Minio.BucketName,
+		rootPath:       cfg.Minio.RootPath,
+		logId:          logId,
+		logName:        logName,
+		segmentId:      segmentMeta.Metadata.SegNo,
+		metadata:       metadata,
+		ClientPool:     clientPool,
+		appendOpsQueue: testAppendOpsQueue,
 		quorumInfo: &proto.QuorumInfo{
 			Id: 1,
 			Wq: 1,
@@ -1154,25 +1154,30 @@ func (s *segmentHandleImpl) completeSegmentOnNode(ctx context.Context, node stri
 // For example: if nodes return [4, 6, 7] and ackQuorum is 2, then LAC is 6
 // because entries 1-6 are committed on at least 2 nodes (majority).
 func (s *segmentHandleImpl) calculateLAC(results []int64, ackQuorum int) int64 {
-	if len(results) == 0 {
+	// Filter out negative values (e.g. -1 returned by nodes with no data).
+	// Only non-negative entry IDs represent real committed data.
+	validResults := make([]int64, 0, len(results))
+	for _, r := range results {
+		if r >= 0 {
+			validResults = append(validResults, r)
+		}
+	}
+	if len(validResults) == 0 {
 		return -1
 	}
 
-	// Sort results in ascending order
-	sortedResults := make([]int64, len(results))
-	copy(sortedResults, results)
-	sort.Slice(sortedResults, func(i, j int) bool {
-		return sortedResults[i] < sortedResults[j]
+	// Sort in ascending order
+	sort.Slice(validResults, func(i, j int) bool {
+		return validResults[i] < validResults[j]
 	})
 
-	// LAC is the (len(results) - ackQuorum + 1)th smallest value
-	// This ensures that at least ackQuorum nodes have committed up to this entry
-	lacIndex := len(sortedResults) - ackQuorum
+	// LAC is the (len - ackQuorum)th element, ensuring at least ackQuorum nodes
+	// have committed up to this entry.
+	lacIndex := len(validResults) - ackQuorum
 	if lacIndex < 0 {
 		lacIndex = 0
 	}
-
-	return sortedResults[lacIndex]
+	return validResults[lacIndex]
 }
 
 // fenceSegmentQuorum sends FenceSegment requests to all quorum nodes

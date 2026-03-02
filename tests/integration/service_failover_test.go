@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -2614,4 +2615,1291 @@ func TestStagedStorageService_Failover_Case9_ReaderNodeFailover(t *testing.T) {
 
 	t.Logf("=== CASE 9 PASSED: Reader survived node %d failure, read all %d entries without gaps ===",
 		killedNodeIdx, totalEntries)
+}
+
+// =============================================================================
+// Case 10: Partial Replication During Node Crash
+// =============================================================================
+//
+// 4-node cluster, es=3. Write entry 0 to all quorum nodes. Kill one quorum
+// node. Write entry 1 (succeeds on 2/3 quorum nodes). Restart killed node.
+// Close writer, open reader. Both entries should be readable.
+func TestStagedStorageService_Failover_Case10_PartialReplicationDuringCrash(t *testing.T) {
+	const (
+		clusterSize = 4
+	)
+
+	t.Logf("=== CASE 10: Partial Replication During Node Crash ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case10")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case10_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write entry 0 — creates quorum and replicates to all quorum nodes
+	t.Logf("Phase 1: Writing entry 0 to create quorum...")
+	result0 := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("case10 entry 0")})
+	require.NoError(t, result0.Err, "Failed to write entry 0")
+	t.Logf("Wrote entry 0 with ID %d", result0.LogMessageId.EntryId)
+
+	// Phase 2: Identify quorum nodes and kill Nodes[0]
+	t.Logf("Phase 2: Identifying quorum and killing first quorum node...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	// Kill Nodes[0] — entry 1 will only be on Nodes[1] and Nodes[2]
+	killedNodeIdx := quorumNodeIndexes[0]
+	t.Logf("Killing quorum node %d (Nodes[0])", killedNodeIdx)
+	_, killErr := cluster.LeaveNodeWithIndex(t, killedNodeIdx)
+	require.NoError(t, killErr)
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: Write entry 1 — succeeds on 2/3 quorum nodes, fails on dead node
+	t.Logf("Phase 3: Writing entry 1 with one quorum node down...")
+	writeSuccess := false
+	maxWriteAttempts := 30
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		result1 := logWriter.Write(context.Background(), &log.WriteMessage{Payload: []byte("case10 entry 1")})
+		if result1.Err != nil {
+			t.Logf("Write attempt %d for entry 1 failed: %v", attempt+1, result1.Err)
+			if werr.ErrLogWriterLockLost.Is(result1.Err) {
+				t.Logf("Writer lock lost, reopening writer...")
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = logWriter.Close(closeCtx)
+				closeCancel()
+				logWriter, openWriterErr = logHandle.OpenLogWriter(ctx)
+				if openWriterErr != nil {
+					t.Logf("Failed to reopen writer: %v", openWriterErr)
+				}
+			}
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		t.Logf("Wrote entry 1 with ID %d", result1.LogMessageId.EntryId)
+		writeSuccess = true
+		break
+	}
+	require.True(t, writeSuccess, "Should eventually write entry 1")
+
+	// Phase 4: Restart killed node
+	t.Logf("Phase 4: Restarting killed node %d...", killedNodeIdx)
+	currentSeeds := cluster.GetSeedList()
+	_, restartErr := cluster.RestartNode(t, killedNodeIdx, currentSeeds)
+	require.NoError(t, restartErr)
+	time.Sleep(3 * time.Second)
+
+	// Phase 5: Close writer and read all entries
+	t.Logf("Phase 5: Closing writer and reading entries...")
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case10-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	totalExpected := 2
+	for i := 0; i < totalExpected; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed: %v", readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+
+	assert.Equal(t, totalExpected, readCount,
+		"Should read both entries after partial replication and recovery")
+
+	t.Logf("=== CASE 10 PASSED: Read %d/%d entries after partial replication ===",
+		readCount, totalExpected)
+}
+
+// =============================================================================
+// Case 11: Fence With Empty Node After Restart (data wiped)
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 1 entry to quorum [A,B,C]. Kill node C, close
+// writer (fence with A=0, B=0, C=dead → LAC=0, correct). Then wipe C's data
+// directory and restart C so it is truly empty. Open reader — the reader may
+// contact C and get ErrFileReaderEndOfFile. Bug #1: reader breaks on EOF
+// instead of trying another node. Assert: 1 entry is readable.
+func TestStagedStorageService_Failover_Case11_FenceWithEmptyNode(t *testing.T) {
+	const (
+		clusterSize = 4
+	)
+
+	t.Logf("=== CASE 11: Fence With Empty Node After Restart (data wiped) ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case11")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case11_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write entry 0 — creates quorum [A, B, C], data on all 3
+	t.Logf("Phase 1: Writing entry 0 to create quorum...")
+	result0 := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("case11 entry 0")})
+	require.NoError(t, result0.Err, "Failed to write entry 0")
+	t.Logf("Wrote entry 0 with ID %d", result0.LogMessageId.EntryId)
+
+	// Phase 2: Get quorum info and identify all quorum nodes
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	// Kill Nodes[0] — the reader iterates quorum nodes starting at index 0,
+	// so after wipe+restart this node will be contacted first, maximizing
+	// Bug #1 (EOF break) reproduction.
+	killedNodeIdx := quorumNodeIndexes[0]
+	t.Logf("Killing quorum node %d (Nodes[0])", killedNodeIdx)
+	_, killErr := cluster.LeaveNodeWithIndex(t, killedNodeIdx)
+	require.NoError(t, killErr)
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: Close writer — fence with 2 alive nodes → LAC=0 (correct)
+	t.Logf("Phase 3: Closing writer to fence and complete segment...")
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+	t.Logf("Writer closed, segment fenced with correct LAC")
+
+	// Phase 4: Wipe killed node's data directory and restart it (truly empty)
+	// Recovery mode will find no files → Read on this node returns EOF
+	nodeDataDir := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", killedNodeIdx))
+	t.Logf("Phase 4: Wiping data dir %s and restarting node %d...", nodeDataDir, killedNodeIdx)
+	require.NoError(t, os.RemoveAll(nodeDataDir))
+
+	currentSeeds := cluster.GetSeedList()
+	_, restartErr := cluster.RestartNode(t, killedNodeIdx, currentSeeds)
+	require.NoError(t, restartErr)
+	time.Sleep(3 * time.Second)
+	t.Logf("Node %d restarted (data wiped), active nodes: %d", killedNodeIdx, cluster.GetActiveNodes())
+
+	// Phase 5: Open reader and read entries
+	// The reader may contact the wiped (empty) node and get EOF.
+	// Bug #1: reader breaks on EOF instead of trying other nodes.
+	t.Logf("Phase 5: Opening reader and reading entries...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case11-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+	msg, readErr := logReader.ReadNext(readCtx)
+	readCancel()
+	if readErr != nil {
+		t.Logf("First read attempt failed: %v, retrying...", readErr)
+		time.Sleep(1 * time.Second)
+		readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr = logReader.ReadNext(readCtx2)
+		readCancel2()
+	}
+	if readErr == nil && msg != nil {
+		readCount++
+		t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+			msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	} else if readErr != nil {
+		t.Logf("Failed to read entry: %v", readErr)
+	}
+
+	assert.Equal(t, 1, readCount,
+		"Should read 1 entry even when one quorum node is empty after restart")
+
+	t.Logf("=== CASE 11 RESULT: Read %d/1 entries ===", readCount)
+}
+
+// =============================================================================
+// Case 12: LAC Miscalculation After Node Swap (Original Bug Reproduction)
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 1 entry to quorum [A, B, C]. Kill node A,
+// wipe A's data directory, restart A (truly empty — returns -1 on fence).
+// Kill node B. Close writer → fence: A=-1, C=0, B=dead.
+// calculateLAC([0, -1], ackQuorum=2) returns -1 (BUG! should be 0).
+// Reader should still be able to read the 1 entry.
+//
+// This test reproduces the original Case 7 rolling restart failure.
+//
+// Expected: FAILS until Bug #2 (LAC calculation) is fixed.
+func TestStagedStorageService_Failover_Case12_LACMiscalculationAfterNodeSwap(t *testing.T) {
+	const (
+		clusterSize = 4
+	)
+
+	t.Logf("=== CASE 12: LAC Miscalculation After Node Swap ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case12")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case12_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write entry 0 — creates quorum [A, B, C], data on all 3 nodes
+	t.Logf("Phase 1: Writing entry 0 to create quorum...")
+	result0 := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("case12 entry 0")})
+	require.NoError(t, result0.Err, "Failed to write entry 0")
+	t.Logf("Wrote entry 0 with ID %d", result0.LogMessageId.EntryId)
+
+	// Phase 2: Identify quorum nodes (A, B, C)
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(quorumInfo.Nodes), 3, "Should have at least 3 quorum nodes")
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	nodeA := quorumNodeIndexes[0]
+	nodeB := quorumNodeIndexes[1]
+
+	// Phase 3: Kill node A and wipe its data directory
+	t.Logf("Phase 3: Killing node A (index %d) and wiping data...", nodeA)
+	_, killErr := cluster.LeaveNodeWithIndex(t, nodeA)
+	require.NoError(t, killErr)
+	time.Sleep(1 * time.Second)
+
+	// Wipe node A's local storage so recovery mode finds nothing → returns -1
+	nodeADataDir := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeA))
+	t.Logf("Wiping data dir: %s", nodeADataDir)
+	require.NoError(t, os.RemoveAll(nodeADataDir))
+
+	// Phase 4: Restart node A — truly empty, returns -1 on fence
+	t.Logf("Phase 4: Restarting node A (index %d, data wiped)...", nodeA)
+	currentSeeds := cluster.GetSeedList()
+	_, restartErr := cluster.RestartNode(t, nodeA, currentSeeds)
+	require.NoError(t, restartErr)
+	time.Sleep(3 * time.Second)
+	t.Logf("Node A restarted (empty), active nodes: %d", cluster.GetActiveNodes())
+
+	// Phase 5: Kill node B — now C has data, A is empty, B is dead
+	t.Logf("Phase 5: Killing node B (index %d)...", nodeB)
+	_, killErr = cluster.LeaveNodeWithIndex(t, nodeB)
+	require.NoError(t, killErr)
+	time.Sleep(2 * time.Second)
+
+	// Phase 6: Close writer — triggers fence on the segment.
+	// Fence results: A returns -1 (empty), C returns 0 (has entry), B is dead.
+	// calculateLAC([0, -1], ensembleCoverage=2) returns -1 (BUG! should be 0).
+	t.Logf("Phase 6: Closing writer to trigger fence (expecting LAC bug)...")
+	closeErr := logWriter.Close(ctx)
+	logWriter = nil
+	if closeErr != nil {
+		t.Logf("Writer close returned error (may be expected): %v", closeErr)
+	}
+
+	// Phase 7: Open reader and attempt to read
+	// With the LAC bug: LAC=-1, reader sees no entries → reads 0 (FAIL)
+	// With the LAC fix: LAC=0, reader sees entry 0 → reads 1 (PASS)
+	// Bug #1 also affects this: if reader contacts node A (empty), it gets EOF
+	// and breaks instead of trying node C.
+	t.Logf("Phase 7: Opening reader and attempting to read...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case12-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+	msg, readErr := logReader.ReadNext(readCtx)
+	readCancel()
+	if readErr != nil {
+		t.Logf("First read attempt failed: %v, retrying...", readErr)
+		time.Sleep(1 * time.Second)
+		readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr = logReader.ReadNext(readCtx2)
+		readCancel2()
+	}
+	if readErr == nil && msg != nil {
+		readCount++
+		t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+			msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	} else if readErr != nil {
+		t.Logf("Failed to read entry (expected until bugs are fixed): %v", readErr)
+	}
+
+	assert.Equal(t, 1, readCount,
+		"Should read 1 entry; fails with LAC=-1 due to calculateLAC([0,-1], ackQuorum=2) bug")
+
+	t.Logf("=== CASE 12 RESULT: Read %d/1 entries (0 = both bugs present, 1 = bugs fixed) ===",
+		readCount)
+}
+
+// =============================================================================
+// Case 13: EOF on non-first quorum node after dead node skip
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 3 entries to quorum [A, B, C].
+// Kill B (Nodes[1]), wipe B's data, restart B (empty). Then kill A (Nodes[0]).
+// Close writer → fence: A=dead, B=-1 (empty), C=2.
+// calculateLAC([2, -1], ensembleCoverage=2) returns -1 (Bug #2, should be 2).
+//
+// Reader path: Nodes[0]=A (dead → connection error → continue),
+//              Nodes[1]=B (empty → EOF → break!),  ← Bug #1 stops here
+//              Nodes[2]=C (has data — never reached).
+//
+// Unlike Case 12 where the empty node is Nodes[0], here the empty node is
+// Nodes[1]. This verifies Bug #1 triggers even when the reader successfully
+// skips one dead node but then hits an empty node mid-iteration.
+//
+// Expected: FAILS until both bugs are fixed.
+func TestStagedStorageService_Failover_Case13_EOFOnNonFirstNodeAfterDeadSkip(t *testing.T) {
+	const (
+		clusterSize  = 4
+		totalEntries = 3
+	)
+
+	t.Logf("=== CASE 13: EOF On Non-First Quorum Node After Dead Node Skip ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case13")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case13_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write 3 entries — creates quorum [A, B, C], all entries on all 3
+	t.Logf("Phase 1: Writing %d entries to create quorum...", totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		payload := fmt.Sprintf("case13 entry %d", i)
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Phase 2: Identify quorum nodes (A=Nodes[0], B=Nodes[1], C=Nodes[2])
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(quorumInfo.Nodes), 3, "Should have at least 3 quorum nodes")
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	nodeA := quorumNodeIndexes[0] // will be killed last (dead during fence+read)
+	nodeB := quorumNodeIndexes[1] // will be wiped (empty during fence+read)
+
+	// Phase 3: Kill B (Nodes[1]), wipe its data, restart B (empty)
+	t.Logf("Phase 3: Killing node B (index %d), wiping data, restarting...", nodeB)
+	_, killErr := cluster.LeaveNodeWithIndex(t, nodeB)
+	require.NoError(t, killErr)
+	time.Sleep(1 * time.Second)
+
+	nodeBDataDir := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", nodeB))
+	t.Logf("Wiping data dir: %s", nodeBDataDir)
+	require.NoError(t, os.RemoveAll(nodeBDataDir))
+
+	currentSeeds := cluster.GetSeedList()
+	_, restartErr := cluster.RestartNode(t, nodeB, currentSeeds)
+	require.NoError(t, restartErr)
+	time.Sleep(3 * time.Second)
+	t.Logf("Node B (index %d) restarted (empty), active nodes: %d", nodeB, cluster.GetActiveNodes())
+
+	// Phase 4: Kill A (Nodes[0]) — now A=dead, B=empty, C=has data
+	t.Logf("Phase 4: Killing node A (index %d)...", nodeA)
+	_, killErr = cluster.LeaveNodeWithIndex(t, nodeA)
+	require.NoError(t, killErr)
+	time.Sleep(2 * time.Second)
+
+	// Phase 5: Close writer → fence: A=dead, B=-1 (empty), C=2
+	// calculateLAC([2, -1], ensembleCoverage=2) returns -1 (Bug #2, should be 2)
+	t.Logf("Phase 5: Closing writer to trigger fence...")
+	closeErr := logWriter.Close(ctx)
+	logWriter = nil
+	if closeErr != nil {
+		t.Logf("Writer close returned error (may be expected): %v", closeErr)
+	}
+
+	// Phase 6: Open reader and attempt to read
+	// Reader iteration: Nodes[0]=A (dead → conn error → continue),
+	//                   Nodes[1]=B (empty → EOF → break! Bug #1),
+	//                   Nodes[2]=C (has data — never reached)
+	t.Logf("Phase 6: Opening reader and attempting to read %d entries...", totalEntries)
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case13-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed at entry %d: %v", i, readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+
+	assert.Equal(t, totalEntries, readCount,
+		"Should read all %d entries; reader must skip dead A, skip empty B (EOF), and reach C",
+		totalEntries)
+
+	t.Logf("=== CASE 13 RESULT: Read %d/%d entries (0 = bugs present, %d = fixed) ===",
+		readCount, totalEntries, totalEntries)
+}
+
+// =============================================================================
+// Case 14: Reader Fallback After EOF On Empty Fenced Node (data wiped)
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 5 entries, close writer normally so the segment
+// is fenced and completed with correct LAC (all 3 nodes alive). Then kill one
+// quorum node, wipe its data directory, and restart it (truly empty). Open
+// reader — if it contacts the empty node it gets ErrFileReaderEndOfFile.
+// Bug #1: reader breaks on EOF instead of trying other nodes.
+//
+// This isolates Bug #1 independently of Bug #2 (LAC is correct).
+func TestStagedStorageService_Failover_Case14_ReaderFallbackAfterEOF(t *testing.T) {
+	const (
+		clusterSize  = 4
+		totalEntries = 5
+	)
+
+	t.Logf("=== CASE 14: Reader Fallback After EOF On Empty Fenced Node (data wiped) ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case14")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if woodpeckerClient != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient.Close(closeCtx)
+		}
+	}()
+
+	logName := "test_log_failover_case14_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+	defer func() {
+		if logHandle != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle.Close(closeCtx)
+		}
+	}()
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+	defer func() {
+		if logWriter != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter.Close(closeCtx)
+		}
+	}()
+
+	// Phase 1: Write entries — quorum [A, B, C], all entries on all 3 nodes
+	t.Logf("Phase 1: Writing %d entries...", totalEntries)
+	writtenPayloads := make([]string, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		payload := fmt.Sprintf("case14 entry %d", i)
+		writtenPayloads[i] = payload
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Phase 2: Get quorum info and identify all quorum nodes
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, err := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, err)
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	// Pick Nodes[0] — the reader iterates quorum nodes starting at index 0,
+	// so wiping this node guarantees the reader hits the empty node first,
+	// reliably triggering Bug #1 (EOF break).
+	targetNodeIdx := quorumNodeIndexes[0]
+
+	// Phase 3: Close writer normally — all 3 nodes alive, fence is correct
+	t.Logf("Phase 3: Closing writer normally (all nodes alive, correct fence)...")
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+
+	// Phase 4: Kill Nodes[0], wipe its data directory, restart (truly empty)
+	t.Logf("Phase 4: Killing quorum node %d (Nodes[0]), wiping data, and restarting...", targetNodeIdx)
+	_, killErr := cluster.LeaveNodeWithIndex(t, targetNodeIdx)
+	require.NoError(t, killErr)
+	time.Sleep(1 * time.Second)
+
+	nodeDataDir := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", targetNodeIdx))
+	t.Logf("Wiping data dir: %s", nodeDataDir)
+	require.NoError(t, os.RemoveAll(nodeDataDir))
+
+	currentSeeds := cluster.GetSeedList()
+	_, restartErr := cluster.RestartNode(t, targetNodeIdx, currentSeeds)
+	require.NoError(t, restartErr)
+	time.Sleep(3 * time.Second)
+	t.Logf("Node %d restarted (data wiped), active nodes: %d",
+		targetNodeIdx, cluster.GetActiveNodes())
+
+	// Phase 5: Open reader and read all entries
+	// The reader may contact the wiped (empty) node and get EOF.
+	// Bug #1: reader breaks on EOF instead of trying other nodes.
+	// Since LAC is correct here, this test isolates Bug #1 exclusively.
+	t.Logf("Phase 5: Opening reader and reading %d entries...", totalEntries)
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle.OpenLogReader(ctx, startMsgId, "test-case14-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(1 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 10*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed at entry %d: %v", i, readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			assert.Equal(t, writtenPayloads[i], string(msg.Payload),
+				"Entry %d content should match", i)
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+
+	assert.Equal(t, totalEntries, readCount,
+		"Should read all %d entries; reader must try other nodes when hitting EOF on empty node",
+		totalEntries)
+
+	t.Logf("=== CASE 14 RESULT: Read %d/%d entries (%d = reader fallback works) ===",
+		readCount, totalEntries, totalEntries)
+}
+
+// =============================================================================
+// Case 15: Cluster restart with data loss on one node
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 1 entry (replicated to 3 quorum nodes).
+// Stop the entire cluster. Close writer (fence fails, segment stays Active).
+// Wipe one quorum node's data directory. Restart entire cluster.
+// Open a new writer (triggers fence on old Active segment).
+// The wiped node returns LAC=-1, other 2 return LAC=0.
+// With 3 responses, calculateLAC([-1,0,0], 2) = 0 (correct), so Bug #2 is NOT triggered.
+// However, when the reader contacts the wiped node first, it gets
+// ErrFileReaderEndOfFile and breaks immediately without trying other nodes (Bug #1).
+func TestStagedStorageService_Failover_Case15_ClusterRestartWithDataLoss(t *testing.T) {
+	const (
+		clusterSize = 4
+	)
+
+	t.Logf("=== CASE 15: Cluster Restart With Data Loss (Bug #1 Reproduction) ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case15")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+
+	logName := "test_log_failover_case15_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+
+	// Phase 1: Write 1 entry — data replicated to all 3 quorum nodes
+	t.Logf("Phase 1: Writing 1 entry to all quorum nodes...")
+	result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte("case15 entry 0")})
+	require.NoError(t, result.Err, "Failed to write entry")
+	t.Logf("Wrote entry with ID %d", result.LogMessageId.EntryId)
+
+	// Phase 2: Identify quorum nodes so we can wipe the first one (Nodes[0])
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, qErr := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, qErr)
+	require.GreaterOrEqual(t, len(quorumInfo.Nodes), 3, "Should have at least 3 quorum nodes")
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	// Pick the FIRST quorum node (Nodes[0]) to wipe — the reader iterates
+	// quorum nodes starting at index 0, so it will hit this wiped node first.
+	wipedNodeIdx := quorumNodeIndexes[0]
+	t.Logf("Will wipe data for node %d (first in quorum list)", wipedNodeIdx)
+
+	// Phase 3: Stop entire cluster — all nodes become unreachable
+	t.Logf("Phase 3: Stopping entire cluster...")
+	cluster.StopMultiNodeCluster(t)
+	time.Sleep(2 * time.Second)
+
+	// Phase 4: Close writer and client — fence will fail since cluster is down,
+	// so the segment stays Active in etcd (never fenced/completed)
+	t.Logf("Phase 4: Closing writer and client (fence fails, segment stays Active in etcd)...")
+	_ = logWriter.Close(ctx)
+	logWriter = nil
+	_ = logHandle.Close(ctx)
+	logHandle = nil
+	_ = woodpeckerClient.Close(ctx)
+	woodpeckerClient = nil
+
+	// Phase 5: Wipe the chosen quorum node's data directory
+	// This simulates a node that lost all data (disk failure, replacement, etc.)
+	wipedNodeDataDir := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", wipedNodeIdx))
+	t.Logf("Phase 5: Wiping data dir for node %d: %s", wipedNodeIdx, wipedNodeDataDir)
+	require.NoError(t, os.RemoveAll(wipedNodeDataDir))
+
+	// Phase 6: Restart entire cluster
+	t.Logf("Phase 6: Restarting entire cluster...")
+	// Restart node 0 first (bootstraps alone with empty seeds)
+	firstAddr, restartErr := cluster.RestartNode(t, 0, []string{})
+	require.NoError(t, restartErr)
+	t.Logf("Restarted first node 0 at %s", firstAddr)
+
+	// Restart remaining nodes using node 0 as seed
+	for i := 1; i < clusterSize; i++ {
+		_, nodeRestartErr := cluster.RestartNode(t, i, []string{firstAddr})
+		require.NoError(t, nodeRestartErr)
+		t.Logf("Restarted node %d", i)
+	}
+	time.Sleep(5 * time.Second)
+	t.Logf("All nodes restarted, active nodes: %d", cluster.GetActiveNodes())
+
+	// Phase 7: Create new etcd client (old one was closed with woodpeckerClient),
+	// then create new woodpecker client, open log, open writer.
+	// Opening a writer triggers fenceAllActiveSegments on old Active segment 0.
+	// Fence results from quorum: wiped node returns -1, other 2 return 0.
+	// calculateLAC([-1, 0, 0], ensembleCoverage=2) → sorted [-1,0,0], index=1 → LAC=0 (correct).
+	// Segment 0 gets completed with LAC=0.
+	t.Logf("Phase 7: Creating new client and opening writer (triggers fence)...")
+	newSeeds := cluster.GetSeedList()
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+
+	etcdCli2, etcdErr := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, etcdErr)
+	defer etcdCli2.Close()
+
+	woodpeckerClient2, clientErr := woodpecker.NewClient(ctx, cfg, etcdCli2, true)
+	require.NoError(t, clientErr)
+	defer func() {
+		if woodpeckerClient2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient2.Close(closeCtx)
+		}
+	}()
+
+	logHandle2, openErr2 := woodpeckerClient2.OpenLog(ctx, logName)
+	require.NoError(t, openErr2)
+	defer func() {
+		if logHandle2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle2.Close(closeCtx)
+		}
+	}()
+
+	logWriter2, openWriterErr2 := logHandle2.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr2)
+	defer func() {
+		if logWriter2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter2.Close(closeCtx)
+		}
+	}()
+	time.Sleep(2 * time.Second)
+
+	// Phase 8: Open reader and try to read the entry
+	// Bug #1: The reader cycles through quorum nodes starting at Nodes[0] (the wiped node).
+	// It sends ReadEntriesBatchAdv to the wiped node → gets ErrFileReaderEndOfFile →
+	// breaks immediately instead of continuing to try other nodes that have the data.
+	// Then the log-level reader interprets EOF as "segment finished" and moves to
+	// the next segment (which is empty), causing a timeout with 0 entries read.
+	t.Logf("Phase 8: Opening reader and reading entries...")
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle2.OpenLogReader(ctx, startMsgId, "test-case15-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	readCtx, readCancel := context.WithTimeout(ctx, 15*time.Second)
+	msg, readErr := logReader.ReadNext(readCtx)
+	readCancel()
+	if readErr != nil {
+		t.Logf("First read error: %v, retrying...", readErr)
+		time.Sleep(2 * time.Second)
+		readCtx2, readCancel2 := context.WithTimeout(ctx, 15*time.Second)
+		msg, readErr = logReader.ReadNext(readCtx2)
+		readCancel2()
+		if readErr != nil {
+			t.Logf("Read still failed: %v", readErr)
+		}
+	}
+	if msg != nil {
+		readCount++
+		assert.Equal(t, "case15 entry 0", string(msg.Payload),
+			"Entry content should match")
+		t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+			msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	}
+
+	assert.Equal(t, 1, readCount,
+		"Should read the 1 entry; reader must try other nodes when hitting EOF on wiped node (Bug #1)")
+
+	t.Logf("=== CASE 15 RESULT: Read %d/1 entries (expected 1 if Bug #1 is fixed) ===", readCount)
+}
+
+// =============================================================================
+// Case 16: Read after normal close with 2 of 3 replicas lost
+// =============================================================================
+//
+// 4-node cluster, es=3. Write 3 entries and close writer normally (segment
+// properly fenced/completed with correct LAC=2). Stop cluster, wipe data on
+// 2 of 3 quorum nodes. Restart cluster, open writer, open reader.
+// The segment metadata already has correct LAC, so Bug #2 is irrelevant.
+// Bug #1: reader hits a wiped node → ErrFileReaderEndOfFile → breaks without
+// trying the remaining node that still has all the data.
+// We deliberately wipe Nodes[0] and Nodes[1] so the reader must fall through
+// to Nodes[2] — the only surviving replica.
+func TestStagedStorageService_Failover_Case16_ReadAfterTwoReplicasLost(t *testing.T) {
+	const (
+		clusterSize  = 4
+		totalEntries = 3
+	)
+
+	t.Logf("=== CASE 16: Read After 2-of-3 Replicas Lost (Bug #1 Reproduction) ===")
+
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestStagedStorageService_Failover_Case16")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	woodpeckerClient, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+
+	logName := "test_log_failover_case16_" + time.Now().Format("20060102150405")
+	createErr := woodpeckerClient.CreateLog(ctx, logName)
+	if createErr != nil {
+		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+	}
+
+	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
+	require.NoError(t, openErr)
+
+	logWriter, openWriterErr := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr)
+
+	// Phase 1: Write 3 entries normally
+	t.Logf("Phase 1: Writing %d entries...", totalEntries)
+	writtenPayloads := make([]string, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		payload := fmt.Sprintf("case16 entry %d", i)
+		writtenPayloads[i] = payload
+		result := logWriter.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Failed to write entry %d", i)
+		t.Logf("Wrote entry %d with ID %d", i, result.LogMessageId.EntryId)
+	}
+
+	// Phase 2: Identify quorum nodes before closing
+	t.Logf("Phase 2: Identifying quorum nodes...")
+	currentSegmentHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+	require.NotNil(t, currentSegmentHandle)
+
+	quorumInfo, qErr := currentSegmentHandle.GetQuorumInfo(ctx)
+	require.NoError(t, qErr)
+	require.GreaterOrEqual(t, len(quorumInfo.Nodes), 3, "Should have at least 3 quorum nodes")
+	t.Logf("Quorum nodes: %v", quorumInfo.Nodes)
+
+	quorumNodeIndexes := make([]int, 0, len(quorumInfo.Nodes))
+	for _, addr := range quorumInfo.Nodes {
+		nodeIdx, found := findClusterNodeByQuorumAddr(t, cluster, addr)
+		require.True(t, found, "Should find cluster node for quorum address %s", addr)
+		quorumNodeIndexes = append(quorumNodeIndexes, nodeIdx)
+	}
+	t.Logf("Quorum node indexes: %v", quorumNodeIndexes)
+
+	// Phase 3: Close writer normally — fence/complete succeeds, segment Completed with correct LAC
+	t.Logf("Phase 3: Closing writer normally (segment gets properly completed)...")
+	require.NoError(t, logWriter.Close(ctx))
+	logWriter = nil
+	require.NoError(t, logHandle.Close(ctx))
+	logHandle = nil
+	require.NoError(t, woodpeckerClient.Close(ctx))
+	woodpeckerClient = nil
+	t.Logf("Writer and client closed, segment completed with correct LAC")
+
+	// Phase 4: Stop entire cluster
+	t.Logf("Phase 4: Stopping entire cluster...")
+	cluster.StopMultiNodeCluster(t)
+	time.Sleep(2 * time.Second)
+
+	// Phase 5: Wipe data on Nodes[0] and Nodes[1] — only Nodes[2] keeps data.
+	// The reader iterates quorum nodes starting at index 0, so it will hit
+	// two wiped nodes before reaching the surviving one.
+	wipedIdx0 := quorumNodeIndexes[0]
+	wipedIdx1 := quorumNodeIndexes[1]
+	survivorIdx := quorumNodeIndexes[2]
+
+	dataDir0 := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", wipedIdx0))
+	dataDir1 := filepath.Join(cluster.BaseDir, fmt.Sprintf("node%d", wipedIdx1))
+	t.Logf("Phase 5: Wiping data for nodes %d and %d (survivor: node %d)",
+		wipedIdx0, wipedIdx1, survivorIdx)
+	require.NoError(t, os.RemoveAll(dataDir0))
+	require.NoError(t, os.RemoveAll(dataDir1))
+
+	// Phase 6: Restart entire cluster
+	t.Logf("Phase 6: Restarting entire cluster...")
+	firstAddr, restartErr := cluster.RestartNode(t, 0, []string{})
+	require.NoError(t, restartErr)
+	t.Logf("Restarted first node 0 at %s", firstAddr)
+
+	for i := 1; i < clusterSize; i++ {
+		_, nodeRestartErr := cluster.RestartNode(t, i, []string{firstAddr})
+		require.NoError(t, nodeRestartErr)
+		t.Logf("Restarted node %d", i)
+	}
+	time.Sleep(5 * time.Second)
+	t.Logf("All nodes restarted, active nodes: %d", cluster.GetActiveNodes())
+
+	// Phase 7: Create new etcd client (old one was closed with woodpeckerClient),
+	// then create new woodpecker client, open log, open writer.
+	t.Logf("Phase 7: Creating new client and opening writer...")
+	newSeeds := cluster.GetSeedList()
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = newSeeds
+
+	etcdCli2, etcdErr := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, etcdErr)
+	defer etcdCli2.Close()
+
+	woodpeckerClient2, clientErr := woodpecker.NewClient(ctx, cfg, etcdCli2, true)
+	require.NoError(t, clientErr)
+	defer func() {
+		if woodpeckerClient2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = woodpeckerClient2.Close(closeCtx)
+		}
+	}()
+
+	logHandle2, openErr2 := woodpeckerClient2.OpenLog(ctx, logName)
+	require.NoError(t, openErr2)
+	defer func() {
+		if logHandle2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logHandle2.Close(closeCtx)
+		}
+	}()
+
+	logWriter2, openWriterErr2 := logHandle2.OpenLogWriter(ctx)
+	require.NoError(t, openWriterErr2)
+	defer func() {
+		if logWriter2 != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logWriter2.Close(closeCtx)
+		}
+	}()
+	time.Sleep(2 * time.Second)
+
+	// Phase 8: Open reader and read all 3 entries
+	// The segment was properly completed (LAC=2), so metadata is correct.
+	// Bug #1: reader hits wiped Nodes[0] → EOF → breaks → never reaches Nodes[2].
+	t.Logf("Phase 8: Opening reader and reading %d entries...", totalEntries)
+	startMsgId := &log.LogMessageId{SegmentId: 0, EntryId: 0}
+	logReader, openReaderErr := logHandle2.OpenLogReader(ctx, startMsgId, "test-case16-reader")
+	require.NoError(t, openReaderErr)
+	defer func() {
+		if logReader != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer closeCancel()
+			_ = logReader.Close(closeCtx)
+		}
+	}()
+
+	readCount := 0
+	for i := 0; i < totalEntries; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 15*time.Second)
+		msg, readErr := logReader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil {
+			t.Logf("Read error at entry %d: %v, retrying...", i, readErr)
+			time.Sleep(2 * time.Second)
+			readCtx2, readCancel2 := context.WithTimeout(ctx, 15*time.Second)
+			msg, readErr = logReader.ReadNext(readCtx2)
+			readCancel2()
+			if readErr != nil {
+				t.Logf("Read still failed at entry %d: %v", i, readErr)
+				continue
+			}
+		}
+		if msg != nil {
+			readCount++
+			assert.Equal(t, writtenPayloads[i], string(msg.Payload),
+				"Entry %d content should match", i)
+			t.Logf("Read entry: segmentId=%d, entryId=%d, payload=%s",
+				msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+		}
+	}
+
+	assert.Equal(t, totalEntries, readCount,
+		"Should read all %d entries; reader must skip wiped nodes and reach the surviving replica (Bug #1)",
+		totalEntries)
+
+	t.Logf("=== CASE 16 RESULT: Read %d/%d entries (expected %d if Bug #1 is fixed) ===",
+		readCount, totalEntries, totalEntries)
 }
