@@ -243,7 +243,7 @@ func (l *logBatchReaderImpl) Close(ctx context.Context) error {
 
 func (l *logBatchReaderImpl) getNextSegHandleAndIDs(ctx context.Context) (segment.SegmentHandle, int64, int64, error) {
 	// Get latest segment ID first
-	nextSegmentId, err := l.logHandle.GetNextSegmentId()
+	nextSegmentId, err := l.logHandle.GetNextSegmentId(ctx)
 	latestSegmentId := nextSegmentId - 1
 	if err != nil {
 		logger.Ctx(ctx).Warn("get next segment id error",

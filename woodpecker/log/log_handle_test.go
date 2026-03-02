@@ -283,13 +283,7 @@ func TestFenceAllActiveSegments_SuccessfulFencing(t *testing.T) {
 	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
 	mockSegment3.EXPECT().FenceAndComplete(mock.Anything).Return(int64(200), nil)
 
-	// Mock metadata updates after fencing
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
-	}), mock.Anything).Return(nil)
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 3 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 200
-	}), mock.Anything).Return(nil)
+	// Note: No UpdateSegmentMetadata mock needed — FenceAndComplete handles metadata update internally.
 
 	err := logHandle.fenceAllActiveSegments(ctx)
 	assert.NoError(t, err)
@@ -324,10 +318,7 @@ func TestFenceAllActiveSegments_PartialFailure(t *testing.T) {
 	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
 	mockSegment2.EXPECT().FenceAndComplete(mock.Anything).Return(int64(-1), errors.New("fence error"))
 
-	// Mock metadata update for successful segment
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
-	}), mock.Anything).Return(nil)
+	// Note: No UpdateSegmentMetadata mock needed — FenceAndComplete handles metadata update internally.
 
 	err := logHandle.fenceAllActiveSegments(ctx)
 
@@ -753,9 +744,8 @@ func TestLogHandle_CompleteAllActiveSegmentIfExists_DataRaceProtection(t *testin
 	// Verify that CompleteAllActiveSegmentIfExists completed successfully
 	assert.NoError(t, completeErr)
 
-	// Verify that segments were cleared
-	assert.Len(t, logHandle.SegmentHandles, 0)
-	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
+	// CompleteAllActiveSegmentIfExists does NOT clear the map — that's Close()'s job.
+	// Segments should still be present after completion.
 
 	// GetExistsReadonlySegmentHandle should either:
 	// 1. Return the segment handle if it got the lock first, OR
@@ -935,8 +925,8 @@ func TestLogHandle_CompleteAllActiveSegmentIfExists_vs_Close_Behavior(t *testing
 
 		// Verify
 		assert.NoError(t, err)
-		assert.Len(t, logHandle.SegmentHandles, 0)              // Segments should be cleared
-		assert.Equal(t, int64(-1), logHandle.WritableSegmentId) // WritableSegmentId should be reset
+		// CompleteAllActiveSegmentIfExists does NOT clear the map — that's Close()'s job.
+		assert.Len(t, logHandle.SegmentHandles, 2)
 
 		// Verify expectations
 		mockSegment1.AssertExpectations(t)
@@ -1329,10 +1319,7 @@ func TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments(t *testing
 	// Mock successful fencing
 	mockSegment1.EXPECT().FenceAndComplete(mock.Anything).Return(int64(100), nil)
 
-	// Mock metadata update after fencing
-	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
-		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Completed && meta.Metadata.LastEntryId == 100
-	}), mock.Anything).Return(nil)
+	// Note: No UpdateSegmentMetadata mock needed here — FenceAndComplete handles metadata update internally.
 
 	// Call OpenLogWriter
 	writer, err := logHandle.OpenLogWriter(ctx)

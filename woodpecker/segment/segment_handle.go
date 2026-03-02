@@ -75,7 +75,7 @@ type SegmentHandle interface {
 	// GetBlocksCount get the number of blocks in the segment
 	GetBlocksCount(ctx context.Context) int64
 	// Complete the segment writing
-	// Deprecated, no used in main logic
+	// Deprecated, not used in main logic
 	Complete(ctx context.Context) (int64, error)
 	// FenceAndComplete the segment in all nodes
 	FenceAndComplete(ctx context.Context) (int64, error)
@@ -118,6 +118,8 @@ func NewSegmentHandle(ctx context.Context, logId int64, logName string, segmentM
 	if canWrite {
 		segmentHandle.canWriteState.Store(true)
 		segmentHandle.executor.Start(ctx)
+		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
+		segmentHandle.completionMgr.Start(context.Background())
 	}
 	return segmentHandle
 }
@@ -161,6 +163,10 @@ func NewSegmentHandleWithAppendOpsQueueWithWritable(ctx context.Context, logId i
 	segmentHandle.canWriteState.Store(writable)
 	segmentHandle.rollingState.Store(false)
 	segmentHandle.lastAccessTime.Store(time.Now().UnixMilli())
+	if writable {
+		segmentHandle.completionMgr = newCompletionManager(segmentHandle)
+		segmentHandle.completionMgr.Start(context.Background())
+	}
 	return segmentHandle
 }
 
@@ -191,7 +197,8 @@ type segmentHandleImpl struct {
 	rollingState   atomic.Bool // For rolling ready state: true confirms it is rolling ready, once all appendOPs are completed and the segment is going to close.
 	expiredTrigger func(ctx context.Context, reason string)
 
-	executor *SequentialExecutor
+	executor      *SequentialExecutor
+	completionMgr *completionManager // nil for readonly segments
 
 	doingCompact atomic.Bool
 
@@ -332,14 +339,9 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 		metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, strconv.FormatInt(s.logId, 10)).Dec()
 	}
 
-	// when seg rolling state mark, if no pending appendOps, close segment safely
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
-		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
-		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
-			logger.Ctx(ctx).Warn("completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
-		} else {
-			logger.Ctx(ctx).Debug("completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		}
+	// when seg rolling state mark, if no pending appendOps, trigger completion
+	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
+		s.completionMgr.TriggerCompletion()
 	}
 }
 
@@ -438,14 +440,9 @@ func (s *segmentHandleImpl) HandleAppendRequestFailure(ctx context.Context, trig
 		s.rollingState.Store(true)
 	}
 
-	// when seg rolling state mark, if no pending appendOps, close segment safely
-	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 {
-		completeAndCloseErr := s.doCompleteAndCloseUnsafe(ctx)
-		if completeAndCloseErr != nil && !werr.ErrSegmentHandleSegmentClosed.Is(completeAndCloseErr) {
-			logger.Ctx(ctx).Warn("rolling completeAndCloseUnsafe failed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Error(completeAndCloseErr))
-		} else {
-			logger.Ctx(ctx).Debug("rolling completeAndCloseUnsafe finish", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId))
-		}
+	// when seg rolling state mark, if no pending appendOps, trigger completion
+	if s.rollingState.Load() && s.appendOpsQueue.Len() == 0 && s.completionMgr != nil {
+		s.completionMgr.TriggerCompletion()
 	}
 }
 
@@ -695,14 +692,14 @@ func (s *segmentHandleImpl) IsWritable(ctx context.Context) (bool, error) {
 }
 
 func (s *segmentHandleImpl) ForceCompleteAndClose(ctx context.Context) error {
-	// complete this segment and close
-	s.Lock()
-	defer s.Unlock()
 	if !s.canWriteState.Load() {
-		// no need to complete this readonly segment
 		return nil
 	}
-	return s.doCompleteAndCloseUnsafe(ctx)
+	if s.completionMgr == nil {
+		return nil
+	}
+	s.completionMgr.TriggerCompletion()
+	return s.completionMgr.WaitForCompletion()
 }
 
 func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {
@@ -764,42 +761,6 @@ func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx con
 		metrics.WpSegmentHandleOperationLatency.WithLabelValues(s.metricsNamespace, logIdStr, "close", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
-}
-
-func (s *segmentHandleImpl) doCompleteAndCloseUnsafe(ctx context.Context) error {
-	var lastError error
-	// complete this segment and close
-	lastFlushedEntryId, err := s.doCompleteUnsafe(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Info("Complete segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		lastError = err
-		s.NotifyWriterInvalidation(ctx, fmt.Sprintf("segment:%d complete failed", s.segmentId))
-	}
-	err = s.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx, lastFlushedEntryId)
-	if err != nil {
-		logger.Ctx(ctx).Info("close segment failed when closing logHandle",
-			zap.String("logName", s.logName),
-			zap.Int64("logId", s.logId),
-			zap.Int64("segId", s.segmentId),
-			zap.Int64("lastFlushedEntryId", lastFlushedEntryId),
-			zap.Error(err))
-		if lastError == nil {
-			lastError = err
-		} else {
-			lastError = werr.Combine(err, lastError)
-		}
-	}
-
-	// mark segment as readonly
-	if lastError == nil {
-		s.canWriteState.Store(false)
-	}
-	return lastError
 }
 
 func (s *segmentHandleImpl) fastFailAppendOpsUnsafe(ctx context.Context, lastEntryId int64, err error) {
@@ -913,12 +874,12 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 func (s *segmentHandleImpl) Complete(ctx context.Context) (int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentHandleScopeName, "Complete")
 	defer sp.End()
-	s.Lock()
-	defer s.Unlock()
-	return s.doCompleteUnsafe(ctx)
+	return s.doComplete(ctx)
 }
 
-func (s *segmentHandleImpl) doCompleteUnsafe(ctx context.Context) (int64, error) {
+// doComplete runs Phase 1 of segment completion (fence + complete quorum RPCs)
+// without holding the segment lock. These are idempotent network calls.
+func (s *segmentHandleImpl) doComplete(ctx context.Context) (int64, error) {
 	// Get quorum information for complete operation
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -1010,17 +971,14 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 		return werr.ErrAppendOpQuorumFailed.WithCauseErrMsg("insufficient successful complete responses")
 	}
 
-	// Calculate LAC (Log All Committed) from successful results
-	completedLAC := s.calculateLAC(successResults, ackQuorum)
-	logger.Ctx(ctx).Info("Calculated LAC from quorum complete responses",
+	logger.Ctx(ctx).Info("Quorum complete responses collected",
 		zap.String("logName", s.logName),
 		zap.Int64("logId", s.logId),
 		zap.Int64("segmentId", s.segmentId),
 		zap.Int64("lac", lac),
 		zap.Int("successCount", len(successResults)),
 		zap.Int("ackQuorum", ackQuorum),
-		zap.Int64s("allResults", successResults),
-		zap.Int64("completedLAC", completedLAC))
+		zap.Int64s("allResults", successResults))
 	s.lastAddConfirmed.Store(lac)
 	return nil
 }
@@ -1627,18 +1585,32 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 
 // SetRollingReady set the segment as ready for rolling
 func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
+	waitForCompletion := false
+
 	s.Lock()
-	defer s.Unlock()
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
+		s.Unlock()
 		return
 	}
-	// trigger immediately
-	err := s.doCompleteAndCloseUnsafe(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("Failed to complete segment after setting to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Error(err))
+	if s.completionMgr != nil {
+		s.completionMgr.TriggerCompletion()
+		waitForCompletion = true
+	}
+	s.Unlock()
+
+	// Preserve historical behavior for empty queue: completion is finished
+	// before SetRollingReady returns.
+	if waitForCompletion {
+		err := s.completionMgr.WaitForCompletion()
+		if err != nil {
+			logger.Ctx(ctx).Warn("segment completion failed after SetRollingReady",
+				zap.Int64("logId", s.logId),
+				zap.Int64("segmentId", s.segmentId),
+				zap.Error(err))
+		}
 	}
 }
 
