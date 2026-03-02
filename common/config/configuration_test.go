@@ -51,6 +51,10 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 0, len(config.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, 3, config.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, config.Woodpecker.Client.SessionMonitor.MaxFailures)
+	// DirectRead config from yaml
+	assert.False(t, config.Woodpecker.Client.DirectRead.Enabled)
+	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
+	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, config.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -143,6 +147,10 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 0, len(defaultConfig.Woodpecker.Client.Quorum.SelectStrategy.CustomPlacement))
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.SessionMonitor.MaxFailures)
+	// DirectRead default config
+	assert.False(t, defaultConfig.Woodpecker.Client.DirectRead.Enabled)
+	assert.Equal(t, int64(16*1024*1024), defaultConfig.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
+	assert.Equal(t, 4, defaultConfig.Woodpecker.Client.DirectRead.MaxFetchThreads)
 	// Test the getter methods for backward compatibility
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetEnsembleSize())
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.Quorum.GetWriteQuorumSize())
@@ -645,4 +653,74 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 	assert.Equal(t, "region-c", placement[4].Region)
 	assert.Equal(t, "az-1", placement[4].Az)
 	assert.Equal(t, "rg-archive", placement[4].ResourceGroup)
+}
+
+// TestDirectReadConfig tests the DirectRead configuration defaults and YAML override
+func TestDirectReadConfig(t *testing.T) {
+	t.Run("default values", func(t *testing.T) {
+		cfg, err := NewConfiguration()
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.False(t, dr.Enabled)
+		assert.Equal(t, int64(16*1024*1024), dr.MaxBatchSize.Int64()) // 16MB
+		assert.Equal(t, 4, dr.MaxFetchThreads)
+	})
+
+	t.Run("yaml override", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  client:
+    directRead:
+      enabled: true
+      maxBatchSize: 33554432
+      maxFetchThreads: 8
+  storage:
+    type: default
+    rootPath: /tmp/test`
+		tmpFile, err := os.CreateTemp("", "direct_read_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.True(t, dr.Enabled)
+		assert.Equal(t, int64(33554432), dr.MaxBatchSize.Int64()) // 32MB
+		assert.Equal(t, 8, dr.MaxFetchThreads)
+	})
+
+	t.Run("partial override keeps defaults", func(t *testing.T) {
+		content := `woodpecker:
+  meta:
+    type: etcd
+    prefix: woodpecker
+  client:
+    directRead:
+      enabled: true
+  storage:
+    type: default
+    rootPath: /tmp/test`
+		tmpFile, err := os.CreateTemp("", "direct_read_partial_*.yaml")
+		assert.NoError(t, err)
+		defer os.Remove(tmpFile.Name())
+		_, err = tmpFile.WriteString(content)
+		assert.NoError(t, err)
+		tmpFile.Close()
+
+		cfg, err := NewConfiguration(tmpFile.Name())
+		assert.NoError(t, err)
+
+		dr := cfg.Woodpecker.Client.DirectRead
+		assert.True(t, dr.Enabled)
+		// Non-overridden fields should keep defaults
+		assert.Equal(t, int64(16*1024*1024), dr.MaxBatchSize.Int64())
+		assert.Equal(t, 4, dr.MaxFetchThreads)
+	})
 }

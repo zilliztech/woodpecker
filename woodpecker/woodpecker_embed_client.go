@@ -369,7 +369,8 @@ func (c *woodpeckerEmbedClient) OpenLog(ctx context.Context, logName string) (lo
 	if c.closeState.Load() {
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
-	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes)
+	// Embed mode reads locally; no direct read from object storage needed
+	return openLogUnsafe(ctx, c.Metadata, logName, c.clientPool, c.cfg, c.SelectQuorumNodes, nil)
 }
 
 func (c *woodpeckerEmbedClient) SelectQuorumNodes(ctx context.Context) (*proto.QuorumInfo, error) {

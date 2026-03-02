@@ -759,7 +759,9 @@ func (f *MinioFileReaderAdv) fetchAndProcessBlock(ctx context.Context, block Blo
 	return result
 }
 
-// processBlockData decodes block data and extracts entries
+// processBlockData decodes block data and extracts entries.
+// For compacted merged blocks, the data may contain multiple sub-blocks:
+// [HeaderRecord] + [{BlkHeaderRecord+DataRecords}, {BlkHeaderRecord+DataRecords}, ...]
 func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64, blockData []byte, startEntryID int64) ([]*proto.LogEntry, int, *codec.IndexRecord, error) {
 	// Decode the block data
 	records, decodeErr := codec.DecodeRecordList(blockData)
@@ -771,22 +773,21 @@ func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64
 		return nil, 0, nil, decodeErr
 	}
 
-	// Find BlockHeaderRecord and verify data integrity
-	var blockHeaderRecord *codec.BlockHeaderRecord
+	// Collect all BlockHeaderRecords and process HeaderRecord for flags
+	var blockHeaderRecords []*codec.BlockHeaderRecord
 	for _, record := range records {
 		if record.Type() == codec.HeaderRecordType {
-			// if no footer/no advOpt, it may start from 0, and header record will be read to init version&flags
+			// Read header record to init version & flags (e.g. compression, compacted)
 			fileHeaderRecord := record.(*codec.HeaderRecord)
 			f.version.Store(uint32(fileHeaderRecord.Version))
 			f.flags.Store(uint32(fileHeaderRecord.Flags))
 			continue
 		}
 		if record.Type() == codec.BlockHeaderRecordType {
-			blockHeaderRecord = record.(*codec.BlockHeaderRecord)
-			break
+			blockHeaderRecords = append(blockHeaderRecords, record.(*codec.BlockHeaderRecord))
 		}
 	}
-	if blockHeaderRecord == nil {
+	if len(blockHeaderRecords) == 0 {
 		err := fmt.Errorf("block header record not found")
 		logger.Ctx(ctx).Warn("block header record not found",
 			zap.String("segmentFileKey", f.segmentFileKey),
@@ -794,24 +795,41 @@ func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64
 		return nil, 0, nil, err
 	}
 
-	// Verify the block data integrity
-	verifyBlockErr := f.verifyBlockDataIntegrity(ctx, blockHeaderRecord, blockID, blockData)
-	if verifyBlockErr != nil {
-		logger.Ctx(ctx).Warn("verify block data integrity failed",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Int64("blockNumber", blockID),
-			zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
-			zap.Error(verifyBlockErr))
-		return nil, 0, nil, verifyBlockErr
+	firstBlockHeader := blockHeaderRecords[0]
+	lastBlockHeader := blockHeaderRecords[len(blockHeaderRecords)-1]
+
+	// Verify data integrity
+	if len(blockHeaderRecords) == 1 {
+		// Single sub-block: use byte-level verification
+		verifyBlockErr := f.verifyBlockDataIntegrity(ctx, firstBlockHeader, blockID, blockData)
+		if verifyBlockErr != nil {
+			logger.Ctx(ctx).Warn("verify block data integrity failed",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("blockNumber", blockID),
+				zap.Int32("readBlockNumber", firstBlockHeader.BlockNumber),
+				zap.Error(verifyBlockErr))
+			return nil, 0, nil, verifyBlockErr
+		}
+	} else {
+		// Multiple sub-blocks (compacted merged block): verify each sub-block individually
+		verifyErr := f.verifyCompactedBlockIntegrity(ctx, blockID, records, blockHeaderRecords)
+		if verifyErr != nil {
+			return nil, 0, nil, verifyErr
+		}
 	}
 
-	// Extract entries from this block
+	// Extract entries from all sub-blocks
 	entries := make([]*proto.LogEntry, 0)
 	readBytes := 0
-	currentEntryID := blockHeaderRecord.FirstEntryID
+	currentEntryID := firstBlockHeader.FirstEntryID
 
-	// Parse all data records in the block
 	for j := 0; j < len(records); j++ {
+		if records[j].Type() == codec.BlockHeaderRecordType {
+			// Reset entry ID tracking at each sub-block boundary
+			bhr := records[j].(*codec.BlockHeaderRecord)
+			currentEntryID = bhr.FirstEntryID
+			continue
+		}
 		if records[j].Type() != codec.DataRecordType {
 			continue
 		}
@@ -833,14 +851,14 @@ func (f *MinioFileReaderAdv) processBlockData(ctx context.Context, blockID int64
 		BlockNumber:  int32(blockID),
 		StartOffset:  blockID,
 		BlockSize:    uint32(len(blockData)),
-		FirstEntryID: blockHeaderRecord.FirstEntryID,
-		LastEntryID:  blockHeaderRecord.LastEntryID,
+		FirstEntryID: firstBlockHeader.FirstEntryID,
+		LastEntryID:  lastBlockHeader.LastEntryID,
 	}
 
 	logger.Ctx(ctx).Debug("processed block data",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.Int64("blockNumber", blockID),
-		zap.Int32("readBlockNumber", blockHeaderRecord.BlockNumber),
+		zap.Int("subBlocks", len(blockHeaderRecords)),
 		zap.Int("extractedEntries", len(entries)),
 		zap.Int("readBytes", readBytes))
 
@@ -900,6 +918,49 @@ func (f *MinioFileReaderAdv) verifyBlockDataIntegrity(ctx context.Context, block
 			zap.Uint32("blockLength", blockHeaderRecord.BlockLength),
 			zap.Uint32("blockCrc", blockHeaderRecord.BlockCrc))
 	}
+	return nil
+}
+
+// verifyCompactedBlockIntegrity verifies data integrity of a compacted merged block
+// that contains multiple sub-blocks (each with its own BlockHeaderRecord + DataRecords).
+func (f *MinioFileReaderAdv) verifyCompactedBlockIntegrity(ctx context.Context, blockID int64, records []codec.Record, blockHeaders []*codec.BlockHeaderRecord) error {
+	headerIdx := 0
+	for i := 0; i < len(records); i++ {
+		if records[i].Type() != codec.BlockHeaderRecordType {
+			continue
+		}
+		if headerIdx >= len(blockHeaders) {
+			break
+		}
+		bhr := blockHeaders[headerIdx]
+		headerIdx++
+
+		// Collect encoded DataRecords following this BlockHeaderRecord until next BlockHeaderRecord
+		var dataBuffer []byte
+		for j := i + 1; j < len(records); j++ {
+			if records[j].Type() == codec.BlockHeaderRecordType {
+				break
+			}
+			if records[j].Type() == codec.DataRecordType {
+				dataBuffer = append(dataBuffer, codec.EncodeRecord(records[j])...)
+			}
+		}
+
+		// Verify this sub-block
+		if err := codec.VerifyBlockDataIntegrity(bhr, dataBuffer); err != nil {
+			logger.Ctx(ctx).Warn("compacted sub-block integrity verification failed",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Int64("mergedBlockID", blockID),
+				zap.Int32("subBlockNumber", bhr.BlockNumber),
+				zap.Error(err))
+			return fmt.Errorf("sub-block %d integrity check failed: %w", bhr.BlockNumber, err)
+		}
+	}
+
+	logger.Ctx(ctx).Debug("compacted block integrity verified successfully",
+		zap.String("segmentFileKey", f.segmentFileKey),
+		zap.Int64("mergedBlockID", blockID),
+		zap.Int("subBlocks", len(blockHeaders)))
 	return nil
 }
 
