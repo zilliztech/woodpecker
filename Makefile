@@ -65,8 +65,38 @@ proto_clean:
 build: ## Build binary for current platform
 	go build -v -o bin/woodpecker ./cmd
 
-test: build ## Run tests
+test: build ## Run all tests
 	go test -cover -race ./...
+
+.PHONY: lint
+lint: ## Run golangci-lint
+	golangci-lint run --config .golangci.yml ./...
+
+.PHONY: lint-fix
+lint-fix: ## Run golangci-lint with auto-fix
+	golangci-lint run --config .golangci.yml --fix ./...
+
+.PHONY: fmt
+fmt: ## Format code with gofumpt and gci
+	gofumpt -l -w .
+	gci write . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated
+
+.PHONY: fmt-check
+fmt-check: ## Check code formatting (CI)
+	@echo "Checking gofumpt..."
+	@test -z "$$(gofumpt -l .)" || (echo "Files need formatting:"; gofumpt -l .; exit 1)
+	@echo "Checking gci..."
+	@gci diff . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated | tee /dev/stderr | (! grep .)
+	@echo "All files formatted correctly."
+
+.PHONY: unit-test
+unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker)
+	go test -race -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
+		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
+
+.PHONY: integration-test
+integration-test: ## Run integration tests (requires etcd + MinIO)
+	go test -race -cover -failfast -timeout=45m -v ./tests/integration/...
 
 clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*

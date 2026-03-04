@@ -1,0 +1,44 @@
+name: Unit Test
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/unit-test.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-test:
+    name: Unit Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Run unit tests
+        run: |
+          go test -race -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
+            $(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7

@@ -1,0 +1,82 @@
+run:
+  go: "1.24"
+  timeout: 10m
+  modules-download-mode: readonly
+  skip-dirs:
+    - proto
+    - mocks
+    - tests/benchmark
+    - tests/docker
+    - tests/stability
+    - bin
+    - build
+    - deployments
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - typecheck
+    - gofmt
+    - goimports
+    - gofumpt
+    - whitespace
+    - gci
+    - unconvert
+    - misspell
+    - revive
+    - durationcheck
+    - gosec
+
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/zilliztech/woodpecker)
+  gofumpt:
+    module-path: github.com/zilliztech/woodpecker
+    extra-rules: true
+  goimports:
+    local-prefixes: github.com/zilliztech/woodpecker
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
+  gosec:
+    excludes:
+      - G404 # Insecure random number source (math/rand)
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+
+issues:
+  exclude-dirs:
+    - proto
+    - mocks
+    - tests/benchmark
+    - tests/docker
+    - tests/stability
+    - bin
+    - build
+    - deployments
+  exclude-files:
+    - ".*\\.pb\\.go$"
+    - ".*_vtproto\\.pb\\.go$"
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - revive
+    - linters:
+        - staticcheck
+      text: "SA1019:"  # Ignore deprecated usage warnings
+  max-issues-per-linter: 0
+  max-same-issues: 0
