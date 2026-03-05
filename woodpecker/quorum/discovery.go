@@ -174,7 +174,7 @@ func (d *quorumDiscovery) buildCrossRegionFilters(ctx context.Context) error {
 	// Create one filter that will be used for each region
 	d.filters = []*proto.NodeFilter{
 		{
-			Limit: int32(d.es), // Will be adjusted per region during selection
+			Limit: d.es, // Will be adjusted per region during selection
 		},
 	}
 

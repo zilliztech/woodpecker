@@ -304,8 +304,8 @@ func (r *LocalFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.R
 
 	// set adv options
 	if lastReadBatchInfo != nil {
-		r.flags.Store(uint32(lastReadBatchInfo.Flags))
-		r.version.Store(uint32(lastReadBatchInfo.Version))
+		r.flags.Store(lastReadBatchInfo.Flags)
+		r.version.Store(lastReadBatchInfo.Version)
 	} else {
 		// Try to parse footer and indexes
 		if err := r.tryParseFooterAndIndexesIfExists(ctx); err != nil {
@@ -572,8 +572,6 @@ func (r *LocalFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) erro
 				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Uint32("expectedCrc", blockHeader.BlockCrc),
 				zap.Error(err))
-			currentOffset = blockDataOffset + int64(blockDataLength)
-			blockNumber++
 			break
 		}
 

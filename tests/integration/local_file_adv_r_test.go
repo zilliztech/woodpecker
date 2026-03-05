@@ -1330,6 +1330,7 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		readEntries := make(map[int64][]byte) // Track read entries
 
 		// Keep reading until we've read all expected entries
+	readLoop:
 		for {
 			select {
 			case <-ctx.Done():
@@ -1339,7 +1340,7 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 				if !ok {
 					// Writer is done, do final read
 					t.Logf("Reader: Writer finished, doing final read")
-					break
+					break readLoop
 				}
 
 				// Try to read up to the latest written entry

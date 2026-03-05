@@ -309,7 +309,6 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 			readCount++
 			t.Logf("Read entry %d: %s", msg.Id.EntryId, string(msg.Payload))
 		}
-
 	}
 
 	t.Logf("Test completed - successfully read %d entries", readCount)
@@ -2341,7 +2340,6 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 	totalWritten += w
 
 	// Phase 2 & 3: Trigger rolling events
-	killedNodes := make([]int, 0)
 	for rolling := 0; rolling < numRollingEvents; rolling++ {
 		t.Logf("--- Rolling event %d ---", rolling+1)
 
@@ -2378,7 +2376,6 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 		t.Logf("Killing quorum node %d to trigger rolling %d", targetIdx, rolling+1)
 		_, killErr := cluster.LeaveNodeWithIndex(t, targetIdx)
 		require.NoError(t, killErr)
-		killedNodes = append(killedNodes, targetIdx)
 		time.Sleep(3 * time.Second)
 
 		// Write entries that will go to the new segment after rolling

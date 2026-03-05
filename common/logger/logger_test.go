@@ -119,10 +119,11 @@ func TestTraceLoggerWithParentCtx(t *testing.T) {
 	assert.NoError(t, initTraceErr)
 
 	// start a span
-	parentCtx := context.WithValue(context.Background(), "testkey", "123")
+	type testKey string
+	parentCtx := context.WithValue(context.Background(), testKey("testkey"), "123")
 	ctx, span := NewIntentCtxWithParent(parentCtx, "testScope", "testIntent")
-	assert.Equal(t, "123", parentCtx.Value("testkey"))
-	assert.Equal(t, "123", ctx.Value("testkey"))
+	assert.Equal(t, "123", parentCtx.Value(testKey("testkey")))
+	assert.Equal(t, "123", ctx.Value(testKey("testkey")))
 	Ctx(ctx).Info("start a test intent")
 	testPrintSomething(ctx)
 	span.End()

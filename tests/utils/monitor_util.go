@@ -116,42 +116,39 @@ func StartReporting() {
 			lastBytesSum, lastBytesCount     float64
 			lastLatencySum, lastLatencyCount float64
 		)
-		for {
-			select {
-			case <-ticker.C:
-				currentTimeMs := time.Now().UnixMilli()
-				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
-				// currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
-				if err != nil {
-					fmt.Printf("Failed to get metrics: %v\n", err)
-					continue
-				}
-				elapsedTimeMs := float64(currentTimeMs - lastTimeMs)
-				deltaBytesSum := currentBytesSum - lastBytesSum
-				deltaBytesCount := currentBytesCount - lastBytesCount
-				deltaLatencySum := currentLatencySum - lastLatencySum
-				deltaLatencyCount := currentLatencyCount - lastLatencyCount
-				// Print calculation results
-				if deltaBytesCount > 0 {
-					avgBytes := deltaBytesSum / deltaBytesCount
-					rateMB := deltaBytesSum / 1_000_000 / elapsedTimeMs * 1000                           // Convert to MB/s
-					avgRateMB := currentBytesSum / 1_000_000 / float64(currentTimeMs-firstTimeMs) * 1000 // Convert to MB/s
-					fmt.Printf("Traffic Monitor - Average size per operation: %.2f bytes, Current throughput: %.2f MB/s, Average throughput: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
-				}
-
-				if deltaLatencyCount > 0 {
-					avgLatency := deltaLatencySum / deltaLatencyCount
-					totalAvgLatency := currentLatencySum / currentLatencyCount
-					fmt.Printf("Operation Latency - Current: %.3f ms, Average: %.3f ms\n", avgLatency, totalAvgLatency)
-				}
-
-				// Update metrics state
-				lastBytesSum = currentBytesSum
-				lastBytesCount = currentBytesCount
-				lastLatencySum = currentLatencySum
-				lastLatencyCount = currentLatencyCount
-				lastTimeMs = currentTimeMs
+		for range ticker.C {
+			currentTimeMs := time.Now().UnixMilli()
+			currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
+			// currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
+			if err != nil {
+				fmt.Printf("Failed to get metrics: %v\n", err)
+				continue
 			}
+			elapsedTimeMs := float64(currentTimeMs - lastTimeMs)
+			deltaBytesSum := currentBytesSum - lastBytesSum
+			deltaBytesCount := currentBytesCount - lastBytesCount
+			deltaLatencySum := currentLatencySum - lastLatencySum
+			deltaLatencyCount := currentLatencyCount - lastLatencyCount
+			// Print calculation results
+			if deltaBytesCount > 0 {
+				avgBytes := deltaBytesSum / deltaBytesCount
+				rateMB := deltaBytesSum / 1_000_000 / elapsedTimeMs * 1000                           // Convert to MB/s
+				avgRateMB := currentBytesSum / 1_000_000 / float64(currentTimeMs-firstTimeMs) * 1000 // Convert to MB/s
+				fmt.Printf("Traffic Monitor - Average size per operation: %.2f bytes, Current throughput: %.2f MB/s, Average throughput: %.2f MB/s\n", avgBytes, rateMB, avgRateMB)
+			}
+
+			if deltaLatencyCount > 0 {
+				avgLatency := deltaLatencySum / deltaLatencyCount
+				totalAvgLatency := currentLatencySum / currentLatencyCount
+				fmt.Printf("Operation Latency - Current: %.3f ms, Average: %.3f ms\n", avgLatency, totalAvgLatency)
+			}
+
+			// Update metrics state
+			lastBytesSum = currentBytesSum
+			lastBytesCount = currentBytesCount
+			lastLatencySum = currentLatencySum
+			lastLatencyCount = currentLatencyCount
+			lastTimeMs = currentTimeMs
 		}
 	}()
 }

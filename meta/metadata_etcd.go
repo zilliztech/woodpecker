@@ -147,7 +147,7 @@ func (e *metadataProviderEtcd) InitIfNecessary(ctx context.Context) error {
 	sp.AddEvent("GetServiceMetaCompleted", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
 	initOps := make([]clientv3.Op, 0, 4)
 	for index, rp := range resp.Responses {
-		if rp.GetResponseRange().Kvs == nil || len(rp.GetResponseRange().Kvs) == 0 {
+		if len(rp.GetResponseRange().Kvs) == 0 {
 			if index == 0 {
 				// instance initial value is a uuid
 				initOps = append(initOps, clientv3.OpPut(keys[index], uuid.New().String()))

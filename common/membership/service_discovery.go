@@ -430,7 +430,7 @@ func (sd *ServiceDiscovery) SelectMultiAzMultiRg(filter *proto.NodeFilter, affin
 	for attempt := 0; attempt < maxRandomAttempts; attempt++ {
 		// 2. Randomly select multiple AZs
 		limit := int(filter.Limit)
-		numAZs := len(candidateAZs)
+		var numAZs int
 		if limit == 0 {
 			numAZs = len(candidateAZs) // All AZs
 		} else {

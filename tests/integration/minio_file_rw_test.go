@@ -395,7 +395,7 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 
 		// Wait for first write with timeout
 		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
+		_, err = resultCh1.ReadResult(ctxWithTimeout)
 		cancel()
 		// require.NoError(t, err) // TODO maybe handle this notify gracefully
 		// require.NoError(t, result.Err)

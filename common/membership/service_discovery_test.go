@@ -1056,7 +1056,7 @@ func TestExtremeCasesReturnEmpty(t *testing.T) {
 		assert.Equal(t, 0, len(nodes), "SOFT mode should return empty array instead of error")
 
 		// HARD mode should return error
-		nodes, err = sd.SelectSingleAzSingleRg(filter, proto.AffinityMode_HARD)
+		_, err = sd.SelectSingleAzSingleRg(filter, proto.AffinityMode_HARD)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no matching nodes found")
 	})
@@ -1085,7 +1085,7 @@ func TestExtremeCasesReturnEmpty(t *testing.T) {
 		assert.Equal(t, 0, len(nodes), "SOFT mode should return empty array")
 
 		// HARD mode should return error
-		nodes, err = sd.SelectSingleAzSingleRg(filter, proto.AffinityMode_HARD)
+		_, err = sd.SelectSingleAzSingleRg(filter, proto.AffinityMode_HARD)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no matching AZs found")
 	})

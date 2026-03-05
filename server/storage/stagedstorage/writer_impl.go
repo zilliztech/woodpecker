@@ -1377,7 +1377,7 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 
 // readBlockDataFromLocalFile reads data for a specific block from the local file
 func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, blockIndex *codec.IndexRecord) *blockReadResult {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
+	_, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
 	defer sp.End()
 
 	// Open local file for reading
