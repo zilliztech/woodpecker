@@ -56,7 +56,6 @@ func startEmbedLogStore(cfg *config.Configuration, storageClient storageclient.O
 		return false, nil
 	}
 
-	var takeControlOfClients bool = false
 	embedLogStore = server.NewLogStore(context.Background(), cfg, storageClient)
 	embedLogStore.SetAddress("127.0.0.1:18888") // TODO only placeholder now
 
@@ -66,8 +65,7 @@ func startEmbedLogStore(cfg *config.Configuration, storageClient storageclient.O
 	}
 
 	isLogStoreRunning = true
-	takeControlOfClients = true
-	return takeControlOfClients, nil
+	return true, nil
 }
 
 func StopEmbedLogStore() error {

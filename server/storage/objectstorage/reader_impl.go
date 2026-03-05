@@ -41,9 +41,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentReaderScope = "MinioFileReader"
-)
+var SegmentReaderScope = "MinioFileReader"
 
 var _ storage.Reader = (*MinioFileReaderAdv)(nil)
 
@@ -299,7 +297,6 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfoUnsafe(ctx context.Cont
 		}
 		if err != nil {
 			// indicates that the prefetching of blocks has completed.
-			//fmt.Println("object storage read block err: ", err)
 			return existsNewBlock, nil, err
 		}
 		if isFenced {
@@ -626,11 +623,11 @@ func (f *MinioFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 		// 2. We have collected some data and no more blocks available
 		// 3. We reached the end of available blocks
 		// 4. We encounter expected read error, data incomplete verification error / network/service unavailable, etc.
-		if totalCollectedSize >= int64(maxBytes) {
+		if totalCollectedSize >= maxBytes {
 			logger.Ctx(ctx).Debug("reached max collected size limit",
 				zap.String("segmentFileKey", f.segmentFileKey),
 				zap.Int64("totalCollectedSize", totalCollectedSize),
-				zap.Int64("maxBytes", int64(maxBytes)))
+				zap.Int64("maxBytes", maxBytes))
 			break
 		}
 

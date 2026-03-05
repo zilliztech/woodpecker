@@ -70,7 +70,7 @@ func TestFileAppendPerformance(t *testing.T) {
 
 	// Create temporary directory
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("file_append_test_%d", time.Now().UnixNano()))
-	err := os.MkdirAll(tempDir, 0755)
+	err := os.MkdirAll(tempDir, 0o755)
 	if err != nil {
 		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFileAppendPerformance(t *testing.T) {
 			flags := os.O_CREATE | os.O_WRONLY
 			if tc.preallocSize > 0 {
 				// If preallocation is needed, create the file and set its size first
-				file, err = os.OpenFile(filePath, flags, 0644)
+				file, err = os.OpenFile(filePath, flags, 0o644)
 				if err != nil {
 					t.Fatalf("Cannot create file: %v", err)
 				}
@@ -101,11 +101,11 @@ func TestFileAppendPerformance(t *testing.T) {
 				// Close file and reopen in append mode
 				file.Close()
 				flags |= os.O_APPEND
-				file, err = os.OpenFile(filePath, flags, 0644)
+				file, err = os.OpenFile(filePath, flags, 0o644)
 			} else {
 				// No preallocation, open directly in append mode
 				flags |= os.O_APPEND
-				file, err = os.OpenFile(filePath, flags, 0644)
+				file, err = os.OpenFile(filePath, flags, 0o644)
 			}
 
 			if err != nil {
@@ -277,7 +277,7 @@ func TestFileReadPerformance(t *testing.T) {
 
 	// Create temporary directory
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("file_read_test_%d", time.Now().UnixNano()))
-	err := os.MkdirAll(tempDir, 0755)
+	err := os.MkdirAll(tempDir, 0o755)
 	if err != nil {
 		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestFileReadPerformance(t *testing.T) {
 			t.Logf("Preparing test file, size: %d MB...", tc.fileSize/(1024*1024))
 
 			// Create file and preallocate space
-			file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0644)
+			file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
 				t.Fatalf("Cannot create file: %v", err)
 			}

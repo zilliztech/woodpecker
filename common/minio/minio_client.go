@@ -249,7 +249,7 @@ func IsFencedObject(objInfo minio.ObjectInfo) bool {
 // ReadObjectFull reads all content from ObjectReader and returns a byte slice
 // It efficiently handles data streams of unknown size by dynamically expanding the buffer to avoid excessive memory allocations
 func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSize int64, operatingNamespace string, operatingLogId string) ([]byte, error) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
+	_, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
 	defer sp.End()
 	start := time.Now()
 	// Initial buffer size - 1MB is a reasonable starting point

@@ -269,8 +269,8 @@ func (s *segmentProcessor) getOrCreateSegmentImpl(ctx context.Context) (storage.
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
 		s.currentSegmentImpl = stagedstorage.NewStagedSegmentImpl(
 			ctx,
-			s.getInstanceBucket(),                                                                  // bucketName
-			s.getLogBaseDir(),                                                                      // rootPath
+			s.getInstanceBucket(), // bucketName
+			s.getLogBaseDir(),     // rootPath
 			path.Join(s.cfg.Woodpecker.Storage.RootPath, s.getInstanceBucket(), s.getLogBaseDir()), // local file baseDir
 			s.logId,
 			s.segId,
@@ -319,7 +319,7 @@ func (s *segmentProcessor) getOrCreateSegmentReader(ctx context.Context) (storag
 		return s.currentSegmentReader, nil
 	}
 
-	//Initialize reader
+	// Initialize reader
 	if s.cfg.Woodpecker.Storage.IsStorageService() {
 		stagedReader, err := stagedstorage.NewStagedFileReaderAdv(
 			ctx,

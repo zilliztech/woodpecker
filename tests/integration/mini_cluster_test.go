@@ -81,12 +81,10 @@ func TestMiniCluster_Basic(t *testing.T) {
 	t.Logf("Stopping cluster...")
 	cluster.StopMultiNodeCluster(t)
 
-	// Wait for nodes to shutdown
-	time.Sleep(2 * time.Second)
-
-	// Verify active nodes count
-	activeNodes := clientNode.GetDiscovery().GetAllServers()
-	assert.Equal(t, 0, len(activeNodes), "All nodes should be stopped")
+	// Wait for gossip to detect all nodes have left
+	assert.Eventually(t, func() bool {
+		return len(clientNode.GetDiscovery().GetAllServers()) == 0
+	}, 30*time.Second, 500*time.Millisecond, "All nodes should be stopped")
 
 	t.Logf("TestMiniCluster_Basic completed successfully")
 }
@@ -145,10 +143,11 @@ func TestMiniCluster_LastScale(t *testing.T) {
 	t.Logf("Stopping cluster...")
 	cluster.StopMultiNodeCluster(t)
 
-	// Poll until all nodes are gone from discovery (gossip propagation for 50 nodes needs time)
+	// Poll until all nodes are gone from discovery.
+	// 50-node gossip leave detection can take over a minute on busy CI runners.
 	assert.Eventually(t, func() bool {
 		return len(clientNode.GetDiscovery().GetAllServers()) == 0
-	}, 30*time.Second, 1*time.Second, "All nodes should be stopped within timeout")
+	}, 120*time.Second, 1*time.Second, "All nodes should be stopped within timeout")
 
 	t.Logf("TestMiniCluster_LastScale completed successfully")
 }

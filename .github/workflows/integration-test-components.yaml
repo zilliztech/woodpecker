@@ -1,0 +1,117 @@
+name: Component Integration Test
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - ".github/workflows/integration-test-components.yaml"
+      - ".github/docker-compose-ci.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Component-Test:
+    name: Component Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Start dependencies (etcd + MinIO)
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml up -d
+          echo "Waiting for etcd..."
+          until docker inspect --format='{{.State.Health.Status}}' ci-etcd 2>/dev/null | grep -q healthy; do
+            sleep 2
+          done
+          echo "etcd is ready"
+          echo "Waiting for MinIO..."
+          until docker inspect --format='{{.State.Health.Status}}' ci-minio 2>/dev/null | grep -q healthy; do
+            sleep 2
+          done
+          echo "MinIO is ready"
+
+      - name: Create MinIO bucket
+        run: |
+          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minioadmin minioadmin
+          mc mb local/a-bucket --ignore-existing
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run component integration tests
+        run: |
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output.json \
+            -- -race -cover -failfast -timeout=20m \
+            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestClientLogWriter)" \
+            ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output.json
+          exit $exit_code
+
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs-components
+          path: test-output.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Handle failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          gh pr comment $PR --body "❌ **Component Integration Test** failed. Comment \`/rerun-component-test\` to rerun, or \`/rerun\` to rerun all failed checks."
+          gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
+
+      - name: Add ci-passed label
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          SELF="${{ github.workflow }}"
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test")
+          CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
+          ALL_PASSED=true
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            [ "$check" = "$SELF" ] && continue
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            if [ "$bucket" != "pass" ]; then
+              ALL_PASSED=false
+              break
+            fi
+          done
+          if [ "$ALL_PASSED" = true ]; then
+            gh pr edit $PR --add-label "ci-passed"
+          fi
+
+      - name: Stop dependencies
+        if: always()
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml down -v

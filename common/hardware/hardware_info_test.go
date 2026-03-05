@@ -12,9 +12,9 @@
 package hardware
 
 import (
-	"github.com/labstack/gommon/log"
 	"testing"
 
+	"github.com/labstack/gommon/log"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )

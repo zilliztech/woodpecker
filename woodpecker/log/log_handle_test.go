@@ -150,9 +150,9 @@ func TestClose_ContinuesOnError(t *testing.T) {
 	mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
 
 	// Set up expectations - segment 1 fails to fence, segment 2 succeeds
-	//mockSegment1.EXPECT().Complete(mock.Anything).Return(-1, nil)
+	// mockSegment1.EXPECT().Complete(mock.Anything).Return(-1, nil)
 	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(errors.New("complete error"))
-	//mockSegment2.EXPECT().Complete(mock.Anything).Return(-1, errors.New("complete error"))
+	// mockSegment2.EXPECT().Complete(mock.Anything).Return(-1, errors.New("complete error"))
 	mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(errors.New("complete error"))
 
 	// Call Close
@@ -778,8 +778,11 @@ func TestLogHandle_CompleteAllActiveSegmentIfExists_DataRaceProtection(t *testin
 // TestLogHandle_Close_vs_GetExistsReadonlySegmentHandle_DataRaceProtection tests that Close
 // properly handles concurrent access with GetExistsReadonlySegmentHandle to prevent data races
 func TestLogHandle_Close_vs_GetExistsReadonlySegmentHandle_DataRaceProtection(t *testing.T) {
-	logHandle, _ := createMockLogHandle(t)
+	logHandle, mockMeta := createMockLogHandle(t)
 	ctx := context.Background()
+
+	// Mock GetSegmentMetadata for when Close clears the map before GetExistsReadonlySegmentHandle runs
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, mock.Anything, mock.Anything).Return(nil, werr.ErrSegmentNotFound).Maybe()
 
 	// Create mock segment handles
 	mockSegment1 := mocks_segment_handle.NewSegmentHandle(t)
@@ -999,16 +1002,21 @@ func TestLogHandle_BackgroundCleanup_DataRaceProtection(t *testing.T) {
 	// Mock ForceCompleteAndClose for cleanup
 	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Maybe()
 
+	// Mock GetSegmentMetadata in case cleanup removes segment 1 before GetExistsReadonlySegmentHandle finds it
+	logHandle.Metadata.(*mocks_meta.MetadataProvider).EXPECT().
+		GetSegmentMetadata(mock.Anything, mock.Anything, int64(1)).
+		Return(nil, werr.ErrSegmentNotFound).Maybe()
+
 	// Start concurrent operations
 	var wg sync.WaitGroup
 	var getErr error
 	var getResult interface{}
 
-	// Goroutine 1: Background cleanup
+	// Goroutine 1: Background cleanup (uses the lock-protected version)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logHandle.cleanupIdleSegmentHandlesUnsafe(ctx, 1*time.Minute)
+		logHandle.performBackgroundCleanup(1 * time.Minute)
 	}()
 
 	// Goroutine 2: GetExistsReadonlySegmentHandle

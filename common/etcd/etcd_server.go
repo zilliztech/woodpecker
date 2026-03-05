@@ -73,7 +73,8 @@ func StartEtcdServerUnsafe(useEmbedEtcd bool,
 	configPath string,
 	dataDir string,
 	logPath string,
-	logLevel string) error {
+	logLevel string,
+) error {
 	var initError error
 	path := configPath
 	var cfg *embed.Config

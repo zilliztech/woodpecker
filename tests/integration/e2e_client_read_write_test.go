@@ -907,7 +907,6 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Write messages in batches with delays
-			writeMessages := make([]*log.LogMessageId, 0, totalMessages)
 			batchSize := 5
 			numBatches := totalMessages / batchSize
 			for batch := 0; batch < numBatches; batch++ {
@@ -923,7 +922,6 @@ func TestTailReadBlockingAfterWriting(t *testing.T) {
 					})
 
 					assert.NoError(t, result.Err)
-					writeMessages = append(writeMessages, result.LogMessageId)
 					t.Logf("Written message %d: %v\n", idx, result.LogMessageId)
 				}
 			}

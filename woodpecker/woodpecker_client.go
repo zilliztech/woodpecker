@@ -187,7 +187,8 @@ func (c *woodpeckerClient) OpenLog(ctx context.Context, logName string) (log.Log
 }
 
 func openLogUnsafe(ctx context.Context, metadata meta.MetadataProvider, logName string, clientPool client.LogStoreClientPool,
-	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) (log.LogHandle, error) {
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
+) (log.LogHandle, error) {
 	// Open log and retrieve metadata with detailed comments
 	logMeta, segmentsMeta, err := metadata.OpenLog(ctx, logName)
 	if err != nil {

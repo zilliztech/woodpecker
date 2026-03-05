@@ -70,8 +70,8 @@ type PreparedTestData struct {
 // prepareCompleteTestFile prepares a complete finalized file with fixed 5 entries
 // Returns PreparedTestData with file path and record positions for crash simulation
 func prepareCompleteTestFile(t *testing.T, ctx context.Context, cfg *config.Configuration, tempDir string,
-	logId, segmentId int64, storageCli objectstorage.ObjectStorage) *PreparedTestData {
-
+	logId, segmentId int64, storageCli objectstorage.ObjectStorage,
+) *PreparedTestData {
 	const numEntries = 2
 	segmentFilePath := filepath.Join(tempDir, fmt.Sprintf("%d/%d/data.log", logId, segmentId))
 
@@ -664,12 +664,12 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	preReaderLAC int64,
 	expectPreReadEntries int, expectPreReadError error,
 	postReaderLAC int64,
-	expectPostReadEntries int, expectPostReadError error) {
-
+	expectPostReadEntries int, expectPostReadError error,
+) {
 	// Step1: prepare crash data
 	// Prepare target path for this test
 	targetDir := filepath.Join(tempDir, fmt.Sprintf("%d/%d", logId, segmentId))
-	err := os.MkdirAll(targetDir, 0755)
+	err := os.MkdirAll(targetDir, 0o755)
 	require.NoError(t, err, "Failed to create target directory %s for log=%d segment=%d", targetDir, logId, segmentId)
 
 	targetPath := filepath.Join(targetDir, "data.log")
@@ -677,7 +677,7 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	// Copy source file to target
 	sourceData, err := os.ReadFile(sourcePath)
 	require.NoError(t, err, "Failed to read source file %s for log=%d segment=%d", sourcePath, logId, segmentId)
-	err = os.WriteFile(targetPath, sourceData, 0644)
+	err = os.WriteFile(targetPath, sourceData, 0o644)
 	require.NoError(t, err, "Failed to write target file %s for log=%d segment=%d", targetPath, logId, segmentId)
 
 	// Simulate crash by truncating

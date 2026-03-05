@@ -51,12 +51,12 @@ func (l *LocalResultChannel) GetIdentifier() string {
 }
 
 func (l *LocalResultChannel) SendResult(ctx context.Context, result *AppendResult) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
-			return
-		}
-	}()
+	l.mu.RLock()
+	if l.closed {
+		l.mu.RUnlock()
+		return werr.ErrAppendOpResultChannelClosed.WithCauseErrMsg(fmt.Sprintf("local result channel %s underlying channel is closed", l.identifier))
+	}
+	defer l.mu.RUnlock()
 	select {
 	case l.ch <- result:
 		logger.Ctx(ctx).Debug("sent result to local channel",

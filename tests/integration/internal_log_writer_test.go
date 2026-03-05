@@ -72,7 +72,7 @@ func TestInternalLogWriter_BasicOpenWriteCloseReopen(t *testing.T) {
 
 			logName := "test-internal-writer-basic-" + tc.name + time.Now().Format("20060102150405")
 			err = client.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -158,7 +158,7 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 
 			logName := "test-internal-writer-preempt-" + tc.name + time.Now().Format("20060102150405")
 			err = client.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -249,7 +249,7 @@ func TestInternalLogWriter_FinalizeIdempotency(t *testing.T) {
 
 			logName := "test-internal-writer-finalize-idem-" + tc.name + time.Now().Format("20060102150405")
 			err = client.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -325,7 +325,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossProcesses(t *testing.T) {
 
 			logName := "test-internal-writer-finalize-idem-xproc-" + tc.name + time.Now().Format("20060102150405")
 			err = client1.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -420,7 +420,7 @@ func TestInternalLogWriter_FinalizeIdempotency_AcrossWriters_NoRestart(t *testin
 
 			logName := "test-internal-writer-finalize-idem-xproc-norestart-" + tc.name + time.Now().Format("20060102150405")
 			err = client1.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -508,7 +508,7 @@ func TestInternalLogWriter_CloseThenFinalize(t *testing.T) {
 
 			logName := "test-internal-writer-close-then-finalize-" + tc.name + time.Now().Format("20060102150405")
 			err = client.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
@@ -591,7 +591,7 @@ func TestInternalLogWriter_FinalizeThenClose(t *testing.T) {
 
 			logName := "test-internal-writer-finalize-then-close-" + tc.name + time.Now().Format("20060102150405")
 			err = client.CreateLog(ctx, logName)
-			if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 				assert.NoError(t, err)
 			}
 
