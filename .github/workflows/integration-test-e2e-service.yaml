@@ -60,19 +60,31 @@ jobs:
       - name: Run e2e service storage tests
         run: |
           E2E_TESTS="TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup"
-          gotestsum --format testname \
+          set +e
+          gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output-service.json \
             -- -race -cover -failfast -timeout=25m \
             -run "^(${E2E_TESTS})/ServiceStorage$" \
             ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-service.json
+          exit $exit_code
 
       - name: Run e2e service failover tests
         run: |
-          gotestsum --format testname \
+          set +e
+          gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output-failover.json \
             -- -race -cover -failfast -timeout=25m \
             -run "^TestStagedStorageService" \
             ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-failover.json
+          exit $exit_code
 
       - name: Upload test output on failure
         if: failure()

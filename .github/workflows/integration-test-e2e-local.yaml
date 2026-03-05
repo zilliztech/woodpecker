@@ -60,11 +60,17 @@ jobs:
       - name: Run e2e local storage tests
         run: |
           E2E_TESTS="TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup"
-          gotestsum --format testname \
+          set +e
+          gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output.json \
             -- -race -cover -failfast -timeout=20m \
             -run "^(${E2E_TESTS})/LocalFsStorage$" \
             ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output.json
+          exit $exit_code
 
       - name: Upload test output on failure
         if: failure()
