@@ -45,9 +45,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
-var (
-	testBucket = "a-bucket"
-)
+var testBucket = "a-bucket"
 
 func setupMinioFileWriterTest(t *testing.T) (storageclient.ObjectStorage, *config.Configuration) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -271,7 +269,6 @@ func TestMinioFileWriter_ConcurrentWrites(t *testing.T) {
 }
 
 func TestMinioFileWriter_Finalize(t *testing.T) {
-
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
@@ -398,13 +395,12 @@ func TestMinioFileWriter_ErrorHandling(t *testing.T) {
 
 		// Wait for first write with timeout
 		ctxWithTimeout, cancel = context.WithTimeout(ctx, 5*time.Second)
-		result, err = resultCh1.ReadResult(ctxWithTimeout)
+		_, err = resultCh1.ReadResult(ctxWithTimeout)
 		cancel()
-		//require.NoError(t, err) // TODO maybe handle this notify gracefully
-		//require.NoError(t, result.Err)
+		// require.NoError(t, err) // TODO maybe handle this notify gracefully
+		// require.NoError(t, result.Err)
 		assert.Error(t, err)
 		assert.True(t, errors.IsAny(err, context.Canceled, context.DeadlineExceeded))
-
 	})
 
 	t.Run("DuplicateEntryIdInUploading", func(t *testing.T) {

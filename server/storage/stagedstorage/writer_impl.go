@@ -45,9 +45,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	WriterScope = "StagedFileWriter"
-)
+var WriterScope = "StagedFileWriter"
 
 var _ storage.Writer = (*StagedFileWriter)(nil)
 
@@ -149,7 +147,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))
@@ -239,11 +237,11 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		}
 		// Open file for appending (create if not exists)
 		logger.Ctx(ctx).Debug("opening file for appending in recovery mode")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	} else {
 		// Open file for writing (create if not exists, truncate if exists)
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err == nil {
 			metrics.WpFileStoredCount.WithLabelValues(metrics.NodeID, writer.nsStr, writer.logIdStr).Inc()
 		}
@@ -1375,12 +1373,11 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		blockSize:  blockSize,
 		error:      nil,
 	}
-
 }
 
 // readBlockDataFromLocalFile reads data for a specific block from the local file
 func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, blockIndex *codec.IndexRecord) *blockReadResult {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
+	_, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "readBlockDataFromLocalFile")
 	defer sp.End()
 
 	// Open local file for reading

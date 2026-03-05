@@ -42,9 +42,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	WriterScope = "LocalFileWriter"
-)
+var WriterScope = "LocalFileWriter"
 
 var _ storage.Writer = (*LocalFileWriter)(nil)
 
@@ -134,7 +132,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 
 	segmentDir := getSegmentDir(baseDir, logId, segmentId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		logger.Ctx(ctx).Warn("failed to create directory",
 			zap.String("segmentDir", segmentDir),
 			zap.Error(err))
@@ -217,7 +215,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 		}
 		// Open file for appending (create if not exists)
 		logger.Ctx(ctx).Debug("opening file for appending in recovery mode")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	} else {
 		logger.Ctx(ctx).Debug("normal mode, creating segment lock and opening file for writing")
 		// Create segment lock file
@@ -231,7 +229,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 
 		// Open file for writing (create if not exists, truncate if exists)
 		logger.Ctx(ctx).Debug("opening file for writing (truncate mode)")
-		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		file, err = os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	}
 
 	initialBuffer := cache.NewSequentialBuffer(logId, segmentId, startEntryId, writer.maxBufferEntries, "default")
@@ -1412,7 +1410,7 @@ func (s *LocalFileWriter) createSegmentLock(ctx context.Context) error {
 		s.logId, s.segmentId, os.Getpid(), time.Now().Unix())
 
 	// Create or write to the lock file for information purposes
-	if infoFile, err := os.OpenFile(s.lockFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+	if infoFile, err := os.OpenFile(s.lockFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); err == nil {
 		infoFile.WriteString(lockInfo)
 		infoFile.Sync()
 		infoFile.Close()

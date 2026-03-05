@@ -91,7 +91,7 @@ trace:
   sampleFraction: 0.5
 `
 
-	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Load user config
@@ -168,7 +168,7 @@ log:
   level: error
 `
 
-	err = os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err = os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	userConfig, err := LoadUserConfig(configFile)
@@ -217,7 +217,7 @@ woodpecker:
       # maxRetries is not set, should not override
 `
 
-	err = os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err = os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	userConfig, err := LoadUserConfig(configFile)
@@ -267,9 +267,9 @@ etcd:
   requestTimeout: 3000
 `
 
-	err := os.WriteFile(configFile1, []byte(yamlContent1), 0644)
+	err := os.WriteFile(configFile1, []byte(yamlContent1), 0o644)
 	require.NoError(t, err)
-	err = os.WriteFile(configFile2, []byte(yamlContent2), 0644)
+	err = os.WriteFile(configFile2, []byte(yamlContent2), 0o644)
 	require.NoError(t, err)
 
 	// Load both config files (config2 should override config1)
@@ -324,7 +324,7 @@ etcd:
   requestTimeout: 5s
 `
 
-	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Load user config
@@ -355,7 +355,7 @@ func TestLoadUserConfigInvalidYAML(t *testing.T) {
 	// Test with invalid YAML - should return error
 	tempDir := t.TempDir()
 	invalidFile := filepath.Join(tempDir, "invalid.yaml")
-	err := os.WriteFile(invalidFile, []byte("invalid: yaml: content: ["), 0644)
+	err := os.WriteFile(invalidFile, []byte("invalid: yaml: content: ["), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadUserConfig(invalidFile)
@@ -374,7 +374,7 @@ func TestLoadUserConfigEmptyYAML(t *testing.T) {
 	// Test with an empty YAML file
 	tempDir := t.TempDir()
 	emptyFile := filepath.Join(tempDir, "empty.yaml")
-	err := os.WriteFile(emptyFile, []byte(""), 0644)
+	err := os.WriteFile(emptyFile, []byte(""), 0o644)
 	require.NoError(t, err)
 
 	// Should not error, just return an empty config
@@ -416,7 +416,7 @@ woodpecker:
 log:
   level: debug
 `
-	err := os.WriteFile(existingFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(existingFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	// Reference a file that doesn't exist

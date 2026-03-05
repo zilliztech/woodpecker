@@ -39,12 +39,12 @@ func createTempFileWithContent(t *testing.T, content []byte) (string, string) {
 
 	// Create the expected directory structure: baseDir/logId/segmentId/
 	segmentDir := filepath.Join(tempDir, "1", "1")
-	err = os.MkdirAll(segmentDir, 0755)
+	err = os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	// Create the data.log file in the correct location
 	filePath := filepath.Join(segmentDir, "data.log")
-	err = os.WriteFile(filePath, content, 0644)
+	err = os.WriteFile(filePath, content, 0o644)
 	require.NoError(t, err)
 
 	return tempDir, filePath // Return baseDir and actual file path
@@ -93,7 +93,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	baseDir, filePath := createTempFileWithContent(t, []byte("test content"))
 	defer func() {
 		// Restore permissions for cleanup
-		os.Chmod(filePath, 0644)
+		os.Chmod(filePath, 0o644)
 		os.RemoveAll(baseDir)
 	}()
 
@@ -108,7 +108,7 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 
 	// Close the file and change permissions to make it unreadable
 	reader.file.Close()
-	err = os.Chmod(filePath, 0000)
+	err = os.Chmod(filePath, 0o000)
 	require.NoError(t, err)
 
 	opt := storage.ReaderOpt{

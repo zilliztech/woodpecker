@@ -32,13 +32,15 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
+type contextKey string
+
 var (
 	_globalLevelLogger sync.Map
 	_globalLogger      atomic.Value
 	initLogOnce        sync.Once
 	customEncoder      = "_WpCustomTextEncoder_"
-	CtxLogKey          = "_WpLogger_"
-	CtxLogLevelKey     = "_WpLoggerLevel_"
+	CtxLogKey          = contextKey("_WpLogger_")
+	CtxLogLevelKey     = contextKey("_WpLoggerLevel_")
 )
 
 func init() {

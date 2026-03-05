@@ -111,7 +111,8 @@ type logHandleImpl struct {
 }
 
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
-	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error)) LogHandle {
+	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
+) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds()
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64(), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
@@ -899,7 +900,6 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 		SegmentId: logMeta.Metadata.TruncatedSegmentId,
 		EntryId:   logMeta.Metadata.TruncatedEntryId,
 	}, nil
-
 }
 
 func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) error {

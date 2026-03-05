@@ -18,6 +18,7 @@ package tracer
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/otel"
@@ -30,14 +31,11 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdk "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
-	"sync"
 
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
-var (
-	initOnce sync.Once
-)
+var initOnce sync.Once
 
 func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) error {
 	initOnce.Do(func() {

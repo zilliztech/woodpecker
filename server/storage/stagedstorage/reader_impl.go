@@ -42,9 +42,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentReaderScope = "StagedFileReader"
-)
+var SegmentReaderScope = "StagedFileReader"
 
 var _ storage.Reader = (*StagedFileReaderAdv)(nil)
 
@@ -100,7 +98,7 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
@@ -535,8 +533,8 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 
 	// set adv options
 	if lastReadBatchInfo != nil {
-		r.flags.Store(uint32(lastReadBatchInfo.Flags))
-		r.version.Store(uint32(lastReadBatchInfo.Version))
+		r.flags.Store(lastReadBatchInfo.Flags)
+		r.version.Store(lastReadBatchInfo.Version)
 	} else {
 		// Try to parse footer and indexes
 		if err := r.tryParseFooterAndIndexesIfExists(ctx); err != nil {
@@ -564,8 +562,8 @@ func (r *StagedFileReaderAdv) ReadNextBatchAdv(ctx context.Context, opt storage.
 		// For further optimization, add another flag to indicate whether this block
 		// was completely read in the last operation. If fully read, we can proceed directly
 		// to the next block; otherwise, we need to start scanning from this block again.
-		//startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
-		//startBlockOffset = lastReadBatchInfo.BlockOffset + int64(lastReadBatchInfo.BlockSize)
+		// startBlockID = int64(lastReadBatchInfo.LastBlockId + 1)
+		// startBlockOffset = lastReadBatchInfo.BlockOffset + int64(lastReadBatchInfo.BlockSize)
 		startBlockID = int64(lastReadBatchInfo.LastBlockId)
 		startBlockOffset = lastReadBatchInfo.BlockOffset
 		logger.Ctx(ctx).Debug("using advOpt mode",
@@ -816,8 +814,6 @@ func (r *StagedFileReaderAdv) scanForAllBlockInfoUnsafe(ctx context.Context) err
 				zap.Int32("readBlockNumber", blockHeader.BlockNumber),
 				zap.Uint32("expectedCrc", blockHeader.BlockCrc),
 				zap.Error(err))
-			currentOffset = blockDataOffset + int64(blockDataLength)
-			blockNumber++
 			break
 		}
 

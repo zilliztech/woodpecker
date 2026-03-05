@@ -149,19 +149,20 @@ var (
 	// ---------------------------------------------
 
 	// Metadata operations (3000-3099)
-	ErrMetadataInit            = newWoodpeckerError("failed to initialize service metadata", 3000, true)
-	ErrMetadataRead            = newWoodpeckerError("failed to read metadata", 3001, true)
-	ErrMetadataWrite           = newWoodpeckerError("failed to write metadata", 3002, true)
-	ErrMetadataEncode          = newWoodpeckerError("failed to encode metadata", 3003, false)
-	ErrMetadataDecode          = newWoodpeckerError("failed to decode metadata", 3004, false)
-	ErrMetadataCreateLog       = newWoodpeckerError("failed to create log metadata", 3005, true)
-	ErrMetadataCreateLogTxn    = newWoodpeckerError("failed execute create log metadata txn", 3006, true)
-	ErrMetadataCreateSegment   = newWoodpeckerError("failed to create segment metadata", 3007, true)
-	ErrMetadataUpdateSegment   = newWoodpeckerError("failed to update segment metadata", 3008, true)
-	ErrMetadataUpdateQuorum    = newWoodpeckerError("failed to update quorum metadata", 3009, true)
-	ErrMetadataCreateReader    = newWoodpeckerError("failed to create reader temp info", 3010, true)
-	ErrMetadataRevisionInvalid = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
-	ErrMetadataKeyNotExists    = newWoodpeckerError("metadata key not exists", 3012, false)
+	ErrMetadataInit                   = newWoodpeckerError("failed to initialize service metadata", 3000, true)
+	ErrMetadataRead                   = newWoodpeckerError("failed to read metadata", 3001, true)
+	ErrMetadataWrite                  = newWoodpeckerError("failed to write metadata", 3002, true)
+	ErrMetadataEncode                 = newWoodpeckerError("failed to encode metadata", 3003, false)
+	ErrMetadataDecode                 = newWoodpeckerError("failed to decode metadata", 3004, false)
+	ErrMetadataCreateLog              = newWoodpeckerError("failed to create log metadata", 3005, true)
+	ErrMetadataCreateLogTxn           = newWoodpeckerError("failed execute create log metadata txn", 3006, true)
+	ErrMetadataCreateSegment          = newWoodpeckerError("failed to create segment metadata", 3007, true)
+	ErrMetadataUpdateSegment          = newWoodpeckerError("failed to update segment metadata", 3008, true)
+	ErrMetadataUpdateQuorum           = newWoodpeckerError("failed to update quorum metadata", 3009, true)
+	ErrMetadataCreateReader           = newWoodpeckerError("failed to create reader temp info", 3010, true)
+	ErrMetadataRevisionInvalid        = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
+	ErrMetadataKeyNotExists           = newWoodpeckerError("metadata key not exists", 3012, false)
+	ErrMetadataCreateLogAlreadyExists = newWoodpeckerError("log already exists in metadata", 3013, false)
 
 	// ---------------------------------------------
 	// Service Layer Errors

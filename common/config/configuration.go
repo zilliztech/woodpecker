@@ -309,13 +309,13 @@ type MinioConfig struct {
 
 // LogstoreConfig stores the logstore configuration.
 type LogstoreConfig struct {
-	SegmentSyncPolicy       SegmentSyncPolicyConfig `yaml:"segmentSyncPolicy"`
-	SegmentCompactionPolicy SegmentCompactionPolicy `yaml:"segmentCompactionPolicy"`
-	SegmentReadPolicy       SegmentReadPolicyConfig `yaml:"segmentReadPolicy"`
-	RetentionPolicy         RetentionPolicyConfig   `yaml:"retentionPolicy"`
-	FencePolicy             FencePolicyConfig       `yaml:"fencePolicy"`
-	GRPCConfig              GRPCConfig              `yaml:"grpc"`
-	ProcessorCleanupPolicy ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
+	SegmentSyncPolicy       SegmentSyncPolicyConfig      `yaml:"segmentSyncPolicy"`
+	SegmentCompactionPolicy SegmentCompactionPolicy      `yaml:"segmentCompactionPolicy"`
+	SegmentReadPolicy       SegmentReadPolicyConfig      `yaml:"segmentReadPolicy"`
+	RetentionPolicy         RetentionPolicyConfig        `yaml:"retentionPolicy"`
+	FencePolicy             FencePolicyConfig            `yaml:"fencePolicy"`
+	GRPCConfig              GRPCConfig                   `yaml:"grpc"`
+	ProcessorCleanupPolicy  ProcessorCleanupPolicyConfig `yaml:"processorCleanupPolicy"`
 }
 
 // ProcessorCleanupPolicyConfig stores the background segment processor cleanup and shutdown configuration.

@@ -289,7 +289,7 @@ func TestMarshalMessage(t *testing.T) {
 		err = proto.Unmarshal(data, layout)
 		require.NoError(t, err)
 		assert.Equal(t, msg.Payload, layout.Payload)
-		//Empty map becomes nil after protobuf serialization/deserialization
+		// Empty map becomes nil after protobuf serialization/deserialization
 		if layout.Properties == nil {
 			assert.Nil(t, layout.Properties)
 		} else {

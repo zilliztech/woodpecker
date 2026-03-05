@@ -65,8 +65,65 @@ proto_clean:
 build: ## Build binary for current platform
 	go build -v -o bin/woodpecker ./cmd
 
-test: build ## Run tests
+test: build ## Run all tests
 	go test -cover -race ./...
+
+.PHONY: lint
+lint: ## Run golangci-lint
+	golangci-lint run --config .golangci.yml ./...
+
+.PHONY: lint-fix
+lint-fix: ## Run golangci-lint with auto-fix
+	golangci-lint run --config .golangci.yml --fix ./...
+
+.PHONY: fmt
+fmt: ## Format code with gofumpt and gci
+	gofumpt -l -w .
+	gci write . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated
+
+.PHONY: fmt-check
+fmt-check: ## Check code formatting (CI)
+	@echo "Checking gofumpt..."
+	@test -z "$$(gofumpt -l .)" || (echo "Files need formatting:"; gofumpt -l .; exit 1)
+	@echo "Checking gci..."
+	@gci diff . --section standard --section default --section "prefix(github.com/zilliztech/woodpecker)" --skip-generated | tee /dev/stderr | (! grep .)
+	@echo "All files formatted correctly."
+
+.PHONY: unit-test
+unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker)
+	go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
+		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
+
+.PHONY: integration-test
+integration-test: ## Run all integration tests (requires etcd + MinIO)
+	go test -race -cover -failfast -timeout=45m -v ./tests/integration/...
+
+.PHONY: integration-test-e2e-local
+integration-test-e2e-local: ## Run e2e tests with local filesystem storage
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/LocalFsStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-objectstorage
+integration-test-e2e-objectstorage: ## Run e2e tests with object storage (MinIO)
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/ObjectStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-service
+integration-test-e2e-service: ## Run e2e tests with service storage + failover
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "/ServiceStorage" \
+		./tests/integration/...
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "^TestStagedStorageService" \
+		./tests/integration/...
+
+.PHONY: integration-test-components
+integration-test-components: ## Run component integration tests (non-e2e)
+	go test -race -cover -failfast -timeout=20m -v \
+		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+		./tests/integration/...
 
 clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*

@@ -58,6 +58,7 @@ func parseAdvertiseAddr(addrPort string) (string, int, error) {
 
 	return host, port, nil
 }
+
 func main() {
 	var (
 		servicePort               = flag.Int("service-port", 18080, "service port")

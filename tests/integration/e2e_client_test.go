@@ -115,7 +115,7 @@ func TestOpenWriterMultiTimesInSingleClient(t *testing.T) {
 			logName := "test_log_single_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 			}
 			logHandle, openErr := client.OpenLog(ctx, logName)
 			assert.NoError(t, openErr)
@@ -174,7 +174,7 @@ func TestOpenWriterMultiTimesInMultiClient(t *testing.T) {
 			logName := "test_log_multi_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client1.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 			}
 
 			logHandle1, openErr := client1.OpenLog(ctx, logName)
@@ -302,7 +302,7 @@ func TestOpenInternalWriterMultiTimesInMultiClient(t *testing.T) {
 			logName := "test_log_multi_" + tc.name + time.Now().Format("20060102150405")
 			createErr := client1.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 			}
 
 			// ==== STEP1: open internal logWriter1 ===
@@ -449,7 +449,7 @@ func TestRepeatedOpenCloseWriterAndReader(t *testing.T) {
 			logName := "test_repeated_open_close" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, errors.IsAny(createErr, werr.ErrMetadataCreateLog, werr.ErrLogHandleLogAlreadyExists))
+				assert.True(t, errors.IsAny(createErr, werr.ErrMetadataCreateLog, werr.ErrMetadataCreateLogAlreadyExists))
 			}
 
 			// Open log handle
@@ -670,7 +670,7 @@ func TestWriterCloseWithoutWrite(t *testing.T) {
 			logName := "test_writer_close_without_write" + tc.name + time.Now().Format("20060102150405")
 			createErr := client.CreateLog(ctx, logName)
 			if createErr != nil {
-				assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+				assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 			}
 
 			// Open log handle
@@ -918,7 +918,7 @@ func TestClientRecreation(t *testing.T) {
 				// Create a log or use existing one
 				createErr := client1.CreateLog(ctx, logName)
 				if createErr != nil {
-					assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+					assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 				}
 
 				// Open the log
@@ -1134,7 +1134,7 @@ func TestClientRecreationWithManagedCli(t *testing.T) {
 				// Create a log or use existing one
 				createErr := client1.CreateLog(ctx, logName)
 				if createErr != nil {
-					assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+					assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 				}
 
 				// Open the log
@@ -1755,7 +1755,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}
@@ -2151,7 +2151,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}
@@ -2553,7 +2553,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}

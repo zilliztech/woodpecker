@@ -77,7 +77,8 @@ type AppendOp struct {
 }
 
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
-	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo,
+) *AppendOp {
 	op := &AppendOp{
 		bucketName:       bucketName,
 		rootPath:         rootPath,
@@ -140,7 +141,7 @@ func (op *AppendOp) sendWriteRequestRetry(ctx context.Context, serverIndex int) 
 }
 
 func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreClient, serverIndex int, serverAddr string) {
-	ctx, sp := logger.NewIntentCtx("AppendOp", "sendWriteRequest")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "AppendOp", "sendWriteRequest")
 	defer sp.End()
 	startRequestTime := time.Now()
 
@@ -165,7 +166,7 @@ func (op *AppendOp) sendWriteRequest(ctx context.Context, cli client.LogStoreCli
 }
 
 func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime time.Time, entryId int64, resultChan channel.ResultChannel, err error, serverIndex int, serverAddr string) {
-	ctx, sp := logger.NewIntentCtx("AppendOp", "receivedAckCallback")
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, "AppendOp", "receivedAckCallback")
 	defer sp.End()
 	// sync call error, return directly
 	if err != nil {

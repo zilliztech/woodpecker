@@ -26,6 +26,9 @@ import (
 )
 
 func TestEtcd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping embedded etcd test in short/CI mode")
+	}
 	err := InitEtcdServer(true, "", "/tmp/data", "stdout", "info")
 	assert.NoError(t, err)
 	defer StopEtcdServer()

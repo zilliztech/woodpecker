@@ -110,7 +110,7 @@ func Start(cfg *config.Configuration, GetServerNodeMemberlistStatus func() strin
 	Register(&Handler{
 		Path: AdminMemberlistPath,
 		HandlerFunc: func(writer http.ResponseWriter, request *http.Request) {
-			fmt.Fprintf(writer, GetServerNodeMemberlistStatus())
+			fmt.Fprint(writer, GetServerNodeMemberlistStatus())
 		},
 	})
 

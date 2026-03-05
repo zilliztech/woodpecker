@@ -1330,6 +1330,7 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 		readEntries := make(map[int64][]byte) // Track read entries
 
 		// Keep reading until we've read all expected entries
+	readLoop:
 		for {
 			select {
 			case <-ctx.Done():
@@ -1339,7 +1340,7 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 				if !ok {
 					// Writer is done, do final read
 					t.Logf("Reader: Writer finished, doing final read")
-					break
+					break readLoop
 				}
 
 				// Try to read up to the latest written entry
@@ -1353,7 +1354,6 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 						StartEntryID:    startId,
 						MaxBatchEntries: batchSize,
 					}, nil)
-
 					if err != nil {
 						t.Logf("Reader: Failed to read entries %d to %d: %v", startId, latestWrittenId, err)
 						// Continue trying - the data might not be fully written yet
@@ -1397,7 +1397,6 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 			StartEntryID:    0,
 			MaxBatchEntries: int64(totalEntries),
 		}, nil)
-
 		if err != nil {
 			t.Errorf("Reader: Failed final read: %v", err)
 			return
@@ -1633,7 +1632,6 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 							StartEntryID:    startId,
 							MaxBatchEntries: entriesToRead,
 						}, nil)
-
 						if err != nil {
 							t.Logf("Reader %d: Failed to read entries %d to %d: %v",
 								readerNum, startId, startId+entriesToRead-1, err)

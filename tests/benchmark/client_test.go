@@ -98,7 +98,7 @@ func (wm *WriterManager) TriggerReopen(failedWriter log.LogWriter, index int64) 
 		}
 
 		// 2. open new writer
-		//newWriter, err := wm.logHandle.OpenLogWriter(context.Background())
+		// newWriter, err := wm.logHandle.OpenLogWriter(context.Background())
 		newWriter, err := newLogHandle.OpenLogWriter(context.Background())
 		if err != nil {
 			// Log error and retry after a brief pause
@@ -230,7 +230,7 @@ func TestE2ERead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			// cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -380,7 +380,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 			// ### Create client
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			// cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -444,7 +444,7 @@ func TestAsyncWriteThroughput(t *testing.T) {
 							fmt.Println(writeResult.Err.Error())
 							failMessages = append(failMessages, writingMessages[idx])
 						} else {
-							//t.Logf("write success, returned recordId:%v \n", writeResult.LogMessageId)
+							// t.Logf("write success, returned recordId:%v \n", writeResult.LogMessageId)
 							utils.MinioIOBytes.WithLabelValues("0").Observe(float64(len(payloadStaticData)))
 							utils.MinioIOLatency.WithLabelValues("0").Observe(float64(time.Since(startTime).Milliseconds()))
 							startTime = time.Now()
@@ -560,7 +560,7 @@ func TestWriteThroughput(t *testing.T) {
 			// ### Create client
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			// cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -617,7 +617,7 @@ func TestWriteThroughput(t *testing.T) {
 			}
 
 			//	### OpenWriter
-			//logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
+			// logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 			logWriter, openWriterErr := logHandle.OpenLogWriter(context.Background())
 			if openWriterErr != nil {
 				t.Logf("Open writer failed, err:%v\n", openWriterErr)
@@ -774,7 +774,7 @@ func TestReadThroughput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			// cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
@@ -1207,7 +1207,7 @@ func TestSequentialWriteAndReadPerformance(t *testing.T) {
 			// ### Create client
 			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
 			assert.NoError(t, err)
-			//cfg.Log.Level = "debug"
+			// cfg.Log.Level = "debug"
 
 			if tc.storageType != "" {
 				cfg.Woodpecker.Storage.Type = tc.storageType
