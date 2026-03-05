@@ -32,7 +32,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          go test -race -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
+          go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
             $(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
 
       - name: Upload coverage

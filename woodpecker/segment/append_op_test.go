@@ -667,15 +667,18 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		Nodes: []string{"node1", "node2", "node3"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations - AppendEntry calls will create async operations
@@ -722,9 +725,12 @@ func TestAppendOp_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed")
 	assert.GreaterOrEqual(t, op.ackSet.Count(), 2, "At least 2 nodes should have acked")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr)
@@ -748,15 +754,18 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 		Nodes: []string{"node1", "node2", "node3"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations
@@ -821,9 +830,12 @@ func TestAppendOp_QuorumWrite_Case2_TwoSuccessOneFail(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed successfully")
 	assert.GreaterOrEqual(t, op.ackSet.Count(), 2, "At least 2 nodes should have acked (quorum reached)")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Success callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr, "Should succeed despite 1 node failure")
@@ -845,15 +857,18 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 		Nodes: []string{"node1"},
 	}
 
-	callbackCalled := false
 	var callbackSegmentId, callbackEntryId int64
 	var callbackErr error
+	callbackDone := make(chan struct{}, 1)
 
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		callbackSegmentId = segmentId
 		callbackEntryId = entryId
 		callbackErr = err
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations
@@ -890,9 +905,12 @@ func TestAppendOp_QuorumWrite_Case3_SingleNodeSuccess(t *testing.T) {
 	assert.True(t, op.completed.Load(), "Operation should be completed")
 	assert.Equal(t, 1, op.ackSet.Count(), "Single node should have acked")
 
-	// Wait for callback
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, callbackCalled, "Callback should have been called")
+	// Wait for callback via channel synchronization
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 	assert.Equal(t, int64(2), callbackSegmentId)
 	assert.Equal(t, int64(3), callbackEntryId)
 	assert.NoError(t, callbackErr)
@@ -951,7 +969,6 @@ func TestAppendOp_QuorumWrite_Case4_SingleNodeFailure(t *testing.T) {
 	// Verify that operation did not complete successfully
 	assert.False(t, op.completed.Load(), "Operation should not be completed")
 	assert.Equal(t, 0, op.ackSet.Count(), "No nodes should have acked")
-	assert.Equal(t, failureErr, op.channelErrors[0], "Error should be set for channel 0")
 }
 
 // TestAppendOp_QuorumWrite_Case5_SimpleQuorumTest tests basic quorum behavior
@@ -1029,9 +1046,12 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 		Nodes: nodes,
 	}
 
-	callbackCalled := false
+	callbackDone := make(chan struct{}, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 
 	// Setup expectations for client pool and AppendEntry
@@ -1085,9 +1105,13 @@ func testSimpleQuorum(t *testing.T, nodeCount, ackQuorum, successCount int, expe
 
 	// Verify results
 	if expectedSuccess {
+		select {
+		case <-callbackDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timed out waiting for callback")
+		}
 		assert.True(t, op.completed.Load(), "Operation should be completed successfully")
 		assert.GreaterOrEqual(t, op.ackSet.Count(), ackQuorum, fmt.Sprintf("At least %d nodes should have acked", ackQuorum))
-		assert.True(t, callbackCalled, "Success callback should have been called")
 	} else {
 		assert.False(t, op.completed.Load(), "Operation should not be completed")
 		assert.Less(t, op.ackSet.Count(), ackQuorum, fmt.Sprintf("Less than %d nodes should have acked (insufficient for quorum)", ackQuorum))

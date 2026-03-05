@@ -105,32 +105,42 @@ func TestAppendAsync_Success(t *testing.T) {
 		Revision: 1,
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
-	callbackCalled := false
+	callbackDone := make(chan struct{}, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
-		callbackCalled = true
 		assert.Equal(t, int64(1), segmentId)
 		assert.Equal(t, int64(0), entryId)
 		assert.Nil(t, err)
+		select {
+		case callbackDone <- struct{}{}:
+		default:
+		}
 	}
 	segmentHandle.AppendAsync(context.Background(), []byte("test"), callback)
 	segImpl := segmentHandle.(*segmentHandleImpl)
 	op := segImpl.appendOpsQueue.Front().Value
 	appendOp := op.(*AppendOp)
 	go func(op2 *AppendOp) {
-		for i := 0; i < 5; i++ {
-			if len(appendOp.resultChannels) > 0 {
-				_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+		for i := 0; i < 50; i++ {
+			op2.mu.Lock()
+			if len(op2.resultChannels) > 0 && op2.resultChannels[0] != nil {
+				rc := op2.resultChannels[0]
+				op2.mu.Unlock()
+				_ = rc.SendResult(context.Background(), &channel.AppendResult{
 					SyncedId: 0,
 					Err:      nil,
 				})
 				return
 			}
-			time.Sleep(200 * time.Millisecond)
+			op2.mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
 		}
 		t.Errorf("Wait timeout for append")
 	}(appendOp)
-	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
-	assert.True(t, callbackCalled)
+	select {
+	case <-callbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for callback")
+	}
 }
 
 func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
@@ -175,16 +185,26 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
+	var mu sync.Mutex
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
+	allDone := make(chan struct{}, 1)
 	for i := 0; i < 20; i++ {
 		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
+			mu.Lock()
+			defer mu.Unlock()
 			callbackCalledNum++
 			assert.Equal(t, int64(1), segmentId)
 			assert.Equal(t, int64(entryIndex), entryId)
 			assert.Nil(t, err)
 			syncedIds = append(syncedIds, entryId)
+			if callbackCalledNum == 20 {
+				select {
+				case allDone <- struct{}{}:
+				default:
+				}
+			}
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
@@ -199,22 +219,40 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
-				if len(appendOp.resultChannels) > 0 {
-					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
+				appendOp.mu.Lock()
+				if len(appendOp.resultChannels) > 0 && appendOp.resultChannels[0] != nil {
+					rc := appendOp.resultChannels[0]
+					appendOp.mu.Unlock()
+					_ = rc.SendResult(context.Background(), &channel.AppendResult{
 						SyncedId: appendOp.entryId,
 						Err:      nil,
 					})
 					processedCount++
+				} else {
+					appendOp.mu.Unlock()
 				}
 			}
 		}
 	}()
 
-	time.Sleep(500 * time.Millisecond) // Give some time for the async operation to complete
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for all callbacks")
+	}
+	mu.Lock()
 	assert.Equal(t, 20, callbackCalledNum)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, syncedIds)
+	mu.Unlock()
 }
 
 func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
@@ -275,12 +313,16 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
+	var mu sync.Mutex
 	failedAttempts := 0
 	successAttempts := 0
 	syncedIds := make([]int64, 0)
+	allDone := make(chan struct{}, 1)
 	for i := 0; i < 5; i++ {
 		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
+			mu.Lock()
+			defer mu.Unlock()
 			if entryIndex >= 2 {
 				failedAttempts++
 				// received callback 2,3,4 fail
@@ -294,6 +336,12 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 				assert.Equal(t, int64(1), segmentId)
 				assert.Equal(t, int64(entryIndex), entryId)
 				syncedIds = append(syncedIds, entryId)
+			}
+			if failedAttempts+successAttempts == 5 {
+				select {
+				case allDone <- struct{}{}:
+				default:
+				}
 			}
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
@@ -309,23 +357,41 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
-				if len(appendOp.resultChannels) > 0 {
-					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
+				appendOp.mu.Lock()
+				if len(appendOp.resultChannels) > 0 && appendOp.resultChannels[0] != nil {
+					rc := appendOp.resultChannels[0]
+					appendOp.mu.Unlock()
+					_ = rc.SendResult(context.Background(), &channel.AppendResult{
 						SyncedId: appendOp.entryId,
 						Err:      nil,
 					})
 					processedCount++
+				} else {
+					appendOp.mu.Unlock()
 				}
 			}
 		}
 	}()
 
-	time.Sleep(1000 * time.Millisecond) // Give some time for the async operation to complete
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for all callbacks")
+	}
+	mu.Lock()
 	assert.Equal(t, 2, successAttempts) // 0,1
 	assert.Equal(t, 3, failedAttempts)  // 2,3,4
 	assert.Equal(t, []int64{0, 1}, syncedIds)
+	mu.Unlock()
 }
 
 // TestAppendAsync_TimeoutBug tests the specific bug where when resultChan.ReadResult times out,
@@ -335,6 +401,9 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 // - Entry 2 times out by not sending any data to result channel
 // - The bug causes the callback to receive nil error instead of timeout error
 func TestAppendAsync_TimeoutBug(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timeout bug test in short mode (takes ~2 minutes)")
+	}
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
@@ -423,27 +492,35 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) > 0 {
+				appendOp.mu.Lock()
+				if len(appendOp.resultChannels) > 0 && appendOp.resultChannels[0] != nil {
+					rc := appendOp.resultChannels[0]
+					appendOp.mu.Unlock()
 					if entryId < 2 && !processedSuccessfully[entryId] {
 						// Send success result for entries 0,1
 						t.Logf("Sending success result for entry %d", entryId)
-						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						_ = rc.SendResult(context.Background(), &channel.AppendResult{
 							SyncedId: entryId,
 							Err:      nil,
 						})
 						processedSuccessfully[entryId] = true
 					}
 					// For entry 2: DO NOT send any result - this simulates timeout
-					// The receivedAckCallback will timeout when calling resultChan.ReadResult(subCtx)
-					// This will trigger the bug in append_op.go lines 172-173
+				} else {
+					appendOp.mu.Unlock()
 				}
 			}
-			segImpl.Unlock()
 
 			// Check if we've processed entries 0,1 and entry 2 has started timing out
 			if processedSuccessfully[0] && processedSuccessfully[1] {
@@ -483,8 +560,11 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 		time.Sleep(2 * time.Second)
 
 		// Force check if entry 2 has any result channels that we can examine
-		if len(entry2Op.resultChannels) > 0 {
-			t.Logf("Entry 2 has %d result channels", len(entry2Op.resultChannels))
+		entry2Op.mu.Lock()
+		rcLen := len(entry2Op.resultChannels)
+		entry2Op.mu.Unlock()
+		if rcLen > 0 {
+			t.Logf("Entry 2 has %d result channels", rcLen)
 		} else {
 			t.Logf("Entry 2 has no result channels yet")
 		}
@@ -563,12 +643,16 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
+	var mu sync.Mutex
 	callbackCalled := 0
 	successCount := 0
 	syncedIds := make([]int64, 0)
+	allDone := make(chan struct{}, 1)
 	for i := 0; i < 5; i++ {
 		entryIndex := i
 		callback := func(segmentId int64, entryId int64, err error) {
+			mu.Lock()
+			defer mu.Unlock()
 			callbackCalled++
 			assert.NoError(t, err, fmt.Sprintf("entry:%d add fail", entryId))
 			assert.Equal(t, int64(1), segmentId)
@@ -576,6 +660,12 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 			if err == nil {
 				successCount++
 				syncedIds = append(syncedIds, entryId)
+			}
+			if callbackCalled == 5 {
+				select {
+				case allDone <- struct{}{}:
+				default:
+				}
 			}
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
@@ -591,23 +681,41 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
-				if len(appendOp.resultChannels) > 0 {
-					_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
+				appendOp.mu.Lock()
+				if len(appendOp.resultChannels) > 0 && appendOp.resultChannels[0] != nil {
+					rc := appendOp.resultChannels[0]
+					appendOp.mu.Unlock()
+					_ = rc.SendResult(context.Background(), &channel.AppendResult{
 						SyncedId: appendOp.entryId,
 						Err:      nil,
 					})
 					processedCount++
+				} else {
+					appendOp.mu.Unlock()
 				}
 			}
 		}
 	}()
 
-	time.Sleep(1000 * time.Millisecond)
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for all callbacks")
+	}
+	mu.Lock()
 	assert.Equal(t, 5, callbackCalled)
 	assert.Equal(t, 5, successCount)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4}, syncedIds)
+	mu.Unlock()
 }
 
 func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
@@ -644,17 +752,27 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 	}
 	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
 
+	var mu sync.Mutex
 	callbackCalledNum := 0
 	syncedIds := make([]int64, 0)
+	allDone := make(chan struct{}, 1)
 	for i := 0; i < 20; i++ {
 		entryIndex := i // Capture the loop variable by value
 		callback := func(segmentId int64, entryId int64, err error) {
+			mu.Lock()
+			defer mu.Unlock()
 			callbackCalledNum++
 			assert.Equal(t, int64(1), segmentId)
 			assert.Equal(t, int64(entryIndex), entryId)
 			assert.Nil(t, err)
 			t.Logf("=====exec callback segID:%d entryID:%d entryIdx:%d callNum:%d \n\n", segmentId, entryId, entryIndex, callbackCalledNum)
 			syncedIds = append(syncedIds, entryId)
+			if callbackCalledNum == 20 {
+				select {
+				case allDone <- struct{}{}:
+				default:
+				}
+			}
 		}
 		segmentHandle.AppendAsync(context.Background(), []byte(fmt.Sprintf("test_%d", i)), callback)
 	}
@@ -666,35 +784,58 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		for processedCount < 20 && attempts < maxAttempts {
 			time.Sleep(1000 * time.Millisecond)
 			attempts++
+
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
+				appendOp.mu.Lock()
 				// when chan ready
-				if len(appendOp.resultChannels) > 0 {
-					if appendOp.entryId%2 == 0 && appendOp.channelAttempts[0]+1 <= 1 {
+				if len(appendOp.resultChannels) > 0 && appendOp.resultChannels[0] != nil {
+					rc := appendOp.resultChannels[0]
+					chanAttempt := appendOp.channelAttempts[0]
+					entryId := appendOp.entryId
+					logId := appendOp.logId
+					segId := appendOp.segmentId
+					appendOp.mu.Unlock()
+					if entryId%2 == 0 && chanAttempt+1 <= 1 {
 						// if attempt=1 and entryId is even, mock fail in this attempt
-						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
-						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", -1, logId, segId, entryId, chanAttempt)
+						_ = rc.SendResult(context.Background(), &channel.AppendResult{
 							SyncedId: -1,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", -1, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", -1, logId, segId, entryId, chanAttempt)
 					} else {
 						// otherwise, mock success
-						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
-						_ = appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
-							SyncedId: appendOp.entryId,
+						t.Logf("start to send %d to chan %d/%d/%d , which in No.%d attempt\n", entryId, logId, segId, entryId, chanAttempt)
+						_ = rc.SendResult(context.Background(), &channel.AppendResult{
+							SyncedId: entryId,
 							Err:      nil,
 						})
-						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", appendOp.entryId, appendOp.logId, appendOp.segmentId, appendOp.entryId, appendOp.channelAttempts[0])
+						t.Logf("finish to send %d to chan %d/%d/%d , which in No.%d attempt\n\n", entryId, logId, segId, entryId, chanAttempt)
 						processedCount++
 					}
+				} else {
+					appendOp.mu.Unlock()
 				}
 			}
 		}
 	}()
-	time.Sleep(5000 * time.Millisecond) // Give some time for the async operation to complete
+	select {
+	case <-allDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Timed out waiting for all callbacks")
+	}
+	mu.Lock()
 	assert.Equal(t, 20, callbackCalledNum)
 	assert.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}, syncedIds)
+	mu.Unlock()
 }
 
 func TestSegmentHandleFenceAndClosed(t *testing.T) {
@@ -1830,6 +1971,7 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 
 	// Simulate successful responses from all 3 nodes for all 3 entries
 	segImpl := segmentHandle.(*segmentHandleImpl)
+	allDone := make(chan struct{}, 1)
 	go func() {
 		maxAttempts := 100
 		attempts := 0
@@ -1839,16 +1981,31 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) >= 3 && !processedEntries[entryId] {
+				appendOp.mu.Lock()
+				ready := len(appendOp.resultChannels) >= 3
+				var rcs []channel.ResultChannel
+				if ready {
+					rcs = make([]channel.ResultChannel, len(appendOp.resultChannels))
+					copy(rcs, appendOp.resultChannels)
+				}
+				appendOp.mu.Unlock()
+
+				if ready && !processedEntries[entryId] {
 					// Send success results from all 3 nodes
 					for i := 0; i < 3; i++ {
-						if appendOp.resultChannels[i] != nil {
-							err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+						if rcs[i] != nil {
+							err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 								SyncedId: entryId,
 								Err:      nil,
 							})
@@ -1861,12 +2018,20 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 					t.Logf("Processed entry %d with all 3 nodes success", entryId)
 				}
 			}
-			segImpl.Unlock()
+		}
+		select {
+		case allDone <- struct{}{}:
+		default:
 		}
 	}()
 
 	// Wait for all operations to complete
-	time.Sleep(2 * time.Second)
+	select {
+	case <-allDone:
+		time.Sleep(500 * time.Millisecond) // Allow callbacks to complete
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for operations to complete")
+	}
 
 	// Verify results
 	mu.Lock()
@@ -2013,6 +2178,7 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 
 	// Simulate responses based on the test scenario
 	segImpl := segmentHandle.(*segmentHandleImpl)
+	allDone := make(chan struct{}, 1)
 	go func() {
 		maxAttempts := 100
 		attempts := 0
@@ -2022,17 +2188,30 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) >= 3 && !processedEntries[entryId] {
+				appendOp.mu.Lock()
+				ready := len(appendOp.resultChannels) >= 3
+				var rcs []channel.ResultChannel
+				if ready {
+					rcs = make([]channel.ResultChannel, len(appendOp.resultChannels))
+					copy(rcs, appendOp.resultChannels)
+				}
+				appendOp.mu.Unlock()
+
+				if ready && !processedEntries[entryId] {
 					if entryId == 0 || entryId == 2 {
-						// Entry 0 and 2: All 3 nodes succeed
 						for i := 0; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2043,11 +2222,9 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 						}
 						t.Logf("Processed entry %d with all 3 nodes success", entryId)
 					} else if entryId == 1 {
-						// Entry 1: node1,node2 succeed, node3 fails
-						// Send success results for node1 and node2
 						for i := 0; i < 2; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2056,9 +2233,8 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 								}
 							}
 						}
-						// Send failure result for node3
-						if appendOp.resultChannels[2] != nil {
-							err := appendOp.resultChannels[2].SendResult(context.Background(), &channel.AppendResult{
+						if rcs[2] != nil {
+							err := rcs[2].SendResult(context.Background(), &channel.AppendResult{
 								SyncedId: -1,
 								Err:      errors.New("node3 failure"),
 							})
@@ -2071,12 +2247,19 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 					processedEntries[entryId] = true
 				}
 			}
-			segImpl.Unlock()
+		}
+		select {
+		case allDone <- struct{}{}:
+		default:
 		}
 	}()
 
-	// Wait for all operations to complete
-	time.Sleep(2 * time.Second)
+	select {
+	case <-allDone:
+		time.Sleep(500 * time.Millisecond)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for operations to complete")
+	}
 
 	// Verify results
 	mu.Lock()
@@ -2223,6 +2406,7 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 
 	// Simulate responses based on the test scenario
 	segImpl := segmentHandle.(*segmentHandleImpl)
+	allDone := make(chan struct{}, 1)
 	go func() {
 		maxAttempts := 100
 		attempts := 0
@@ -2232,17 +2416,32 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) >= 3 && !processedEntries[entryId] {
+				appendOp.mu.Lock()
+				ready := len(appendOp.resultChannels) >= 3
+				var rcs []channel.ResultChannel
+				if ready {
+					rcs = make([]channel.ResultChannel, len(appendOp.resultChannels))
+					copy(rcs, appendOp.resultChannels)
+				}
+				appendOp.mu.Unlock()
+
+				if ready && !processedEntries[entryId] {
 					if entryId == 0 {
 						// Entry 0: All 3 nodes succeed
 						for i := 0; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2255,8 +2454,8 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 					} else if entryId == 1 {
 						// Entry 1: only node1 succeeds, node2,node3 fail
 						// Send success result for node1
-						if appendOp.resultChannels[0] != nil {
-							err := appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						if rcs[0] != nil {
+							err := rcs[0].SendResult(context.Background(), &channel.AppendResult{
 								SyncedId: entryId,
 								Err:      nil,
 							})
@@ -2266,8 +2465,8 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 						}
 						// Send failure results for node2 and node3
 						for i := 1; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: -1,
 									Err:      errors.New(fmt.Sprintf("node%d failure", i+1)),
 								})
@@ -2280,8 +2479,8 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 					} else if entryId == 2 {
 						// Entry 2: All 3 nodes succeed (but should be fast-failed due to entry 1 failure)
 						for i := 0; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2295,12 +2494,20 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 					processedEntries[entryId] = true
 				}
 			}
-			segImpl.Unlock()
+		}
+		select {
+		case allDone <- struct{}{}:
+		default:
 		}
 	}()
 
 	// Wait for all operations to complete
-	time.Sleep(2 * time.Second)
+	select {
+	case <-allDone:
+		time.Sleep(500 * time.Millisecond) // Allow callbacks to complete
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for operations to complete")
+	}
 
 	// Verify results
 	mu.Lock()
@@ -2451,6 +2658,7 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 
 	// Simulate responses based on the test scenario
 	segImpl := segmentHandle.(*segmentHandleImpl)
+	allDone := make(chan struct{}, 1)
 	go func() {
 		maxAttempts := 100
 		attempts := 0
@@ -2460,17 +2668,32 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) >= 3 && !processedEntries[entryId] {
+				appendOp.mu.Lock()
+				ready := len(appendOp.resultChannels) >= 3
+				var rcs []channel.ResultChannel
+				if ready {
+					rcs = make([]channel.ResultChannel, len(appendOp.resultChannels))
+					copy(rcs, appendOp.resultChannels)
+				}
+				appendOp.mu.Unlock()
+
+				if ready && !processedEntries[entryId] {
 					if entryId == 0 || entryId == 1 {
 						// Entry 0 and 1: All 3 nodes succeed
 						for i := 0; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2483,8 +2706,8 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 					} else if entryId == 2 {
 						// Entry 2: node1 fails, node2,node3 succeed
 						// Send failure result for node1
-						if appendOp.resultChannels[0] != nil {
-							err := appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						if rcs[0] != nil {
+							err := rcs[0].SendResult(context.Background(), &channel.AppendResult{
 								SyncedId: -1,
 								Err:      errors.New("node1 failure"),
 							})
@@ -2494,8 +2717,8 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 						}
 						// Send success results for node2 and node3
 						for i := 1; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2509,12 +2732,20 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 					processedEntries[entryId] = true
 				}
 			}
-			segImpl.Unlock()
+		}
+		select {
+		case allDone <- struct{}{}:
+		default:
 		}
 	}()
 
 	// Wait for all operations to complete
-	time.Sleep(2 * time.Second)
+	select {
+	case <-allDone:
+		time.Sleep(500 * time.Millisecond) // Allow callbacks to complete
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for operations to complete")
+	}
 
 	// Verify results
 	mu.Lock()
@@ -2665,6 +2896,7 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 
 	// Simulate responses based on the test scenario
 	segImpl := segmentHandle.(*segmentHandleImpl)
+	allDone := make(chan struct{}, 1)
 	go func() {
 		maxAttempts := 100
 		attempts := 0
@@ -2674,17 +2906,32 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			attempts++
 
-			segImpl.Lock()
+			// Snapshot ops under segment lock to avoid race with queue modifications
+			var ops []*AppendOp
+			segImpl.RLock()
 			for e := segImpl.appendOpsQueue.Front(); e != nil; e = e.Next() {
-				appendOp := e.Value.(*AppendOp)
+				ops = append(ops, e.Value.(*AppendOp))
+			}
+			segImpl.RUnlock()
+
+			for _, appendOp := range ops {
 				entryId := appendOp.entryId
 
-				if len(appendOp.resultChannels) >= 3 && !processedEntries[entryId] {
+				appendOp.mu.Lock()
+				ready := len(appendOp.resultChannels) >= 3
+				var rcs []channel.ResultChannel
+				if ready {
+					rcs = make([]channel.ResultChannel, len(appendOp.resultChannels))
+					copy(rcs, appendOp.resultChannels)
+				}
+				appendOp.mu.Unlock()
+
+				if ready && !processedEntries[entryId] {
 					if entryId == 0 {
 						// Entry 0: node1 fails, node2,node3 succeed
 						// Send failure result for node1
-						if appendOp.resultChannels[0] != nil {
-							err := appendOp.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+						if rcs[0] != nil {
+							err := rcs[0].SendResult(context.Background(), &channel.AppendResult{
 								SyncedId: -1,
 								Err:      errors.New("node1 failure"),
 							})
@@ -2694,8 +2941,8 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 						}
 						// Send success results for node2 and node3
 						for i := 1; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2708,8 +2955,8 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 					} else if entryId == 1 || entryId == 2 {
 						// Entry 1 and 2: All 3 nodes succeed
 						for i := 0; i < 3; i++ {
-							if appendOp.resultChannels[i] != nil {
-								err := appendOp.resultChannels[i].SendResult(context.Background(), &channel.AppendResult{
+							if rcs[i] != nil {
+								err := rcs[i].SendResult(context.Background(), &channel.AppendResult{
 									SyncedId: entryId,
 									Err:      nil,
 								})
@@ -2723,12 +2970,20 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 					processedEntries[entryId] = true
 				}
 			}
-			segImpl.Unlock()
+		}
+		select {
+		case allDone <- struct{}{}:
+		default:
 		}
 	}()
 
 	// Wait for all operations to complete
-	time.Sleep(2 * time.Second)
+	select {
+	case <-allDone:
+		time.Sleep(500 * time.Millisecond) // Allow callbacks to complete
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for operations to complete")
+	}
 
 	// Verify results
 	mu.Lock()

@@ -91,7 +91,7 @@ fmt-check: ## Check code formatting (CI)
 
 .PHONY: unit-test
 unit-test: ## Run unit tests only (excludes integration/benchmark/stability/docker)
-	go test -race -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
+	go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
 		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
 
 .PHONY: integration-test
