@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   integration-test:
-    name: Integration Test (${{ matrix.name }})
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
