@@ -54,7 +54,7 @@ func setupStagedAdvTest(t *testing.T, rootDir string) (storageclient.ObjectStora
 
 	// Create a temporary directory for local files
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", rootDir, time.Now().Unix()))
-	err = os.MkdirAll(tempDir, 0755)
+	err = os.MkdirAll(tempDir, 0o755)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {

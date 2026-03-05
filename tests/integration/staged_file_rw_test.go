@@ -39,9 +39,7 @@ import (
 	"github.com/zilliztech/woodpecker/tests/utils"
 )
 
-var (
-	StagedTestBucket = "a-bucket"
-)
+var StagedTestBucket = "a-bucket"
 
 func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStorage, *config.Configuration, string) {
 	cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
@@ -61,7 +59,7 @@ func setupStagedFileTest(t *testing.T, rootDir string) (storageclient.ObjectStor
 
 	// Create a temporary directory for local files
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", rootDir, currentTime))
-	err = os.MkdirAll(tempDir, 0755)
+	err = os.MkdirAll(tempDir, 0o755)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -347,7 +345,6 @@ func TestStagedFileWriter_ConcurrentWrites(t *testing.T) {
 
 			resultCh := channel.NewLocalResultChannel(fmt.Sprintf("test-staged-concurrent-%d", entryId))
 			_, err := writer.WriteDataAsync(ctx, entryId, data, resultCh)
-
 			if err != nil {
 				errorMutex.Lock()
 				errors[entryId] = err

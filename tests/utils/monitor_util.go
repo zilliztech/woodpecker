@@ -85,7 +85,7 @@ func StartMetrics() {
 		http.Handle("/metrics", promhttp.Handler())
 		http.ListenAndServe(":29092", nil)
 	}()
-	//go recordMetrics()
+	// go recordMetrics()
 }
 
 //func recordMetrics() {
@@ -121,7 +121,7 @@ func StartReporting() {
 			case <-ticker.C:
 				currentTimeMs := time.Now().UnixMilli()
 				currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMinioMetrics()
-				//currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
+				// currentBytesSum, currentBytesCount, currentLatencySum, currentLatencyCount, err := getCurrentMetrics()
 				if err != nil {
 					fmt.Printf("Failed to get metrics: %v\n", err)
 					continue
@@ -153,7 +153,6 @@ func StartReporting() {
 				lastTimeMs = currentTimeMs
 			}
 		}
-
 	}()
 }
 
@@ -172,7 +171,7 @@ func PrintMetrics() {
 	}
 
 	// Direct print
-	//fmt.Println(string(body))
+	// fmt.Println(string(body))
 
 	// Filter to print only certain metrics
 	metricsFilter := []string{

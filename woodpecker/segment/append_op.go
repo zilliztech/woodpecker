@@ -77,7 +77,8 @@ type AppendOp struct {
 }
 
 func NewAppendOp(bucketName string, rootPath string, logId int64, segmentId int64, entryId int64, value []byte, callback func(segmentId int64, entryId int64, err error),
-	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo) *AppendOp {
+	clientPool client.LogStoreClientPool, handle SegmentHandle, quorumInfo *proto.QuorumInfo,
+) *AppendOp {
 	op := &AppendOp{
 		bucketName:       bucketName,
 		rootPath:         rootPath,

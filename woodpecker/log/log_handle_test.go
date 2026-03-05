@@ -150,9 +150,9 @@ func TestClose_ContinuesOnError(t *testing.T) {
 	mockSegment2.EXPECT().GetId(mock.Anything).Return(int64(2)).Maybe()
 
 	// Set up expectations - segment 1 fails to fence, segment 2 succeeds
-	//mockSegment1.EXPECT().Complete(mock.Anything).Return(-1, nil)
+	// mockSegment1.EXPECT().Complete(mock.Anything).Return(-1, nil)
 	mockSegment1.EXPECT().ForceCompleteAndClose(mock.Anything).Return(errors.New("complete error"))
-	//mockSegment2.EXPECT().Complete(mock.Anything).Return(-1, errors.New("complete error"))
+	// mockSegment2.EXPECT().Complete(mock.Anything).Return(-1, errors.New("complete error"))
 	mockSegment2.EXPECT().ForceCompleteAndClose(mock.Anything).Return(errors.New("complete error"))
 
 	// Call Close

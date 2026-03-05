@@ -240,7 +240,7 @@ func TestClientLogWriterEtcdFailure(t *testing.T) {
 	// Create client with the separate etcd instance
 	client, err := woodpecker.NewEmbedClient(context.Background(), cfg, etcdCli, storageCli, true)
 	assert.NoError(t, err, "Failed to create client")
-	//defer client.Close(context.Background())
+	// defer client.Close(context.Background())
 
 	// Create log if not exists
 	logName := "test-etcd-failure-log_" + time.Now().Format("20060102150405")
@@ -416,8 +416,8 @@ func TestClientLogWriterRealEtcdServiceFailureManually(t *testing.T) {
 	t.Logf("=========== Waiting %v for START ETCD Manually ===========", waitTime)
 	time.Sleep(waitTime)
 
-	//err = etcd.StartEtcdServerUnsafe(true, "", "/tmp/"+testEtcdBaseDir, "/tmp/"+testEtcdBaseDir+".log", "info")
-	//assert.NoError(t, err, "Failed to restart etcd")
+	// err = etcd.StartEtcdServerUnsafe(true, "", "/tmp/"+testEtcdBaseDir, "/tmp/"+testEtcdBaseDir+".log", "info")
+	// assert.NoError(t, err, "Failed to restart etcd")
 	etcdCli2, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
 	assert.NoError(t, err, "Failed to create etcd client")
 	defer etcdCli2.Close()

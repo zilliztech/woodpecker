@@ -717,7 +717,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 		for i := 6; i < 10; i++ {
 			afterNewSegmentId := readMessagesCopy[i].Id.SegmentId
 			t.Logf("Entry %d: segmentId=%d, entryId=%d", i, afterNewSegmentId, readMessagesCopy[i].Id.EntryId)
-			//assert.Equal(t, newSegmentId, segmentId,"...") // TODO Perhaps we need to control the precise scrolling only once by coordinating the time interval between auto sync and trigger sync
+			// assert.Equal(t, newSegmentId, segmentId,"...") // TODO Perhaps we need to control the precise scrolling only once by coordinating the time interval between auto sync and trigger sync
 			assert.GreaterOrEqual(t, afterNewSegmentId, newSegmentId,
 				"Entries 6-9 (after rolling) should all be in the same new segment")
 		}

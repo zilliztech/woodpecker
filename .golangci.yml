@@ -30,7 +30,7 @@ linters-settings:
       - prefix(github.com/zilliztech/woodpecker)
   gofumpt:
     module-path: github.com/zilliztech/woodpecker
-    extra-rules: true
+    extra-rules: false
   goimports:
     local-prefixes: github.com/zilliztech/woodpecker
   revive:

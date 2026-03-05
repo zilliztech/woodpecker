@@ -108,8 +108,8 @@ func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName 
 
 	// TODO  Currently only support embed standalone mode
 	// 2. Get segment info and find corresponding quorum info
-	//segMeta, err := s.metadata.GetSegmentMetadata(ctx, logName, segmentId)
-	//quorum, err := s.metadata.GetQuorumInfo(ctx, segMeta.QuorumId)
+	// segMeta, err := s.metadata.GetSegmentMetadata(ctx, logName, segmentId)
+	// quorum, err := s.metadata.GetQuorumInfo(ctx, segMeta.QuorumId)
 	quorum := &proto.QuorumInfo{
 		Id: 0,
 		Es: 1,
