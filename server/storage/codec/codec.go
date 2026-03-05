@@ -331,6 +331,7 @@ func VerifyBlockDataIntegrity(blockHeaderRecord *BlockHeaderRecord, blockData []
 func IsCompacted(flags uint16) bool {
 	return (flags & 1) != 0
 }
+
 func SetCompacted(flags uint16) uint16 {
 	return flags | 1
 }

@@ -114,7 +114,7 @@ func TestTraceLoggerWithParentCtx(t *testing.T) {
 	InitLogger(cfg)
 
 	// init tracer
-	//cfg.Trace.Exporter = "otlp" // for integration test, set up jaeger/otlp before this exporter enable
+	// cfg.Trace.Exporter = "otlp" // for integration test, set up jaeger/otlp before this exporter enable
 	initTraceErr := tracer.InitTracer(cfg, "TextTraceLogger", 1001)
 	assert.NoError(t, initTraceErr)
 

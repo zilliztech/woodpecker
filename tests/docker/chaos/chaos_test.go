@@ -205,10 +205,10 @@ func TestChaos_SingleNodeKill_WriteContinues(t *testing.T) {
 //   - Phase 1: All 4 nodes alive → writes succeed normally
 //   - Kill 2 nodes → only 2 remaining
 //   - Phase 2: Writes may or may not succeed depending on gossip convergence timing:
-//     * Before gossip detects failures: SelectQuorum may select an ensemble containing
-//       1 dead + 2 alive nodes. Since aq=2, 2 alive acks satisfy the quorum → write succeeds.
-//     * After gossip converges: SelectQuorum finds only 2 alive nodes, cannot form
-//       ensemble of 3 → writes block indefinitely.
+//   - Before gossip detects failures: SelectQuorum may select an ensemble containing
+//     1 dead + 2 alive nodes. Since aq=2, 2 alive acks satisfy the quorum → write succeeds.
+//   - After gossip converges: SelectQuorum finds only 2 alive nodes, cannot form
+//     ensemble of 3 → writes block indefinitely.
 //     This phase uses a short timeout and does NOT assert failure, since the result
 //     depends on gossip timing and ensemble selection.
 //   - Phase 3: Restart at least 1 node (3 alive) → quorum can be formed again.

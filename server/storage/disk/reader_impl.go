@@ -38,9 +38,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentReaderScope = "LocalFileReader"
-)
+var SegmentReaderScope = "LocalFileReader"
 
 var _ storage.Reader = (*LocalFileReaderAdv)(nil)
 
@@ -79,7 +77,7 @@ func NewLocalFileReaderAdv(ctx context.Context, baseDir string, logId int64, seg
 
 	segmentDir := getSegmentDir(baseDir, logId, segId)
 	// Ensure directory exists
-	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 

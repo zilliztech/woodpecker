@@ -1017,4 +1017,3 @@ func (sd *ServiceDiscovery) getCompiledRegex(pattern string) (*regexp.Regexp, er
 	sd.regexCache.Add(pattern, regex)
 	return regex, nil
 }
-

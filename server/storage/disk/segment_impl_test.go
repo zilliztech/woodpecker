@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
@@ -64,7 +65,7 @@ func TestDeleteFileData(t *testing.T) {
 
 		// Create a DiskSegmentImpl object with a mock directory
 		logDir := testDir
-		err = os.MkdirAll(logDir, 0755)
+		err = os.MkdirAll(logDir, 0o755)
 		assert.NoError(t, err)
 
 		// Create read-only log file
@@ -98,7 +99,7 @@ func TestDeleteFileData(t *testing.T) {
 
 		// Create the segment directory
 		segmentDir := getSegmentDir(dir, logId, segmentId)
-		err = os.MkdirAll(segmentDir, 0755)
+		err = os.MkdirAll(segmentDir, 0o755)
 		require.NoError(t, err)
 
 		// Create test files that should be deleted
@@ -108,17 +109,17 @@ func TestDeleteFileData(t *testing.T) {
 		otherFile := filepath.Join(segmentDir, "other.txt") // This should NOT be deleted
 
 		// Create segment files (.log files)
-		err = os.WriteFile(segmentFile1, []byte("segment data 1"), 0644)
+		err = os.WriteFile(segmentFile1, []byte("segment data 1"), 0o644)
 		require.NoError(t, err)
-		err = os.WriteFile(segmentFile2, []byte("segment data 2"), 0644)
+		err = os.WriteFile(segmentFile2, []byte("segment data 2"), 0o644)
 		require.NoError(t, err)
 
 		// Create lock file
-		err = os.WriteFile(lockFile, []byte("lock info"), 0644)
+		err = os.WriteFile(lockFile, []byte("lock info"), 0o644)
 		require.NoError(t, err)
 
 		// Create other file that should not be deleted
-		err = os.WriteFile(otherFile, []byte("other data"), 0644)
+		err = os.WriteFile(otherFile, []byte("other data"), 0o644)
 		require.NoError(t, err)
 
 		// Verify files exist before deletion

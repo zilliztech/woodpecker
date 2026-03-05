@@ -177,7 +177,7 @@ func TestDeleteFileData(t *testing.T) {
 
 	t.Run("NoFragmentsToDelete", func(t *testing.T) {
 		client := mocks_objectstorage.NewObjectStorage(t)
-		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+		// client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		cfg := &config.Configuration{
 			Woodpecker: config.WoodpeckerConfig{
 				Logstore: config.LogstoreConfig{
@@ -247,7 +247,7 @@ func TestDeleteFileData(t *testing.T) {
 
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
 		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything, mock.Anything).Return(nil)
-		//client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
+		// client.EXPECT().StatObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything).Return(minio.ObjectInfo{}, errors.New("error")).Times(0)
 		// Call DeleteFileData
 		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
 		assert.NoError(t, err)

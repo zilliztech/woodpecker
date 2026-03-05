@@ -411,7 +411,6 @@ func (e *metadataProviderEtcd) UpdateLogMeta(ctx context.Context, logName string
 		// Update the log metadata
 		clientv3.OpPut(logKey, string(logMetaValue)),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "update_log_meta", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "update_log_meta", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -695,7 +694,6 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 		// Create segmentKey with segmentMetadata
 		clientv3.OpPut(segmentKey, string(segmentMetadata)),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -747,7 +745,6 @@ func (e *metadataProviderEtcd) UpdateSegmentMetadata(ctx context.Context, logNam
 		// Update segmentKey with segmentMetadata
 		clientv3.OpPut(segmentKey, string(segmentMetadata)),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "update_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "update_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -898,7 +895,6 @@ func (e *metadataProviderEtcd) DeleteSegmentMetadata(ctx context.Context, logNam
 		// Delete the segment metadata
 		clientv3.OpDelete(segmentKey),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "delete_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "delete_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -951,7 +947,6 @@ func (e *metadataProviderEtcd) StoreQuorumInfo(ctx context.Context, info *proto.
 		// Create quorumKey with quorumInfoValue
 		clientv3.OpPut(quorumKey, string(quorumInfoValue)),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_quorum_info", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_quorum_info", "error").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -1540,7 +1535,6 @@ func (e *metadataProviderEtcd) StoreOrGetConditionWriteResult(ctx context.Contex
 		// Key exists, read the existing value
 		clientv3.OpGet(ConditionWriteKey),
 	).Commit()
-
 	if err != nil {
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "store_or_get_condition_write", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "store_or_get_condition_write", "error").Observe(float64(time.Since(startTime).Milliseconds()))

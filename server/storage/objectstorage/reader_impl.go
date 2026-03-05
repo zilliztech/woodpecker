@@ -41,9 +41,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentReaderScope = "MinioFileReader"
-)
+var SegmentReaderScope = "MinioFileReader"
 
 var _ storage.Reader = (*MinioFileReaderAdv)(nil)
 
@@ -299,7 +297,6 @@ func (f *MinioFileReaderAdv) prefetchIncrementalBlockInfoUnsafe(ctx context.Cont
 		}
 		if err != nil {
 			// indicates that the prefetching of blocks has completed.
-			//fmt.Println("object storage read block err: ", err)
 			return existsNewBlock, nil, err
 		}
 		if isFenced {

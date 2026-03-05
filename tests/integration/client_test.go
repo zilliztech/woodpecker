@@ -1755,7 +1755,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}
@@ -2151,7 +2151,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}
@@ -2553,7 +2553,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 						messages = append(messages, string(msg.Payload))
 
 						// Log milestone messages
-						//if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
+						// if (i+1)%messageCount == 0 || (i+1)%10 == 0 || i == 0 || i == expectedMessagesThisCycle-1 {
 						t.Logf("[%s] Cycle %d - %s: Read message %d/%d:  seg:%d,entry:%d  payload:%s",
 							time.Now().Format("20060102150405"), cycle+1, readerName, i+1, expectedMessagesThisCycle, msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
 						//}

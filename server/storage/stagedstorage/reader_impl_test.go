@@ -59,7 +59,7 @@ func TestReadDataBlocksWithLACButNoData(t *testing.T) {
 	// Create a file with data blocks for entries 0-20
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	err := os.MkdirAll(segmentDir, 0755)
+	err := os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
@@ -159,7 +159,7 @@ func TestReadDataBlocksWithLACAndPartialData(t *testing.T) {
 	// Create a file with data blocks for entries 0-50
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	err := os.MkdirAll(segmentDir, 0755)
+	err := os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
@@ -257,7 +257,7 @@ func TestReadDataBlocksWithLACGreaterThanData(t *testing.T) {
 	// Create a file with data blocks for entries 0-10 only
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	err := os.MkdirAll(segmentDir, 0755)
+	err := os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
@@ -356,7 +356,7 @@ func TestReadDataBlocksWithLACAtBoundary(t *testing.T) {
 	// Create a file with data blocks for entries 0-50
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	err := os.MkdirAll(segmentDir, 0755)
+	err := os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)
@@ -442,7 +442,7 @@ func TestReadDataBlocksSuccessfulRead(t *testing.T) {
 	// Create a file with data blocks for entries 0-50
 	localBaseDir := filepath.Join(tempDir, "local")
 	segmentDir := getSegmentDir(localBaseDir, logId, segId)
-	err := os.MkdirAll(segmentDir, 0755)
+	err := os.MkdirAll(segmentDir, 0o755)
 	require.NoError(t, err)
 
 	filePath := getSegmentFilePath(localBaseDir, logId, segId)

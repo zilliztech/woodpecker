@@ -1353,7 +1353,6 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 						StartEntryID:    startId,
 						MaxBatchEntries: batchSize,
 					}, nil)
-
 					if err != nil {
 						t.Logf("Reader: Failed to read entries %d to %d: %v", startId, latestWrittenId, err)
 						// Continue trying - the data might not be fully written yet
@@ -1397,7 +1396,6 @@ func TestAdvLocalFileRW_ConcurrentReadWrite(t *testing.T) {
 			StartEntryID:    0,
 			MaxBatchEntries: int64(totalEntries),
 		}, nil)
-
 		if err != nil {
 			t.Errorf("Reader: Failed final read: %v", err)
 			return
@@ -1633,7 +1631,6 @@ func TestAdvLocalFileRW_ConcurrentOneWriteMultipleReads(t *testing.T) {
 							StartEntryID:    startId,
 							MaxBatchEntries: entriesToRead,
 						}, nil)
-
 						if err != nil {
 							t.Logf("Reader %d: Failed to read entries %d to %d: %v",
 								readerNum, startId, startId+entriesToRead-1, err)

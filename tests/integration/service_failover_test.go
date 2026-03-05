@@ -3136,8 +3136,9 @@ func TestStagedStorageService_Failover_Case12_LACMiscalculationAfterNodeSwap(t *
 // calculateLAC([2, -1], ensembleCoverage=2) returns -1 (Bug #2, should be 2).
 //
 // Reader path: Nodes[0]=A (dead → connection error → continue),
-//              Nodes[1]=B (empty → EOF → break!),  ← Bug #1 stops here
-//              Nodes[2]=C (has data — never reached).
+//
+//	Nodes[1]=B (empty → EOF → break!),  ← Bug #1 stops here
+//	Nodes[2]=C (has data — never reached).
 //
 // Unlike Case 12 where the empty node is Nodes[0], here the empty node is
 // Nodes[1]. This verifies Bug #1 triggers even when the reader successfully

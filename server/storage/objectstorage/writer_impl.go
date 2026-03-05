@@ -50,9 +50,7 @@ import (
 	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
-var (
-	SegmentWriterScope = "MinioFileWriter"
-)
+var SegmentWriterScope = "MinioFileWriter"
 
 var _ storage.Writer = (*MinioFileWriter)(nil)
 
@@ -1486,7 +1484,6 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 			return werr.ErrObjectAlreadyExists.Is(err)
 		}),
 	)
-
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to create fence object after retries",
 			zap.String("segmentFileKey", f.segmentFileKey),
