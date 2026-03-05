@@ -57,7 +57,7 @@ jobs:
       - name: Run component integration tests
         run: |
           go test -race -cover -failfast -timeout=20m -v \
-            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+            -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestClientLogWriter)" \
             ./tests/integration/...
 
       - name: Upload logs on failure
