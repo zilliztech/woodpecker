@@ -54,24 +54,31 @@ jobs:
           mc alias set local http://localhost:9000 minioadmin minioadmin
           mc mb local/a-bucket --ignore-existing
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Run e2e service storage tests
         run: |
-          go test -race -cover -failfast -timeout=25m -v \
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output-service.json \
+            -- -race -cover -failfast -timeout=25m \
             -run "/ServiceStorage" \
             ./tests/integration/...
 
       - name: Run e2e service failover tests
         run: |
-          go test -race -cover -failfast -timeout=25m -v \
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output-failover.json \
+            -- -race -cover -failfast -timeout=25m \
             -run "^TestStagedStorageService" \
             ./tests/integration/...
 
-      - name: Upload logs on failure
+      - name: Upload test output on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-logs-e2e-service
-          path: log_woodpecker_*
+          path: test-output-*.json
           retention-days: 7
           if-no-files-found: ignore
 

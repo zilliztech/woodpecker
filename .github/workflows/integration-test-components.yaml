@@ -54,18 +54,23 @@ jobs:
           mc alias set local http://localhost:9000 minioadmin minioadmin
           mc mb local/a-bucket --ignore-existing
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Run component integration tests
         run: |
-          go test -race -cover -failfast -timeout=20m -v \
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output.json \
+            -- -race -cover -failfast -timeout=20m \
             -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService|TestClientLogWriter)" \
             ./tests/integration/...
 
-      - name: Upload logs on failure
+      - name: Upload test output on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-logs-components
-          path: log_woodpecker_*
+          path: test-output.json
           retention-days: 7
           if-no-files-found: ignore
 
