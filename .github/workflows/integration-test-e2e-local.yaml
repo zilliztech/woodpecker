@@ -1,4 +1,4 @@
-name: Integration Test / e2e_local
+name: E2E Local
 
 on:
   pull_request:
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e-local:
-    name: E2E Local Storage
+  E2E-Local:
+    name: E2E Local
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

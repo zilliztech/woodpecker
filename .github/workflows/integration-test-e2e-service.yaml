@@ -1,4 +1,4 @@
-name: Integration Test / e2e_service
+name: E2E Service
 
 on:
   pull_request:
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e-service:
-    name: E2E Service Storage + Failover
+  E2E-Service:
+    name: E2E Service
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

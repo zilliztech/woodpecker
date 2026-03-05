@@ -1,4 +1,4 @@
-name: Integration Test / e2e_objectstorage
+name: E2E Object Storage
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e-objectstorage:
+  E2E-Object-Storage:
     name: E2E Object Storage
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -1,4 +1,4 @@
-name: Integration Test / components
+name: Component Test
 
 on:
   pull_request:
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  components:
-    name: Component Tests
+  Component-Test:
+    name: Component Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
