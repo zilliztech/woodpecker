@@ -1,4 +1,4 @@
-name: Integration Test
+name: Integration Test / e2e_local
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "config/**"
-      - ".github/workflows/integration-test.yaml"
+      - ".github/workflows/integration-test-e2e-local.yaml"
       - ".github/docker-compose-ci.yaml"
 
 concurrency:
@@ -18,37 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  integration-test:
-    name: ${{ matrix.name }}
+  e2e-local:
+    name: E2E Local Storage
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: e2e_local
-            test-cmd: |
-              go test -race -cover -failfast -timeout=20m -v \
-                -run "/LocalFsStorage" \
-                ./tests/integration/...
-          - name: e2e_objectstorage
-            test-cmd: |
-              go test -race -cover -failfast -timeout=20m -v \
-                -run "/ObjectStorage" \
-                ./tests/integration/...
-          - name: e2e_service
-            test-cmd: |
-              go test -race -cover -failfast -timeout=25m -v \
-                -run "/ServiceStorage" \
-                ./tests/integration/...
-              go test -race -cover -failfast -timeout=25m -v \
-                -run "^TestStagedStorageService" \
-                ./tests/integration/...
-          - name: components
-            test-cmd: |
-              go test -race -cover -failfast -timeout=20m -v \
-                -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
-                ./tests/integration/...
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -81,15 +54,17 @@ jobs:
           mc alias set local http://localhost:9000 minioadmin minioadmin
           mc mb local/a-bucket --ignore-existing
 
-      - name: Run integration tests
+      - name: Run e2e local storage tests
         run: |
-          ${{ matrix.test-cmd }}
+          go test -race -cover -failfast -timeout=20m -v \
+            -run "/LocalFsStorage" \
+            ./tests/integration/...
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-logs-${{ matrix.name }}
+          name: integration-test-logs-e2e-local
           path: log_woodpecker_*
           retention-days: 7
           if-no-files-found: ignore

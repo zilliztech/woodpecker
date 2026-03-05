@@ -1,0 +1,81 @@
+name: Integration Test / e2e_service
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - ".github/workflows/integration-test-e2e-service.yaml"
+      - ".github/docker-compose-ci.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-service:
+    name: E2E Service Storage + Failover
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Start dependencies (etcd + MinIO)
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml up -d
+          echo "Waiting for etcd..."
+          until docker inspect --format='{{.State.Health.Status}}' ci-etcd 2>/dev/null | grep -q healthy; do
+            sleep 2
+          done
+          echo "etcd is ready"
+          echo "Waiting for MinIO..."
+          until docker inspect --format='{{.State.Health.Status}}' ci-minio 2>/dev/null | grep -q healthy; do
+            sleep 2
+          done
+          echo "MinIO is ready"
+
+      - name: Create MinIO bucket
+        run: |
+          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minioadmin minioadmin
+          mc mb local/a-bucket --ignore-existing
+
+      - name: Run e2e service storage tests
+        run: |
+          go test -race -cover -failfast -timeout=25m -v \
+            -run "/ServiceStorage" \
+            ./tests/integration/...
+
+      - name: Run e2e service failover tests
+        run: |
+          go test -race -cover -failfast -timeout=25m -v \
+            -run "^TestStagedStorageService" \
+            ./tests/integration/...
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs-e2e-service
+          path: log_woodpecker_*
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop dependencies
+        if: always()
+        run: |
+          docker compose -f .github/docker-compose-ci.yaml down -v
