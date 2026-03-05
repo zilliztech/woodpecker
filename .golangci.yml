@@ -2,15 +2,6 @@ run:
   go: "1.24"
   timeout: 10m
   modules-download-mode: readonly
-  skip-dirs:
-    - proto
-    - mocks
-    - tests/benchmark
-    - tests/docker
-    - tests/stability
-    - bin
-    - build
-    - deployments
 
 linters:
   disable-all: true
