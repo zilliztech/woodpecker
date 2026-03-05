@@ -19,9 +19,36 @@ concurrency:
 
 jobs:
   integration-test:
-    name: Integration Test
+    name: Integration Test (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e_local
+            test-cmd: |
+              go test -race -cover -failfast -timeout=20m -v \
+                -run "/LocalFsStorage" \
+                ./tests/integration/...
+          - name: e2e_objectstorage
+            test-cmd: |
+              go test -race -cover -failfast -timeout=20m -v \
+                -run "/ObjectStorage" \
+                ./tests/integration/...
+          - name: e2e_service
+            test-cmd: |
+              go test -race -cover -failfast -timeout=25m -v \
+                -run "/ServiceStorage" \
+                ./tests/integration/...
+              go test -race -cover -failfast -timeout=25m -v \
+                -run "^TestStagedStorageService" \
+                ./tests/integration/...
+          - name: components
+            test-cmd: |
+              go test -race -cover -failfast -timeout=20m -v \
+                -skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+                ./tests/integration/...
 
     steps:
       - name: Checkout
@@ -56,13 +83,13 @@ jobs:
 
       - name: Run integration tests
         run: |
-          go test -race -cover -failfast -timeout=45m -v ./tests/integration/...
+          ${{ matrix.test-cmd }}
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-logs
+          name: integration-test-logs-${{ matrix.name }}
           path: log_woodpecker_*
           retention-days: 7
           if-no-files-found: ignore

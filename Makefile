@@ -95,8 +95,35 @@ unit-test: ## Run unit tests only (excludes integration/benchmark/stability/dock
 		$$(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
 
 .PHONY: integration-test
-integration-test: ## Run integration tests (requires etcd + MinIO)
+integration-test: ## Run all integration tests (requires etcd + MinIO)
 	go test -race -cover -failfast -timeout=45m -v ./tests/integration/...
+
+.PHONY: integration-test-e2e-local
+integration-test-e2e-local: ## Run e2e tests with local filesystem storage
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/LocalFsStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-objectstorage
+integration-test-e2e-objectstorage: ## Run e2e tests with object storage (MinIO)
+	go test -race -cover -failfast -timeout=20m -v \
+		-run "/ObjectStorage" \
+		./tests/integration/...
+
+.PHONY: integration-test-e2e-service
+integration-test-e2e-service: ## Run e2e tests with service storage + failover
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "/ServiceStorage" \
+		./tests/integration/...
+	go test -race -cover -failfast -timeout=25m -v \
+		-run "^TestStagedStorageService" \
+		./tests/integration/...
+
+.PHONY: integration-test-components
+integration-test-components: ## Run component integration tests (non-e2e)
+	go test -race -cover -failfast -timeout=20m -v \
+		-skip "^(TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup|TestStagedStorageService)" \
+		./tests/integration/...
 
 clean: ## Clean built binaries
 	rm -f $(BIN_DIR)/*
