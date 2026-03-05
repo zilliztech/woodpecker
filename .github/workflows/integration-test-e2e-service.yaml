@@ -59,10 +59,11 @@ jobs:
 
       - name: Run e2e service storage tests
         run: |
+          E2E_TESTS="TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup"
           gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output-service.json \
             -- -race -cover -failfast -timeout=25m \
-            -run "/ServiceStorage" \
+            -run "^(${E2E_TESTS})/ServiceStorage$" \
             ./tests/integration/...
 
       - name: Run e2e service failover tests

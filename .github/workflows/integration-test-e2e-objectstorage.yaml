@@ -59,10 +59,11 @@ jobs:
 
       - name: Run e2e object storage tests
         run: |
+          E2E_TESTS="TestOpenWriter|TestOpenInternal|TestRepeated|TestWriterClose|TestClientRecreation|TestMultiClient|TestConcurrentWriteAnd|TestConcurrentReader|TestReadTheWritten|TestReadWriteLoop|TestMultiAppendSync|TestTailRead|TestConcurrentWriteWith|TestTruncate|TestWriteAndTruncate|TestMultiSegment|TestReadBefore|TestSegmentCleanup"
           gotestsum --format pkgname-and-test-fails \
             --jsonfile test-output.json \
             -- -race -cover -failfast -timeout=20m \
-            -run "/ObjectStorage" \
+            -run "^(${E2E_TESTS})/ObjectStorage$" \
             ./tests/integration/...
 
       - name: Upload test output on failure
