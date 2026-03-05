@@ -273,7 +273,7 @@ func (e *metadataProviderEtcd) CreateLog(ctx context.Context, logName string) er
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues(e.metricsNamespace, "create_log", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues(e.metricsNamespace, "create_log", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("log already exists", zap.String("logName", logName))
-		return werr.ErrMetadataCreateLog.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
+		return werr.ErrMetadataCreateLogAlreadyExists.WithCauseErrMsg(fmt.Sprintf("%s already exists", logName))
 	}
 
 	// create a New Log with default Options

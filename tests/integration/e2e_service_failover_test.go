@@ -71,7 +71,7 @@ func TestStagedStorageService_Normal_BasicRW(t *testing.T) {
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
+		assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
 	}
 
 	// Open log handle
@@ -194,7 +194,7 @@ func TestStagedStorageService_Failover_Simple_SegmentRollingVerification(t *test
 	// Create and open log
 	createErr := woodpeckerClient.CreateLog(context.Background(), logName)
 	if createErr != nil {
-		assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Unexpected error: %v", createErr)
+		assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr), "Unexpected error: %v", createErr)
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(context.Background(), logName)
@@ -361,7 +361,7 @@ func TestStagedStorageService_Failover_Case1_NodeFailure_WriteReaderContinues(t 
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		assert.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
+		assert.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
 	}
 
 	// Open log handle
@@ -805,7 +805,7 @@ func TestStagedStorageService_Failover_Case2_DoubleNodeFailure_WriteReaderContin
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr), "Error should be 'log already exists' but got: %v", createErr)
 	}
 
 	// Open log handle
@@ -1257,7 +1257,7 @@ func TestStagedStorageService_Failover_Case3_NodeRestartTriggersSegmentRolling(t
 	// Create log if not exists
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr), "Unexpected error: %v", createErr)
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr), "Unexpected error: %v", createErr)
 	}
 
 	// Open log handle
@@ -1630,7 +1630,7 @@ func TestStagedStorageService_Failover_Case4_NonQuorumNodeFailure(t *testing.T) 
 	logName := "test_log_failover_case4_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -1783,7 +1783,7 @@ func TestStagedStorageService_Failover_Case5_QuorumLossAndRecovery(t *testing.T)
 	logName := "test_log_failover_case5_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -1953,7 +1953,7 @@ func TestStagedStorageService_Failover_Case6_FullClusterRestartDurability(t *tes
 	logName := "test_log_failover_case6_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2098,7 +2098,7 @@ func TestStagedStorageService_Failover_Case7_RollingRestart(t *testing.T) {
 	logName := "test_log_failover_case7_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2263,7 +2263,7 @@ func TestStagedStorageService_Failover_Case8_MultipleSequentialRollings(t *testi
 	logName := "test_log_failover_case8_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2480,7 +2480,7 @@ func TestStagedStorageService_Failover_Case9_ReaderNodeFailover(t *testing.T) {
 	logName := "test_log_failover_case9_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2656,7 +2656,7 @@ func TestStagedStorageService_Failover_Case10_PartialReplicationDuringCrash(t *t
 	logName := "test_log_failover_case10_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2834,7 +2834,7 @@ func TestStagedStorageService_Failover_Case11_FenceWithEmptyNode(t *testing.T) {
 	logName := "test_log_failover_case11_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -2995,7 +2995,7 @@ func TestStagedStorageService_Failover_Case12_LACMiscalculationAfterNodeSwap(t *
 	logName := "test_log_failover_case12_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -3178,7 +3178,7 @@ func TestStagedStorageService_Failover_Case13_EOFOnNonFirstNodeAfterDeadSkip(t *
 	logName := "test_log_failover_case13_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -3357,7 +3357,7 @@ func TestStagedStorageService_Failover_Case14_ReaderFallbackAfterEOF(t *testing.
 	logName := "test_log_failover_case14_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -3525,7 +3525,7 @@ func TestStagedStorageService_Failover_Case15_ClusterRestartWithDataLoss(t *test
 	logName := "test_log_failover_case15_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)
@@ -3732,7 +3732,7 @@ func TestStagedStorageService_Failover_Case16_ReadAfterTwoReplicasLost(t *testin
 	logName := "test_log_failover_case16_" + time.Now().Format("20060102150405")
 	createErr := woodpeckerClient.CreateLog(ctx, logName)
 	if createErr != nil {
-		require.True(t, werr.ErrLogHandleLogAlreadyExists.Is(createErr))
+		require.True(t, werr.ErrMetadataCreateLogAlreadyExists.Is(createErr))
 	}
 
 	logHandle, openErr := woodpeckerClient.OpenLog(ctx, logName)

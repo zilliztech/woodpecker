@@ -47,7 +47,7 @@ func TestClientLogWriterSessionExpiryByManuallyRelease(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -135,7 +135,7 @@ func TestClientLogWriterSessionExpiry(t *testing.T) {
 	// Create log if not exists
 	logName := "test-client-session-expiry-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -245,7 +245,7 @@ func TestClientLogWriterEtcdFailure(t *testing.T) {
 	// Create log if not exists
 	logName := "test-etcd-failure-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
@@ -373,7 +373,7 @@ func TestClientLogWriterRealEtcdServiceFailureManually(t *testing.T) {
 	// Create log if not exists
 	logName := "test-etcd-failure-manually-log_" + time.Now().Format("20060102150405")
 	err = client.CreateLog(context.Background(), logName)
-	if err != nil && !werr.ErrLogHandleLogAlreadyExists.Is(err) {
+	if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
 		assert.NoError(t, err, "Failed to create log")
 	}
 
