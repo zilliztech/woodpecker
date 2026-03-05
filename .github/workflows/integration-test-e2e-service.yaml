@@ -95,6 +95,37 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      - name: Handle failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          gh pr comment $PR --body "❌ **E2E Service** failed. Comment \`/rerun-e2e-service\` to rerun, or \`/rerun\` to rerun all failed checks."
+          gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
+
+      - name: Add ci-passed label
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          SELF="${{ github.workflow }}"
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test")
+          CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
+          ALL_PASSED=true
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            [ "$check" = "$SELF" ] && continue
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            if [ "$bucket" != "pass" ]; then
+              ALL_PASSED=false
+              break
+            fi
+          done
+          if [ "$ALL_PASSED" = true ]; then
+            gh pr edit $PR --add-label "ci-passed"
+          fi
+
       - name: Stop dependencies
         if: always()
         run: |
