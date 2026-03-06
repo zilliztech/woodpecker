@@ -162,11 +162,19 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 	var client *service.Client
 	var err error
 	if c.Minio.UseIAM {
-		cred, credErr := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
-			ClientID:      os.Getenv("AZURE_CLIENT_ID"),
-			TenantID:      os.Getenv("AZURE_TENANT_ID"),
-			TokenFilePath: os.Getenv("AZURE_FEDERATED_TOKEN_FILE"),
-		})
+		var cred azcore.TokenCredential
+		var credErr error
+		if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
+			cred, credErr = azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
+				ClientID:      os.Getenv("AZURE_CLIENT_ID"),
+				TenantID:      os.Getenv("AZURE_TENANT_ID"),
+				TokenFilePath: os.Getenv("AZURE_FEDERATED_TOKEN_FILE"),
+			})
+		} else {
+			cred, credErr = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
+				ID: azidentity.ClientID(os.Getenv("AZURE_CLIENT_ID")),
+			})
+		}
 		if credErr != nil {
 			return nil, credErr
 		}
