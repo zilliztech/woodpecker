@@ -15,8 +15,11 @@ coverage:
 ignore:
   - "tests/**"
   - "mocks/**"
+  - "proto/**"
   - "**/*_mock.go"
   - "**/*_test.go"
+  - "**/*.pb.go"
+  - "**/*_vtproto.pb.go"
 
 comment:
   layout: "reach,diff,flags,files"
