@@ -63,6 +63,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 1000, config.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 32, config.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
+	assert.Equal(t, 10, config.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
 	assert.Equal(t, int64(2000000), config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, config.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
@@ -155,6 +156,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 2000, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval.Milliseconds())
 	assert.Equal(t, int64(16000000), defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64())
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads)
+	assert.Equal(t, 10, defaultConfig.Woodpecker.Logstore.SegmentSyncPolicy.CheckpointThreshold)
 	assert.Equal(t, int64(32000000), defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes.Int64())
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads)
 	assert.Equal(t, 8, defaultConfig.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads)
@@ -442,6 +444,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 							RetryInterval:              NewDurationMillisecondsFromInt(2000),
 							MaxFlushSize:               NewByteSize(16000000),
 							MaxFlushThreads:            8,
+							CheckpointThreshold:        10,
 						},
 						SegmentCompactionPolicy: SegmentCompactionPolicy{
 							MaxBytes:           NewByteSize(32000000),
@@ -595,6 +598,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					RetryInterval:              NewDurationMillisecondsFromInt(2000),
 					MaxFlushSize:               NewByteSize(16000000),
 					MaxFlushThreads:            8,
+					CheckpointThreshold:        10,
 				},
 				SegmentCompactionPolicy: SegmentCompactionPolicy{
 					MaxBytes:           NewByteSize(32000000),
