@@ -466,9 +466,9 @@ func (_c *LogHandle_GetName_Call) RunAndReturn(run func() string) *LogHandle_Get
 	return _c
 }
 
-// GetNextSegmentId provides a mock function with no fields
-func (_m *LogHandle) GetNextSegmentId() (int64, error) {
-	ret := _m.Called()
+// GetNextSegmentId provides a mock function with given fields: ctx
+func (_m *LogHandle) GetNextSegmentId(ctx context.Context) (int64, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetNextSegmentId")
@@ -476,17 +476,17 @@ func (_m *LogHandle) GetNextSegmentId() (int64, error) {
 
 	var r0 int64
 	var r1 error
-	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() int64); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
+		r0 = rf(ctx)
 	} else {
 		r0 = ret.Get(0).(int64)
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -500,13 +500,14 @@ type LogHandle_GetNextSegmentId_Call struct {
 }
 
 // GetNextSegmentId is a helper method to define mock.On call
-func (_e *LogHandle_Expecter) GetNextSegmentId() *LogHandle_GetNextSegmentId_Call {
-	return &LogHandle_GetNextSegmentId_Call{Call: _e.mock.On("GetNextSegmentId")}
+//   - ctx context.Context
+func (_e *LogHandle_Expecter) GetNextSegmentId(ctx interface{}) *LogHandle_GetNextSegmentId_Call {
+	return &LogHandle_GetNextSegmentId_Call{Call: _e.mock.On("GetNextSegmentId", ctx)}
 }
 
-func (_c *LogHandle_GetNextSegmentId_Call) Run(run func()) *LogHandle_GetNextSegmentId_Call {
+func (_c *LogHandle_GetNextSegmentId_Call) Run(run func(ctx context.Context)) *LogHandle_GetNextSegmentId_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -516,7 +517,7 @@ func (_c *LogHandle_GetNextSegmentId_Call) Return(_a0 int64, _a1 error) *LogHand
 	return _c
 }
 
-func (_c *LogHandle_GetNextSegmentId_Call) RunAndReturn(run func() (int64, error)) *LogHandle_GetNextSegmentId_Call {
+func (_c *LogHandle_GetNextSegmentId_Call) RunAndReturn(run func(context.Context) (int64, error)) *LogHandle_GetNextSegmentId_Call {
 	_c.Call.Return(run)
 	return _c
 }

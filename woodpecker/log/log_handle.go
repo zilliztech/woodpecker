@@ -58,7 +58,7 @@ type LogHandle interface {
 	// CheckAndSetSegmentTruncatedIfNeed checks if the segment needs to be truncated and sets the truncated flag accordingly.
 	CheckAndSetSegmentTruncatedIfNeed(ctx context.Context) error
 	// GetNextSegmentId returns the next new segment ID for the log.
-	GetNextSegmentId() (int64, error)
+	GetNextSegmentId(ctx context.Context) (int64, error)
 	// GetMetadataProvider returns the metadata provider instance.
 	GetMetadataProvider() meta.MetadataProvider
 	// GetOrCreateWritableSegmentHandle returns the writable segment handle for the log, means creating a new one
@@ -373,32 +373,17 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 	// Collect results
 	var fenceErrors []error
 	successfullyFenced := 0
-	fencedSegments := make(map[int64]int64) // segmentId -> lastEntryId
 
 	for result := range resultChan {
 		if result.err != nil {
 			fenceErrors = append(fenceErrors, result.err)
 		} else {
 			successfullyFenced++
-			fencedSegments[result.segmentId] = result.lastEntryId
 		}
 	}
 
-	// Update metadata for successfully fenced segments
-	for segmentId, lastEntryId := range fencedSegments {
-		segMeta := segments[segmentId]
-		oldState := segMeta.Metadata.State
-		segMeta.Metadata.State = proto.SegmentState_Completed
-		segMeta.Metadata.LastEntryId = lastEntryId
-		err = l.Metadata.UpdateSegmentMetadata(ctx, l.Name, l.Id, segMeta, oldState)
-		if err != nil {
-			logger.Ctx(ctx).Warn("failed to update segment metadata after fence",
-				zap.String("logName", l.Name),
-				zap.Int64("segmentId", segmentId),
-				zap.Error(err))
-			// Don't treat metadata update failure as critical error, but log it
-		}
-	}
+	// Note: metadata update (Active→Completed) is already handled inside FenceAndComplete,
+	// so no additional UpdateSegmentMetadata call is needed here.
 
 	// If we had errors fencing segments, return a combined error
 	if len(fenceErrors) > 0 {
@@ -566,7 +551,7 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.Segment
 	}
 
 	// construct new segment metadata
-	segmentNo, err := l.GetNextSegmentId()
+	segmentNo, err := l.GetNextSegmentId(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -593,9 +578,9 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.Segment
 
 // TODO To be optimized, reduce meta access, maybe use a param to indicate whether to refresh lastSegmentId, most of the time, the lastSegmentId is not changed
 // GetNextSegmentId get the next id according to max seq No
-func (l *logHandleImpl) GetNextSegmentId() (int64, error) {
+func (l *logHandleImpl) GetNextSegmentId(ctx context.Context) (int64, error) {
 	// try get dynamic max seqNo
-	existsSeg, err := l.GetSegments(context.Background())
+	existsSeg, err := l.GetSegments(ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -902,18 +887,13 @@ func (l *logHandleImpl) GetTruncatedRecordId(ctx context.Context) (*LogMessageId
 	}, nil
 }
 
-func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) error {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "Close")
-	defer sp.End()
-	l.Lock()
-	defer l.Unlock()
-
+// completeAllSegmentHandlesUnsafe completes all segment handles. Must be called with lock held.
+func (l *logHandleImpl) completeAllSegmentHandlesUnsafe(ctx context.Context) error {
 	var lastError error
-	// close all segment handles
 	for _, segmentHandle := range l.SegmentHandles {
 		err := segmentHandle.ForceCompleteAndClose(ctx)
 		if err != nil {
-			logger.Ctx(ctx).Warn("Complete active segment failed when closing logHandle",
+			logger.Ctx(ctx).Warn("ForceCompleteAndClose segment failed",
 				zap.String("logName", l.Name),
 				zap.Int64("logId", l.Id),
 				zap.Int64("segId", segmentHandle.GetId(ctx)),
@@ -923,12 +903,15 @@ func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) er
 			}
 		}
 	}
-
-	// Clear the segment handles map to prevent memory leaks
-	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
-	l.WritableSegmentId = -1
-
 	return lastError
+}
+
+func (l *logHandleImpl) CompleteAllActiveSegmentIfExists(ctx context.Context) error {
+	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogHandleScopeName, "CompleteAllActiveSegmentIfExists")
+	defer sp.End()
+	l.Lock()
+	defer l.Unlock()
+	return l.completeAllSegmentHandlesUnsafe(ctx)
 }
 
 func (l *logHandleImpl) Close(ctx context.Context) error {
@@ -943,21 +926,7 @@ func (l *logHandleImpl) Close(ctx context.Context) error {
 	l.Lock()
 	defer l.Unlock()
 
-	var lastError error
-	// close all segment handles
-	for _, segmentHandle := range l.SegmentHandles {
-		err := segmentHandle.ForceCompleteAndClose(ctx)
-		if err != nil {
-			logger.Ctx(ctx).Warn("CompleteAndClose segment failed when closing logHandle",
-				zap.String("logName", l.Name),
-				zap.Int64("logId", l.Id),
-				zap.Int64("segId", segmentHandle.GetId(ctx)),
-				zap.Error(err))
-			if lastError == nil {
-				lastError = err
-			}
-		}
-	}
+	lastError := l.completeAllSegmentHandlesUnsafe(ctx)
 
 	// Clear the segment handles map to prevent memory leaks
 	l.SegmentHandles = make(map[int64]segment.SegmentHandle)
