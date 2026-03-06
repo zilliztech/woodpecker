@@ -35,13 +35,13 @@ jobs:
           go test -race -short -cover -coverprofile=coverage.out -covermode=atomic -failfast -timeout=20m \
             $(go list ./... | grep -v -E '(tests/integration|tests/benchmark|tests/stability|tests/docker)')
 
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@v5
         with:
-          name: coverage-report
-          path: coverage.out
-          retention-days: 7
+          files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Handle failure
         if: failure()
