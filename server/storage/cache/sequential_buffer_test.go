@@ -22,12 +22,104 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
+
+// TestGetFirstEntryId tests the GetFirstEntryId method.
+func TestGetFirstEntryId(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 10, 5, "")
+	assert.Equal(t, int64(10), buffer.GetFirstEntryId())
+
+	buffer2 := NewSequentialBuffer(1, 0, 0, 5, "")
+	assert.Equal(t, int64(0), buffer2.GetFirstEntryId())
+}
+
+// TestGetExpectedNextEntryId tests the GetExpectedNextEntryId method.
+func TestGetExpectedNextEntryId(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 10, 5, "")
+	assert.Equal(t, int64(10), buffer.GetExpectedNextEntryId())
+
+	// Write entries and check progression
+	buffer.WriteEntryWithNotify(10, []byte("data"), nil)
+	assert.Equal(t, int64(11), buffer.GetExpectedNextEntryId())
+
+	buffer.WriteEntryWithNotify(11, []byte("data"), nil)
+	assert.Equal(t, int64(12), buffer.GetExpectedNextEntryId())
+}
+
+// TestNotifyPendingEntryDirectly tests the NotifyPendingEntryDirectly function.
+func TestNotifyPendingEntryDirectly(t *testing.T) {
+	ctx := context.Background()
+
+	// Test success notification (result >= 0)
+	rc1 := channel.NewLocalResultChannel("1/0/1")
+	NotifyPendingEntryDirectly(ctx, 1, 0, 5, rc1, 100, nil, "", time.Time{})
+	result1, err := rc1.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), result1.SyncedId) // Should receive entryId, not result
+	assert.Nil(t, result1.Err)
+
+	// Test error notification (result < 0)
+	rc2 := channel.NewLocalResultChannel("1/0/2")
+	testErr := fmt.Errorf("test error")
+	NotifyPendingEntryDirectly(ctx, 1, 0, 5, rc2, -1, testErr, "", time.Time{})
+	result2, err := rc2.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(-1), result2.SyncedId) // Should receive error result
+	assert.Error(t, result2.Err)
+
+	// Test with namespace and enqueue time for metrics tracking
+	rc3 := channel.NewLocalResultChannel("1/0/3")
+	NotifyPendingEntryDirectly(ctx, 1, 0, 7, rc3, 200, nil, "test-ns", time.Now().Add(-10*time.Millisecond))
+	result3, err := rc3.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(7), result3.SyncedId)
+
+	// Test with closed channel (should not panic)
+	rc4 := channel.NewLocalResultChannel("1/0/4")
+	rc4.Close(ctx)
+	assert.NotPanics(t, func() {
+		NotifyPendingEntryDirectly(ctx, 1, 0, 8, rc4, 100, nil, "", time.Time{})
+	})
+}
+
+// TestReadEntry_BelowFirstEntryId tests ReadEntry with entryId below FirstEntryId.
+func TestReadEntry_BelowFirstEntryId(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 10, 5, "")
+	entry, err := buffer.ReadEntry(5) // below FirstEntryId=10
+	assert.Error(t, err)
+	assert.Nil(t, entry)
+	assert.Contains(t, err.Error(), "smaller than")
+}
+
+// TestReadEntriesRange_InvalidEndEntryId tests ReadEntriesRange with invalid end ID.
+func TestReadEntriesRange_InvalidEndEntryId(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 1, 5, "")
+	buffer.WriteEntryWithNotify(1, []byte("data1"), nil)
+
+	// endEntryId <= startEntryId
+	entries, err := buffer.ReadEntriesRange(3, 2)
+	assert.Error(t, err)
+	assert.Nil(t, entries)
+
+	// endEntryId > firstEntryId + maxEntries
+	entries, err = buffer.ReadEntriesRange(1, 100)
+	assert.Error(t, err)
+	assert.Nil(t, entries)
+}
+
+// TestWriteEntry_BelowFirstEntryId tests WriteEntryWithNotify with entryId below FirstEntryId.
+func TestWriteEntry_BelowFirstEntryId(t *testing.T) {
+	buffer := NewSequentialBuffer(1, 0, 10, 5, "")
+	id, err := buffer.WriteEntryWithNotify(5, []byte("data"), nil) // below FirstEntryId=10
+	assert.Error(t, err)
+	assert.Equal(t, int64(-1), id)
+}
 
 // TestNewSequentialBuffer tests the creation of a new SequentialBuffer.
 func TestNewSequentialBuffer(t *testing.T) {

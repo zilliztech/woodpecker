@@ -816,12 +816,6 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 		return 0
 	}
 
-	if len(s.quorumInfo.Nodes) > 1 {
-		// In service mode, writes go to local disk and are not limited by block count,
-		// rolling is only controlled by size and time constraints
-		return 0
-	}
-
 	// write data to quorum
 	quorumInfo, err := s.GetQuorumInfo(ctx)
 	if err != nil {
@@ -830,6 +824,12 @@ func (s *segmentHandleImpl) GetBlocksCount(ctx context.Context) int64 {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segmentId", s.segmentId),
 			zap.Error(err))
+		return 0
+	}
+
+	if len(quorumInfo.Nodes) > 1 {
+		// In service mode, writes go to local disk and are not limited by block count,
+		// rolling is only controlled by size and time constraints
 		return 0
 	}
 

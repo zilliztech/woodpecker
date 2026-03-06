@@ -146,3 +146,109 @@ func TestNewDefaultRollingPolicy_DefaultValues(t *testing.T) {
 		t.Errorf("Expected rollover due to default time limit")
 	}
 }
+
+func TestNewDefaultRollingPolicy_ZeroValues(t *testing.T) {
+	// Test zero values result in defaults
+	policy := NewDefaultRollingPolicy(0, 0, 0)
+
+	// Defaults: 10min, 64MB, 1000 blocks
+	// Should NOT rollover below defaults
+	lastRolloverTimeMs := time.Now().UnixMilli() - 100
+	if policy.ShouldRollover(context.TODO(), int64(1024), int64(5), lastRolloverTimeMs) {
+		t.Errorf("Expected no rollover with values well below defaults")
+	}
+
+	// Should rollover when exceeding 64MB default
+	if !policy.ShouldRollover(context.TODO(), int64(64*1024*1024+1), int64(5), lastRolloverTimeMs) {
+		t.Errorf("Expected rollover due to exceeding 64MB default")
+	}
+}
+
+func TestDefaultRollingPolicy_NegativeSize(t *testing.T) {
+	policy := NewDefaultRollingPolicy(1000, 100, 10)
+
+	// Negative segment size should return false
+	result := policy.ShouldRollover(context.TODO(), int64(-1), int64(5), time.Now().UnixMilli()-500)
+	if result {
+		t.Errorf("Expected ShouldRollover to return false for negative segment size")
+	}
+}
+
+func TestDefaultRollingPolicy_NegativeBlocksCount(t *testing.T) {
+	policy := NewDefaultRollingPolicy(1000, 100, 10)
+
+	// Negative blocks count should return false
+	result := policy.ShouldRollover(context.TODO(), int64(50), int64(-1), time.Now().UnixMilli()-500)
+	if result {
+		t.Errorf("Expected ShouldRollover to return false for negative blocks count")
+	}
+}
+
+func TestDefaultRollingPolicy_ClockSkew(t *testing.T) {
+	policy := NewDefaultRollingPolicy(1000, 100, 10)
+
+	// Simulate clock skew: lastRolloverTime is in the future
+	futureTime := time.Now().UnixMilli() + 10000
+	result := policy.ShouldRollover(context.TODO(), int64(50), int64(5), futureTime)
+	if result {
+		t.Errorf("Expected ShouldRollover to return false on clock skew (time went backwards)")
+	}
+}
+
+func TestDefaultRollingPolicy_ExactSizeMatch(t *testing.T) {
+	policy := NewDefaultRollingPolicy(10000, 100, 10)
+
+	// Exactly at size limit should trigger rollover
+	lastRolloverTimeMs := time.Now().UnixMilli() - 100
+	result := policy.ShouldRollover(context.TODO(), int64(100), int64(5), lastRolloverTimeMs)
+	if !result {
+		t.Errorf("Expected ShouldRollover to return true when size equals limit")
+	}
+}
+
+func TestDefaultRollingPolicy_TimeRollover_WithNonEmptySegment(t *testing.T) {
+	policy := NewDefaultRollingPolicy(500, 1000000, 1000)
+
+	// Non-empty segment with time exceeded should trigger rollover
+	lastRolloverTimeMs := time.Now().UnixMilli() - 600
+	result := policy.ShouldRollover(context.TODO(), int64(1), int64(0), lastRolloverTimeMs)
+	if !result {
+		t.Errorf("Expected ShouldRollover to return true for time-based rollover on non-empty segment")
+	}
+}
+
+func TestDefaultRollingPolicy_TimeRollover_ZeroLastRolloverTime(t *testing.T) {
+	policy := NewDefaultRollingPolicy(500, 1000000, 1000)
+
+	// lastRolloverTimeMs=0 means invalid, time-based rollover should NOT trigger
+	result := policy.ShouldRollover(context.TODO(), int64(50), int64(5), int64(0))
+	if result {
+		t.Errorf("Expected ShouldRollover to return false when lastRolloverTimeMs is 0")
+	}
+}
+
+func TestNewDefaultRollingPolicy_ValidParams(t *testing.T) {
+	// Ensure valid params are used directly (not replaced by defaults)
+	policy := NewDefaultRollingPolicy(5000, 256, 20)
+
+	// Should rollover at 256 bytes
+	lastRolloverTimeMs := time.Now().UnixMilli() - 100
+	if !policy.ShouldRollover(context.TODO(), int64(256), int64(5), lastRolloverTimeMs) {
+		t.Errorf("Expected rollover at exactly 256 bytes")
+	}
+
+	// Should NOT rollover at 255 bytes
+	if policy.ShouldRollover(context.TODO(), int64(255), int64(5), lastRolloverTimeMs) {
+		t.Errorf("Expected no rollover at 255 bytes (below 256 limit)")
+	}
+
+	// Should rollover at 20 blocks
+	if !policy.ShouldRollover(context.TODO(), int64(10), int64(20), lastRolloverTimeMs) {
+		t.Errorf("Expected rollover at exactly 20 blocks")
+	}
+
+	// Should NOT rollover at 19 blocks
+	if policy.ShouldRollover(context.TODO(), int64(10), int64(19), lastRolloverTimeMs) {
+		t.Errorf("Expected no rollover at 19 blocks (below 20 limit)")
+	}
+}

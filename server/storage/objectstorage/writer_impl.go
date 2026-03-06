@@ -1694,8 +1694,8 @@ func (f *MinioFileWriter) serialize(blockId int64, entries []*cache.BufferEntry)
 	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
 
 	// Add BlockHeaderRecord at the start of the block with calculated values
-	firstEntryID := entries[0].EntryId
-	lastEntryID := entries[len(entries)-1].EntryId
+	firstEntryID := entries[0].EntryId             //nolint:gosec // len(entries) > 0 guaranteed by check above
+	lastEntryID := entries[len(entries)-1].EntryId //nolint:gosec // len(entries) > 0 guaranteed by check above
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		BlockNumber:  int32(blockId),
 		FirstEntryID: firstEntryID,

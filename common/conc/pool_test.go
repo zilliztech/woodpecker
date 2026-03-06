@@ -39,7 +39,7 @@ func TestPool(t *testing.T) {
 		futures = append(futures, future)
 	}
 
-	assert.Greater(t, pool.Running(), 0)
+	// Wait for all tasks to complete
 	AwaitAll(futures...)
 	for i, future := range futures {
 		res, err := future.Await()

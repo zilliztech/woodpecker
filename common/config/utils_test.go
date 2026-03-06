@@ -156,6 +156,79 @@ func TestDurationSecondsUnmarshal(t *testing.T) {
 	}
 }
 
+func TestNewDuration(t *testing.T) {
+	d := NewDuration(5*time.Second, time.Second)
+	assert.Equal(t, 5, d.Seconds())
+	assert.Equal(t, 5000, d.Milliseconds())
+	assert.Equal(t, 5*time.Second, d.Duration())
+}
+
+func TestNewDurationWithDefault(t *testing.T) {
+	d := NewDurationWithDefault(time.Second)
+	assert.Equal(t, 0, d.Seconds())
+	assert.Equal(t, 0, d.Milliseconds())
+}
+
+func TestByteSizeUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	err := yaml.Unmarshal([]byte("size: true"), &config)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid type for ByteSize")
+}
+
+func TestByteSizeUnmarshal_InvalidString(t *testing.T) {
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	err := yaml.Unmarshal([]byte("size: invalidXYZ"), &config)
+	assert.Error(t, err)
+}
+
+func TestDurationUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Duration DurationSeconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: true"), &config)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid type for Duration")
+}
+
+func TestDurationUnmarshal_InvalidString(t *testing.T) {
+	var config struct {
+		Duration DurationSeconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: invalidXYZ"), &config)
+	assert.Error(t, err)
+}
+
+func TestDurationMillisecondsUnmarshal_InvalidType(t *testing.T) {
+	var config struct {
+		Duration DurationMilliseconds `yaml:"duration"`
+	}
+	err := yaml.Unmarshal([]byte("duration: [1,2,3]"), &config)
+	assert.Error(t, err)
+}
+
+func TestParseSize_InvalidSuffixValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"invalid GB value", "abcg"},
+		{"invalid MB value", "xyzm"},
+		{"invalid KB value", "abck"},
+		{"invalid TB value", "xyzt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseSize(tt.input)
+			assert.Error(t, err)
+		})
+	}
+}
+
 func TestDurationMillisecondsUnmarshal(t *testing.T) {
 	tests := []struct {
 		name       string

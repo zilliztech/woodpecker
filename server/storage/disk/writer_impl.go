@@ -116,6 +116,9 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
+	if blockSize <= 0 {
+		blockSize = 2 * 1024 * 1024 // 2MB default
+	}
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
@@ -178,13 +181,6 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.lastSubmittedFlushingBlockID.Store(-1)
 	writer.allUploadingTaskDone.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
-
-	// Set default block size if not specified
-	if writer.maxFlushSize <= 0 {
-		writer.maxFlushSize = 2 * 1024 * 1024 // 2MB default
-		logger.Ctx(ctx).Debug("using default block size",
-			zap.Int64("defaultBlockSize", writer.maxFlushSize))
-	}
 
 	logger.Ctx(ctx).Debug("writer configuration initialized",
 		zap.Int64("maxFlushSize", writer.maxFlushSize),

@@ -229,6 +229,128 @@ func TestRetryErrorParam(t *testing.T) {
 	}
 }
 
+func TestDo_ContextAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	err := Do(ctx, func() error {
+		t.Fatal("should not be called")
+		return nil
+	})
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDo_ContextAlreadyDeadlineExceeded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	time.Sleep(1 * time.Millisecond) // ensure deadline passed
+
+	err := Do(ctx, func() error {
+		t.Fatal("should not be called")
+		return nil
+	})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestDo_UnrecoverableReturnsLastErr(t *testing.T) {
+	// When fn returns context.Canceled (unrecoverable) and lastErr exists,
+	// Do should return lastErr instead of the context error
+	firstErr := errors.New("first failure")
+	counter := 0
+	err := Do(context.Background(), func() error {
+		counter++
+		if counter == 1 {
+			return firstErr
+		}
+		return Unrecoverable(context.Canceled)
+	}, Attempts(5), Sleep(1*time.Millisecond))
+	assert.ErrorIs(t, err, firstErr)
+}
+
+func TestDo_DeadlineApproachingReturnsLastErr(t *testing.T) {
+	// When deadline is approaching and the error is a context error with lastErr set
+	firstErr := errors.New("transient error")
+	counter := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := Do(ctx, func() error {
+		counter++
+		if counter == 1 {
+			return firstErr
+		}
+		// Return context deadline exceeded after first failure
+		return Unrecoverable(context.DeadlineExceeded)
+	}, Attempts(10), Sleep(1*time.Millisecond))
+	// Should get the first error back since the second error is context-related
+	assert.ErrorIs(t, err, firstErr)
+}
+
+func TestSleep_AdjustsMaxSleepTime(t *testing.T) {
+	// When Sleep is set to a large value, maxSleepTime should be auto-adjusted
+	c := newDefaultRetryConfig()
+	Sleep(2 * time.Second)(c)
+	assert.Equal(t, 2*time.Second, c.sleep)
+	assert.GreaterOrEqual(t, c.maxSleepTime, 4*time.Second)
+}
+
+func TestMaxSleepTime_NormalCase(t *testing.T) {
+	// When maxSleepTime >= 2*sleep, it should just be set directly
+	c := newDefaultRetryConfig()
+	MaxSleepTime(10 * time.Second)(c)
+	assert.Equal(t, 10*time.Second, c.maxSleepTime)
+}
+
+func TestHandle_ContextAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := Handle(ctx, func() (bool, error) {
+		t.Fatal("should not be called")
+		return false, nil
+	})
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestHandle_ShouldNotRetryWithContextErr(t *testing.T) {
+	// When shouldRetry=false and err is context error with lastErr, returns lastErr
+	firstErr := errors.New("first err")
+	counter := 0
+	err := Handle(context.Background(), func() (bool, error) {
+		counter++
+		if counter == 1 {
+			return true, firstErr
+		}
+		return false, context.Canceled // not retryable, context error
+	}, Attempts(5), Sleep(1*time.Millisecond))
+	assert.ErrorIs(t, err, firstErr)
+}
+
+func TestHandle_SleepCapAtMaxSleepTime(t *testing.T) {
+	// Verify exponential backoff caps at maxSleepTime
+	counter := 0
+	start := time.Now()
+	err := Handle(context.Background(), func() (bool, error) {
+		counter++
+		if counter >= 5 {
+			return false, nil
+		}
+		return true, errors.New("retry")
+	}, Attempts(10), Sleep(1*time.Millisecond), MaxSleepTime(5*time.Millisecond))
+	assert.NoError(t, err)
+	assert.Equal(t, 5, counter)
+	elapsed := time.Since(start)
+	// With sleep 1,2,4,5 ms (capped at 5), total should be < 100ms
+	assert.Less(t, elapsed, 100*time.Millisecond)
+}
+
+func TestHandle_ExhaustsAttempts(t *testing.T) {
+	mockErr := errors.New("always fail")
+	err := Handle(context.Background(), func() (bool, error) {
+		return true, mockErr
+	}, Attempts(3), Sleep(1*time.Millisecond))
+	assert.ErrorIs(t, err, mockErr)
+}
+
 func TestHandle(t *testing.T) {
 	// test context done
 	ctx, cancel := context.WithCancel(context.Background())

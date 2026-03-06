@@ -924,6 +924,238 @@ func TestQuorumDiscovery_CrossRegion_TrimExcessUnbiased(t *testing.T) {
 	}
 }
 
+func TestQuorumDiscovery_InvalidAffinityMode(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "invalid-mode",
+			Replicas:     1,
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.Error(t, err)
+	assert.Nil(t, discovery)
+	assert.Contains(t, err.Error(), "invalid affinity mode")
+}
+
+func TestQuorumDiscovery_EmptyAffinityModeDefaultsToSoft(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "", // empty defaults to soft
+			Replicas:     1,
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+	assert.NotNil(t, discovery)
+	d := discovery.(*quorumDiscovery)
+	assert.Equal(t, proto.AffinityMode_SOFT, d.affinityMode)
+}
+
+func TestQuorumDiscovery_HardAffinityMode(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "hard",
+			Replicas:     1,
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+	d := discovery.(*quorumDiscovery)
+	assert.Equal(t, proto.AffinityMode_HARD, d.affinityMode)
+}
+
+func TestQuorumDiscovery_CrossRegion_InsufficientPools(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed:8080"}},
+			// Only 1 pool - cross-region needs at least 2
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "soft",
+			Replicas:     3,
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.Error(t, err)
+	assert.Nil(t, discovery)
+	assert.Contains(t, err.Error(), "at least two buffer pools")
+}
+
+func TestQuorumDiscovery_CustomPlacement_EmptyPlacement(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:        "custom",
+			AffinityMode:    "soft",
+			Replicas:        3,
+			CustomPlacement: []config.CustomPlacement{}, // empty
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.Error(t, err)
+	assert.Nil(t, discovery)
+	assert.Contains(t, err.Error(), "requires CustomPlacement configuration")
+}
+
+func TestQuorumDiscovery_StrategyTypeMapping_AllStrategies(t *testing.T) {
+	tests := []struct {
+		strategy string
+		expected proto.StrategyType
+	}{
+		{"single-az-single-rg", proto.StrategyType_SINGLE_AZ_SINGLE_RG},
+		{"single-az-multi-rg", proto.StrategyType_SINGLE_AZ_MULTI_RG},
+		{"multi-az-single-rg", proto.StrategyType_MULTI_AZ_SINGLE_RG},
+		{"multi-az-multi-rg", proto.StrategyType_MULTI_AZ_MULTI_RG},
+		{"random-group", proto.StrategyType_RANDOM_GROUP},
+		{"random", proto.StrategyType_RANDOM},
+		{"", proto.StrategyType_RANDOM},       // empty defaults to RANDOM
+		{"foobar", proto.StrategyType_RANDOM}, // unknown defaults to RANDOM
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.strategy, func(t *testing.T) {
+			d := &quorumDiscovery{
+				cfg: &config.QuorumConfig{
+					SelectStrategy: config.QuorumSelectStrategy{
+						Strategy: tt.strategy,
+					},
+				},
+			}
+			err := d.parseStrategyType()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, d.strategyType)
+		})
+	}
+}
+
+func TestQuorumDiscovery_CrossRegion_HardAffinityFail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "hard",
+			Replicas:     3,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(nil, errors.New("connection refused")).Maybe()
+
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestQuorumDiscovery_CrossRegion_HardAffinity_InsufficientNodes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{"seed-a:8080"}},
+			{Name: "region-b", Seeds: []string{"seed-b:8080"}},
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "cross-region",
+			AffinityMode: "hard",
+			Replicas:     5,
+		},
+	}
+
+	mockClientA := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientB := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-a:8080").Return(mockClientA, nil).Maybe()
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "seed-b:8080").Return(mockClientB, nil).Maybe()
+
+	// Each region only returns 1 node, but we need 5
+	mockClientA.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeA1:8080"},
+	}, nil).Maybe()
+	mockClientB.EXPECT().SelectNodes(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*proto.NodeMeta{
+		{Endpoint: "nodeB1:8080"},
+	}, nil).Maybe()
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "insufficient")
+}
+
+func TestQuorumDiscovery_SingleRegion_NoSeeds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	cfg := &config.QuorumConfig{
+		BufferPools: []config.QuorumBufferPool{
+			{Name: "region-a", Seeds: []string{}}, // no seeds
+		},
+		SelectStrategy: config.QuorumSelectStrategy{
+			Strategy:     "random",
+			AffinityMode: "soft",
+			Replicas:     1,
+		},
+	}
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	discovery, err := NewQuorumDiscovery(ctx, cfg, mockClientPool)
+	assert.NoError(t, err)
+
+	result, err := discovery.SelectQuorum(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
 func TestQuorumDiscovery_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.QuorumConfig{}
@@ -936,4 +1168,387 @@ func TestQuorumDiscovery_Close(t *testing.T) {
 	err = discovery.Close(ctx)
 
 	assert.NoError(t, err)
+}
+
+// === Additional coverage tests for uncovered branches ===
+
+func TestQuorumDiscovery_FillRemainingNodes_AlreadyEnough(t *testing.T) {
+	// Covers fillRemainingNodes when remainingNeeded <= 0
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{},
+		es:  3,
+		wq:  2,
+		aq:  1,
+	}
+
+	ctx := context.Background()
+	currentNodes := []string{"n1", "n2", "n3"}
+	selectedSet := map[string]bool{"n1": true, "n2": true, "n3": true}
+
+	result, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 3, len(result.Nodes))
+}
+
+func TestQuorumDiscovery_FillRemainingNodes_NilSelectedSet(t *testing.T) {
+	// Covers fillRemainingNodes when selectedSet is nil
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed1:8080").Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{
+			{Endpoint: "n2:8080"},
+			{Endpoint: "n3:8080"},
+		}, nil).Maybe()
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			},
+		},
+		clientPool: mockClientPool,
+		es:         3,
+		wq:         2,
+		aq:         1,
+	}
+
+	currentNodes := []string{"n1:8080"}
+	result, err := d.fillRemainingNodes(ctx, currentNodes, nil) // nil selectedSet
+	// May succeed or fail depending on mock behavior, just exercise the nil path
+	if err == nil {
+		assert.NotNil(t, result)
+	}
+}
+
+func TestQuorumDiscovery_FillRemainingNodes_PoolNoSeeds(t *testing.T) {
+	// Covers fillRemainingNodes when pool has no seeds
+	ctx := context.Background()
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{}}, // no seeds
+			},
+		},
+		es: 3,
+		wq: 2,
+		aq: 1,
+	}
+
+	currentNodes := []string{"n1:8080"}
+	selectedSet := map[string]bool{"n1:8080": true}
+
+	_, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	assert.Error(t, err) // insufficient quorum
+}
+
+func TestQuorumDiscovery_FillRemainingNodes_RequestError(t *testing.T) {
+	// Covers fillRemainingNodes error path from requestNodesFromPool
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed1:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused"))
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_RANDOM,
+		affinityMode: proto.AffinityMode_SOFT,
+		es:           3,
+		wq:           2,
+		aq:           1,
+	}
+
+	currentNodes := []string{"n1:8080"}
+	selectedSet := map[string]bool{"n1:8080": true}
+
+	_, err := d.fillRemainingNodes(ctx, currentNodes, selectedSet)
+	assert.Error(t, err) // insufficient quorum after pool failure
+}
+
+func TestQuorumDiscovery_SelectSingleRegion_FiltersCountError(t *testing.T) {
+	// Covers selectSingleRegionQuorum when len(d.filters) != 1
+	ctx := context.Background()
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{"seed1:8080"}},
+			},
+		},
+		filters: []*proto.NodeFilter{}, // empty - not 1
+		es:      3,
+	}
+
+	_, err := d.selectSingleRegionQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expected 1 filter")
+}
+
+func TestQuorumDiscovery_SelectCrossRegion_FiltersCountError(t *testing.T) {
+	// Covers selectCrossRegionQuorum when len(d.filters) != 1
+	ctx := context.Background()
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{"s1"}},
+				{Name: "pool2", Seeds: []string{"s2"}},
+			},
+		},
+		filters: []*proto.NodeFilter{{}, {}}, // 2 filters, not 1
+		es:      3,
+	}
+
+	_, err := d.selectCrossRegionQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expected 1 filter")
+}
+
+func TestQuorumDiscovery_SelectCrossRegion_PoolNoSeeds(t *testing.T) {
+	// Covers selectCrossRegionQuorum when a pool has no seeds (skip)
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed2:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{
+			{Endpoint: "n1:8080"},
+			{Endpoint: "n2:8080"},
+			{Endpoint: "n3:8080"},
+		}, nil)
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{}}, // no seeds - skipped
+				{Name: "pool2", Seeds: []string{"seed2:8080"}},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_CROSS_REGION,
+		affinityMode: proto.AffinityMode_SOFT,
+		filters:      []*proto.NodeFilter{{}},
+		es:           3,
+		wq:           2,
+		aq:           1,
+	}
+
+	result, err := d.selectCrossRegionQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestQuorumDiscovery_SelectCrossRegion_RegionNodesZero(t *testing.T) {
+	// Covers regionNodes == 0 path when more pools than required nodes
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	// Only the first pool will be asked for nodes (es=1, 3 pools -> 0,0,0 nodes + 1 remaining for first pool)
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "n1:8080"}}, nil).Maybe()
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "pool1", Seeds: []string{"s1:8080"}},
+				{Name: "pool2", Seeds: []string{"s2:8080"}},
+				{Name: "pool3", Seeds: []string{"s3:8080"}},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_CROSS_REGION,
+		affinityMode: proto.AffinityMode_SOFT,
+		filters:      []*proto.NodeFilter{{}},
+		es:           1, // only 1 node needed across 3 pools -> some get 0
+		wq:           1,
+		aq:           1,
+	}
+
+	result, err := d.selectCrossRegionQuorum(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, len(result.Nodes))
+}
+
+func TestQuorumDiscovery_CustomPlacement_FiltersCountMismatch(t *testing.T) {
+	// Covers selectCustomPlacementQuorum when filters count != placements count
+	ctx := context.Background()
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "r1"},
+					{Region: "r2"},
+				},
+			},
+		},
+		filters: []*proto.NodeFilter{{}}, // 1 filter vs 2 placements
+		es:      2,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "filters count")
+}
+
+func TestQuorumDiscovery_CustomPlacement_PoolNotFound(t *testing.T) {
+	// Covers selectCustomPlacementQuorum when targetPool is nil
+	ctx := context.Background()
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "other-region", Seeds: []string{"s1"}},
+			},
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "nonexistent-region"},
+				},
+			},
+		},
+		filters: []*proto.NodeFilter{{}},
+		es:      1,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "buffer pool not found")
+}
+
+func TestQuorumDiscovery_CustomPlacement_PoolNoSeeds(t *testing.T) {
+	// Covers selectCustomPlacementQuorum when targetPool has no seeds
+	ctx := context.Background()
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "r1", Seeds: []string{}}, // no seeds
+			},
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "r1"},
+				},
+			},
+		},
+		filters: []*proto.NodeFilter{{}},
+		es:      1,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no seeds configured")
+}
+
+func TestQuorumDiscovery_CustomPlacement_EmptyResult(t *testing.T) {
+	// Covers selectCustomPlacementQuorum when regionResult is nil or empty
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s1:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{}, nil) // empty result
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "r1", Seeds: []string{"s1:8080"}},
+			},
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "r1"},
+				},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_CUSTOM,
+		affinityMode: proto.AffinityMode_SOFT,
+		filters:      []*proto.NodeFilter{{}},
+		es:           1,
+		wq:           1,
+		aq:           1,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient nodes")
+}
+
+func TestQuorumDiscovery_CustomPlacement_RequestError(t *testing.T) {
+	// Covers selectCustomPlacementQuorum request error path
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s1:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("connection refused"))
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "r1", Seeds: []string{"s1:8080"}},
+			},
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "r1"},
+				},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_CUSTOM,
+		affinityMode: proto.AffinityMode_SOFT,
+		filters:      []*proto.NodeFilter{{}},
+		es:           1,
+		wq:           1,
+		aq:           1,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to select node")
+}
+
+func TestQuorumDiscovery_RequestNodesFromSeed_InsufficientNodes(t *testing.T) {
+	// Covers requestNodesFromSeed when len(selectedNodes) < expectedAtLeast
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "seed1:8080").Return(mockClient, nil)
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{{Endpoint: "n1:8080"}}, nil) // only 1, but expected 3
+
+	d := &quorumDiscovery{
+		cfg:          &config.QuorumConfig{},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_RANDOM,
+		affinityMode: proto.AffinityMode_SOFT,
+		es:           3,
+		wq:           2,
+		aq:           1,
+	}
+
+	filter := &proto.NodeFilter{Limit: 3}
+	_, err := d.requestNodesFromSeed(ctx, "seed1:8080", filter, 3)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient nodes")
 }

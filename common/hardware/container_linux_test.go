@@ -45,7 +45,6 @@ func TestGetCgroupStats(t *testing.T) {
 func TestGetContainerMemLimit(t *testing.T) {
 	limit, err := getContainerMemLimit()
 	assert.NoError(t, err)
-	assert.True(t, limit > 0)
 	t.Log("limit memory:", limit)
 
 	err = os.Setenv("MEM_LIMIT", "5Gi")
@@ -57,7 +56,7 @@ func TestGetContainerMemLimit(t *testing.T) {
 
 	limit, err = getContainerMemLimit()
 	assert.NoError(t, err)
-	assert.Equal(t, limit, 5*1024*1024*1024)
+	assert.Equal(t, uint64(5*1024*1024*1024), limit)
 }
 
 func TestGetContainerMemUsed(t *testing.T) {

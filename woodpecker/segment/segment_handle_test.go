@@ -3254,3 +3254,2625 @@ func TestCalculateLAC(t *testing.T) {
 		})
 	}
 }
+
+// TestGetLogName tests the GetLogName method returns the correct log name
+func TestGetLogName(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		logName string
+	}{
+		{"simple_name", "testLog"},
+		{"empty_name", ""},
+		{"complex_name", "namespace/collection/partition/log-123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segmentMeta := &meta.SegmentMeta{
+				Metadata: &proto.SegmentMetadata{
+					SegNo: 1,
+				},
+				Revision: 1,
+			}
+			segmentHandle := NewSegmentHandle(context.Background(), 1, tt.logName, segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			assert.Equal(t, tt.logName, segmentHandle.GetLogName())
+		})
+	}
+}
+
+// TestGetLastAddPushed tests the GetLastAddPushed method
+func TestGetLastAddPushed(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		lastEntryId int64
+		expected    int64
+	}{
+		{"initial_minus_one", -1, -1},
+		{"zero", 0, 0},
+		{"positive", 42, 42},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segmentMeta := &meta.SegmentMeta{
+				Metadata: &proto.SegmentMetadata{
+					SegNo:       1,
+					LastEntryId: tt.lastEntryId,
+				},
+				Revision: 1,
+			}
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			lastPushed, err := segmentHandle.GetLastAddPushed(context.Background())
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, lastPushed)
+		})
+	}
+}
+
+// TestGetMetadata tests the GetMetadata method returns the correct segment metadata
+func TestGetMetadata(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       5,
+			State:       proto.SegmentState_Active,
+			LastEntryId: 100,
+			Size:        2048,
+		},
+		Revision: 3,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result := segmentHandle.GetMetadata(context.Background())
+	assert.NotNil(t, result)
+	assert.Equal(t, int64(5), result.Metadata.SegNo)
+	assert.Equal(t, proto.SegmentState_Active, result.Metadata.State)
+	assert.Equal(t, int64(100), result.Metadata.LastEntryId)
+	assert.Equal(t, int64(2048), result.Metadata.Size)
+}
+
+// TestRefreshAndGetMetadata_Success tests refreshing metadata successfully
+func TestRefreshAndGetMetadata_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
+	}
+
+	updatedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 50,
+			Size:        4096,
+		},
+		Revision: 2,
+	}
+
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(updatedMeta, nil)
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	err := segmentHandle.RefreshAndGetMetadata(context.Background())
+	assert.NoError(t, err)
+
+	// Verify metadata was updated
+	result := segmentHandle.GetMetadata(context.Background())
+	assert.Equal(t, proto.SegmentState_Completed, result.Metadata.State)
+	assert.Equal(t, int64(50), result.Metadata.LastEntryId)
+	assert.Equal(t, int64(4096), result.Metadata.Size)
+}
+
+// TestRefreshAndGetMetadata_Error tests refreshing metadata when provider returns error
+func TestRefreshAndGetMetadata_Error(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+		},
+		Revision: 1,
+	}
+
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(nil, errors.New("etcd connection failed"))
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	err := segmentHandle.RefreshAndGetMetadata(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "etcd connection failed")
+
+	// Verify metadata was NOT updated (still original)
+	result := segmentHandle.GetMetadata(context.Background())
+	assert.Equal(t, proto.SegmentState_Active, result.Metadata.State)
+	assert.Equal(t, int64(-1), result.Metadata.LastEntryId)
+}
+
+// TestGetSize tests the GetSize method returns submitted + committed size
+func TestGetSize(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		initialSize  int64
+		expectedSize int64
+	}{
+		{"zero_size", 0, 0},
+		{"with_committed_size", 1024, 1024},
+		{"large_size", 64 * 1024 * 1024, 64 * 1024 * 1024},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segmentMeta := &meta.SegmentMeta{
+				Metadata: &proto.SegmentMetadata{
+					SegNo:       1,
+					State:       proto.SegmentState_Active,
+					LastEntryId: -1,
+					Size:        tt.initialSize,
+				},
+				Revision: 1,
+			}
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			size := segmentHandle.GetSize(context.Background())
+			assert.Equal(t, tt.expectedSize, size)
+		})
+	}
+}
+
+// TestGetBlocksCount_CompletedSegment tests GetBlocksCount returns 0 for completed segments
+func TestGetBlocksCount_CompletedSegment(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := segmentHandle.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(0), blocksCount)
+}
+
+// TestGetBlocksCount_ActiveSegment_MultipleNodes tests GetBlocksCount returns 0 for multi-node quorum
+func TestGetBlocksCount_ActiveSegment_MultipleNodes(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    3,
+				Wq:    3,
+				Nodes: []string{"node1", "node2", "node3"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := segmentHandle.GetBlocksCount(context.Background())
+	// Multi-node quorum returns 0 (blocks count not relevant for service mode)
+	assert.Equal(t, int64(0), blocksCount)
+}
+
+// TestGetBlocksCount_ActiveSegment_SingleNode tests GetBlocksCount for single-node quorum
+func TestGetBlocksCount_ActiveSegment_SingleNode(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().GetBlockCount(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(7), nil)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := segmentHandle.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(7), blocksCount)
+}
+
+// TestGetBlocksCount_ActiveSegment_ClientError tests GetBlocksCount returns 0 on client error
+func TestGetBlocksCount_ActiveSegment_ClientError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(nil, errors.New("client unavailable"))
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := segmentHandle.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(0), blocksCount)
+}
+
+// TestGetBlocksCount_ActiveSegment_GetBlockCountError tests GetBlocksCount returns 0 when GetBlockCount fails
+func TestGetBlocksCount_ActiveSegment_GetBlockCountError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().GetBlockCount(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), errors.New("block count error"))
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := segmentHandle.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(0), blocksCount)
+}
+
+// TestGetLastAddConfirmed_CompletedSegment tests GetLastAddConfirmed for completed segment
+func TestGetLastAddConfirmed_CompletedSegment(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 42,
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(42), lac)
+}
+
+// TestGetLastAddConfirmed_ActiveSegment_Success tests GetLastAddConfirmed for active segment via client
+func TestGetLastAddConfirmed_ActiveSegment_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().GetLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(99), nil)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(99), lac)
+}
+
+// TestGetLastAddConfirmed_ActiveSegment_AllNodesFail tests GetLastAddConfirmed when all nodes fail
+func TestGetLastAddConfirmed_ActiveSegment_AllNodesFail(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().GetLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(-1), errors.New("node unavailable"))
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
+	assert.Error(t, err)
+	assert.Equal(t, int64(-1), lac)
+}
+
+// TestReadBatchAdv_Success tests ReadBatchAdv successfully reads from first node
+func TestReadBatchAdv_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+
+	expectedEntries := []*proto.LogEntry{
+		{SegId: 1, EntryId: 0, Values: []byte("entry_0")},
+		{SegId: 1, EntryId: 1, Values: []byte("entry_1")},
+	}
+	expectedResult := &proto.BatchReadResult{
+		Entries:       expectedEntries,
+		LastReadState: &proto.LastReadState{},
+	}
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(expectedResult, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 2, len(result.Entries))
+	assert.Equal(t, "127.0.0.1", result.LastReadState.Node)
+}
+
+// TestReadBatchAdv_AllNodesFail tests ReadBatchAdv when all nodes fail
+func TestReadBatchAdv_AllNodesFail(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(nil, errors.New("read failed"))
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+// TestReadBatchAdv_WithLastReadState tests ReadBatchAdv with lastReadState directing to a specific node
+func TestReadBatchAdv_WithLastReadState(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+
+	expectedResult := &proto.BatchReadResult{
+		Entries: []*proto.LogEntry{
+			{SegId: 1, EntryId: 5, Values: []byte("entry_5")},
+		},
+		LastReadState: &proto.LastReadState{Node: "node2"},
+	}
+	mockClient2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5), int64(10), mock.Anything).Return(expectedResult, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    3,
+				Wq:    3,
+				Nodes: []string{"node1", "node2", "node3"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lastReadState := &proto.LastReadState{Node: "node2"}
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 5, 10, lastReadState)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, len(result.Entries))
+	assert.Equal(t, "node2", result.LastReadState.Node)
+}
+
+// TestGetLastAccessTime tests the GetLastAccessTime method
+func TestGetLastAccessTime(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+		},
+		Revision: 1,
+	}
+
+	beforeCreate := time.Now().UnixMilli()
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	afterCreate := time.Now().UnixMilli()
+
+	lastAccess := segmentHandle.GetLastAccessTime()
+	assert.GreaterOrEqual(t, lastAccess, beforeCreate)
+	assert.LessOrEqual(t, lastAccess, afterCreate)
+}
+
+// TestGetLastAccessTime_UpdatesOnAccess tests that access time is updated on method calls
+func TestGetLastAccessTime_UpdatesOnAccess(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	initialAccess := segmentHandle.GetLastAccessTime()
+
+	// Wait briefly to ensure time difference
+	time.Sleep(5 * time.Millisecond)
+
+	// Access via GetLastAddConfirmed (which calls updateAccessTime)
+	_, _ = segmentHandle.GetLastAddConfirmed(context.Background())
+
+	updatedAccess := segmentHandle.GetLastAccessTime()
+	assert.Greater(t, updatedAccess, initialAccess)
+}
+
+// TestComplete_Success tests the Complete method when fencing and completing succeed
+func TestComplete_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(5), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(5), nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lastEntryId, err := segmentHandle.Complete(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), lastEntryId)
+}
+
+// TestComplete_FenceFails tests the Complete method when fence fails
+func TestComplete_FenceFails(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(-1), errors.New("fence failed"))
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lastEntryId, err := segmentHandle.Complete(context.Background())
+	assert.Error(t, err)
+	assert.Equal(t, int64(-1), lastEntryId)
+}
+
+// TestCompact_LocalStorage tests that Compact skips compaction for local storage
+func TestCompact_LocalStorage(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "local",
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	err := segmentHandle.Compact(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestCompact_NotCompletedState tests that Compact fails when segment is not in Completed state
+func TestCompact_NotCompletedState(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	tests := []struct {
+		name  string
+		state proto.SegmentState
+	}{
+		{"active_state", proto.SegmentState_Active},
+		{"sealed_state", proto.SegmentState_Sealed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segmentMeta := &meta.SegmentMeta{
+				Metadata: &proto.SegmentMetadata{
+					SegNo:       1,
+					State:       tt.state,
+					LastEntryId: 10,
+				},
+				Revision: 1,
+			}
+			// Mock GetSegmentMetadata to return the same state (RefreshAndGetMetadata calls it)
+			mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMeta, nil).Once()
+
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			err := segmentHandle.Compact(context.Background())
+			assert.Error(t, err)
+			assert.True(t, werr.ErrSegmentHandleSegmentStateInvalid.Is(err))
+		})
+	}
+}
+
+// TestCompact_Success tests successful compaction from Completed to Sealed
+func TestCompact_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil).Maybe()
+
+	completedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+			Size:        2048,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	sealedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Sealed,
+			LastEntryId: 10,
+			Size:        1024,
+		},
+		Revision: 2,
+	}
+
+	compactedSegMetaInfo := &proto.SegmentMetadata{
+		SegNo:          1,
+		LastEntryId:    10,
+		Size:           1024,
+		CompletionTime: time.Now().UnixMilli(),
+	}
+
+	// First call for RefreshAndGetMetadata, second for refresh after compaction
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Once()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil)
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	err := segmentHandle.Compact(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestCompact_CompactionFails tests Compact when SegmentCompact fails on all nodes
+func TestCompact_CompactionFails(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil).Maybe()
+
+	completedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+			Size:        2048,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compaction failed"))
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	err := segmentHandle.Compact(context.Background())
+	assert.Error(t, err)
+}
+
+// TestCompact_AlreadyCompacting tests that concurrent compact is rejected
+func TestCompact_AlreadyCompacting(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil).Maybe()
+
+	completedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+			Size:        2048,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	sealedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Sealed,
+			LastEntryId: 10,
+			Size:        1024,
+		},
+		Revision: 2,
+	}
+
+	compactedResult := &proto.SegmentMetadata{
+		SegNo:          1,
+		LastEntryId:    10,
+		Size:           1024,
+		CompletionTime: time.Now().UnixMilli(),
+	}
+
+	// The first compact blocks for a while; second call should see doingCompact=true and return nil
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Maybe()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil).Maybe()
+	// Use a channel to delay the SegmentCompact response
+	blockCh := make(chan struct{})
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).RunAndReturn(
+		func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+			<-blockCh
+			return compactedResult, nil
+		},
+	).Maybe()
+
+	// For refresh after compaction
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+
+	// Start first compact in background
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = segmentHandle.Compact(context.Background())
+	}()
+
+	// Give the first compact time to start and acquire the doingCompact flag
+	time.Sleep(50 * time.Millisecond)
+
+	// Second compact should return nil immediately (already compacting)
+	err := segmentHandle.Compact(context.Background())
+	assert.NoError(t, err)
+
+	// Unblock the first compact
+	close(blockCh)
+	wg.Wait()
+}
+
+// TestSetWriterInvalidationNotifier tests the SetWriterInvalidationNotifier method
+func TestSetWriterInvalidationNotifier(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	notified := false
+	var receivedReason string
+	notifier := func(ctx context.Context, reason string) {
+		notified = true
+		receivedReason = reason
+	}
+	segmentHandle.SetWriterInvalidationNotifier(context.Background(), notifier)
+
+	// Trigger the notifier through the internal method
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	segImpl.NotifyWriterInvalidation(context.Background(), "test-reason")
+
+	assert.True(t, notified)
+	assert.Equal(t, "test-reason", receivedReason)
+}
+
+// TestNotifyWriterInvalidation_NilNotifier tests that NotifyWriterInvalidation does not panic when notifier is nil
+func TestNotifyWriterInvalidation_NilNotifier(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	// Should not panic even without a notifier set
+	segImpl := segmentHandle.(*segmentHandleImpl)
+	assert.NotPanics(t, func() {
+		segImpl.NotifyWriterInvalidation(context.Background(), "test-reason")
+	})
+}
+
+// TestReadBatchAdv_FailoverToSecondNode tests ReadBatchAdv failing on first node and succeeding on second
+func TestReadBatchAdv_FailoverToSecondNode(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+
+	// First node fails
+	mockClient1.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(nil, errors.New("node1 failed"))
+
+	// Second node succeeds
+	expectedResult := &proto.BatchReadResult{
+		Entries: []*proto.LogEntry{
+			{SegId: 1, EntryId: 0, Values: []byte("entry_0")},
+		},
+		LastReadState: &proto.LastReadState{},
+	}
+	mockClient2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(expectedResult, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    2,
+				Es:    2,
+				Wq:    2,
+				Nodes: []string{"node1", "node2"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, len(result.Entries))
+	assert.Equal(t, "node2", result.LastReadState.Node)
+}
+
+// TestGetLastAddConfirmed_ActiveSegment_FailoverToSecondNode tests LAC failover
+func TestGetLastAddConfirmed_ActiveSegment_FailoverToSecondNode(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+
+	// First node fails
+	mockClient1.EXPECT().GetLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(-1), errors.New("node1 down"))
+	// Second node succeeds
+	mockClient2.EXPECT().GetLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(25), nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    2,
+				Wq:    2,
+				Nodes: []string{"node1", "node2"},
+			},
+		},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(25), lac)
+}
+
+// === GetQuorumInfo tests ===
+
+func TestGetQuorumInfo_CachedQuorum(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 3, Wq: 2, Nodes: []string{"n1", "n2", "n3"}}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, Quorum: quorum},
+		Revision: 1,
+	}
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	// Should return cached quorum without calling metadata
+	q, err := segmentHandle.GetQuorumInfo(context.Background())
+	assert.NoError(t, err)
+	assert.Same(t, quorum, q)
+}
+
+func TestGetQuorumInfo_NilQuorum_ZeroId(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Quorum with Id=0 - should produce standalone quorum
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, Quorum: &proto.QuorumInfo{Id: 0}},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil // force nil to test the zero-id path
+
+	q, err := sh.GetQuorumInfo(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), q.Id)
+	assert.Equal(t, []string{"127.0.0.1"}, q.Nodes)
+}
+
+func TestGetQuorumInfo_PositiveQuorumId_FetchesFromMeta(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	expectedQuorum := &proto.QuorumInfo{Id: 5, Aq: 2, Es: 3, Nodes: []string{"a", "b", "c"}}
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(5)).Return(expectedQuorum, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil // force nil to test metadata fetch path
+
+	q, err := sh.GetQuorumInfo(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, expectedQuorum, q)
+}
+
+func TestGetQuorumInfo_PositiveQuorumId_MetaError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(5)).Return(nil, werr.ErrInternalError)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil
+
+	_, err := sh.GetQuorumInfo(context.Background())
+	assert.Error(t, err)
+}
+
+// === AppendAsync edge case tests ===
+
+func TestAppendAsync_Fenced(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+	impl.fencedState.Store(true)
+
+	done := make(chan struct{})
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentFenced.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+func TestAppendAsync_Rolling(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+	impl.rollingState.Store(true)
+
+	done := make(chan struct{})
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentHandleSegmentRolling.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+func TestAppendAsync_NotActive(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	done := make(chan struct{})
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentHandleSegmentStateInvalid.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+// === syncLACToNode / completeSegmentOnNode / fenceSegmentOnNode error path tests ===
+
+func TestSyncLACToNode_GetClientError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	resultChan := make(chan nodeLACSyncResult, 1)
+	impl.syncLACToNode(context.Background(), "node1", 5, resultChan)
+
+	result := <-resultChan
+	assert.Error(t, result.err)
+	assert.Equal(t, "node1", result.node)
+}
+
+func TestCompleteSegmentOnNode_GetClientError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	resultChan := make(chan nodeCompleteResult, 1)
+	impl.completeSegmentOnNode(context.Background(), "node1", 5, resultChan)
+
+	result := <-resultChan
+	assert.Error(t, result.err)
+	assert.Equal(t, "node1", result.node)
+}
+
+func TestFenceSegmentOnNode_GetClientError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	resultChan := make(chan nodeFenceResult, 1)
+	impl.fenceSegmentOnNode(context.Background(), "node1", resultChan)
+
+	result := <-resultChan
+	assert.Error(t, result.err)
+	assert.Equal(t, "node1", result.node)
+}
+
+// === completeSegmentQuorum tests ===
+
+func TestCompleteSegmentQuorum_InsufficientResponses(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Both nodes fail
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, errors.New("conn error"))
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5)).Return(int64(0), errors.New("complete failed"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
+	err := impl.completeSegmentQuorum(context.Background(), quorum, 5)
+	assert.Error(t, err)
+}
+
+func TestCompleteSegmentQuorum_ContextCancel(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Client blocks indefinitely so context cancellation kicks in
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, ctx.Err()).Maybe()
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}}
+	err := impl.completeSegmentQuorum(ctx, quorum, 5)
+	assert.Error(t, err)
+}
+
+// === FenceAndComplete tests ===
+
+func TestFenceAndComplete_AlreadyFenced(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: 10,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.fencedState.Store(true)
+	impl.lastAddConfirmed.Store(10)
+
+	lastEntry, err := sh.FenceAndComplete(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10), lastEntry)
+}
+
+func TestFenceAndComplete_GetQuorumInfoError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(5)).Return(nil, werr.ErrInternalError)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil
+
+	_, err := sh.FenceAndComplete(context.Background())
+	assert.Error(t, err)
+}
+
+func TestFenceAndComplete_FenceError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Fence fails - node returns error
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	_, err := sh.FenceAndComplete(context.Background())
+	assert.Error(t, err)
+}
+
+func TestFenceAndComplete_CompleteError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Fence succeeds
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(5), nil)
+	// Complete fails
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5)).Return(int64(0), errors.New("complete failed"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	_, err := sh.FenceAndComplete(context.Background())
+	assert.Error(t, err)
+}
+
+func TestFenceAndComplete_MetaUpdateError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Fence succeeds
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(5), nil)
+	// Complete succeeds
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5)).Return(int64(5), nil)
+	// Meta update fails
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).Return(werr.ErrInternalError)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	_, err := sh.FenceAndComplete(context.Background())
+	assert.Error(t, err)
+}
+
+func TestFenceAndComplete_Success(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(5), nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5)).Return(int64(5), nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).Return(nil)
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 5,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 2,
+	}, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+
+	lastEntry, err := sh.FenceAndComplete(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), lastEntry)
+
+	// Verify fenced state was set
+	impl := sh.(*segmentHandleImpl)
+	assert.True(t, impl.fencedState.Load())
+}
+
+// === doComplete tests ===
+
+func TestDoComplete_GetQuorumInfoError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(5)).Return(nil, werr.ErrInternalError)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil
+
+	_, err := impl.doComplete(context.Background())
+	assert.Error(t, err)
+}
+
+func TestDoComplete_FenceError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	_, err := impl.doComplete(context.Background())
+	assert.Error(t, err)
+}
+
+// === compactSegmentQuorum tests ===
+
+func TestCompactSegmentQuorum_AllNodesFail(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// First node: get client succeeds, compact fails
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compact failed"))
+	// Second node: get client fails
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
+	_, err := impl.compactSegmentQuorum(context.Background(), quorum)
+	assert.Error(t, err)
+}
+
+func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient1 := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// First node fails
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient1, nil)
+	mockClient1.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(nil, errors.New("compact failed"))
+	// Second node succeeds
+	expectedMeta := &proto.SegmentMetadata{SegNo: 1, Size: 100, LastEntryId: 10}
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClient2.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(expectedMeta, nil)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
+	result, err := impl.compactSegmentQuorum(context.Background(), quorum)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedMeta, result)
+}
+
+// === doCloseWritingAndUpdateMetaIfNecessaryUnsafe tests ===
+
+func TestDoCloseWriting_NotWritable(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	// canWriteState is false, should return nil immediately
+	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), 5)
+	assert.NoError(t, err)
+}
+
+func TestDoCloseWriting_RevisionInvalid(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).
+		Return(werr.ErrMetadataRevisionInvalid)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// Set a writer invalidation notifier to capture the notification
+	notified := false
+	impl.SetWriterInvalidationNotifier(context.Background(), func(ctx context.Context, reason string) {
+		notified = true
+	})
+
+	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), 5)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrMetadataRevisionInvalid.Is(err))
+	assert.True(t, notified)
+}
+
+// === fenceSegmentQuorum tests ===
+
+func TestFenceSegmentQuorum_InsufficientResponses(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Both nodes fail
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Es: 2, Aq: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
+	_, err := impl.fenceSegmentQuorum(context.Background(), quorum)
+	assert.Error(t, err)
+}
+
+// === syncLACToQuorumAsync tests ===
+
+func TestSyncLACToQuorumAsync_GetQuorumInfoError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(5)).Return(nil, werr.ErrInternalError)
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+	impl.quorumInfo = nil
+
+	// syncLACToQuorumAsync should return without panicking
+	impl.syncLACToQuorumAsync(context.Background(), 5)
+}
+
+func TestSyncLACToQuorumAsync_NodeError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	// Should complete without panicking even with node error
+	impl.syncLACToQuorumAsync(context.Background(), 5)
+}
+
+// === AppendAsync double-check under lock paths ===
+
+func TestAppendAsync_FencedUnderLock(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// Hold the lock, set fenced while locked, then release and let AppendAsync proceed
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		impl.Lock()
+		close(ready)
+		// Set fenced while holding the lock — the pre-lock check will pass,
+		// but the double-check under lock will catch it
+		impl.fencedState.Store(true)
+		time.Sleep(50 * time.Millisecond)
+		impl.Unlock()
+	}()
+	<-ready
+	time.Sleep(10 * time.Millisecond) // Let goroutine settle
+
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentFenced.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+func TestAppendAsync_RollingUnderLock(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		impl.Lock()
+		close(ready)
+		impl.rollingState.Store(true)
+		time.Sleep(50 * time.Millisecond)
+		impl.Unlock()
+	}()
+	<-ready
+	time.Sleep(10 * time.Millisecond)
+
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentHandleSegmentRolling.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+func TestAppendAsync_SubmitFails(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// Stop the executor so Submit returns false
+	impl.executor.Stop(context.Background())
+
+	done := make(chan struct{})
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentHandleSegmentClosed.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+// === SendAppendSuccessCallbacks edge cases ===
+
+func TestSendAppendSuccessCallbacks_EntryIdBelowLAC(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil).Maybe()
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+
+	testQueue := list.New()
+	sh := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+	impl := sh.(*segmentHandleImpl)
+
+	// Set LAC to 5 — any op with entryId <= 5 should go through the "already confirmed" branch
+	impl.lastAddConfirmed.Store(5)
+
+	// Create ops with entryId 3, 4 (below LAC) and 7 (above, not next)
+	successIds := make([]int64, 0)
+	mu := sync.Mutex{}
+	for _, id := range []int64{3, 4, 7} {
+		entryId := id
+		op := NewAppendOp("b", "r", 1, 1, entryId, []byte("data"), func(segmentId int64, eid int64, err error) {
+			mu.Lock()
+			successIds = append(successIds, eid)
+			mu.Unlock()
+		}, mockClientPool, sh, segmentMeta.Metadata.Quorum)
+		op.completed.Store(true)
+		testQueue.PushBack(op)
+	}
+
+	sh.SendAppendSuccessCallbacks(context.Background(), 4)
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	// entryId 3 and 4 should succeed (below LAC), entryId 7 should break (not next in sequence)
+	assert.Contains(t, successIds, int64(3))
+	assert.Contains(t, successIds, int64(4))
+	assert.NotContains(t, successIds, int64(7))
+	mu.Unlock()
+}
+
+func TestSendAppendSuccessCallbacks_NotCompleted_Break(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+
+	testQueue := list.New()
+	sh := NewSegmentHandleWithAppendOpsQueue(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue)
+
+	// Add op that is NOT completed — should trigger the "not completed" break
+	op := NewAppendOp("b", "r", 1, 1, 0, []byte("data"), func(segmentId int64, eid int64, err error) {}, mockClientPool, sh, segmentMeta.Metadata.Quorum)
+	op.completed.Store(false)
+	testQueue.PushBack(op)
+
+	// Should not panic and should leave the queue unchanged
+	sh.SendAppendSuccessCallbacks(context.Background(), 0)
+	assert.Equal(t, 1, testQueue.Len()) // op still in queue since it wasn't completed
+}
+
+// === ReadBatchAdv error path tests ===
+
+func TestReadBatchAdv_ClientError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(nil, errors.New("connection refused"))
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "connection refused")
+}
+
+func TestReadBatchAdv_EntryNotFound(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil)
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).
+		Return(nil, werr.ErrEntryNotFound)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, werr.ErrEntryNotFound.Is(err))
+}
+
+func TestReadBatchAdv_EOF(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).
+		Return(nil, werr.ErrFileReaderEndOfFile)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1", "node2"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	// EOF should break immediately without trying node2
+	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+}
+
+func TestReadBatchAdv_FailoverClientError_ThenSuccess(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	// First node: client error
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn refused"))
+	// Second node: success
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	expectedResult := &proto.BatchReadResult{
+		Entries:       []*proto.LogEntry{{SegId: 1, EntryId: 0, Values: []byte("data")}},
+		LastReadState: &proto.LastReadState{},
+	}
+	mockClient2.EXPECT().ReadEntriesBatchAdv(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(0), int64(10), (*proto.LastReadState)(nil)).Return(expectedResult, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 2, Es: 2, Wq: 2, Nodes: []string{"node1", "node2"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "node2", result.LastReadState.Node)
+}
+
+// === GetLastAddConfirmed failover ===
+
+func TestGetLastAddConfirmed_ActiveSegment_ClientError_Failover(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient2 := mocks_logstore_client.NewLogStoreClient(t)
+	// First node: client error
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(nil, errors.New("conn error"))
+	// Second node: success
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node2").Return(mockClient2, nil)
+	mockClient2.EXPECT().GetLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(10), nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 2, Es: 2, Wq: 2, Nodes: []string{"node1", "node2"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	lac, err := sh.GetLastAddConfirmed(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10), lac)
+}
+
+// === GetBlocksCount unsupported quorum ===
+
+func TestGetBlocksCount_ActiveSegment_UnsupportedQuorum(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			// Single node in quorumInfo.Nodes but unsupported config (Wq=2)
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 2, Es: 1, Wq: 2, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := sh.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(0), blocksCount) // returns 0 for unsupported quorum config
+}
+
+func TestGetBlocksCount_ActiveSegment_QuorumInfoError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			QuorumId: 99,  // positive quorum ID so GetQuorumInfo queries metadata
+			Quorum:   nil, // nil quorum so s.quorumInfo is nil
+		},
+		Revision: 1,
+	}
+	// Mock metadata.GetQuorumInfo to return an error
+	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(99)).Return(nil, errors.New("quorum not found"))
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	blocksCount := sh.GetBlocksCount(context.Background())
+	assert.Equal(t, int64(0), blocksCount) // returns 0 when GetQuorumInfo fails
+}
+
+// === syncLACToQuorumAsync context cancellation ===
+
+func TestSyncLACToQuorumAsync_ContextCancelled(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	// Make UpdateLastAddConfirmed block until context is cancelled
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
+	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), int64(5)).
+		RunAndReturn(func(ctx context.Context, _ string, _ string, _ int64, _ int64, _ int64) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	// Cancel context quickly to trigger ctx.Done in the result collection loop
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// syncLACToQuorumAsync runs synchronously in this call — should return without panicking
+	impl.syncLACToQuorumAsync(ctx, 5)
+}
+
+// === doCloseWriting edge cases ===
+
+func TestDoCloseWriting_LastFlushedNegativeOne(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// lastFlushedEntryId == -1 should return nil without updating metadata
+	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), -1)
+	assert.NoError(t, err)
+	assert.False(t, impl.canWriteState.Load())
+}
+
+func TestDoCloseWriting_NonRevisionError(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Active).
+		Return(errors.New("etcd unavailable"))
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), 5)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "etcd unavailable")
+}
+
+func TestDoCloseWriting_CompletedSegment(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Completed, LastEntryId: 10,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// Completed segment state should return nil without updating metadata
+	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), 5)
+	assert.NoError(t, err)
+}
+
+// === ForceCompleteAndClose nil completionMgr ===
+
+func TestForceCompleteAndClose_NilCompletionMgr(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+	impl.completionMgr = nil
+
+	err := sh.ForceCompleteAndClose(context.Background())
+	assert.NoError(t, err) // Returns nil when completionMgr is nil
+}
