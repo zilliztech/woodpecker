@@ -1,6 +1,15 @@
 name: Unit Test
 
 on:
+  push:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/unit-test.yaml"
   pull_request:
     branches:
       - master
@@ -44,7 +53,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Handle failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -53,7 +62,7 @@ jobs:
           gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
 
       - name: Add ci-passed label
-        if: success()
+        if: success() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
