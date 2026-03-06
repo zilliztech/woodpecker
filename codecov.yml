@@ -22,6 +22,33 @@ ignore:
   - "**/*_vtproto.pb.go"
 
 comment:
-  layout: "reach,diff,flags,files"
+  layout: "reach, diff, flags, components, files"
   behavior: default
-  require_changes: true
+  require_changes: false
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+
+  individual_components:
+    - component_id: server
+      name: Server
+      paths:
+        - server/**
+
+    - component_id: client
+      name: Client
+      paths:
+        - woodpecker/**
+
+    - component_id: meta
+      name: Meta
+      paths:
+        - meta/**
+
+    - component_id: common
+      name: Common
+      paths:
+        - common/**
