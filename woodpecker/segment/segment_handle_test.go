@@ -993,7 +993,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
 	mockClient := mocks_logstore_client.NewLogStoreClient(t)
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
-	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(4, nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(4, nil).Maybe()
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil)
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1053,7 +1053,7 @@ func TestSendAppendErrorCallbacks(t *testing.T) {
 		testQueue.PushBack(op)
 	}
 
-	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(4, nil)
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(4, nil).Maybe()
 	// success 3-9, but 0-2 is not finish
 	for i := 0; i < 10; i++ {
 		if i == 5 {
@@ -1342,7 +1342,7 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 }
 
 // TestSegmentHandle_Rolling_AutoCompleteAndClose tests that when segment is marked as rolling
-// and all pending appendOps are completed, the segment automatically calls doCompleteAndCloseUnsafe
+// and all pending appendOps are completed, the segment automatically triggers completion
 func TestSegmentHandle_Rolling_AutoCompleteAndClose(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -1461,7 +1461,7 @@ func TestSegmentHandle_Rolling_CompleteFlow(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(2), nil).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
-	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1567,7 +1567,7 @@ func TestSegmentHandle_Rolling_ErrorTriggersRolling(t *testing.T) {
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
 	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Maybe()
 	mockClient.EXPECT().UpdateLastAddConfirmed(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(nil)
-	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil)
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(2), nil).Maybe()
 
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
@@ -1859,17 +1859,62 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 
 	// Verify rolling state
 	assert.True(t, segmentHandle.IsForceRollingReady(context.Background()))
-	// Should still be writable until ForceCompleteAndClose is called
-	writable, err = segmentHandle.IsWritable(context.Background())
-	assert.NoError(t, err)
-	assert.False(t, writable) // because empty segmentHandle is force closing when SetRollingReady
 
-	// Force complete and close
+	// Force complete and close (waits for async completion triggered by SetRollingReady)
 	err = segmentHandle.ForceCompleteAndClose(context.Background())
 	assert.NoError(t, err)
 
-	// Verify final state
+	// Verify final state: segment should not be writable after completion
 	writable, err = segmentHandle.IsWritable(context.Background())
+	assert.NoError(t, err)
+	assert.False(t, writable)
+}
+
+// TestSegmentHandle_SetRollingReady_EmptyQueueCompletesSynchronously verifies
+// SetRollingReady preserves historical behavior for empty queues: when there
+// are no pending append ops, completion is finished before the method returns.
+func TestSegmentHandle_SetRollingReady_EmptyQueueCompletesSynchronously(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(int64(0), nil).Once()
+	mockClient.EXPECT().CompleteSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1), mock.Anything).Return(int64(0), nil).Once()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+		},
+	}
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Active,
+			LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+
+	segmentHandle.SetRollingReady(context.Background())
+
+	writable, err := segmentHandle.IsWritable(context.Background())
 	assert.NoError(t, err)
 	assert.False(t, writable)
 }
