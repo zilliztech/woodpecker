@@ -163,8 +163,8 @@ func NewStagedFileReaderAdv(ctx context.Context, bucket string, rootPath string,
 		reader.closed.Store(true)
 		logger.Ctx(ctx).Warn("failed to parse footer and indexes",
 			zap.String("filePath", filePath),
-			zap.Error(err))
-		return nil, fmt.Errorf("try parse footer and indexes: %w", err)
+			zap.Error(parseFooterErr))
+		return nil, fmt.Errorf("try parse footer and indexes: %w", parseFooterErr)
 	}
 
 	metrics.WpFileReaders.WithLabelValues(metrics.NodeID, reader.nsStr, reader.logIdStr).Inc()

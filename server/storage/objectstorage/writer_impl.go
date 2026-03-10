@@ -778,7 +778,11 @@ func (f *MinioFileWriter) GetLastEntryId(ctx context.Context) int64 {
 }
 
 func (f *MinioFileWriter) GetBlockCount(ctx context.Context) int64 {
-	return f.lastSubmittedUploadingBlockID.Load()
+	lastID := f.lastSubmittedUploadingBlockID.Load()
+	if lastID < 0 {
+		return 0
+	}
+	return lastID + 1
 }
 
 func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
@@ -1516,7 +1520,11 @@ func (f *MinioFileWriter) waitIfSegmentLockedWhenConditionWriteDisabled(ctx cont
 	}
 	if isLocked {
 		logger.Ctx(ctx).Info("segment is locked which means other process is quit unexpectedly, wait for a while", zap.String("segmentFileKey", f.segmentFileKey))
-		time.Sleep(time.Second * 30)
+		select {
+		case <-time.After(time.Second * 30):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }

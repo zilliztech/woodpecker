@@ -144,7 +144,9 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 	buffer := NewSequentialBufferWithData(1, 0, 1, 5, data, "")
 	assert.NotNil(t, buffer)
 	assert.Equal(t, int64(1), buffer.FirstEntryId)
-	assert.Equal(t, int64(1), buffer.ExpectedNextEntryId.Load())
+	assert.Equal(t, int64(6), buffer.ExpectedNextEntryId.Load()) // 5 contiguous entries from startEntryId=1
+	assert.Equal(t, int64(25), buffer.DataSize.Load())           // 5 * len("dataX") = 25
+	assert.Equal(t, int64(25), buffer.SequentialReadyDataSize.Load())
 	assert.Len(t, buffer.Entries, 5)
 	// Check that data is properly converted to BufferEntry format
 	for i, expectedData := range data {
@@ -164,7 +166,9 @@ func TestNewSequentialBufferWithData(t *testing.T) {
 	buffer2 := NewSequentialBufferWithData(1, 0, 2, 5, data2, "")
 	assert.NotNil(t, buffer2)
 	assert.Equal(t, int64(2), buffer2.FirstEntryId)
-	assert.Equal(t, int64(2), buffer2.ExpectedNextEntryId.Load())
+	assert.Equal(t, int64(2), buffer2.ExpectedNextEntryId.Load()) // first entry is nil, so no contiguous sequence
+	assert.Equal(t, int64(10), buffer2.DataSize.Load())           // "data3" + "data5" = 10
+	assert.Equal(t, int64(0), buffer2.SequentialReadyDataSize.Load())
 	assert.Len(t, buffer2.Entries, 5)
 	// Check entries
 	assert.Nil(t, buffer2.Entries[0])

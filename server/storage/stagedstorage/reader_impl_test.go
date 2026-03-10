@@ -20,6 +20,7 @@ package stagedstorage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -1656,8 +1657,11 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_WithLastReadState(t *testing.T) {
 		MaxBatchEntries: 100,
 	}
 	result2, err := reader.ReadNextBatchAdv(ctx, opt2, result.LastReadState)
-	// Either returns data or error (depends on last block info)
-	if err == nil {
+	if err != nil {
+		// Expected errors: EOF (all data read) or EntryNotFound (waiting for data)
+		assert.True(t, errors.Is(err, werr.ErrFileReaderEndOfFile) || errors.Is(err, werr.ErrEntryNotFound),
+			"unexpected error: %v", err)
+	} else {
 		assert.NotNil(t, result2)
 	}
 }
@@ -1800,8 +1804,10 @@ func TestStagedFileReaderAdv_ReadNextBatchAdv_CompactedWithLastReadState(t *test
 	if result.LastReadState != nil {
 		opt2 := storage.ReaderOpt{StartEntryID: 5, MaxBatchEntries: 10}
 		result2, err := reader.ReadNextBatchAdv(ctx, opt2, result.LastReadState)
-		// Compacted reads use pool-based reading
-		if err == nil {
+		if err != nil {
+			assert.True(t, errors.Is(err, werr.ErrFileReaderEndOfFile) || errors.Is(err, werr.ErrEntryNotFound),
+				"unexpected error: %v", err)
+		} else {
 			assert.NotNil(t, result2)
 		}
 	}

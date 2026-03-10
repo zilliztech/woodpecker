@@ -470,7 +470,7 @@ func TestLocalFileReader_GetLastEntryID_NoFooterNoBlocks(t *testing.T) {
 	lastId, err := reader.GetLastEntryID(context.Background())
 	if err != nil {
 		// No footer and possibly no complete blocks
-		assert.True(t, werr.ErrFileReaderNoBlockFound.Is(err) || err != nil)
+		assert.True(t, werr.ErrFileReaderNoBlockFound.Is(err), "unexpected error: %v", err)
 	} else {
 		assert.GreaterOrEqual(t, lastId, int64(0))
 	}

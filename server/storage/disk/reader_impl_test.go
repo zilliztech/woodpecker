@@ -130,40 +130,6 @@ func TestLocalFileReaderAdv_ReadDataBlocks_PermissionError_ShouldReturnEntryNotF
 	t.Logf("Permission error correctly returns EntryNotFound")
 }
 
-func TestLocalFileReaderAdv_ReadDataBlocks_CompletedFileNoError_ShouldReturnEOF(t *testing.T) {
-	t.Skipf("mock real data read")
-	// Test: Normal completed file with no errors → should return EOF
-	ctx := context.Background()
-
-	// Create a temporary empty file structure
-	baseDir, _ := createTempFileWithContent(t, []byte{})
-	defer os.RemoveAll(baseDir)
-
-	// Create reader
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 4*1024*1024)
-	require.NoError(t, err)
-	defer reader.Close(ctx)
-
-	// Set as completed file (has footer)
-	reader.footer = &codec.FooterRecord{}
-	reader.isIncompleteFile.Store(false)
-	reader.blockIndexes = []*codec.IndexRecord{} // No blocks
-
-	opt := storage.ReaderOpt{
-		StartEntryID:    0,
-		MaxBatchEntries: 10,
-	}
-
-	// TODO mock no error exists when read data blocks
-	batch, err := reader.readDataBlocksUnsafe(ctx, opt, 0, 0)
-
-	// Should return EOF because file is completed and no read errors occurred
-	assert.Nil(t, batch)
-	assert.True(t, errors.Is(err, werr.ErrFileReaderEndOfFile))
-
-	t.Logf("Completed file without errors correctly returns EOF")
-}
-
 func TestLocalFileReaderAdv_ReadDataBlocks_IncompleteFileNoError_ShouldReturnEntryNotFound(t *testing.T) {
 	// Test: Incomplete file with no errors → should return EntryNotFound
 	ctx := context.Background()
@@ -439,17 +405,11 @@ func TestLocalFileReaderAdv_TryParseFooter_ReadAtFails(t *testing.T) {
 	baseDir, _ := createTempFileWithContent(t, content)
 	defer os.RemoveAll(baseDir)
 
-	reader, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
-	// This may fail or succeed depending on whether readAt with offset < 0 returns err
-	// In our code, negative offset → "invalid read parameters" error
-	// So tryParseFooterAndIndexesIfExists should return ErrEntryNotFound
-	if err != nil {
-		assert.Contains(t, err.Error(), "try parse footer")
-	} else {
-		defer reader.Close(ctx)
-		// If it didn't fail at init, the footer read error path was still exercised
-		assert.True(t, reader.isIncompleteFile.Load())
-	}
+	_, err := NewLocalFileReaderAdv(ctx, baseDir, 1, 1, 100)
+	// File is exactly minFooterSize (45 bytes) but maxFooterSize is 53 bytes,
+	// so readAt offset = 45-53 = -8, which fails → returns "try parse footer" error
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "try parse footer")
 }
 
 func TestLocalFileReaderAdv_TryParseFooter_StatError(t *testing.T) {
@@ -667,11 +627,11 @@ func TestLocalFileReaderAdv_GetLastEntryID_IncompleteFileWithBlocks(t *testing.T
 	assert.True(t, reader.isIncompleteFile.Load())
 
 	lastId, err := reader.GetLastEntryID(ctx)
-	if err == nil {
-		assert.GreaterOrEqual(t, lastId, int64(0))
-	} else {
+	if err != nil {
 		// May fail if blocks aren't fully flushed
-		assert.True(t, werr.ErrFileReaderNoBlockFound.Is(err))
+		assert.True(t, werr.ErrFileReaderNoBlockFound.Is(err), "unexpected error: %v", err)
+	} else {
+		assert.GreaterOrEqual(t, lastId, int64(0))
 	}
 }
 

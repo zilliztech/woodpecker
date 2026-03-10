@@ -138,7 +138,7 @@ func (l *logStore) Stop() error {
 	for logKey, processors := range l.segmentProcessors {
 		for segmentId, processor := range processors {
 			totalProcessors += 1
-			l.closeSegmentProcessorUnsafe(shutdownCtx, logKey, segmentId, processor)
+			l.closeSegmentProcessor(shutdownCtx, logKey, segmentId, processor)
 		}
 	}
 
@@ -503,9 +503,9 @@ func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string
 	return err
 }
 
-// closeSegmentProcessorUnsafe closes a segment processor and updates metrics
-// This method should be called while holding the spMu lock
-func (l *logStore) closeSegmentProcessorUnsafe(ctx context.Context, logKey string, segmentId int64, processor processor.SegmentProcessor) {
+// closeSegmentProcessor closes a segment processor and updates metrics
+// This method does not require any lock to be held
+func (l *logStore) closeSegmentProcessor(ctx context.Context, logKey string, segmentId int64, processor processor.SegmentProcessor) {
 	ns := logKey[:strings.LastIndex(logKey, "/")]
 
 	logger.Ctx(ctx).Info("Closing segment processor",
@@ -630,7 +630,7 @@ func (l *logStore) RemoveSegmentProcessor(ctx context.Context, bucketName string
 	if processors, logExists := l.segmentProcessors[logKey]; logExists {
 		if processor, segExists := processors[segmentId]; segExists {
 			// Close the processor
-			l.closeSegmentProcessorUnsafe(ctx, logKey, segmentId, processor)
+			l.closeSegmentProcessor(ctx, logKey, segmentId, processor)
 
 			// Remove from maps
 			delete(processors, segmentId)
@@ -718,7 +718,7 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 
 	// Phase 2: Close processors outside the lock to avoid blocking I/O under lock
 	for _, item := range idleProcessors {
-		l.closeSegmentProcessorUnsafe(l.ctx, item.logKey, item.segmentId, item.processor)
+		l.closeSegmentProcessor(l.ctx, item.logKey, item.segmentId, item.processor)
 
 		logger.Ctx(l.ctx).Info("cleaned up idle segment processor",
 			zap.String("logKey", item.logKey),

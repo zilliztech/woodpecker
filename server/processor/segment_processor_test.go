@@ -457,9 +457,10 @@ func TestSegmentProcessor_Close_ReaderCloseError(t *testing.T) {
 	sp.currentSegmentWriter = mockWriter
 	sp.currentSegmentReader = mockReader
 
-	// Writer succeeded, so Close returns nil (only writerErr is returned)
+	// Writer succeeded but reader failed, Close now returns reader error
 	err := sp.Close(context.Background())
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reader close err")
 }
 
 // === getSegmentWriter Tests ===

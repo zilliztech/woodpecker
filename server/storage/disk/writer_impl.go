@@ -599,7 +599,9 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 	}
 
 	// Lock to protect blockIndexes from concurrent access
+	w.mu.Lock()
 	w.blockIndexes = append(w.blockIndexes, indexRecord)
+	w.mu.Unlock()
 
 	// Update entry tracking
 	if w.firstEntryID.Load() == -1 {

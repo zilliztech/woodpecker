@@ -215,14 +215,14 @@ func TestMinioFileWriter_GetBlockCount(t *testing.T) {
 	ctx := context.Background()
 	w := newTestMinioFileWriter()
 
-	// Initially -1 (lastSubmittedUploadingBlockID)
-	assert.Equal(t, int64(-1), w.GetBlockCount(ctx))
-
-	w.lastSubmittedUploadingBlockID.Store(0)
+	// Initially -1 (no blocks submitted), count should be 0
 	assert.Equal(t, int64(0), w.GetBlockCount(ctx))
 
+	w.lastSubmittedUploadingBlockID.Store(0)
+	assert.Equal(t, int64(1), w.GetBlockCount(ctx)) // block ID 0 = 1 block
+
 	w.lastSubmittedUploadingBlockID.Store(5)
-	assert.Equal(t, int64(5), w.GetBlockCount(ctx))
+	assert.Equal(t, int64(6), w.GetBlockCount(ctx)) // block IDs 0-5 = 6 blocks
 }
 
 func TestMinioFileWriter_IsFenced(t *testing.T) {

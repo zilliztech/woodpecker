@@ -96,11 +96,20 @@ func (m *mockFileReader) Size() (int64, error) {
 	return int64(len(m.data)), nil
 }
 
-// createMockCompactedFooterData creates a simple mock footer data that indicates compaction
+// createMockCompactedFooterData creates valid encoded footer data with compaction flag set
 func createMockCompactedFooterData() []byte {
-	// Create a simple mock that will be parsed as a compacted footer
-	// This is a simplified mock - just return some data that will trigger compaction detection
-	return []byte("mock-compacted-footer-data")
+	footer := &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 1,
+		TotalSize:    1024,
+		IndexOffset:  0,
+		IndexLength:  0,
+		Version:      codec.FormatVersion,
+		Flags:        codec.SetCompacted(0),
+		LAC:          10,
+	}
+	record := codec.Record(footer)
+	return codec.EncodeRecord(record)
 }
 
 func TestMinioFileReaderAdv_readDataBlocks_NoError_EOF_CompletedFile(t *testing.T) {
@@ -1534,7 +1543,12 @@ func TestMinioFileReaderAdv_ReadNextBatchAdv_WithLastReadState(t *testing.T) {
 	}
 
 	batch, err := reader.ReadNextBatchAdv(ctx, opt, lastState)
-	if err == nil {
+	// With mock data the second read may return EOF or data; either is valid,
+	// but an unexpected error type should fail
+	if err != nil {
+		assert.True(t, errors.Is(err, werr.ErrFileReaderEndOfFile) || errors.Is(err, werr.ErrEntryNotFound),
+			"unexpected error: %v", err)
+	} else {
 		assert.NotNil(t, batch)
 		assert.GreaterOrEqual(t, len(batch.Entries), 1)
 	}
