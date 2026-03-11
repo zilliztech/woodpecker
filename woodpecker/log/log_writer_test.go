@@ -327,6 +327,22 @@ func TestInternalLogWriter_Close_SegmentNotFoundIgnored(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestInternalLogWriter_Close_MetadataRevisionInvalidIgnored(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+
+	// ErrMetadataRevisionInvalid should be silently ignored during close (fenced writer)
+	mockLogHandle.On("CompleteAllActiveSegmentIfExists", mock.Anything).Return(werr.ErrMetadataRevisionInvalid)
+	mockLogHandle.On("Close", mock.Anything).Return(nil)
+
+	err := w.Close(context.Background())
+	assert.NoError(t, err)
+}
+
 func TestInternalLogWriter_Close_Idempotent(t *testing.T) {
 	mockLogHandle := &testLogHandleMock{}
 	mockLogHandle.Test(t)
@@ -925,6 +941,25 @@ func TestLogWriter_Close_ProcessorNoWriterIgnored(t *testing.T) {
 	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)
 
 	mockLogHandle.On("CompleteAllActiveSegmentIfExists", mock.Anything).Return(werr.ErrSegmentProcessorNoWriter)
+	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
+	mockMetadata.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
+	mockLogHandle.On("Close", mock.Anything).Return(nil)
+
+	err := w.Close(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestLogWriter_Close_MetadataRevisionInvalidIgnored(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	sessionLock := meta.NewSessionLockForTest(nil)
+	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)
+
+	mockLogHandle.On("CompleteAllActiveSegmentIfExists", mock.Anything).Return(werr.ErrMetadataRevisionInvalid)
 	mockLogHandle.On("GetMetadataProvider").Return(mockMetadata).Maybe()
 	mockMetadata.EXPECT().ReleaseLogWriterLock(mock.Anything, "test-log").Return(nil)
 	mockLogHandle.On("Close", mock.Anything).Return(nil)

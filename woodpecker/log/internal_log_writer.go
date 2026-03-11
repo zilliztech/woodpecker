@@ -552,7 +552,7 @@ func (l *internalLogWriterImpl) Close(ctx context.Context) error {
 		if closeErr != nil {
 			logger.Ctx(ctx).Warn("close log writer failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Error(closeErr))
 			status = "error"
-			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) {
+			if werr.ErrSegmentNotFound.Is(closeErr) || werr.ErrSegmentProcessorNoWriter.Is(closeErr) || werr.ErrMetadataRevisionInvalid.Is(closeErr) {
 				closeErr = nil
 				status = "success"
 			}
