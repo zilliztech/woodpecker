@@ -478,12 +478,6 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		return
 	}
 
-	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer fenced", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
-		w.notifyFlushError(task.entries, werr.ErrSegmentFenced)
-		return
-	}
-
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
 		w.notifyFlushError(task.entries, werr.ErrFileWriterFinalized)
@@ -643,6 +637,11 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
 	logger.Ctx(ctx).Info("awaiting completion of all block flush tasks", zap.String("segmentFilePath", f.segmentFilePath))
 
+	// Fast return if already completed (idempotent for retry)
+	if f.allUploadingTaskDone.Load() {
+		return nil
+	}
+
 	// Now wait for the ack goroutine to process all completed tasks
 	// This ensures that blockIndexes are properly populated
 	logger.Ctx(ctx).Info("waiting for ack goroutine to process completed tasks", zap.String("segmentFilePath", f.segmentFilePath))
@@ -735,6 +734,11 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	if w.inRecoveryMode.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
 		return entryId, werr.ErrFileWriterInRecoveryMode
+	}
+
+	if w.fenced.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrSegmentFenced
 	}
 
 	// Validate empty payload
@@ -995,23 +999,28 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (int64, error) {
 	defer sp.End()
 	startTime := time.Now()
 
-	// If already fenced, return idempotently
-	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("StagedFileWriter already fenced, returning idempotently",
-			zap.String("segmentFile", w.segmentFilePath))
+	// Mark as fenced first to reject new AppendAsync calls (idempotent)
+	w.fenced.Store(true)
+
+	// If flush goroutine already terminated, all data is persisted, fast return
+	if w.allUploadingTaskDone.Load() {
 		return w.GetLastEntryId(ctx), nil
 	}
 
-	// Sync all pending data first
+	// Sync remaining buffer data to flush channel.
+	// processFlushTask does not check fenced, so the task will be processed correctly.
 	if err := w.Sync(ctx); err != nil {
 		return w.GetLastEntryId(ctx), err
 	}
 
-	// Mark as fenced and stop accepting writes
-	w.fenced.Store(true)
+	// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
+	// This also terminates the flush goroutine since no more writes are expected after fence.
+	if err := w.awaitAllFlushTasks(ctx); err != nil {
+		return w.GetLastEntryId(ctx), err
+	}
 
 	lastEntryId := w.GetLastEntryId(ctx)
-	logger.Ctx(ctx).Info("Successfully created fence flag file and marked StagedFileWriter as fenced",
+	logger.Ctx(ctx).Info("Successfully marked StagedFileWriter as fenced",
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
