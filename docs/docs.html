@@ -1,0 +1,1810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation - Woodpecker</title>
+    <link rel="icon" href="images/icon.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        /* ─── DARK THEME (used when html.dark) ─── */
+        :root {
+            --bg-deep: #ffffff;
+            --bg-surface: #f8fafc;
+            --bg-card: #f1f5f9;
+            --bg-card-hover: #e2e8f0;
+            --border: #e2e8f0;
+            --border-light: #cbd5e1;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent: #0891b2;
+            --accent-green: #059669;
+            --accent-purple: #7c3aed;
+            --accent-orange: #ea580c;
+            --accent-rose: #e11d48;
+            --sidebar-width: 280px;
+            --nav-bg: rgba(255,255,255,0.82);
+            --code-bg: #f8fafc;
+            --code-text: #334155;
+        }
+        html.dark {
+            --bg-deep: #06090f;
+            --bg-surface: #0c1018;
+            --bg-card: #111827;
+            --bg-card-hover: #1a2332;
+            --border: #1e293b;
+            --border-light: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #22d3ee;
+            --accent-green: #34d399;
+            --accent-purple: #a78bfa;
+            --accent-orange: #fb923c;
+            --accent-rose: #fb7185;
+            --nav-bg: rgba(6,9,15,0.8);
+            --code-bg: #111827;
+            --code-text: #94a3b8;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            -webkit-font-smoothing: antialiased;
+        }
+        code, .mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* ─── TOP NAV ─── */
+        .doc-nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            height: 56px;
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            background: var(--nav-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center;
+            padding: 0 24px;
+        }
+        .doc-nav-brand {
+            display: flex; align-items: center; gap: 10px;
+            text-decoration: none; color: var(--text-primary);
+            width: var(--sidebar-width);
+        }
+        .doc-nav-brand img { height: 48px; }
+        html.dark .doc-nav-brand img { filter: invert(1) hue-rotate(180deg) brightness(0.75); }
+        .doc-nav-brand .tag {
+            font-size: 8px; font-weight: 600; letter-spacing: 0.06em;
+            color: var(--accent); border: 1px solid rgba(34,211,238,0.3);
+            padding: 1px 4px; border-radius: 2px; text-transform: uppercase;
+        }
+        .doc-nav-right {
+            display: flex; align-items: center; gap: 20px;
+            margin-left: auto;
+        }
+        .doc-nav-right a {
+            color: var(--text-secondary); text-decoration: none;
+            font-size: 13px; font-weight: 500; transition: color 0.2s;
+        }
+        .doc-nav-right a:hover { color: var(--text-primary); }
+        .doc-nav-search { display: none; }
+        }
+        .mobile-menu-btn {
+            display: none; background: none; border: none;
+            color: var(--text-secondary); cursor: pointer; padding: 4px;
+        }
+
+        /* ─── SIDEBAR ─── */
+        .doc-sidebar {
+            position: fixed; top: 56px; left: 0; bottom: 0;
+            width: var(--sidebar-width);
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 24px 0;
+            z-index: 50;
+            transition: transform 0.3s;
+        }
+        .doc-sidebar::-webkit-scrollbar { width: 4px; }
+        .doc-sidebar::-webkit-scrollbar-track { background: transparent; }
+        .doc-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .sidebar-section {
+            padding: 0 16px; margin-bottom: 8px;
+        }
+        .sidebar-heading {
+            font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+            text-transform: uppercase; color: var(--text-muted);
+            padding: 8px 12px; margin-bottom: 2px;
+        }
+        .sidebar-link {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 12px; border-radius: 8px;
+            font-size: 14px; color: var(--text-secondary);
+            text-decoration: none; transition: all 0.15s;
+            cursor: pointer;
+            border: none; background: none; width: 100%;
+            font-family: inherit; text-align: left;
+        }
+        .sidebar-link:hover {
+            background: var(--bg-card); color: var(--text-primary);
+        }
+        .sidebar-link.active {
+            background: rgba(34,211,238,0.08);
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .sidebar-link.active::before {
+            content: '';
+            position: absolute; left: 0;
+            width: 3px; height: 20px;
+            background: var(--accent);
+            border-radius: 0 2px 2px 0;
+        }
+        .sidebar-link svg {
+            width: 16px; height: 16px; flex-shrink: 0;
+            opacity: 0.5;
+        }
+        .sidebar-link.active svg { opacity: 1; }
+
+        .sidebar-sub { padding-left: 20px; }
+        .sidebar-sub .sidebar-link {
+            font-size: 13px; padding: 6px 12px;
+            position: relative;
+        }
+        .sidebar-sub .sidebar-link::before {
+            content: ''; position: absolute; left: 0; top: 50%;
+            width: 12px; height: 1px; background: var(--border);
+        }
+        .sidebar-divider {
+            height: 1px; background: var(--border);
+            margin: 12px 16px;
+        }
+
+        /* ─── MAIN CONTENT ─── */
+        .doc-main {
+            margin-left: var(--sidebar-width);
+            padding: 56px 0 0;
+            min-height: 100vh;
+        }
+        .doc-content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 48px 48px 120px;
+        }
+
+        /* ─── DOC PAGE SECTIONS ─── */
+        .doc-page { display: none; }
+        .doc-page.active { display: block; }
+
+        .doc-page h1 {
+            font-size: 36px; font-weight: 700; letter-spacing: -0.03em;
+            margin-bottom: 8px; line-height: 1.2;
+        }
+        .doc-page .page-desc {
+            font-size: 17px; color: var(--text-secondary);
+            line-height: 1.6; margin-bottom: 40px;
+            padding-bottom: 32px; border-bottom: 1px solid var(--border);
+        }
+        .doc-page h2 {
+            font-size: 24px; font-weight: 600; letter-spacing: -0.02em;
+            margin: 48px 0 16px;
+            padding-top: 24px;
+        }
+        .doc-page h2:first-of-type { margin-top: 0; }
+        .doc-page h3 {
+            font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
+            margin: 32px 0 12px;
+        }
+        .doc-page p {
+            font-size: 15px; color: var(--text-secondary);
+            line-height: 1.8; margin-bottom: 16px;
+        }
+        .doc-page ul, .doc-page ol {
+            margin: 0 0 20px 20px;
+            color: var(--text-secondary); font-size: 15px; line-height: 1.8;
+        }
+        .doc-page li { margin-bottom: 6px; }
+        .doc-page li strong { color: var(--text-primary); }
+        .doc-page a { color: var(--accent); text-decoration: none; }
+        .doc-page a:hover { text-decoration: underline; }
+
+        /* code blocks */
+        .code-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px; margin: 20px 0 24px;
+            overflow: hidden;
+        }
+        .code-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px; color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .code-copy {
+            background: none; border: 1px solid var(--border);
+            color: var(--text-muted); font-size: 11px; padding: 3px 10px;
+            border-radius: 4px; cursor: pointer; font-family: inherit;
+            transition: all 0.2s;
+        }
+        .code-copy:hover { border-color: var(--border-light); color: var(--text-secondary); }
+        .code-body {
+            padding: 20px; overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; line-height: 1.7; color: var(--text-secondary);
+        }
+        .code-body pre { margin: 0; }
+        .hl-kw { color: var(--accent-purple); }
+        .hl-fn { color: var(--accent); }
+        .hl-str { color: var(--accent-green); }
+        .hl-cm { color: var(--text-muted); font-style: italic; }
+        .hl-type { color: var(--accent-orange); }
+        .hl-num { color: var(--accent-rose); }
+
+        /* inline code */
+        .doc-page code:not(pre code) {
+            background: var(--bg-card); border: 1px solid var(--border);
+            padding: 2px 7px; border-radius: 5px;
+            font-size: 13px; color: var(--accent);
+        }
+
+        /* tables */
+        .doc-table {
+            width: 100%; border-collapse: collapse;
+            margin: 20px 0 24px;
+            font-size: 14px;
+        }
+        .doc-table th {
+            text-align: left; padding: 12px 16px;
+            background: var(--bg-card); color: var(--text-muted);
+            font-weight: 600; font-size: 12px;
+            text-transform: uppercase; letter-spacing: 0.06em;
+            border-bottom: 1px solid var(--border);
+        }
+        .doc-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        .doc-table td:first-child {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; color: var(--accent);
+        }
+        .doc-table tr:last-child td { border-bottom: none; }
+        .doc-table tr:hover td { background: rgba(17,24,39,0.5); }
+
+        /* callout boxes */
+        .callout {
+            padding: 16px 20px; border-radius: 10px;
+            margin: 20px 0; font-size: 14px; line-height: 1.6;
+            display: flex; gap: 12px; align-items: flex-start;
+        }
+        .callout-icon { flex-shrink: 0; margin-top: 2px; }
+        .callout.info {
+            background: rgba(34,211,238,0.06);
+            border: 1px solid rgba(34,211,238,0.15);
+            color: var(--text-secondary);
+        }
+        .callout.warning {
+            background: rgba(251,146,60,0.06);
+            border: 1px solid rgba(251,146,60,0.15);
+            color: var(--text-secondary);
+        }
+        .callout.tip {
+            background: rgba(52,211,153,0.06);
+            border: 1px solid rgba(52,211,153,0.15);
+            color: var(--text-secondary);
+        }
+
+        /* ─── RESPONSIVE ─── */
+        @media (max-width: 960px) {
+            .mobile-menu-btn { display: block; }
+            .doc-sidebar {
+                transform: translateX(-100%);
+            }
+            .doc-sidebar.open { transform: translateX(0); }
+            .doc-main { margin-left: 0; }
+            .doc-content { padding: 32px 24px 120px; }
+        }
+
+        /* ─── PREV/NEXT NAV ─── */
+        .doc-pagination {
+            display: flex; gap: 16px; margin-top: 64px;
+            padding-top: 32px; border-top: 1px solid var(--border);
+        }
+        .doc-pagination a {
+            flex: 1; display: block;
+            padding: 20px; border-radius: 12px;
+            border: 1px solid var(--border);
+            text-decoration: none;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .doc-pagination a:hover {
+            border-color: var(--border-light);
+            background: var(--bg-card);
+        }
+        .doc-pagination .pg-label {
+            font-size: 12px; color: var(--text-muted);
+            margin-bottom: 4px; text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .doc-pagination .pg-title {
+            font-size: 15px; font-weight: 600; color: var(--text-primary);
+        }
+        .doc-pagination .pg-next { text-align: right; }
+
+        /* ─── THEME TOGGLE ─── */
+        .theme-toggle {
+            width: 34px; height: 34px; border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer; display: flex;
+            align-items: center; justify-content: center;
+            transition: border-color 0.2s, background 0.2s;
+            flex-shrink: 0;
+        }
+        .theme-toggle:hover {
+            border-color: var(--border-light);
+            color: var(--text-primary);
+        }
+        /* Light theme (default): show sun, hide moon */
+        .theme-toggle .icon-sun { display: block; }
+        .theme-toggle .icon-moon { display: none; }
+        html.dark .theme-toggle .icon-sun { display: none; }
+        html.dark .theme-toggle .icon-moon { display: block; }
+
+        /* ─── DARK MODE CODE OVERRIDES ─── */
+        html.dark .hl-kw { color: #a78bfa; }
+        html.dark .hl-fn { color: #22d3ee; }
+        html.dark .hl-str { color: #34d399; }
+        html.dark .hl-cm { color: #64748b; }
+        html.dark .hl-type { color: #fb923c; }
+        html.dark .hl-num { color: #fb7185; }
+
+        /* ─── LIGHT MODE CODE COLORS ─── */
+        .hl-kw { color: #7c3aed; }
+        .hl-fn { color: #0891b2; }
+        .hl-str { color: #059669; }
+        .hl-cm { color: #94a3b8; }
+        .hl-type { color: #ea580c; }
+        .hl-num { color: #e11d48; }
+
+        /* light mode inline code */
+        .doc-page code:not(pre code) {
+            background: var(--bg-card); border: 1px solid var(--border);
+        }
+
+        /* light sidebar active indicator color */
+        .sidebar-link.active { position: relative; }
+        html.dark .sidebar-link.active { color: #22d3ee; background: rgba(34,211,238,0.08); }
+
+        /* ─── ARCHITECTURE DIAGRAMS (isometric SVG) ─── */
+        .arch-diagram-wrap {
+            margin: 24px 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px 16px;
+            display: flex; justify-content: center;
+            position: relative; overflow: hidden;
+        }
+        .arch-diagram-wrap::before {
+            content: ''; position: absolute; inset: 0;
+            background: radial-gradient(ellipse at 50% 30%, rgba(34,211,238,0.03) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .arch-diagram-wrap svg { max-width: 100%; height: auto; }
+        .arch-diagram-wrap svg text { font-family: 'DM Sans', sans-serif; }
+        /* animated flow lines */
+        @keyframes archFlow { 0% { stroke-dashoffset: 16; } 100% { stroke-dashoffset: 0; } }
+        .arch-flow { stroke-dasharray: 8 8; animation: archFlow 1.2s linear infinite; }
+
+        /* ─── DOC TABS (for Quick Start mode switch) ─── */
+        .doc-tabs {
+            display: flex; gap: 4px; margin: 24px 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px; padding: 4px;
+            width: fit-content;
+        }
+        .doc-tab {
+            padding: 8px 20px; border-radius: 7px;
+            font-size: 14px; font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer; transition: all 0.2s;
+            border: none; background: transparent;
+            font-family: inherit;
+        }
+        .doc-tab.active {
+            background: var(--accent);
+            color: #0f172a;
+            font-weight: 600;
+        }
+        html.dark .doc-tab.active { color: #06090f; }
+        .doc-tab:hover:not(.active) { color: var(--text-primary); }
+        .doc-tab-panel { display: none; }
+        .doc-tab-panel.active { display: block; }
+    </style>
+</head>
+<body>
+
+<!-- ─── TOP NAV ─── -->
+<header class="doc-nav">
+    <a href="index.html" class="doc-nav-brand">
+        <img src="images/logo.png" alt="Woodpecker">
+        <span class="tag">Docs</span>
+    </a>
+    <div class="doc-nav-right">
+        <a href="index.html">Home</a>
+        <a href="https://github.com/zilliztech/woodpecker" target="_blank">GitHub</a>
+        <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+            <svg class="icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            <svg class="icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        </button>
+    </div>
+</header>
+
+<!-- ─── SIDEBAR ─── -->
+<aside class="doc-sidebar" id="sidebar">
+    <div class="sidebar-section">
+        <div class="sidebar-heading">Getting Started</div>
+        <a class="sidebar-link active" href="#" onclick="showPage('overview',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            Overview
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('quickstart',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Quick Start
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('configuration',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Configuration
+        </a>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section">
+        <div class="sidebar-heading">Architecture</div>
+        <a class="sidebar-link" href="#" onclick="showPage('architecture',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            System Architecture
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('quorum',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Quorum Protocol
+        </a>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section">
+        <div class="sidebar-heading">Storage Backends</div>
+        <a class="sidebar-link" href="#" onclick="showPage('object-storage',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Object Storage
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('local-storage',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            Local File System
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('staged-storage',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            Staged Storage
+        </a>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section">
+        <div class="sidebar-heading">Advanced</div>
+        <a class="sidebar-link" href="#" onclick="showPage('condition-write',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Condition Write & Fence
+        </a>
+        <a class="sidebar-link" href="#" onclick="showPage('monitoring',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Monitoring & Metrics
+        </a>
+    </div>
+</aside>
+
+<!-- ─── MAIN CONTENT ─── -->
+<main class="doc-main">
+    <div class="doc-content">
+
+        <!-- ═══════ OVERVIEW ═══════ -->
+        <div class="doc-page active" id="page-overview">
+            <h1>Welcome to Woodpecker</h1>
+            <p class="page-desc">A cloud-native Write-Ahead Log storage engine that leverages object storage for low-cost, high-throughput, and reliable logging.</p>
+
+            <h2>What is Woodpecker?</h2>
+            <p><strong>Woodpecker</strong> is a cloud-native WAL (Write-Ahead Log) storage implementation designed to fully utilize cloud-native infrastructure for scalability and durability. Unlike traditional on-premises WAL solutions or custom-built distributed logging systems, Woodpecker uses cloud object storage as its durable storage layer.</p>
+
+            <div class="callout info">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+                <span>Woodpecker is currently under active development. Initially built for <a href="https://milvus.io/">Milvus</a> vector database and <a href="https://zilliz.com/">Zilliz Cloud</a>, with broad applicability across cloud workloads.</span>
+            </div>
+
+            <h2>Key Features</h2>
+            <ul>
+                <li><strong>Cloud-Native WAL</strong> &mdash; Uses cloud object storage (S3, GCS, Azure, OSS) as the durable layer for scalability and cost-effectiveness</li>
+                <li><strong>High-Throughput Writes</strong> &mdash; Optimized write strategies achieving 60-80% of maximum backend throughput</li>
+                <li><strong>Efficient Log Reads</strong> &mdash; Memory management and prefetching strategies for optimized sequential access</li>
+                <li><strong>Ordered Durability</strong> &mdash; Strict sequential ordering guarantees for log persistence</li>
+                <li><strong>Flexible Deployment</strong> &mdash; Standalone service mode or embedded library mode</li>
+                <li><strong>Multi-Cloud Support</strong> &mdash; AWS, GCP, Azure, Aliyun, Tencent Cloud, MinIO</li>
+                <li><strong>Innovative Quorum Protocol</strong> &mdash; Configurable ensemble/write/ack quorum with AZ-aware placement</li>
+                <li><strong>Condition Write Fence</strong> &mdash; Prevents split-brain with built-in fence mechanism</li>
+            </ul>
+
+            <h2>Core Components</h2>
+            <table class="doc-table">
+                <tr><th>Component</th><th>Description</th></tr>
+                <tr><td>Client</td><td>Read/write protocol layer for interacting with Woodpecker</td></tr>
+                <tr><td>EmbeddedClient</td><td>Client with built-in LogStore for embedded deployments</td></tr>
+                <tr><td>LogStore</td><td>Handles high-speed log writes, batching, and cloud storage uploads</td></tr>
+                <tr><td>ObjectStorage</td><td>Cloud object storage backend (S3, GCS, OSS, etc.)</td></tr>
+                <tr><td>MetadataProvider</td><td>etcd-backed metadata and coordination service</td></tr>
+                <tr><td>QuorumDiscovery</td><td>Quorum-based node selection and replication management</td></tr>
+            </table>
+
+            <h2>Design Benefits</h2>
+            <ul>
+                <li><strong>Lightweight deployment</strong> &mdash; Easy integration with minimal dependencies</li>
+                <li><strong>Decoupled compute &amp; storage</strong> &mdash; Reduced operational complexity</li>
+                <li><strong>Auto-scaling storage</strong> &mdash; Eliminates capacity planning overhead</li>
+                <li><strong>Reduced local disk dependency</strong> &mdash; Ideal for cloud-native workloads</li>
+                <li><strong>One-write, multiple-reads</strong> &mdash; Data-embedded metadata design enables concurrent reads without writer synchronization</li>
+            </ul>
+
+            <div class="doc-pagination">
+                <div></div>
+                <a href="#" onclick="showPage('quickstart',document.querySelector('[onclick*=quickstart]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Quick Start &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ QUICK START ═══════ -->
+        <div class="doc-page" id="page-quickstart">
+            <h1>Quick Start</h1>
+            <p class="page-desc">Get Woodpecker up and running in minutes. Choose between embedded mode (library) or service mode (dedicated cluster).</p>
+
+            <h2>Install Client Library</h2>
+            <p>Add Woodpecker as a Go dependency to your project:</p>
+            <div class="code-container">
+                <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre>go get github.com/zilliztech/woodpecker@latest</pre></div>
+            </div>
+
+            <h2>Choose Your Mode</h2>
+            <p>Woodpecker supports two deployment modes with different clients. Pick the one that fits your architecture.</p>
+
+            <div class="doc-tabs">
+                <button class="doc-tab active" onclick="switchQS('embedded')">Embedded Mode</button>
+                <button class="doc-tab" onclick="switchQS('service')">Service Mode</button>
+            </div>
+
+            <!-- ── EMBEDDED MODE ── -->
+            <div class="doc-tab-panel active" id="qs-embedded">
+
+                <div class="callout tip">
+                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+                    <span>Embedded mode runs the LogStore <strong>in-process</strong>. No external LogStore service needed &mdash; just etcd and object storage. Best for single-instance deployments and applications needing local WAL integration.</span>
+                </div>
+
+                <h3>Prerequisites</h3>
+                <p>Only an etcd instance is required. Object storage (MinIO/S3) is configured via <code>woodpecker.yaml</code>.</p>
+                <div class="code-container">
+                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm"># Start etcd (for metadata coordination)</span>
+docker run -d --name etcd -p 2379:2379 \
+  quay.io/coreos/etcd:v3.5.0 /usr/local/bin/etcd \
+  --advertise-client-urls http://0.0.0.0:2379 \
+  --listen-client-urls http://0.0.0.0:2379
+
+<span class="hl-cm"># Start MinIO (for object storage)</span>
+docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+  minio/minio server /data --console-address ":9001"</pre></div>
+                </div>
+
+                <h3>Create Client</h3>
+                <p>Use <code>NewEmbedClientFromConfig</code> &mdash; it auto-creates etcd and storage connections, and starts an in-process LogStore.</p>
+                <div class="code-container">
+                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre>cfg, _ := config.<span class="hl-fn">NewConfiguration</span>()
+client, _ := woodpecker.<span class="hl-fn">NewEmbedClientFromConfig</span>(ctx, cfg)
+<span class="hl-kw">defer</span> client.<span class="hl-fn">Close</span>(ctx)</pre></div>
+                </div>
+
+                <h3>Write Data</h3>
+                <div class="code-container">
+                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm">// Create and open a log</span>
+client.<span class="hl-fn">CreateLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
+logHandle, _ := client.<span class="hl-fn">OpenLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
+
+<span class="hl-cm">// Open a writer (acquires distributed lock)</span>
+writer, _ := logHandle.<span class="hl-fn">OpenLogWriter</span>(ctx)
+
+<span class="hl-cm">// Synchronous write</span>
+result := writer.<span class="hl-fn">Write</span>(ctx,
+    &amp;log.<span class="hl-type">WriteMessage</span>{
+        Payload:    []<span class="hl-kw">byte</span>(<span class="hl-str">"hello world"</span>),
+        Properties: <span class="hl-kw">map</span>[<span class="hl-kw">string</span>]<span class="hl-kw">string</span>{<span class="hl-str">"key"</span>: <span class="hl-str">"value"</span>},
+    },
+)
+<span class="hl-cm">// result.LogMessageId = {SegmentId, EntryId}</span>
+
+<span class="hl-cm">// Asynchronous write (higher throughput)</span>
+ch := writer.<span class="hl-fn">WriteAsync</span>(ctx,
+    &amp;log.<span class="hl-type">WriteMessage</span>{
+        Payload: []<span class="hl-kw">byte</span>(<span class="hl-str">"async hello"</span>),
+    },
+)
+r := &lt;-ch <span class="hl-cm">// wait for result</span></pre></div>
+                </div>
+
+                <h3>Read Data</h3>
+                <div class="code-container">
+                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm">// Open a reader from the earliest position</span>
+start := log.<span class="hl-fn">EarliestLogMessageID</span>()
+reader, _ := logHandle.<span class="hl-fn">OpenLogReader</span>(ctx, &amp;start, <span class="hl-str">"my-reader"</span>)
+<span class="hl-kw">defer</span> reader.<span class="hl-fn">Close</span>(ctx)
+
+<span class="hl-cm">// Iterate through all messages</span>
+<span class="hl-kw">for</span> {
+    msg, err := reader.<span class="hl-fn">ReadNext</span>(ctx)
+    <span class="hl-kw">if</span> err != <span class="hl-kw">nil</span> { <span class="hl-kw">break</span> }
+    fmt.<span class="hl-fn">Printf</span>(<span class="hl-str">"ID: {%d,%d} Payload: %s\n"</span>,
+        msg.Id.SegmentId, msg.Id.EntryId,
+        <span class="hl-kw">string</span>(msg.Payload))
+}</pre></div>
+                </div>
+            </div>
+
+            <!-- ── SERVICE MODE ── -->
+            <div class="doc-tab-panel" id="qs-service">
+
+                <div class="callout info">
+                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+                    <span>Service mode uses a dedicated <strong>LogStore cluster</strong> as a caching layer for higher throughput and lower latency. Requires running LogStore server(s) with gossip-based cluster membership. Uses <strong>staged storage</strong> (local disk + object storage hybrid).</span>
+                </div>
+
+                <h3>Deploy LogStore Cluster</h3>
+                <p>Service mode requires a running LogStore cluster. Choose one of the following approaches:</p>
+
+                <h3>Option A: Using Docker Compose (Recommended)</h3>
+                <p>Use the provided <code>deployments/docker-compose.yaml</code> template to pull the latest image and start a complete cluster:</p>
+                <div class="code-container">
+                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm"># Clone the repository for deployment templates</span>
+git clone https://github.com/zilliztech/woodpecker.git
+cd woodpecker/deployments
+
+<span class="hl-cm"># Start the complete cluster (etcd + MinIO + Jaeger + 3 nodes)</span>
+docker compose up -d
+
+<span class="hl-cm"># Check cluster status</span>
+./deploy.sh status</pre></div>
+                </div>
+
+                <h3>Option B: Build from Source</h3>
+                <p>Build Woodpecker binary and Docker image locally, then deploy:</p>
+                <div class="code-container">
+                    <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm"># 1. Build binary and Docker image</span>
+git clone https://github.com/zilliztech/woodpecker.git
+cd woodpecker/deployments
+./deploy.sh build
+
+<span class="hl-cm"># 2. Start the cluster using locally built image</span>
+./deploy.sh up
+
+<span class="hl-cm"># 3. Check cluster status</span>
+./deploy.sh status</pre></div>
+                </div>
+
+                <div class="callout tip">
+                    <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+                    <span>Both options deploy 3 Woodpecker nodes (gRPC ports 18080&ndash;18082) with gossip-based discovery (ports 17946&ndash;17948), etcd, MinIO, and Jaeger tracing. See <code>deployments/README.md</code> for full configuration details.</span>
+                </div>
+
+                <h3>Create Client</h3>
+                <p>Use <code>NewClient</code> with an external etcd connection &mdash; the client connects to the LogStore cluster via gRPC.</p>
+                <div class="code-container">
+                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre>cfg, _ := config.<span class="hl-fn">NewConfiguration</span>()
+
+<span class="hl-cm">// Connect to etcd</span>
+etcdCli, _ := clientv3.<span class="hl-fn">New</span>(clientv3.<span class="hl-type">Config</span>{
+    Endpoints: []<span class="hl-kw">string</span>{<span class="hl-str">"localhost:2379"</span>},
+})
+
+<span class="hl-cm">// Create service-mode client</span>
+client, _ := woodpecker.<span class="hl-fn">NewClient</span>(ctx, cfg, etcdCli, <span class="hl-kw">false</span>)
+<span class="hl-kw">defer</span> client.<span class="hl-fn">Close</span>(ctx)</pre></div>
+                </div>
+
+                <h3>Write & Read Data</h3>
+                <p>Once the client is created, the write and read API is <strong>identical</strong> to embedded mode:</p>
+                <div class="code-container">
+                    <div class="code-header"><span>main.go</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                    <div class="code-body"><pre><span class="hl-cm">// Same API as embedded mode after client creation</span>
+client.<span class="hl-fn">CreateLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
+logHandle, _ := client.<span class="hl-fn">OpenLog</span>(ctx, <span class="hl-str">"my-wal"</span>)
+
+<span class="hl-cm">// Write</span>
+writer, _ := logHandle.<span class="hl-fn">OpenLogWriter</span>(ctx)
+result := writer.<span class="hl-fn">Write</span>(ctx, &amp;log.<span class="hl-type">WriteMessage</span>{
+    Payload: []<span class="hl-kw">byte</span>(<span class="hl-str">"hello from service mode"</span>),
+})
+
+<span class="hl-cm">// Read</span>
+start := log.<span class="hl-fn">EarliestLogMessageID</span>()
+reader, _ := logHandle.<span class="hl-fn">OpenLogReader</span>(ctx, &amp;start, <span class="hl-str">"reader-1"</span>)
+msg, _ := reader.<span class="hl-fn">ReadNext</span>(ctx)
+fmt.<span class="hl-fn">Println</span>(<span class="hl-kw">string</span>(msg.Payload))</pre></div>
+                </div>
+            </div>
+
+            <h2>Mode Comparison</h2>
+            <table class="doc-table">
+                <tr><th>Aspect</th><th>Embedded Mode</th><th>Service Mode</th></tr>
+                <tr><td>Client</td><td><code>NewEmbedClientFromConfig()</code></td><td><code>NewClient(ctx, cfg, etcdCli, managed)</code></td></tr>
+                <tr><td>LogStore</td><td>In-process (automatic)</td><td>Dedicated cluster (gRPC)</td></tr>
+                <tr><td>Storage</td><td>Direct to object storage</td><td>Staged: local disk + object storage</td></tr>
+                <tr><td>Dependencies</td><td>etcd + object storage</td><td>etcd + object storage + LogStore servers</td></tr>
+                <tr><td>Latency</td><td>No network overhead</td><td>Lower via caching layer</td></tr>
+                <tr><td>Throughput</td><td>Good</td><td>Higher (prefetching + batching)</td></tr>
+                <tr><td>Best for</td><td>Single instance, testing, embedded apps</td><td>Multi-instance, high-throughput production</td></tr>
+            </table>
+
+            <div class="callout tip">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+                <span>For high-throughput use cases, prefer <code>WriteAsync</code> with batch writes. This allows Woodpecker to optimize batching and flush operations.</span>
+            </div>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('overview',document.querySelector('[onclick*=overview]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Overview</div>
+                </a>
+                <a href="#" onclick="showPage('configuration',document.querySelector('[onclick*=configuration]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Configuration &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ CONFIGURATION ═══════ -->
+        <div class="doc-page" id="page-configuration">
+            <h1>Configuration</h1>
+            <p class="page-desc">Comprehensive guide to configuring Woodpecker with all available options and their defaults.</p>
+
+            <h2>Full Configuration Example</h2>
+            <p>Woodpecker uses YAML configuration. Create a <code>woodpecker.yaml</code> file:</p>
+
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">meta</span>:
+    type: <span class="hl-str">etcd</span>
+    prefix: <span class="hl-str">woodpecker</span>
+  <span class="hl-kw">client</span>:
+    <span class="hl-kw">segmentAppend</span>:
+      queueSize: <span class="hl-num">100</span>            <span class="hl-cm"># max queued append requests</span>
+      maxRetries: <span class="hl-num">2</span>             <span class="hl-cm"># max retries per append</span>
+    <span class="hl-kw">segmentRollingPolicy</span>:
+      maxSize: <span class="hl-num">100000000</span>        <span class="hl-cm"># 100MB per segment</span>
+      maxInterval: <span class="hl-num">800</span>          <span class="hl-cm"># seconds between rolls</span>
+      maxBlocks: <span class="hl-num">1000</span>           <span class="hl-cm"># max blocks per segment</span>
+    <span class="hl-kw">auditor</span>:
+      maxInterval: <span class="hl-num">5</span>            <span class="hl-cm"># seconds between audits</span>
+    <span class="hl-kw">sessionMonitor</span>:
+      checkInterval: <span class="hl-num">3</span>          <span class="hl-cm"># seconds</span>
+      maxFailures: <span class="hl-num">5</span>            <span class="hl-cm"># consecutive fails before invalid</span>
+    <span class="hl-cm"># quorum: (service mode only, see Quorum section)</span>
+  <span class="hl-kw">logstore</span>:
+    <span class="hl-kw">segmentSyncPolicy</span>:
+      maxInterval: <span class="hl-num">1000</span>         <span class="hl-cm"># ms between syncs</span>
+      maxIntervalForLocalStorage: <span class="hl-num">5</span>  <span class="hl-cm"># ms for local backend</span>
+      maxEntries: <span class="hl-num">2000</span>          <span class="hl-cm"># max entries per buffer</span>
+      maxBytes: <span class="hl-num">100000000</span>       <span class="hl-cm"># 100MB buffer limit</span>
+      maxFlushRetries: <span class="hl-num">3</span>
+      retryInterval: <span class="hl-num">2000</span>       <span class="hl-cm"># ms between retries</span>
+      maxFlushSize: <span class="hl-num">16000000</span>    <span class="hl-cm"># 16MB per block flush</span>
+      maxFlushThreads: <span class="hl-num">8</span>
+    <span class="hl-kw">segmentCompactionPolicy</span>:
+      maxBytes: <span class="hl-num">32000000</span>       <span class="hl-cm"># 32MB merged block size</span>
+      maxParallelUploads: <span class="hl-num">4</span>
+      maxParallelReads: <span class="hl-num">8</span>
+    <span class="hl-kw">segmentReadPolicy</span>:
+      maxBatchSize: <span class="hl-num">16000000</span>   <span class="hl-cm"># 16MB read batch</span>
+      maxFetchThreads: <span class="hl-num">32</span>
+    <span class="hl-kw">retentionPolicy</span>:
+      ttl: <span class="hl-num">259200</span>             <span class="hl-cm"># 72 hours for truncated segments</span>
+    <span class="hl-kw">fencePolicy</span>:
+      conditionWrite: <span class="hl-str">"auto"</span>   <span class="hl-cm"># auto | enable | disable</span>
+    <span class="hl-kw">grpc</span>:
+      serverMaxSendSize: <span class="hl-num">536870912</span>   <span class="hl-cm"># 512MB</span>
+      serverMaxRecvSize: <span class="hl-num">268435456</span>   <span class="hl-cm"># 256MB</span>
+      clientMaxSendSize: <span class="hl-num">268435456</span>   <span class="hl-cm"># 256MB</span>
+      clientMaxRecvSize: <span class="hl-num">536870912</span>   <span class="hl-cm"># 512MB</span>
+    <span class="hl-kw">processorCleanupPolicy</span>:
+      cleanupInterval: <span class="hl-num">60</span>     <span class="hl-cm"># seconds</span>
+      maxIdleTime: <span class="hl-num">300</span>        <span class="hl-cm"># seconds</span>
+      shutdownTimeout: <span class="hl-num">15</span>     <span class="hl-cm"># seconds</span>
+  <span class="hl-kw">storage</span>:
+    type: <span class="hl-str">default</span>             <span class="hl-cm"># default(=minio), minio, local, service</span>
+    rootPath: <span class="hl-str">/var/lib/woodpecker</span></pre></div>
+            </div>
+
+            <h2>Client Configuration</h2>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
+                <tr><td>segmentAppend.queueSize</td><td>Maximum queued segment append requests</td><td>100</td></tr>
+                <tr><td>segmentAppend.maxRetries</td><td>Maximum retries for append operations</td><td>2</td></tr>
+                <tr><td>segmentRollingPolicy.maxSize</td><td>Maximum segment size in bytes</td><td>100MB</td></tr>
+                <tr><td>segmentRollingPolicy.maxInterval</td><td>Maximum interval between segment rolls (seconds)</td><td>800</td></tr>
+                <tr><td>segmentRollingPolicy.maxBlocks</td><td>Maximum blocks per segment</td><td>1000</td></tr>
+                <tr><td>auditor.maxInterval</td><td>Audit interval in seconds</td><td>5</td></tr>
+                <tr><td>sessionMonitor.checkInterval</td><td>Session health check interval (seconds)</td><td>3</td></tr>
+                <tr><td>sessionMonitor.maxFailures</td><td>Consecutive failures before session invalid</td><td>5</td></tr>
+            </table>
+
+            <h2>LogStore Configuration</h2>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
+                <tr><td>segmentSyncPolicy.maxInterval</td><td>Max sync interval (milliseconds)</td><td>1000</td></tr>
+                <tr><td>segmentSyncPolicy.maxIntervalForLocalStorage</td><td>Sync interval for local storage (ms)</td><td>5</td></tr>
+                <tr><td>segmentSyncPolicy.maxEntries</td><td>Max entries in write buffer</td><td>2000</td></tr>
+                <tr><td>segmentSyncPolicy.maxBytes</td><td>Max write buffer size</td><td>100MB</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushRetries</td><td>Max sync retries</td><td>3</td></tr>
+                <tr><td>segmentSyncPolicy.retryInterval</td><td>Retry interval (ms)</td><td>2000</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushSize</td><td>Max block flush size</td><td>16MB</td></tr>
+                <tr><td>segmentSyncPolicy.maxFlushThreads</td><td>Concurrent flush threads</td><td>8</td></tr>
+                <tr><td>segmentCompactionPolicy.maxBytes</td><td>Max merged block size after compaction</td><td>32MB</td></tr>
+                <tr><td>segmentCompactionPolicy.maxParallelUploads</td><td>Parallel compaction upload threads</td><td>4</td></tr>
+                <tr><td>segmentCompactionPolicy.maxParallelReads</td><td>Parallel compaction read threads</td><td>8</td></tr>
+                <tr><td>segmentReadPolicy.maxBatchSize</td><td>Max read batch size</td><td>16MB</td></tr>
+                <tr><td>segmentReadPolicy.maxFetchThreads</td><td>Concurrent fetch threads</td><td>32</td></tr>
+                <tr><td>retentionPolicy.ttl</td><td>TTL for truncated segments (seconds)</td><td>259200 (72h)</td></tr>
+                <tr><td>processorCleanupPolicy.cleanupInterval</td><td>Idle processor scan interval (seconds)</td><td>60</td></tr>
+                <tr><td>processorCleanupPolicy.maxIdleTime</td><td>Idle time before cleanup (seconds)</td><td>300</td></tr>
+            </table>
+
+            <h2>Storage Configuration</h2>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
+                <tr><td>storage.type</td><td>Storage backend: <code>default</code> (=minio), <code>minio</code>, <code>local</code>, <code>service</code></td><td>default</td></tr>
+                <tr><td>storage.rootPath</td><td>Root path for log data files</td><td>/var/lib/woodpecker</td></tr>
+            </table>
+
+            <h2>etcd Configuration</h2>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">etcd</span>:
+  endpoints: [<span class="hl-str">localhost:2379</span>]
+  rootPath: <span class="hl-str">by-dev</span>
+  metaSubPath: <span class="hl-str">meta</span>
+  kvSubPath: <span class="hl-str">kv</span>
+  requestTimeout: <span class="hl-num">10000</span>        <span class="hl-cm"># ms</span>
+  use:
+    embed: <span class="hl-kw">false</span>              <span class="hl-cm"># enable embedded etcd</span>
+  data:
+    dir: <span class="hl-str">default.etcd</span>         <span class="hl-cm"># embedded etcd data dir</span>
+  ssl:
+    enabled: <span class="hl-kw">false</span>
+    tlsCert: <span class="hl-str">/path/to/cert.pem</span>
+    tlsKey: <span class="hl-str">/path/to/key.pem</span>
+    tlsCACert: <span class="hl-str">/path/to/ca.pem</span>
+  auth:
+    enabled: <span class="hl-kw">false</span>
+    userName: <span class="hl-str">""</span>
+    password: <span class="hl-str">""</span></pre></div>
+            </div>
+
+            <h2>MinIO / S3 Configuration</h2>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">minio</span>:
+  address: <span class="hl-str">localhost</span>
+  port: <span class="hl-num">9000</span>
+  accessKeyID: <span class="hl-str">minioadmin</span>
+  secretAccessKey: <span class="hl-str">minioadmin</span>
+  useSSL: <span class="hl-kw">false</span>
+  bucketName: <span class="hl-str">a-bucket</span>
+  createBucket: <span class="hl-kw">false</span>
+  rootPath: <span class="hl-str">files</span>
+  useIAM: <span class="hl-kw">false</span>
+  cloudProvider: <span class="hl-str">aws</span>           <span class="hl-cm"># aws, gcp, aliyun, gcpnative</span>
+  region: <span class="hl-str">""</span>
+  useVirtualHost: <span class="hl-kw">false</span>
+  requestTimeoutMs: <span class="hl-num">10000</span>
+  listObjectsMaxKeys: <span class="hl-num">0</span>       <span class="hl-cm"># 0 = unlimited</span></pre></div>
+            </div>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
+                <tr><td>minio.address</td><td>MinIO/S3 server address</td><td>localhost</td></tr>
+                <tr><td>minio.port</td><td>MinIO/S3 server port</td><td>9000</td></tr>
+                <tr><td>minio.accessKeyID</td><td>Access key for authentication</td><td>minioadmin</td></tr>
+                <tr><td>minio.secretAccessKey</td><td>Secret key for authentication</td><td>minioadmin</td></tr>
+                <tr><td>minio.bucketName</td><td>Storage bucket name</td><td>a-bucket</td></tr>
+                <tr><td>minio.createBucket</td><td>Auto-create bucket if not exists</td><td>false</td></tr>
+                <tr><td>minio.useIAM</td><td>Use IAM role authentication</td><td>false</td></tr>
+                <tr><td>minio.cloudProvider</td><td>Cloud provider: aws, gcp, aliyun, gcpnative</td><td>aws</td></tr>
+                <tr><td>minio.region</td><td>Storage region</td><td>&mdash;</td></tr>
+                <tr><td>minio.useVirtualHost</td><td>Virtual host style addressing</td><td>false</td></tr>
+                <tr><td>minio.requestTimeoutMs</td><td>Request timeout in milliseconds</td><td>10000</td></tr>
+            </table>
+
+            <h2>Quorum Configuration (Service Mode)</h2>
+            <p>Required when using <code>storage.type: service</code> with a LogStore cluster.</p>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">client</span>:
+    <span class="hl-kw">quorum</span>:
+      <span class="hl-kw">quorumBufferPools</span>:
+        - name: <span class="hl-str">"region-1"</span>
+          seeds: [<span class="hl-str">"logstore1:7946"</span>, <span class="hl-str">"logstore2:7946"</span>]
+      <span class="hl-kw">quorumSelectStrategy</span>:
+        affinityMode: <span class="hl-str">"soft"</span>   <span class="hl-cm"># soft | hard</span>
+        replicas: <span class="hl-num">3</span>             <span class="hl-cm"># 3 or 5</span>
+        strategy: <span class="hl-str">"random"</span>      <span class="hl-cm"># see table below</span>
+        customPlacement:       <span class="hl-cm"># only for strategy: custom</span>
+          - name: <span class="hl-str">"replica-1"</span>
+            region: <span class="hl-str">"region-1"</span>
+            az: <span class="hl-str">"az-1"</span>
+            resourceGroup: <span class="hl-str">"rg-1"</span></pre></div>
+            </div>
+            <table class="doc-table">
+                <tr><th>Strategy Value</th><th>Description</th></tr>
+                <tr><td>random</td><td>Random node selection (default)</td></tr>
+                <tr><td>single-az-single-rg</td><td>All nodes in same AZ and resource group</td></tr>
+                <tr><td>single-az-multi-rg</td><td>Same AZ, different resource groups</td></tr>
+                <tr><td>multi-az-single-rg</td><td>Multiple AZs, same resource group</td></tr>
+                <tr><td>multi-az-multi-rg</td><td>Multiple AZs and resource groups</td></tr>
+                <tr><td>cross-region</td><td>Nodes across different regions (requires 2+ buffer pools)</td></tr>
+                <tr><td>random-group</td><td>Pre-partitioned random groups</td></tr>
+                <tr><td>custom</td><td>Explicit placement rules via customPlacement</td></tr>
+            </table>
+
+            <h2>Fence Policy</h2>
+            <table class="doc-table">
+                <tr><th>Value</th><th>Behavior</th></tr>
+                <tr><td>auto</td><td>Auto-detect condition write support; fallback to distributed locks (default)</td></tr>
+                <tr><td>enable</td><td>Require condition write; panic if unavailable</td></tr>
+                <tr><td>disable</td><td>Force distributed locks; skip detection</td></tr>
+            </table>
+
+            <h2>gRPC Configuration</h2>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Description</th><th>Default</th></tr>
+                <tr><td>grpc.serverMaxSendSize</td><td>Server max send message size</td><td>512MB</td></tr>
+                <tr><td>grpc.serverMaxRecvSize</td><td>Server max receive message size</td><td>256MB</td></tr>
+                <tr><td>grpc.clientMaxSendSize</td><td>Client max send message size</td><td>256MB</td></tr>
+                <tr><td>grpc.clientMaxRecvSize</td><td>Client max receive message size</td><td>512MB</td></tr>
+            </table>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('quickstart',document.querySelector('[onclick*=quickstart]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Quick Start</div>
+                </a>
+                <a href="#" onclick="showPage('architecture',document.querySelector('[onclick*=architecture]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">System Architecture &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ ARCHITECTURE ═══════ -->
+        <div class="doc-page" id="page-architecture">
+            <h1>System Architecture</h1>
+            <p class="page-desc">Understanding Woodpecker's two deployment modes and core design.</p>
+
+            <h2>Embedded Mode</h2>
+            <p>In embedded mode, Woodpecker operates as a lightweight library integrated directly into your application. It requires only <strong>etcd</strong> for metadata storage and coordination, keeping dependencies minimal.</p>
+
+            <div class="arch-diagram-wrap">
+                <svg viewBox="0 0 520 300" width="520" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="eg-client" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#818cf8"/></linearGradient>
+                        <linearGradient id="eg-client-side" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f46e5"/><stop offset="100%" stop-color="#6366f1"/></linearGradient>
+                        <linearGradient id="eg-etcd" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#e2e8f0"/><stop offset="100%" stop-color="#cbd5e1"/></linearGradient>
+                        <linearGradient id="eg-etcd-side" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#cbd5e1"/><stop offset="100%" stop-color="#94a3b8"/></linearGradient>
+                        <linearGradient id="eg-etcd-top" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#f1f5f9"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+                        <linearGradient id="eg-stor" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#38bdf8"/></linearGradient>
+                        <linearGradient id="eg-stor-side" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0284c7"/><stop offset="100%" stop-color="#0369a1"/></linearGradient>
+                        <linearGradient id="eg-stor-top" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#7dd3fc"/><stop offset="100%" stop-color="#38bdf8"/></linearGradient>
+                        <filter id="eg-shadow"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.12"/></filter>
+                        <marker id="eg-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>
+                    </defs>
+                    <!-- EmbeddedClient - isometric box -->
+                    <g filter="url(#eg-shadow)" transform="translate(80,30)">
+                        <path d="M0,20 L80,-10 L160,20 L160,60 L80,90 L0,60Z" fill="url(#eg-client)"/>
+                        <path d="M0,20 L80,50 L80,90 L0,60Z" fill="url(#eg-client-side)" opacity="0.85"/>
+                        <path d="M80,50 L160,20 L160,60 L80,90Z" fill="url(#eg-client-side)" opacity="0.65"/>
+                        <path d="M0,20 L80,-10 L160,20 L80,50Z" fill="url(#eg-client)" opacity="0.95"/>
+                        <text x="80" y="24" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">EmbeddedClient</text>
+                    </g>
+                    <!-- ETCD - cylinder -->
+                    <g filter="url(#eg-shadow)" transform="translate(345,20)">
+                        <rect x="0" y="14" width="90" height="48" rx="0" fill="url(#eg-etcd-side)"/>
+                        <ellipse cx="45" cy="62" rx="45" ry="12" fill="url(#eg-etcd-side)" opacity="0.8"/>
+                        <rect x="0" y="14" width="90" height="48" rx="0" fill="url(#eg-etcd)" opacity="0.9"/>
+                        <ellipse cx="45" cy="62" rx="45" ry="12" fill="url(#eg-etcd-side)" opacity="0.7"/>
+                        <ellipse cx="45" cy="14" rx="45" ry="12" fill="url(#eg-etcd-top)"/>
+                        <text x="45" y="19" text-anchor="middle" fill="#334155" font-size="13" font-weight="600">ETCD</text>
+                    </g>
+                    <!-- Arrow: Client → ETCD -->
+                    <line x1="240" y1="65" x2="340" y2="65" stroke="#94a3b8" stroke-width="2" marker-end="url(#eg-arrow)" class="arch-flow"/>
+                    <!-- Arrow: Client ↓ Storage -->
+                    <line x1="160" y1="120" x2="160" y2="175" stroke="#94a3b8" stroke-width="2" marker-end="url(#eg-arrow)" class="arch-flow"/>
+                    <!-- Cloud Object Storage - isometric cylinder -->
+                    <g filter="url(#eg-shadow)" transform="translate(60,180)">
+                        <rect x="0" y="20" width="200" height="60" rx="6" fill="url(#eg-stor-side)"/>
+                        <ellipse cx="100" cy="80" rx="100" ry="18" fill="url(#eg-stor-side)"/>
+                        <rect x="0" y="20" width="200" height="60" rx="0" fill="url(#eg-stor)" opacity="0.9"/>
+                        <ellipse cx="100" cy="80" rx="100" ry="18" fill="url(#eg-stor-side)" opacity="0.8"/>
+                        <ellipse cx="100" cy="20" rx="100" ry="18" fill="url(#eg-stor-top)"/>
+                        <text x="100" y="25" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Cloud Object Storage</text>
+                        <text x="100" y="72" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-size="10">MinIO / S3 / Aliyun / GCS / Azure</text>
+                    </g>
+                </svg>
+            </div>
+
+            <p>Key characteristics of embedded mode:</p>
+            <ul>
+                <li>Zero additional services required beyond etcd</li>
+                <li>Client directly writes to object storage</li>
+                <li>Condition-write fence mechanism prevents split-brain</li>
+                <li>Best suited for applications needing simple WAL integration</li>
+            </ul>
+
+            <h2>Service Mode</h2>
+            <p>In service mode, WAL read/write operations and caching logic are decoupled into a dedicated <strong>LogStore</strong> cluster service. This acts as a high-performance caching layer between clients and object storage.</p>
+
+            <div class="arch-diagram-wrap">
+                <svg viewBox="0 0 560 420" width="560" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="sv-client" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#818cf8"/></linearGradient>
+                        <linearGradient id="sv-client-s" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f46e5"/><stop offset="100%" stop-color="#6366f1"/></linearGradient>
+                        <linearGradient id="sv-etcd" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#e2e8f0"/><stop offset="100%" stop-color="#cbd5e1"/></linearGradient>
+                        <linearGradient id="sv-etcd-s" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#cbd5e1"/><stop offset="100%" stop-color="#94a3b8"/></linearGradient>
+                        <linearGradient id="sv-etcd-t" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#f1f5f9"/><stop offset="100%" stop-color="#e2e8f0"/></linearGradient>
+                        <linearGradient id="sv-ls" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0891b2"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient>
+                        <linearGradient id="sv-ls-s" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0e7490"/><stop offset="100%" stop-color="#0891b2"/></linearGradient>
+                        <linearGradient id="sv-ls-t" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#67e8f9"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient>
+                        <linearGradient id="sv-stor" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#38bdf8"/></linearGradient>
+                        <linearGradient id="sv-stor-s" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0284c7"/><stop offset="100%" stop-color="#0369a1"/></linearGradient>
+                        <linearGradient id="sv-stor-t" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#7dd3fc"/><stop offset="100%" stop-color="#38bdf8"/></linearGradient>
+                        <filter id="sv-shadow"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.12"/></filter>
+                        <marker id="sv-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>
+                    </defs>
+                    <!-- Client - isometric box -->
+                    <g filter="url(#sv-shadow)" transform="translate(130,10)">
+                        <path d="M0,20 L60,-10 L120,20 L120,55 L60,85 L0,55Z" fill="url(#sv-client)"/>
+                        <path d="M0,20 L60,50 L60,85 L0,55Z" fill="url(#sv-client-s)" opacity="0.85"/>
+                        <path d="M60,50 L120,20 L120,55 L60,85Z" fill="url(#sv-client-s)" opacity="0.65"/>
+                        <path d="M0,20 L60,-10 L120,20 L60,50Z" fill="url(#sv-client)" opacity="0.95"/>
+                        <text x="60" y="24" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">Client</text>
+                    </g>
+                    <!-- ETCD - cylinder -->
+                    <g filter="url(#sv-shadow)" transform="translate(370,10)">
+                        <rect x="0" y="14" width="90" height="48" rx="0" fill="url(#sv-etcd-s)"/>
+                        <ellipse cx="45" cy="62" rx="45" ry="12" fill="url(#sv-etcd-s)" opacity="0.8"/>
+                        <rect x="0" y="14" width="90" height="48" rx="0" fill="url(#sv-etcd)" opacity="0.9"/>
+                        <ellipse cx="45" cy="62" rx="45" ry="12" fill="url(#sv-etcd-s)" opacity="0.7"/>
+                        <ellipse cx="45" cy="14" rx="45" ry="12" fill="url(#sv-etcd-t)"/>
+                        <text x="45" y="19" text-anchor="middle" fill="#334155" font-size="13" font-weight="600">ETCD</text>
+                    </g>
+                    <!-- Arrow: Client → ETCD -->
+                    <line x1="252" y1="50" x2="365" y2="50" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <!-- Arrows: Client ↓ LogStores (fan out) -->
+                    <line x1="165" y1="95" x2="75" y2="148" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <line x1="190" y1="95" x2="200" y2="148" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <line x1="215" y1="95" x2="325" y2="148" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <!-- LogStore 1 - cube -->
+                    <g filter="url(#sv-shadow)" transform="translate(20,145)">
+                        <path d="M0,30 L50,5 L100,30 L100,80 L50,105 L0,80Z" fill="url(#sv-ls)"/>
+                        <path d="M0,30 L50,55 L50,105 L0,80Z" fill="url(#sv-ls-s)" opacity="0.8"/>
+                        <path d="M50,55 L100,30 L100,80 L50,105Z" fill="url(#sv-ls-s)" opacity="0.6"/>
+                        <path d="M0,30 L50,5 L100,30 L50,55Z" fill="url(#sv-ls-t)" opacity="0.95"/>
+                        <text x="50" y="34" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">LogStore</text>
+                    </g>
+                    <!-- LogStore 2 - cube -->
+                    <g filter="url(#sv-shadow)" transform="translate(150,145)">
+                        <path d="M0,30 L50,5 L100,30 L100,80 L50,105 L0,80Z" fill="url(#sv-ls)"/>
+                        <path d="M0,30 L50,55 L50,105 L0,80Z" fill="url(#sv-ls-s)" opacity="0.8"/>
+                        <path d="M50,55 L100,30 L100,80 L50,105Z" fill="url(#sv-ls-s)" opacity="0.6"/>
+                        <path d="M0,30 L50,5 L100,30 L50,55Z" fill="url(#sv-ls-t)" opacity="0.95"/>
+                        <text x="50" y="34" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">LogStore</text>
+                    </g>
+                    <!-- LogStore 3 - cube -->
+                    <g filter="url(#sv-shadow)" transform="translate(280,145)">
+                        <path d="M0,30 L50,5 L100,30 L100,80 L50,105 L0,80Z" fill="url(#sv-ls)"/>
+                        <path d="M0,30 L50,55 L50,105 L0,80Z" fill="url(#sv-ls-s)" opacity="0.8"/>
+                        <path d="M50,55 L100,30 L100,80 L50,105Z" fill="url(#sv-ls-s)" opacity="0.6"/>
+                        <path d="M0,30 L50,5 L100,30 L50,55Z" fill="url(#sv-ls-t)" opacity="0.95"/>
+                        <text x="50" y="34" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">LogStore</text>
+                    </g>
+                    <!-- Arrows: LogStores ↓ Storage (converge) -->
+                    <line x1="70" y1="252" x2="150" y2="292" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <line x1="200" y1="252" x2="205" y2="292" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <line x1="330" y1="252" x2="260" y2="292" stroke="#94a3b8" stroke-width="2" marker-end="url(#sv-arrow)" class="arch-flow"/>
+                    <!-- Cloud Object Storage - isometric cylinder -->
+                    <g filter="url(#sv-shadow)" transform="translate(80,295)">
+                        <rect x="0" y="20" width="250" height="60" rx="6" fill="url(#sv-stor-s)"/>
+                        <ellipse cx="125" cy="80" rx="125" ry="20" fill="url(#sv-stor-s)"/>
+                        <rect x="0" y="20" width="250" height="60" rx="0" fill="url(#sv-stor)" opacity="0.9"/>
+                        <ellipse cx="125" cy="80" rx="125" ry="20" fill="url(#sv-stor-s)" opacity="0.8"/>
+                        <ellipse cx="125" cy="20" rx="125" ry="20" fill="url(#sv-stor-t)"/>
+                        <text x="125" y="25" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Cloud Object Storage</text>
+                        <text x="125" y="72" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-size="10">MinIO / S3 / Aliyun / GCS / Azure</text>
+                    </g>
+                </svg>
+            </div>
+
+            <p>Key characteristics of service mode:</p>
+            <ul>
+                <li>Dedicated LogStore cluster with gRPC communication</li>
+                <li>Data prefetching and read/write caching for lower latency</li>
+                <li>Gossip-based cluster membership and auto-discovery</li>
+                <li>Quorum-based replication with AZ-aware node placement</li>
+                <li>Best suited for high-throughput, latency-sensitive workloads</li>
+            </ul>
+
+            <h2>Core Components</h2>
+            <table class="doc-table">
+                <tr><th>Component</th><th>Role</th></tr>
+                <tr><td>Client</td><td>Read/write protocol layer connecting applications to Woodpecker</td></tr>
+                <tr><td>EmbeddedClient</td><td>Combined client + LogStore for embedded deployments</td></tr>
+                <tr><td>LogStore</td><td>High-speed log writes, batching, caching, and cloud storage uploads</td></tr>
+                <tr><td>ObjectStorage</td><td>Durable storage backend using S3-compatible APIs</td></tr>
+                <tr><td>MetadataProvider</td><td>etcd-backed metadata storage, coordination, and distributed locking</td></tr>
+                <tr><td>QuorumDiscovery</td><td>Service mode quorum-based node selection and replication management via gossip</td></tr>
+            </table>
+
+            <h2>Data Flow</h2>
+            <h3>Write Path</h3>
+            <ol>
+                <li>Application calls <code>Write()</code> or <code>WriteAsync()</code> on a LogWriter</li>
+                <li>Writer validates the session lock is still valid (distributed lock via etcd)</li>
+                <li>Gets or creates a writable segment via rolling policy (<code>maxSize</code>=100MB, <code>maxInterval</code>=800s, <code>maxBlocks</code>=1000)</li>
+                <li>Serializes message with <code>MarshalMessage()</code> (payload + properties)</li>
+                <li>Calls <code>segment.AppendAsync()</code> &mdash; data is buffered</li>
+                <li>Buffer is flushed to storage when sync policy triggers (<code>maxInterval</code>=1000ms, <code>maxEntries</code>=2000, <code>maxBytes</code>=100MB)</li>
+                <li>Segment metadata updated in etcd with revision-based optimistic locking</li>
+            </ol>
+            <h3>Read Path</h3>
+            <ol>
+                <li>Application opens a LogReader with starting position and reader name (<code>OpenLogReader(ctx, from, readerName)</code>)</li>
+                <li>Reader loads entries in batches via <code>ReadBatchAdv()</code> (batch limit: 200 entries)</li>
+                <li>Yields one entry per <code>ReadNext()</code> call from local cache</li>
+                <li>On segment EOF, auto-advances to the next segment seamlessly</li>
+                <li>Reader position updated in etcd every 30 seconds</li>
+                <li>For active (still-writing) segments, polls with 200ms wait interval when no new data is available</li>
+            </ol>
+
+            <h2>Segment Lifecycle</h2>
+            <p>Segments transition through the following states:</p>
+            <div class="code-container">
+                <div class="code-header"><span>State Machine</span></div>
+                <div class="code-body"><pre>Active &rarr; Completed &rarr; Sealed &rarr; Truncated &rarr; (Deleted)
+
+<span class="hl-cm">Active</span>     - Currently accepting writes
+<span class="hl-cm">Completed</span>  - All data flushed, no more writes
+<span class="hl-cm">Sealed</span>     - Metadata finalized, immutable
+<span class="hl-cm">Truncated</span>  - Marked for cleanup
+<span class="hl-cm">Deleted</span>    - Storage data removed</pre></div>
+            </div>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('configuration',document.querySelector('[onclick*=configuration]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Configuration</div>
+                </a>
+                <a href="#" onclick="showPage('quorum',document.querySelector('[onclick*=quorum]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Quorum Protocol &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ QUORUM PROTOCOL ═══════ -->
+        <div class="doc-page" id="page-quorum">
+            <h1>Quorum Protocol</h1>
+            <p class="page-desc">Woodpecker's innovative quorum-based replication for service mode deployments.</p>
+
+            <h2>Overview</h2>
+            <p>In service mode, Woodpecker uses a configurable quorum protocol for data replication across LogStore nodes. This ensures data durability while allowing flexible tradeoffs between consistency, availability, and performance.</p>
+
+            <h2>Quorum Parameters</h2>
+            <p>The quorum is configured via the <code>replicas</code> setting, which determines the ensemble size (E). Write quorum (WQ) and ack quorum (AQ) are derived automatically:</p>
+            <table class="doc-table">
+                <tr><th>Parameter</th><th>Symbol</th><th>Formula</th><th>E=3</th><th>E=5</th></tr>
+                <tr><td>Ensemble Size</td><td>E</td><td>= replicas</td><td>3</td><td>5</td></tr>
+                <tr><td>Write Quorum</td><td>WQ</td><td>= E</td><td>3</td><td>5</td></tr>
+                <tr><td>Ack Quorum</td><td>AQ</td><td>= (E / 2) + 1</td><td>2</td><td>3</td></tr>
+            </table>
+
+            <div class="callout info">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+                <span>Data is written to <strong>all E nodes</strong> (WQ = E), but only <strong>AQ acknowledgments</strong> are required before the write is considered durable. This allows writes to succeed even if some nodes are slow, while ensuring majority-based durability.</span>
+            </div>
+
+            <h2>Buffer Pools</h2>
+            <p>Buffer pools are logical groupings of LogStore nodes. Each pool is defined by a name and seed addresses used for gossip-based node discovery. Pools enable regional grouping of nodes for locality-aware placement.</p>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">client</span>:
+    <span class="hl-kw">quorum</span>:
+      <span class="hl-kw">quorumBufferPools</span>:
+        - name: <span class="hl-str">"region-1"</span>
+          seeds: [<span class="hl-str">"logstore1:7946"</span>, <span class="hl-str">"logstore2:7946"</span>]
+        - name: <span class="hl-str">"region-2"</span>
+          seeds: [<span class="hl-str">"logstore3:7946"</span>, <span class="hl-str">"logstore4:7946"</span>]
+      <span class="hl-kw">quorumSelectStrategy</span>:
+        affinityMode: <span class="hl-str">"soft"</span>     <span class="hl-cm"># soft | hard</span>
+        replicas: <span class="hl-num">3</span>               <span class="hl-cm"># ensemble size (3 or 5)</span>
+        strategy: <span class="hl-str">"random"</span>        <span class="hl-cm"># see strategies table below</span>
+        customPlacement:         <span class="hl-cm"># only for strategy: custom</span>
+          - name: <span class="hl-str">"replica-1"</span>
+            region: <span class="hl-str">"region-1"</span>
+            az: <span class="hl-str">"az-1"</span>
+            resourceGroup: <span class="hl-str">"rg-1"</span></pre></div>
+            </div>
+
+            <h2>Node Selection Strategies</h2>
+            <p>Woodpecker supports 8 node selection strategies for quorum placement:</p>
+            <table class="doc-table">
+                <tr><th>Strategy</th><th>Config Value</th><th>Description</th></tr>
+                <tr><td>Random</td><td>random</td><td>Random node selection from all available nodes (default)</td></tr>
+                <tr><td>Single AZ, Single RG</td><td>single-az-single-rg</td><td>All nodes in the same availability zone and resource group</td></tr>
+                <tr><td>Single AZ, Multi RG</td><td>single-az-multi-rg</td><td>Nodes in the same AZ but spread across different resource groups</td></tr>
+                <tr><td>Multi AZ, Single RG</td><td>multi-az-single-rg</td><td>Nodes across multiple AZs within the same resource group</td></tr>
+                <tr><td>Multi AZ, Multi RG</td><td>multi-az-multi-rg</td><td>Nodes spread across multiple AZs and resource groups (highest fault tolerance)</td></tr>
+                <tr><td>Cross Region</td><td>cross-region</td><td>Nodes across different regions (requires 2+ buffer pools)</td></tr>
+                <tr><td>Random Group</td><td>random-group</td><td>Pre-partitioned random groups for balanced distribution</td></tr>
+                <tr><td>Custom</td><td>custom</td><td>Explicit placement rules via <code>customPlacement</code> configuration</td></tr>
+            </table>
+
+            <h2>Affinity Modes</h2>
+            <table class="doc-table">
+                <tr><th>Mode</th><th>Behavior</th></tr>
+                <tr><td>soft</td><td>Prefer nodes matching the strategy constraints, but fall back to any available node if not enough matching nodes are found</td></tr>
+                <tr><td>hard</td><td>Strictly enforce strategy constraints &mdash; fail if not enough matching nodes are available</td></tr>
+            </table>
+
+            <h2>Cluster Membership</h2>
+            <p>Service mode uses <strong>HashiCorp memberlist</strong> (gossip protocol) for cluster membership management:</p>
+            <ul>
+                <li>Nodes discover each other via seed addresses configured in buffer pools</li>
+                <li>Health status is propagated through gossip protocol</li>
+                <li>Failed nodes are automatically detected and excluded from quorum selection</li>
+                <li>New nodes can join the cluster dynamically by connecting to any seed</li>
+                <li>Each node exposes a <strong>bind port</strong> (gossip) and a <strong>service port</strong> (gRPC)</li>
+            </ul>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('architecture',document.querySelector('[onclick*=architecture]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">System Architecture</div>
+                </a>
+                <a href="#" onclick="showPage('object-storage',document.querySelector('[onclick*=object-storage]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Object Storage &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ OBJECT STORAGE ═══════ -->
+        <div class="doc-page" id="page-object-storage">
+            <h1>Object Storage</h1>
+            <p class="page-desc">Cloud-native object storage as the durable storage layer for Woodpecker's WAL data.</p>
+
+            <h2>Overview</h2>
+            <p>Object storage serves as Woodpecker's primary durable storage layer. All WAL data is ultimately persisted to S3-compatible object storage, providing virtually unlimited capacity, high durability (11 nines), and cross-region replication capabilities.</p>
+
+            <h2>ObjectStorage Interface</h2>
+            <p>Woodpecker abstracts storage operations through a unified <code>ObjectStorage</code> interface:</p>
+            <div class="code-container">
+                <div class="code-header"><span>Go Interface</span></div>
+                <div class="code-body"><pre><span class="hl-kw">type</span> <span class="hl-type">ObjectStorage</span> <span class="hl-kw">interface</span> {
+    <span class="hl-fn">GetObject</span>(ctx, bucket, key <span class="hl-kw">string</span>, offset, size <span class="hl-kw">int64</span>) (*Object, error)
+    <span class="hl-fn">PutObject</span>(ctx, bucket, key <span class="hl-kw">string</span>, reader io.Reader, size <span class="hl-kw">int64</span>) error
+    <span class="hl-fn">PutObjectIfNoneMatch</span>(ctx, bucket, key <span class="hl-kw">string</span>, reader, size) error
+    <span class="hl-fn">PutFencedObject</span>(ctx, bucket, key <span class="hl-kw">string</span>, reader, size, fenceId) error
+    <span class="hl-fn">StatObject</span>(ctx, bucket, key <span class="hl-kw">string</span>) (*ObjectAttr, error)
+    <span class="hl-fn">WalkWithObjects</span>(ctx, bucket, prefix <span class="hl-kw">string</span>, recursive <span class="hl-kw">bool</span>, walkFn) error
+    <span class="hl-fn">RemoveObject</span>(ctx, bucket, key <span class="hl-kw">string</span>) error
+}</pre></div>
+            </div>
+
+            <h2>Supported Backends</h2>
+            <p>Woodpecker supports multiple cloud providers via the <code>minio.cloudProvider</code> configuration:</p>
+            <table class="doc-table">
+                <tr><th>Provider</th><th>Config Value</th><th>Condition Write</th><th>Notes</th></tr>
+                <tr><td>Amazon S3</td><td>aws</td><td>Supported (<code>If-None-Match</code>)</td><td>Default provider</td></tr>
+                <tr><td>Google GCS</td><td>gcp</td><td>Supported</td><td>S3-compatible mode</td></tr>
+                <tr><td>Aliyun OSS</td><td>aliyun</td><td>Supported (wrapped)</td><td>Uses forbid-overwrite feature</td></tr>
+                <tr><td>Tencent COS</td><td>tencent</td><td>Supported (wrapped)</td><td>Uses forbid-overwrite feature</td></tr>
+                <tr><td>Azure Blob</td><td>azure</td><td>Supported</td><td>Dedicated implementation</td></tr>
+                <tr><td>MinIO</td><td>aws</td><td>Supported</td><td>Uses S3 API</td></tr>
+            </table>
+
+            <h2>Configuration</h2>
+            <p>Object storage is configured via the <code>storage</code> and <code>minio</code> sections:</p>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">storage</span>:
+    type: <span class="hl-str">default</span>              <span class="hl-cm"># default(=minio), minio, local, service</span>
+    rootPath: <span class="hl-str">/var/lib/woodpecker</span>
+
+<span class="hl-kw">minio</span>:
+  address: <span class="hl-str">localhost</span>
+  port: <span class="hl-num">9000</span>
+  accessKeyID: <span class="hl-str">minioadmin</span>
+  secretAccessKey: <span class="hl-str">minioadmin</span>
+  useSSL: <span class="hl-kw">false</span>
+  bucketName: <span class="hl-str">a-bucket</span>
+  createBucket: <span class="hl-kw">false</span>
+  rootPath: <span class="hl-str">files</span>
+  useIAM: <span class="hl-kw">false</span>
+  cloudProvider: <span class="hl-str">aws</span>            <span class="hl-cm"># aws, gcp, aliyun, gcpnative</span>
+  region: <span class="hl-str">""</span>
+  useVirtualHost: <span class="hl-kw">false</span>
+  requestTimeoutMs: <span class="hl-num">10000</span>
+  listObjectsMaxKeys: <span class="hl-num">0</span>        <span class="hl-cm"># 0 = unlimited</span></pre></div>
+            </div>
+
+            <h2>Condition Write Support</h2>
+            <p>Condition write (<code>PutObjectIfNoneMatch</code>) is used as a fence mechanism to prevent split-brain in embedded mode. It ensures only one writer can create a given object key.</p>
+            <ul>
+                <li><strong>AWS/MinIO/GCS/Azure</strong> &mdash; Uses <code>If-None-Match: *</code> header for conditional PUT</li>
+                <li><strong>Aliyun OSS / Tencent COS</strong> &mdash; Uses the forbid-overwrite feature (wrapped implementation)</li>
+                <li><strong>Auto-detection</strong> &mdash; Woodpecker probes condition write support at startup (configurable via <code>fencePolicy.conditionWrite</code>)</li>
+            </ul>
+
+            <h2>Performance Best Practices</h2>
+            <h3>Write Optimization</h3>
+            <ul>
+                <li>The default <code>maxFlushSize</code> is <strong>16MB</strong> &mdash; increase for larger batch uploads to reduce API call overhead</li>
+                <li>Default <code>maxFlushThreads</code> is <strong>8</strong> &mdash; increase for higher parallelism on fast networks</li>
+                <li>Use <code>WriteAsync</code> with batching for maximum throughput</li>
+                <li>Compaction merges small blocks into <strong>32MB</strong> merged blocks (configurable via <code>segmentCompactionPolicy.maxBytes</code>)</li>
+            </ul>
+            <h3>Read Optimization</h3>
+            <ul>
+                <li>Read batch size is <strong>16MB</strong> by default (<code>segmentReadPolicy.maxBatchSize</code>)</li>
+                <li>Up to <strong>32 concurrent fetch threads</strong> for parallel reads (<code>segmentReadPolicy.maxFetchThreads</code>)</li>
+                <li>Range reads via <code>GetObject</code> with offset/size parameters for partial fetches</li>
+            </ul>
+
+            <h2>Data Durability</h2>
+            <ul>
+                <li><strong>CRC32 checksums</strong> for data integrity verification on every block</li>
+                <li><strong>Automatic retry</strong> on transient failures with configurable backoff (up to <code>maxFlushRetries</code> = 3, interval = 2s)</li>
+                <li><strong>Fragment-based storage</strong> for incremental durability &mdash; data is durable as soon as each block is flushed</li>
+                <li><strong>Segment compaction</strong> merges small fragments into larger objects for efficient storage and reads</li>
+            </ul>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('quorum',document.querySelector('[onclick*=quorum]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Quorum Protocol</div>
+                </a>
+                <a href="#" onclick="showPage('local-storage',document.querySelector('[onclick*=local-storage]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Local File System &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ LOCAL STORAGE ═══════ -->
+        <div class="doc-page" id="page-local-storage">
+            <h1>Local File System Storage</h1>
+            <p class="page-desc">High-performance disk-based log storage using memory-mapped I/O.</p>
+
+            <h2>Overview</h2>
+            <p>The local file system storage implements disk-based log storage using <strong>mmap</strong> (memory mapping) for efficient read and write performance. It maintains the Fragment concept for consistency with the object storage implementation.</p>
+
+            <h2>File Layout</h2>
+            <div class="code-container">
+                <div class="code-header"><span>FragmentFile Layout</span></div>
+                <div class="code-body"><pre>[Header (4K)] + [Data Area &rarr;] + [...Free Space...] + [&larr; Index Area] + [Footer]
+
+<span class="hl-cm">Header (4K)</span>       Magic string and version information
+<span class="hl-cm">Data Area</span>         Actual log entries, growing forward from 4K
+<span class="hl-cm">Free Space</span>        Unused space between data and index
+<span class="hl-cm">Index Area</span>        Entry offsets, growing backward from file end
+<span class="hl-cm">Footer</span>            Metadata information
+
+<span class="hl-type">Data Entry Format:</span>
+[Payload Size (4B)] + [CRC32 (4B)] + [Actual Data (variable)]</pre></div>
+            </div>
+
+            <h2>Directory Structure</h2>
+            <div class="code-container">
+                <div class="code-header"><span>File Tree</span></div>
+                <div class="code-body"><pre>/basePath/
+  &boxvr;&boxh;&boxh; log_[logID]/
+  &boxv;   &boxvr;&boxh;&boxh; fragment_[startOffset1]
+  &boxv;   &boxvr;&boxh;&boxh; fragment_[startOffset2]
+  &boxv;   &boxur;&boxh;&boxh; ...
+  &boxur;&boxh;&boxh; log_[logID2]/
+      &boxur;&boxh;&boxh; ...</pre></div>
+            </div>
+
+            <h2>Key Design Decisions</h2>
+            <h3>Why mmap?</h3>
+            <ul>
+                <li>Zero-copy read/write operations</li>
+                <li>Random access support</li>
+                <li>OS-managed page caching</li>
+                <li>Memory-level read/write performance</li>
+            </ul>
+
+            <h3>Why Fragments?</h3>
+            <p>Although the local file system supports append operations, maintaining fragments provides:</p>
+            <ul>
+                <li>Architecture consistency with object storage backend</li>
+                <li>File size limitation support</li>
+                <li>Segmented management and cleanup</li>
+                <li>Simplified concurrency control</li>
+                <li>Better system recovery capability</li>
+            </ul>
+
+            <h2>Performance Characteristics</h2>
+            <table class="doc-table">
+                <tr><th>Aspect</th><th>Optimization</th></tr>
+                <tr><td>Write</td><td>Zero-copy via mmap, batch writes, async support, pre-allocated space</td></tr>
+                <tr><td>Read</td><td>Index-based positioning, random reads, OS page cache, range reads</td></tr>
+                <tr><td>Memory</td><td>On-demand loading via mmap, controlled fragment sizes, memory limits</td></tr>
+            </table>
+
+            <h2>Reliability</h2>
+            <ul>
+                <li><strong>CRC32 checksum</strong> for data validation</li>
+                <li><strong>Magic string verification</strong> in file header</li>
+                <li><strong>Read-write locks</strong> for concurrent access control</li>
+                <li><strong>Atomic operations</strong> for counter integrity</li>
+                <li><strong>File locks</strong> to prevent concurrent writes</li>
+            </ul>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('object-storage',document.querySelector('[onclick*=object-storage]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Object Storage</div>
+                </a>
+                <a href="#" onclick="showPage('staged-storage',document.querySelector('[onclick*=staged-storage]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Staged Storage &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ STAGED STORAGE ═══════ -->
+        <div class="doc-page" id="page-staged-storage">
+            <h1>Staged Storage (Service Mode)</h1>
+            <p class="page-desc">Two-tier hybrid storage combining local disk speed with object storage durability for service mode deployments.</p>
+
+            <h2>Overview</h2>
+            <p>Staged storage is the storage backend used in <strong>service mode</strong> (<code>storage.type: service</code>). It implements a two-tier hybrid architecture: active segments write to <strong>local disk</strong> for low-latency writes, then compaction uploads merged blocks to <strong>object storage</strong> for durable, long-term persistence.</p>
+
+            <div class="callout info">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+                <span>Staged storage is automatically used when <code>storage.type</code> is set to <code>service</code>. No additional configuration is needed beyond configuring the MinIO/S3 backend for the object storage tier.</span>
+            </div>
+
+            <h2>How It Works</h2>
+            <div class="code-container">
+                <div class="code-header"><span>Data Flow</span></div>
+                <div class="code-body"><pre><span class="hl-cm">Write Path:</span>
+  Client &rarr; LogStore Server &rarr; Local Disk (fast, low-latency)
+
+<span class="hl-cm">Compaction:</span>
+  Local Disk &rarr; Merge Blocks &rarr; Object Storage (durable)
+
+<span class="hl-cm">Read Path:</span>
+  Active segments  &rarr; Read from Local Disk
+  Compacted data   &rarr; Read from Object Storage</pre></div>
+            </div>
+
+            <h2>Core Components</h2>
+            <table class="doc-table">
+                <tr><th>Component</th><th>Role</th></tr>
+                <tr><td>StagedSegmentImpl</td><td>Manages a segment's lifecycle across both tiers &mdash; coordinates writes to local disk and compaction uploads to object storage</td></tr>
+                <tr><td>StagedFileWriter</td><td>Handles buffered writes to local disk files with block-based batching and CRC32 integrity checks</td></tr>
+                <tr><td>StagedFileReaderAdv</td><td>Reads entries from either local disk (active segments) or object storage (compacted segments) transparently</td></tr>
+            </table>
+
+            <h2>Configuration</h2>
+            <p>Enable staged storage by setting <code>storage.type: service</code>:</p>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">storage</span>:
+    type: <span class="hl-str">service</span>              <span class="hl-cm"># enables staged storage</span>
+    rootPath: <span class="hl-str">/var/lib/woodpecker</span> <span class="hl-cm"># local staging directory</span>
+
+<span class="hl-cm"># Object storage tier (for compacted data)</span>
+<span class="hl-kw">minio</span>:
+  address: <span class="hl-str">localhost</span>
+  port: <span class="hl-num">9000</span>
+  accessKeyID: <span class="hl-str">minioadmin</span>
+  secretAccessKey: <span class="hl-str">minioadmin</span>
+  bucketName: <span class="hl-str">a-bucket</span>
+  rootPath: <span class="hl-str">files</span></pre></div>
+            </div>
+
+            <h2>Benefits</h2>
+            <ul>
+                <li><strong>Low write latency</strong> &mdash; Writes go to local disk first, avoiding object storage API overhead</li>
+                <li><strong>High durability</strong> &mdash; Compaction ensures all data reaches object storage for long-term persistence</li>
+                <li><strong>Efficient reads</strong> &mdash; Active data served from local disk; compacted data served from object storage with prefetching</li>
+                <li><strong>Automatic lifecycle</strong> &mdash; Compaction runs automatically based on configured policies</li>
+                <li><strong>Reduced API costs</strong> &mdash; Merging blocks before upload reduces the number of object storage API calls</li>
+            </ul>
+
+            <h2>Storage Backend Comparison</h2>
+            <table class="doc-table">
+                <tr><th>Aspect</th><th>Object Storage (MinIO/S3)</th><th>Local File System</th><th>Staged Storage</th></tr>
+                <tr><td>Config Value</td><td><code>default</code> / <code>minio</code></td><td><code>local</code></td><td><code>service</code></td></tr>
+                <tr><td>Mode</td><td>Embedded</td><td>Embedded (dev/test)</td><td>Service</td></tr>
+                <tr><td>Write Latency</td><td>Higher (network)</td><td>Lowest (local I/O)</td><td>Low (local disk)</td></tr>
+                <tr><td>Durability</td><td>High (cloud-replicated)</td><td>Node-level only</td><td>High (compacted to cloud)</td></tr>
+                <tr><td>Capacity</td><td>Unlimited</td><td>Disk-limited</td><td>Unlimited (after compaction)</td></tr>
+                <tr><td>Best For</td><td>Production embedded</td><td>Development/testing</td><td>Production service mode</td></tr>
+            </table>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('local-storage',document.querySelector('[onclick*=local-storage]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Local File System</div>
+                </a>
+                <a href="#" onclick="showPage('condition-write',document.querySelector('[onclick*=condition-write]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Condition Write & Fence &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ CONDITION WRITE ═══════ -->
+        <div class="doc-page" id="page-condition-write">
+            <h1>Condition Write & Fence</h1>
+            <p class="page-desc">Split-brain prevention using condition write as a fence mechanism.</p>
+
+            <h2>Overview</h2>
+            <p>In embedded mode, Woodpecker uses <strong>condition write</strong> as a fence mechanism to prevent split-brain scenarios where a stale primary node resumes writing after being partitioned or crashed. This ensures data consistency and prevents concurrent write conflicts.</p>
+
+            <h2>Supported Storage Backends</h2>
+            <table class="doc-table">
+                <tr><th>Backend</th><th>Support</th><th>Mechanism</th></tr>
+                <tr><td>MinIO</td><td>Full</td><td><code>If-None-Match</code> header</td></tr>
+                <tr><td>AWS S3</td><td>Full</td><td>Conditional PUT operations</td></tr>
+                <tr><td>Azure Blob</td><td>Full</td><td>Conditional writes</td></tr>
+                <tr><td>GCP Cloud Storage</td><td>Full</td><td>Conditional operations</td></tr>
+                <tr><td>Aliyun OSS</td><td>Wrapped</td><td>Forbid overwrite feature</td></tr>
+                <tr><td>Tencent COS</td><td>Wrapped</td><td>Forbid overwrite feature</td></tr>
+            </table>
+
+            <h2>Detection Modes</h2>
+            <h3>Auto Mode (Default)</h3>
+            <p>Attempts to detect condition write support up to 30 times with exponential backoff. If any detection succeeds, it's enabled cluster-wide. If all fail, falls back to distributed locks.</p>
+
+            <div class="callout info">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+                <span>Cluster consensus is achieved via CAS (Compare-And-Swap) in etcd. The first successful detection determines the cluster-wide setting.</span>
+            </div>
+
+            <h3>Enable Mode</h3>
+            <p>Strict requirement: detection must succeed within 10 retries or the system panics. Use when you're certain your backend supports condition write.</p>
+
+            <h3>Disable Mode</h3>
+            <p>Skips detection entirely and uses distributed locks. Use when you know your backend doesn't support condition write.</p>
+
+            <h2>Distributed Lock Fallback</h2>
+            <p>When condition write is unavailable, Woodpecker uses etcd-based distributed locks:</p>
+            <table class="doc-table">
+                <tr><th>Property</th><th>Detail</th></tr>
+                <tr><td>Lock Type</td><td>etcd <code>concurrency.Mutex</code> with <code>concurrency.Session</code></td></tr>
+                <tr><td>Session TTL</td><td>10 seconds (auto-renewed via keep-alive)</td></tr>
+                <tr><td>Lock Key</td><td><code>/woodpecker/service/lock/{logName}</code></td></tr>
+                <tr><td>Acquisition</td><td>Non-blocking <code>TryLock</code></td></tr>
+            </table>
+
+            <h2>Failover Behavior</h2>
+            <ol>
+                <li><strong>Session Expiration</strong> &mdash; etcd session expires after TTL (10s) if keep-alive fails</li>
+                <li><strong>Lock Release</strong> &mdash; Distributed lock is automatically released</li>
+                <li><strong>New Primary</strong> &mdash; New node acquires the lock</li>
+                <li><strong>Writer Switch</strong> &mdash; Applications reopen writer (up to 10s wait)</li>
+            </ol>
+
+            <h2>Performance Comparison</h2>
+            <table class="doc-table">
+                <tr><th>Aspect</th><th>Condition Write</th><th>Distributed Lock</th></tr>
+                <tr><td>Lock overhead</td><td>None</td><td>Per-writer acquisition</td></tr>
+                <tr><td>Failover latency</td><td>Immediate</td><td>Up to 10 seconds</td></tr>
+                <tr><td>Concurrency</td><td>Multiple attempt, one wins</td><td>Single writer at a time</td></tr>
+            </table>
+
+            <h2>Configuration</h2>
+            <div class="code-container">
+                <div class="code-header"><span>woodpecker.yaml</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-kw">woodpecker</span>:
+  <span class="hl-kw">logstore</span>:
+    <span class="hl-kw">fencePolicy</span>:
+      conditionWrite: <span class="hl-str">"auto"</span>   <span class="hl-cm"># "auto" | "enable" | "disable"</span></pre></div>
+            </div>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('staged-storage',document.querySelector('[onclick*=staged-storage]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Staged Storage</div>
+                </a>
+                <a href="#" onclick="showPage('monitoring',document.querySelector('[onclick*=monitoring]'))">
+                    <div class="pg-label pg-next">Next</div>
+                    <div class="pg-title">Monitoring & Metrics &rarr;</div>
+                </a>
+            </div>
+        </div>
+
+        <!-- ═══════ MONITORING ═══════ -->
+        <div class="doc-page" id="page-monitoring">
+            <h1>Monitoring & Metrics</h1>
+            <p class="page-desc">Built-in Prometheus metrics and OpenTelemetry tracing for production observability.</p>
+
+            <h2>Prometheus Metrics</h2>
+            <p>Woodpecker exposes comprehensive Prometheus metrics for monitoring system health and performance. Each node exposes metrics on a dedicated port (default 9091&ndash;9094 for nodes 1&ndash;4).</p>
+
+            <h2>Key Metrics</h2>
+            <table class="doc-table">
+                <tr><th>Module</th><th>Example Metrics</th><th>Purpose</th></tr>
+                <tr><td>Client Append</td><td><code>woodpecker_client_append_latency</code>, <code>_requests_total</code>, <code>_bytes</code></td><td>Write QPS, latency P50/P99, message size distribution</td></tr>
+                <tr><td>Client Read</td><td><code>woodpecker_client_read_requests_total</code>, <code>_reader_bytes_read</code></td><td>Read QPS, throughput, reader operation latency</td></tr>
+                <tr><td>Server LogStore</td><td><code>woodpecker_server_logstore_active_logs</code>, <code>_active_segments</code></td><td>Resource usage, segment lifecycle, operation success rate</td></tr>
+                <tr><td>Server File/Buffer</td><td><code>woodpecker_server_file_flush_latency</code>, <code>_compaction_latency</code></td><td>Persistence latency, compaction performance, buffer queuing</td></tr>
+                <tr><td>Object Storage</td><td><code>woodpecker_server_object_storage_operations_total</code>, <code>_operation_latency</code></td><td>S3 call frequency, latency P50/P99, bandwidth usage</td></tr>
+                <tr><td>System Resources</td><td><code>woodpecker_server_system_cpu_usage</code>, <code>_memory_usage_ratio</code></td><td>Node load, memory pressure, I/O bottleneck detection</td></tr>
+                <tr><td>gRPC</td><td><code>grpc_server_handled_total</code>, <code>_handling_seconds</code></td><td>RPC QPS, success rate, error code distribution</td></tr>
+            </table>
+
+            <h2>OpenTelemetry Tracing</h2>
+            <p>Woodpecker integrates with OpenTelemetry for distributed tracing. The deployment includes <strong>Jaeger</strong> (port 16686) for trace visualization. gRPC interceptors automatically propagate trace context in service mode.</p>
+
+            <h2>Setting Up Monitoring Stack</h2>
+            <p>Use the provided Docker Compose overlay to add Prometheus and Grafana to the cluster:</p>
+            <div class="code-container">
+                <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-cm"># Start cluster with Prometheus + Grafana monitoring</span>
+cd deployments
+docker compose -f docker-compose.yaml \
+  -f ../tests/docker/monitor/docker-compose.monitor.yaml \
+  -p woodpecker-monitor up -d</pre></div>
+            </div>
+            <p>Access the monitoring services:</p>
+            <table class="doc-table">
+                <tr><th>Service</th><th>URL</th><th>Credentials</th></tr>
+                <tr><td>Prometheus</td><td>http://localhost:9090</td><td>&mdash;</td></tr>
+                <tr><td>Grafana</td><td>http://localhost:3000</td><td>Anonymous admin (no login)</td></tr>
+                <tr><td>Jaeger</td><td>http://localhost:16686</td><td>&mdash;</td></tr>
+                <tr><td>MinIO Console</td><td>http://localhost:9001</td><td>minioadmin / minioadmin</td></tr>
+            </table>
+
+            <h2>Grafana Dashboards</h2>
+            <p>Pre-built Grafana dashboard templates are available in <code>tests/docker/monitor/grafana/templates/</code>. These provide ready-to-use visualizations for write/read throughput, latency percentiles (P50/P95/P99), segment state distribution, storage backend performance, and error rates.</p>
+
+            <h2>Run Monitoring Tests</h2>
+            <p>Automated E2E metric verification tests are provided:</p>
+            <div class="code-container">
+                <div class="code-header"><span>bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+                <div class="code-body"><pre><span class="hl-cm"># One-click: build, deploy, test, and cleanup</span>
+cd tests/docker/monitor
+./run_monitor_tests.sh
+
+<span class="hl-cm"># Keep cluster running after tests for manual inspection</span>
+./run_monitor_tests.sh --no-cleanup</pre></div>
+            </div>
+
+            <div class="callout tip">
+                <span class="callout-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+                <span>The monitoring test suite also includes a <strong>rolling restart latency profile</strong> test that measures write/read latency across node restarts &mdash; useful as a baseline for evaluating rolling upgrade quality.</span>
+            </div>
+
+            <div class="doc-pagination">
+                <a href="#" onclick="showPage('condition-write',document.querySelector('[onclick*=condition-write]'))">
+                    <div class="pg-label">&larr; Previous</div>
+                    <div class="pg-title">Condition Write & Fence</div>
+                </a>
+                <div></div>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+<script>
+// Theme toggle - docs defaults to light
+function toggleTheme() {
+    const isDark = document.documentElement.classList.toggle('dark');
+    localStorage.setItem('wp-theme', isDark ? 'dark' : 'light');
+}
+(function() {
+    const saved = localStorage.getItem('wp-theme');
+    if (saved === 'dark') document.documentElement.classList.add('dark');
+})();
+
+function showPage(pageId, linkEl) {
+    // Hide all pages
+    document.querySelectorAll('.doc-page').forEach(p => p.classList.remove('active'));
+    // Show target
+    const target = document.getElementById('page-' + pageId);
+    if (target) target.classList.add('active');
+
+    // Update sidebar
+    document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+    if (linkEl) linkEl.classList.add('active');
+
+    // Scroll to top
+    document.querySelector('.doc-main').scrollTo(0, 0);
+    window.scrollTo(0, 0);
+
+    // Close mobile sidebar
+    document.getElementById('sidebar').classList.remove('open');
+
+    // Update URL hash
+    history.replaceState(null, null, '#' + pageId);
+}
+
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+}
+
+function switchQS(mode) {
+    document.querySelectorAll('#page-quickstart .doc-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#page-quickstart .doc-tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('qs-' + mode).classList.add('active');
+    document.querySelector('#page-quickstart .doc-tab[onclick*="' + mode + '"]').classList.add('active');
+}
+
+function copyCode(btn) {
+    const code = btn.closest('.code-container').querySelector('.code-body pre').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 2000);
+    });
+}
+
+// Handle initial hash
+window.addEventListener('DOMContentLoaded', () => {
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+        const link = document.querySelector(`[onclick*="${hash}"]`);
+        if (link) showPage(hash, link);
+    }
+});
+
+// Handle click outside sidebar on mobile
+document.querySelector('.doc-main').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.remove('open');
+});
+</script>
+
+</body>
+</html>
