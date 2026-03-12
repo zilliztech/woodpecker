@@ -3,6 +3,7 @@ package conc
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/atomic"
@@ -13,58 +14,58 @@ type SingleflightSuite struct {
 }
 
 func (s *SingleflightSuite) TestDo() {
-	counter, hasShared := atomic.Int32{}, atomic.Bool{}
+	counter := atomic.Int32{}
 
 	sf := Singleflight[any]{}
+	ready := make(chan struct{})
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(10)
 	for i := 0; i < 10; i++ {
 		go func(i int) {
 			defer wg.Done()
-			_, _, shared := sf.Do("test_do", func() (any, error) {
+			<-ready // ensure all goroutines start before any proceeds
+			sf.Do("test_do", func() (any, error) {
 				<-ch
 				counter.Add(1)
 				return struct{}{}, nil
 			})
-			if shared {
-				hasShared.Store(true)
-			}
 		}(i)
 	}
+	close(ready) // release all goroutines at once
+	// Give goroutines time to enter sf.Do before unblocking the function
+	time.Sleep(10 * time.Millisecond)
 	close(ch)
 	wg.Wait()
-	if hasShared.Load() {
-		s.Less(counter.Load(), int32(10))
-	}
+	s.Less(counter.Load(), int32(10), "singleflight should deduplicate concurrent calls")
 }
 
 func (s *SingleflightSuite) TestDoChan() {
-	counter, hasShared := atomic.Int32{}, atomic.Bool{}
+	counter := atomic.Int32{}
 
 	sf := Singleflight[any]{}
+	ready := make(chan struct{})
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(10)
 	for i := 0; i < 10; i++ {
 		go func(i int) {
 			defer wg.Done()
-			ch := sf.DoChan("test_dochan", func() (any, error) {
+			<-ready // ensure all goroutines start before any proceeds
+			resCh := sf.DoChan("test_dochan", func() (any, error) {
 				<-ch
 				counter.Add(1)
 				return struct{}{}, nil
 			})
-			result := <-ch
-			if result.Shared {
-				hasShared.Store(true)
-			}
+			<-resCh
 		}(i)
 	}
+	close(ready) // release all goroutines at once
+	// Give goroutines time to enter sf.DoChan before unblocking the function
+	time.Sleep(10 * time.Millisecond)
 	close(ch)
 	wg.Wait()
-	if hasShared.Load() {
-		s.Less(counter.Load(), int32(10))
-	}
+	s.Less(counter.Load(), int32(10), "singleflight should deduplicate concurrent DoChan calls")
 }
 
 func (s *SingleflightSuite) TestForget() {

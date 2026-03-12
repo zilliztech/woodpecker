@@ -36,6 +36,20 @@ const (
 	FencedObjectMetaKey    = "Fenced"
 )
 
+//go:generate mockery --dir=./common/minio --name=MinioClientAPI --structname=MinioClientAPI --output=mocks/mocks_minio_client --filename=mock_minio_client_api.go --with-expecter=true --outpkg=mocks_minio_client
+
+// MinioClientAPI abstracts the minio.Client methods used by minioHandlerImpl,
+// enabling unit testing with mock implementations.
+// *minio.Client satisfies this interface implicitly via duck typing.
+type MinioClientAPI interface {
+	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
+	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
+	ListObjects(ctx context.Context, bucketName string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
+}
+
 //go:generate mockery --dir=./common/minio --name=MinioHandler --structname=MinioHandler --output=mocks/mocks_minio --filename=mock_minio_handler.go --with-expecter=true  --outpkg=mocks_minio
 type MinioHandler interface {
 	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions, operatingNamespace string, operatingLogId string) (*minio.Object, error)
@@ -52,7 +66,7 @@ type MinioHandler interface {
 var _ MinioHandler = (*minioHandlerImpl)(nil)
 
 type minioHandlerImpl struct {
-	client *minio.Client
+	client MinioClientAPI
 	cfg    *config.Configuration
 }
 
@@ -67,7 +81,7 @@ func NewMinioHandler(ctx context.Context, cfg *config.Configuration) (MinioHandl
 	}, nil
 }
 
-func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, minioCli *minio.Client) (MinioHandler, error) {
+func NewMinioHandlerWithClient(ctx context.Context, cfg *config.Configuration, minioCli MinioClientAPI) (MinioHandler, error) {
 	return &minioHandlerImpl{
 		client: minioCli,
 		cfg:    cfg,

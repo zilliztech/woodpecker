@@ -19,7 +19,6 @@ package channel
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,14 +82,10 @@ func TestLocalResultChannel_ReadAfterClose(t *testing.T) {
 	err = rc.Close(ctx)
 	assert.NoError(t, err)
 
-	// Try to read after close - this should still work if data is buffered
+	// Read after close should still return buffered data (Go channel semantics)
 	readResult, err := rc.ReadResult(ctx)
-	// This test will reveal the bug - it might fail even though data is available
-	if err != nil {
-		t.Logf("Bug detected: ReadResult failed after close even with buffered data: %v", err)
-	} else {
-		assert.Equal(t, int64(123), readResult.SyncedId)
-	}
+	assert.NoError(t, err, "should be able to read buffered data after close")
+	assert.Equal(t, int64(123), readResult.SyncedId)
 }
 
 func TestLocalResultChannel_ReadTimeout(t *testing.T) {
@@ -189,11 +184,11 @@ func TestLocalResultChannel_ConcurrentReadAndClose(t *testing.T) {
 
 	wg.Wait()
 
-	// This test will reveal potential deadlock or race condition issues
-	if readError != nil {
-		t.Logf("Read error: %v", readError)
-	} else {
+	// Either the reader got the buffered data, or got a closed error (both valid)
+	if readError == nil {
 		assert.Equal(t, int64(123), readResult.SyncedId)
+	} else {
+		assert.Contains(t, readError.Error(), "closed")
 	}
 }
 
@@ -232,39 +227,37 @@ func TestLocalResultChannel_MultipleClose(t *testing.T) {
 	assert.True(t, rc.IsClosed())
 }
 
-// Test to expose potential deadlock in ReadResult
+// Test that ReadResult + Close don't deadlock
 func TestLocalResultChannel_ReadResultDeadlock(t *testing.T) {
 	rc := NewLocalResultChannel("test-deadlock")
 
 	var wg sync.WaitGroup
 	var readError error
 
-	// Start a reader that will block
+	// Start a reader that will block on empty channel
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-
-		// This should block because channel is empty
 		_, readError = rc.ReadResult(ctx)
 	}()
 
-	// Give reader time to start and acquire the lock
+	// Give reader time to start blocking
 	time.Sleep(50 * time.Millisecond)
 
-	// Now try to close - this might deadlock if reader holds the lock
+	// Close should not deadlock
 	closeErr := rc.Close(context.Background())
 	assert.NoError(t, closeErr)
 
 	wg.Wait()
 
-	// Should timeout, not deadlock
+	// Reader should get closed error (channel was closed while it was blocking)
 	assert.Error(t, readError)
 	assert.True(t, werr.ErrAppendOpResultChannelClosed.Is(readError))
 }
 
-// Test to expose race condition in SendResult
+// Test that concurrent Send and Close don't panic (race safety)
 func TestLocalResultChannel_SendRaceCondition(t *testing.T) {
 	rc := NewLocalResultChannel("test-race")
 
@@ -278,8 +271,6 @@ func TestLocalResultChannel_SendRaceCondition(t *testing.T) {
 		defer wg.Done()
 		ctx := context.Background()
 		result := &AppendResult{SyncedId: 123, Err: nil}
-
-		// Add a small delay to increase chance of race condition
 		time.Sleep(10 * time.Millisecond)
 		sendError = rc.SendResult(ctx, result)
 	}()
@@ -292,25 +283,21 @@ func TestLocalResultChannel_SendRaceCondition(t *testing.T) {
 		closeError = rc.Close(context.Background())
 	}()
 
-	wg.Wait()
-
+	// Must not panic
+	assert.NotPanics(t, func() { wg.Wait() })
 	assert.NoError(t, closeError)
-	// sendError might be nil or error depending on timing
-	t.Logf("Send error: %v", sendError)
+	// sendError may be nil or "closed" depending on timing - both are valid
+	if sendError != nil {
+		assert.Contains(t, sendError.Error(), "closed")
+	}
 }
 
-// Test the specific ReadResult logic bug
-func TestLocalResultChannel_ReadResultLogicBug(t *testing.T) {
-	rc := NewLocalResultChannel("test-logic")
+// Test that ReadResult properly respects context timeout on empty channel
+func TestLocalResultChannel_ReadResultTimeout(t *testing.T) {
+	rc := NewLocalResultChannel("test-timeout")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-
-	// This should timeout because:
-	// 1. First select hits default case (no data)
-	// 2. Channel is not closed, so enters second select
-	// 3. Second select has no default case, so blocks forever
-	// 4. Should timeout due to context, but might not if logic is wrong
 
 	start := time.Now()
 	_, err := rc.ReadResult(ctx)
@@ -338,16 +325,13 @@ func TestLocalResultChannel_BufferedDataAfterClose(t *testing.T) {
 	err = rc.Close(ctx)
 	assert.NoError(t, err)
 
-	// Should still be able to read buffered data
+	// Should still be able to read buffered data (Go channel semantics)
 	readCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
 	read1, err := rc.ReadResult(readCtx)
-	if err != nil {
-		t.Errorf("Should be able to read buffered data after close, got error: %v", err)
-	} else {
-		assert.Equal(t, int64(111), read1.SyncedId)
-	}
+	assert.NoError(t, err, "should be able to read buffered data after close")
+	assert.Equal(t, int64(111), read1.SyncedId)
 
 	// Second read should fail because no more data
 	_, err = rc.ReadResult(readCtx)
@@ -355,9 +339,9 @@ func TestLocalResultChannel_BufferedDataAfterClose(t *testing.T) {
 	assert.Contains(t, err.Error(), "closed")
 }
 
-// This test will expose the real bug in ReadResult
-func TestLocalResultChannel_ReadResultBugExposed(t *testing.T) {
-	rc := NewLocalResultChannel("test-bug")
+// Test that ReadResult returns buffered data even after Close
+func TestLocalResultChannel_ReadResultBufferedAfterClose(t *testing.T) {
+	rc := NewLocalResultChannel("test-buffered-read")
 
 	ctx := context.Background()
 	result := &AppendResult{SyncedId: 999, Err: nil}
@@ -370,24 +354,13 @@ func TestLocalResultChannel_ReadResultBugExposed(t *testing.T) {
 	err = rc.Close(ctx)
 	assert.NoError(t, err)
 
-	// Now try to read - this should work because data is still in the buffer
-	// But the current implementation might fail because it checks l.closed first
+	// Read should return buffered data (Go closed channel returns buffered data first)
 	readCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	// The bug: ReadResult will hit the default case first, then check l.closed
-	// and return error immediately without trying to read the buffered data
 	readResult, err := rc.ReadResult(readCtx)
-
-	if err != nil {
-		t.Errorf("BUG DETECTED: ReadResult should read buffered data even after close, but got error: %v", err)
-		// This is the bug - it returns "closed" error even though data is available
-		assert.Contains(t, err.Error(), "closed")
-	} else {
-		// This is the expected behavior
-		assert.Equal(t, int64(999), readResult.SyncedId)
-		t.Log("No bug detected - ReadResult correctly read buffered data after close")
-	}
+	assert.NoError(t, err, "ReadResult should return buffered data even after close")
+	assert.Equal(t, int64(999), readResult.SyncedId)
 }
 
 // Test a potential issue with concurrent reads
@@ -441,11 +414,8 @@ func TestLocalResultChannel_ConcurrentReads(t *testing.T) {
 	assert.Equal(t, 1, len(errors), "One reader should get error")
 
 	for _, err := range errors {
-		// Should be either timeout or closed error
-		assert.True(t,
-			err == context.DeadlineExceeded ||
-				(err != nil && (strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "timeout"))),
-			"Error should be timeout or closed: %v", err)
+		// The other reader should get a context timeout (channel empty, no more data)
+		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
 	}
 }
 
@@ -596,11 +566,8 @@ func TestLocalResultChannel_MultipleReadersOneMessage(t *testing.T) {
 	assert.Len(t, errors, 2, "Two readers should get errors")
 
 	for _, err := range errors {
-		// Should be either timeout or closed error
-		assert.True(t,
-			err == context.DeadlineExceeded ||
-				(err != nil && (strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "timeout"))),
-			"Error should be timeout or closed: %v", err)
+		// The other readers should get a context timeout (channel empty, no more data)
+		assert.Equal(t, context.DeadlineExceeded, err, "non-winning reader should timeout")
 	}
 }
 
@@ -638,6 +605,23 @@ func TestLocalResultChannel_ResourceCleanupPattern(t *testing.T) {
 	err = rc.SendResult(ctx, result)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "closed")
+}
+
+func TestLocalResultChannel_SendResult_ContextCancelled(t *testing.T) {
+	rc := NewLocalResultChannel("test-ctx-cancel")
+
+	ctx := context.Background()
+	// Fill the buffer first
+	err := rc.SendResult(ctx, &AppendResult{SyncedId: 1, Err: nil})
+	assert.NoError(t, err)
+
+	// Now use a cancelled context to send when buffer is full
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	err = rc.SendResult(cancelledCtx, &AppendResult{SyncedId: 2, Err: nil})
+	assert.Error(t, err)
+	assert.Equal(t, context.Canceled, err)
 }
 
 // Test the recommended usage pattern - simplified

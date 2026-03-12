@@ -26,7 +26,9 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/mocks/mocks_server/mocks_segment"
+	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
 )
 
@@ -47,7 +49,7 @@ func createTestLogStore() *logStore {
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		cleanupDone:       make(chan struct{}),
 	}
-
+	store.stopped.Store(true) // Match production: NewLogStore starts in stopped state
 	return store
 }
 
@@ -133,7 +135,7 @@ func TestLogStore_SegmentProcessorCleanup_IdleCleanup(t *testing.T) {
 	// Call cleanup with 5 minute max idle time
 	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
 	for _, item := range idleProcessors {
-		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
+		store.closeSegmentProcessor(context.Background(), item.logKey, item.segmentId, item.processor)
 	}
 
 	// Verify that segments 1,2,3 were removed (idle)
@@ -177,8 +179,11 @@ func TestLogStore_SegmentProcessorCleanup_ThresholdConditions(t *testing.T) {
 			store.segmentProcessors[logKey] = make(map[int64]processor.SegmentProcessor)
 		}
 		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
-		// All processors are recently accessed, so none should be cleaned
-		mockProcessors[i].EXPECT().GetLastAccessTime().Return(recentTime.UnixMilli()).Maybe()
+		if i < 15 {
+			// Segments 1-14 should have GetLastAccessTime called (not protected)
+			mockProcessors[i].EXPECT().GetLastAccessTime().Return(recentTime.UnixMilli()).Once()
+		}
+		// Segment 15 is protected (highest), so GetLastAccessTime won't be called
 		store.segmentProcessors[logKey][i] = mockProcessors[i]
 	}
 
@@ -304,7 +309,7 @@ func TestLogStore_CloseSegmentProcessorUnsafe_CloseError(t *testing.T) {
 	mockProcessor.EXPECT().GetLogId().Return(testLogId).Times(2)
 
 	// Should not panic even if close fails
-	store.closeSegmentProcessorUnsafe(context.Background(), logKey, 10, mockProcessor)
+	store.closeSegmentProcessor(context.Background(), logKey, 10, mockProcessor)
 
 	// Verify expectations
 	mockProcessor.AssertExpectations(t)
@@ -347,7 +352,7 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	// Call cleanup
 	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
 	for _, item := range idleProcessors {
-		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
+		store.closeSegmentProcessor(context.Background(), item.logKey, item.segmentId, item.processor)
 	}
 
 	// Verify that segments 1,2,3,4 were removed
@@ -356,58 +361,6 @@ func TestLogStore_SegmentProcessorCleanup_ProtectLatestSegments(t *testing.T) {
 	}
 
 	// Verify that segment 5 remains (protected: highest segment ID)
-	assert.Contains(t, store.segmentProcessors[logKey], int64(5), "Segment 5 should be protected (highest segment ID)")
-
-	// Verify expectations for closed processors
-	for i := int64(1); i <= 4; i++ {
-		mockProcessors[i].AssertExpectations(t)
-	}
-}
-
-func TestLogStore_SegmentProcessorCleanup_ProtectHighestSegment(t *testing.T) {
-	store := createTestLogStore()
-
-	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
-
-	// Create 5 processors to test highest segment protection
-	mockProcessors := make(map[int64]*mocks_segment.SegmentProcessor)
-	for i := int64(1); i <= 5; i++ {
-		mockProcessors[i] = mocks_segment.NewSegmentProcessor(t)
-	}
-
-	// Set up expectations - processors 1,2,3,4 should be closed (all idle except highest)
-	// Processor 5 will be protected (highest segment ID)
-	for i := int64(1); i <= 4; i++ {
-		mockProcessors[i].EXPECT().Close(mock.Anything).Return(nil).Once()
-		mockProcessors[i].EXPECT().GetLogId().Return(testLogId).Times(2)
-	}
-
-	// Add processors with old access times (all idle)
-	now := time.Now()
-	oldTime := now.Add(-10 * time.Minute) // All are idle
-
-	store.segmentProcessors[logKey] = make(map[int64]processor.SegmentProcessor)
-
-	for i := int64(1); i <= 5; i++ {
-		store.segmentProcessors[logKey][i] = mockProcessors[i]
-		// Only processors 1-4 will have GetLastAccessTime called (segment 5 is protected)
-		if i < 5 {
-			mockProcessors[i].EXPECT().GetLastAccessTime().Return(oldTime.UnixMilli()).Once()
-		}
-	}
-
-	// Call cleanup
-	idleProcessors := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
-	for _, item := range idleProcessors {
-		store.closeSegmentProcessorUnsafe(context.Background(), item.logKey, item.segmentId, item.processor)
-	}
-
-	// Verify that segments 1,2,3,4 were removed (idle and not highest)
-	for i := int64(1); i <= 4; i++ {
-		assert.NotContains(t, store.segmentProcessors[logKey], i, "Segment %d should be cleaned up", i)
-	}
-
-	// Verify that segment 5 remains (highest segment ID, protected)
 	assert.Contains(t, store.segmentProcessors[logKey], int64(5), "Segment 5 should be protected (highest segment ID)")
 
 	// Verify expectations for closed processors
@@ -435,6 +388,537 @@ func TestLogStore_BackgroundCleanup_StartStop(t *testing.T) {
 	default:
 		t.Fatal("cleanupDone channel should be closed")
 	}
+}
+
+// === LogStore core method tests ===
+
+func TestLogStore_NewLogStore(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ctx := context.Background()
+	store := NewLogStore(ctx, cfg, nil)
+	assert.NotNil(t, store)
+	ls := store.(*logStore)
+	assert.NotEmpty(t, ls.address)
+	assert.True(t, ls.stopped.Load())
+}
+
+func TestLogStore_StartStop(t *testing.T) {
+	store := createTestLogStore()
+	err := store.Start()
+	assert.NoError(t, err)
+	assert.False(t, store.stopped.Load())
+
+	err = store.Stop()
+	assert.NoError(t, err)
+	assert.True(t, store.stopped.Load())
+}
+
+func TestLogStore_SetGetAddress(t *testing.T) {
+	store := createTestLogStore()
+	store.SetAddress("10.0.0.1:8080")
+	assert.Equal(t, "10.0.0.1:8080", store.GetAddress())
+}
+
+func TestLogStore_AddEntry_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.AddEntry(context.Background(), testBucketName, testRootPath, testLogId, &proto.LogEntry{SegId: 0, EntryId: 0}, nil)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_AddEntry_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().AddEntry(mock.Anything, mock.Anything, mock.Anything).Return(int64(0), nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	entry := &proto.LogEntry{SegId: 0, EntryId: 0, Values: []byte("hello")}
+	entryId, err := store.AddEntry(context.Background(), testBucketName, testRootPath, testLogId, entry, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), entryId)
+}
+
+func TestLogStore_AddEntry_ProcessorError(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().AddEntry(mock.Anything, mock.Anything, mock.Anything).Return(int64(-1), assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	entry := &proto.LogEntry{SegId: 0, EntryId: 0}
+	_, err := store.AddEntry(context.Background(), testBucketName, testRootPath, testLogId, entry, nil)
+	assert.Error(t, err)
+}
+
+func TestLogStore_GetBatchEntriesAdv_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.GetBatchEntriesAdv(context.Background(), testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_GetBatchEntriesAdv_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	expectedResult := &proto.BatchReadResult{
+		Entries: []*proto.LogEntry{{EntryId: 0, Values: []byte("data")}},
+	}
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().ReadBatchEntriesAdv(mock.Anything, int64(0), int64(10), mock.Anything).Return(expectedResult, nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	result, err := store.GetBatchEntriesAdv(context.Background(), testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Entries, 1)
+}
+
+func TestLogStore_GetBatchEntriesAdv_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().ReadBatchEntriesAdv(mock.Anything, int64(0), int64(10), mock.Anything).Return(nil, assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.GetBatchEntriesAdv(context.Background(), testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.Error(t, err)
+}
+
+func TestLogStore_CompleteSegment_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.CompleteSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 5)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_CompleteSegment_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Complete(mock.Anything, int64(5)).Return(int64(5), nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	lac, err := store.CompleteSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 5)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), lac)
+}
+
+func TestLogStore_FenceSegment_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.FenceSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_FenceSegment_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Fence(mock.Anything).Return(int64(10), nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	lastEntry, err := store.FenceSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10), lastEntry)
+}
+
+func TestLogStore_FenceSegment_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Fence(mock.Anything).Return(int64(-1), assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.FenceSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.Error(t, err)
+}
+
+func TestLogStore_GetSegmentLastAddConfirmed_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.GetSegmentLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_GetSegmentLastAddConfirmed_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().GetSegmentLastAddConfirmed(mock.Anything).Return(int64(42), nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	lac, err := store.GetSegmentLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(42), lac)
+}
+
+func TestLogStore_GetSegmentBlockCount_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.GetSegmentBlockCount(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_GetSegmentBlockCount_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().GetBlocksCount(mock.Anything).Return(int64(5), nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	count, err := store.GetSegmentBlockCount(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+}
+
+func TestLogStore_GetSegmentBlockCount_NoWriter(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().GetBlocksCount(mock.Anything).Return(int64(0), werr.ErrSegmentProcessorNoWriter).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	count, err := store.GetSegmentBlockCount(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), count)
+}
+
+func TestLogStore_CompactSegment_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_CompactSegment_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	expectedMeta := &proto.SegmentMetadata{SegNo: 0}
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Compact(mock.Anything).Return(expectedMeta, nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	meta, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedMeta, meta)
+}
+
+func TestLogStore_CleanSegment_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	err := store.CleanSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 0)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_CleanSegment_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Clean(mock.Anything, 0).Return(nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	err := store.CleanSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 0)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_UpdateLastAddConfirmed_Stopped(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(true)
+
+	err := store.UpdateLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0, 10)
+	assert.ErrorIs(t, err, werr.ErrLogStoreShutdown)
+}
+
+func TestLogStore_UpdateLastAddConfirmed_Success(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().UpdateSegmentLastAddConfirmed(mock.Anything, int64(10)).Return(nil).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	err := store.UpdateLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0, 10)
+	assert.NoError(t, err)
+}
+
+func TestLogStore_GetOrCreateSegmentProcessor(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	// First call should create a new processor
+	sp, err := store.getOrCreateSegmentProcessor(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.NotNil(t, sp)
+
+	// Second call should return the same processor (cached)
+	sp2, err := store.getOrCreateSegmentProcessor(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, sp, sp2)
+}
+
+func TestLogStore_GetLogKey(t *testing.T) {
+	assert.Equal(t, "bucket/root/1", GetLogKey("bucket", "root", 1))
+	assert.Equal(t, "b/r/0", GetLogKey("b", "r", 0))
+}
+
+// === Additional error path tests to improve coverage ===
+
+func TestLogStore_CompleteSegment_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Complete(mock.Anything, int64(5)).Return(int64(-1), assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.CompleteSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 5)
+	assert.Error(t, err)
+}
+
+func TestLogStore_GetSegmentLastAddConfirmed_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().GetSegmentLastAddConfirmed(mock.Anything).Return(int64(-1), assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.GetSegmentLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.Error(t, err)
+}
+
+func TestLogStore_GetSegmentBlockCount_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().GetBlocksCount(mock.Anything).Return(int64(-1), assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.GetSegmentBlockCount(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.Error(t, err)
+}
+
+func TestLogStore_CompactSegment_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Compact(mock.Anything).Return(nil, assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.CompactSegment(context.Background(), testBucketName, testRootPath, testLogId, 0)
+	assert.Error(t, err)
+}
+
+func TestLogStore_CleanSegment_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().Clean(mock.Anything, 1).Return(assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	err := store.CleanSegment(context.Background(), testBucketName, testRootPath, testLogId, 0, 1)
+	assert.Error(t, err)
+}
+
+func TestLogStore_UpdateLastAddConfirmed_Error(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().UpdateSegmentLastAddConfirmed(mock.Anything, int64(10)).Return(assert.AnError).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	err := store.UpdateLastAddConfirmed(context.Background(), testBucketName, testRootPath, testLogId, 0, 10)
+	assert.Error(t, err)
+}
+
+func TestLogStore_RemoveSegmentProcessor_SegmentNotFound(t *testing.T) {
+	store := createTestLogStore()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		10: mockProcessor,
+	}
+
+	// Remove a non-existent segment ID - should not panic
+	store.RemoveSegmentProcessor(context.Background(), testBucketName, testRootPath, testLogId, 999)
+
+	// Verify existing processor still there
+	assert.Contains(t, store.segmentProcessors[logKey], int64(10))
+}
+
+func TestLogStore_RemoveSegmentProcessor_LogNotFound(t *testing.T) {
+	store := createTestLogStore()
+
+	// Remove from a non-existent log - should not panic
+	store.RemoveSegmentProcessor(context.Background(), "nonexistent-bucket", "nonexistent-path", 999, 0)
+
+	// Verify no crash
+	assert.Empty(t, store.segmentProcessors)
+}
+
+func TestLogStore_GetBatchEntriesAdv_ErrorKinds(t *testing.T) {
+	// Test with ErrEntryNotFound
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().ReadBatchEntriesAdv(mock.Anything, int64(0), int64(10), mock.Anything).Return(nil, werr.ErrEntryNotFound).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.GetBatchEntriesAdv(context.Background(), testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrEntryNotFound.Is(err))
+}
+
+func TestLogStore_GetBatchEntriesAdv_ErrorEOF(t *testing.T) {
+	store := createTestLogStore()
+	store.stopped.Store(false)
+
+	mockProcessor := mocks_segment.NewSegmentProcessor(t)
+	mockProcessor.EXPECT().ReadBatchEntriesAdv(mock.Anything, int64(0), int64(10), mock.Anything).Return(nil, werr.ErrFileReaderEndOfFile).Once()
+
+	logKey := GetLogKey(testBucketName, testRootPath, testLogId)
+	store.segmentProcessors[logKey] = map[int64]processor.SegmentProcessor{
+		0: mockProcessor,
+	}
+
+	_, err := store.GetBatchEntriesAdv(context.Background(), testBucketName, testRootPath, testLogId, 0, 0, 10, nil)
+	assert.Error(t, err)
+}
+
+func TestLogStore_StopAlreadyStopped(t *testing.T) {
+	store := createTestLogStore()
+	// Store is already stopped by default
+	assert.True(t, store.stopped.Load())
+
+	// Start then stop normally
+	store.Start()
+	assert.False(t, store.stopped.Load())
+
+	err := store.Stop()
+	assert.NoError(t, err)
+	assert.True(t, store.stopped.Load())
+
+	// Calling Stop again should not panic (already stopped)
+	// Re-create cleanupDone channel since it was already closed
+	store.cleanupDone = make(chan struct{})
+	err = store.Stop()
+	assert.NoError(t, err)
+}
+
+func TestLogStore_CollectIdleSegmentProcessors_NoIdle(t *testing.T) {
+	store := createTestLogStore()
+
+	// Empty store - should return nil
+	result := store.collectIdleSegmentProcessorsUnsafe(context.Background(), 5*time.Minute)
+	assert.Nil(t, result)
 }
 
 func TestLogStore_BackgroundCleanup_PerformCleanup(t *testing.T) {

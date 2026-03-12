@@ -33,6 +33,21 @@ import (
 	"github.com/zilliztech/woodpecker/proto"
 )
 
+// cleanupAppendOp stops background goroutines spawned by Execute().
+// It sets fastCalled to make goroutines exit early after ReadResult returns,
+// then closes all result channels to unblock them.
+func cleanupAppendOp(t *testing.T, op *AppendOp) {
+	t.Helper()
+	op.fastCalled.Store(true)
+	for _, ch := range op.resultChannels {
+		if ch != nil {
+			ch.Close(context.Background())
+		}
+	}
+	// Give goroutines time to see fastCalled and exit
+	time.Sleep(100 * time.Millisecond)
+}
+
 func TestNewAppendOp(t *testing.T) {
 	logId := int64(1)
 	segmentId := int64(2)
@@ -90,10 +105,14 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 	}
 
 	// Setup expectations
-	// mockHandle.EXPECT().GetQuorumInfo(mock.Anything).Return(quorumInfo, nil)
 	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "node1").Return(mockClient, nil)
 	mockClient.EXPECT().AppendEntry(mock.Anything, mock.Anything, mock.Anything, int64(1), mock.Anything, mock.Anything).Return(int64(3), nil)
 	mockClient.EXPECT().IsRemoteClient().Return(true)
+
+	done := make(chan struct{})
+	mockHandle.EXPECT().SendAppendSuccessCallbacks(mock.Anything, int64(3)).Run(func(_ context.Context, _ int64) {
+		close(done)
+	}).Return()
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
 
@@ -102,6 +121,21 @@ func TestAppendOp_Execute_Success(t *testing.T) {
 
 	// Verify
 	assert.Equal(t, 1, len(op.resultChannels))
+
+	// Send a result through the channel so the background goroutine completes
+	// instead of blocking for 30s and panicking after the test ends.
+	err := op.resultChannels[0].SendResult(context.Background(), &channel.AppendResult{
+		SyncedId: 3,
+		Err:      nil,
+	})
+	assert.NoError(t, err)
+
+	// Wait for the goroutine to finish
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for goroutine to complete")
+	}
 }
 
 func TestAppendOp_Execute_GetClientError(t *testing.T) {
@@ -454,6 +488,7 @@ func TestAppendOp_Execute_RetryIdempotency(t *testing.T) {
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
 	op.Execute()
@@ -508,6 +543,7 @@ func TestAppendOp_Execute_RetryIdempotency_WithSameQuorumSize(t *testing.T) {
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, initialQuorumInfo)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution with 2 nodes
 	op.Execute()
@@ -549,6 +585,7 @@ func TestAppendOp_sendWriteRequest_ChannelReuse(t *testing.T) {
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, nil, quorumInfo)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// Initialize result channels slice
 	op.resultChannels = make([]channel.ResultChannel, 1)
@@ -590,6 +627,7 @@ func TestAppendOp_Execute_RetryIdempotency_WithNilChannels(t *testing.T) {
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// Manually set up result channels with one nil channel (simulating partial failure)
 	op.resultChannels = make([]channel.ResultChannel, 2)
@@ -629,6 +667,7 @@ func TestAppendOp_Execute_RetryIdempotency_ChannelIdentifier(t *testing.T) {
 	mockClient.EXPECT().IsRemoteClient().Return(true)
 
 	op := NewAppendOp("a-bucket", "files", 1, 2, 3, []byte("test"), func(int64, int64, error) {}, mockClientPool, mockHandle, quorumInfo)
+	t.Cleanup(func() { cleanupAppendOp(t, op) })
 
 	// First execution
 	op.Execute()

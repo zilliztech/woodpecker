@@ -27,6 +27,7 @@ import (
 func TestNewConfiguration(t *testing.T) {
 	tempFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
+	defer tempFile.Close()
 	// load configuration
 	config, err := NewConfiguration(tempFile.Name())
 	if err != nil {
@@ -218,6 +219,7 @@ func TestConfigurationOverwrite(t *testing.T) {
 	// config file 1
 	cfgFile, err := os.OpenFile("../../config/woodpecker.yaml", os.O_RDWR|os.O_CREATE, 0o666)
 	assert.NoError(t, err)
+	defer cfgFile.Close()
 
 	// config file2
 	extraCfgContent := `woodpecker:
@@ -483,6 +485,387 @@ func TestQuorumConfigValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFencePolicyConfig(t *testing.T) {
+	t.Run("IsConditionWriteEnabled", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "enable"}
+		assert.True(t, f.IsConditionWriteEnabled())
+		assert.False(t, f.IsConditionWriteDisabled())
+		assert.False(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("IsConditionWriteDisabled", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "disable"}
+		assert.False(t, f.IsConditionWriteEnabled())
+		assert.True(t, f.IsConditionWriteDisabled())
+		assert.False(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("IsConditionWriteAuto", func(t *testing.T) {
+		f := &FencePolicyConfig{ConditionWrite: "auto"}
+		assert.False(t, f.IsConditionWriteEnabled())
+		assert.False(t, f.IsConditionWriteDisabled())
+		assert.True(t, f.IsConditionWriteAuto())
+	})
+
+	t.Run("SetConditionWriteEnableOrNot", func(t *testing.T) {
+		f := &FencePolicyConfig{}
+		f.SetConditionWriteEnableOrNot(true)
+		assert.True(t, f.IsConditionWriteEnabled())
+		f.SetConditionWriteEnableOrNot(false)
+		assert.True(t, f.IsConditionWriteDisabled())
+	})
+}
+
+func TestStorageConfig_IsStorageLocal(t *testing.T) {
+	s := &StorageConfig{Type: "local"}
+	assert.True(t, s.IsStorageLocal())
+	assert.False(t, s.IsStorageMinio())
+	assert.False(t, s.IsStorageService())
+}
+
+func TestStorageConfig_IsStorageMinio(t *testing.T) {
+	for _, typ := range []string{"minio", "default", ""} {
+		s := &StorageConfig{Type: typ}
+		assert.True(t, s.IsStorageMinio(), "type=%q should be minio", typ)
+	}
+	s := &StorageConfig{Type: "local"}
+	assert.False(t, s.IsStorageMinio())
+}
+
+func TestNewConfiguration_FileErrors(t *testing.T) {
+	// Non-existent file
+	_, err := NewConfiguration("/nonexistent/path/file.yaml")
+	assert.Error(t, err)
+
+	// Empty file
+	tmpFile, err := os.CreateTemp("", "empty_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+	cfg, err := NewConfiguration(tmpFile.Name())
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	// Invalid YAML
+	tmpBad, err := os.CreateTemp("", "bad_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpBad.Name())
+	_, err = tmpBad.WriteString("{{invalid yaml")
+	assert.NoError(t, err)
+	tmpBad.Close()
+	_, err = NewConfiguration(tmpBad.Name())
+	assert.Error(t, err)
+}
+
+func TestNewConfiguration_ValidationFailure(t *testing.T) {
+	// YAML with invalid meta type should fail validation
+	tmpFile, err := os.CreateTemp("", "invalid_meta_*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.WriteString("woodpecker:\n  meta:\n    type: invalid\n    prefix: test\n")
+	assert.NoError(t, err)
+	tmpFile.Close()
+	_, err = NewConfiguration(tmpFile.Name())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid meta type")
+}
+
+func TestValidateMetaConfig_Errors(t *testing.T) {
+	cfg, _ := NewConfiguration()
+
+	// Invalid type
+	cfg.Woodpecker.Meta.Type = "invalid"
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid meta type")
+
+	// Empty prefix
+	cfg.Woodpecker.Meta.Type = "etcd"
+	cfg.Woodpecker.Meta.Prefix = ""
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prefix cannot be empty")
+}
+
+func TestValidateClientConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("QueueSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentAppend.QueueSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "queue size must be positive")
+	})
+
+	t.Run("MaxRetries<0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentAppend.MaxRetries = -1
+		assert.ErrorContains(t, cfg.Validate(), "max retries cannot be negative")
+	})
+
+	t.Run("RollingPolicy MaxSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max size must be positive")
+	})
+
+	t.Run("RollingPolicy MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval must be positive")
+	})
+
+	t.Run("RollingPolicy MaxBlocks<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks = 0
+		assert.ErrorContains(t, cfg.Validate(), "max blocks must be positive")
+	})
+
+	t.Run("Auditor MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.Auditor.MaxInterval = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "auditor max interval must be positive")
+	})
+}
+
+func TestValidateLogstoreConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("SyncPolicy MaxInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "sync policy max interval must be positive")
+	})
+
+	t.Run("SyncPolicy MaxIntervalForLocalStorage<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "max interval for local storage must be positive")
+	})
+
+	t.Run("SyncPolicy MaxEntries<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries = 0
+		assert.ErrorContains(t, cfg.Validate(), "max entries must be positive")
+	})
+
+	t.Run("SyncPolicy MaxBytes<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes = 0
+		assert.ErrorContains(t, cfg.Validate(), "max bytes must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushRetries<0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushRetries = -1
+		assert.ErrorContains(t, cfg.Validate(), "max flush retries cannot be negative")
+	})
+
+	t.Run("SyncPolicy RetryInterval<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.RetryInterval = NewDurationMillisecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "retry interval must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max flush size must be positive")
+	})
+
+	t.Run("SyncPolicy MaxFlushThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max flush threads must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxBytes<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = 0
+		assert.ErrorContains(t, cfg.Validate(), "compaction policy max bytes must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxParallelUploads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max parallel uploads must be positive")
+	})
+
+	t.Run("CompactionPolicy MaxParallelReads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max parallel reads must be positive")
+	})
+
+	t.Run("ReadPolicy MaxBatchSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxBatchSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "max batch size must be positive")
+	})
+
+	t.Run("ReadPolicy MaxFetchThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentReadPolicy.MaxFetchThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "max fetch threads must be positive")
+	})
+}
+
+func TestValidateStorageConfig_Errors(t *testing.T) {
+	newValidCfg := func() *Configuration {
+		cfg, _ := NewConfiguration()
+		return cfg
+	}
+
+	t.Run("Invalid type", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.Type = "invalid"
+		assert.ErrorContains(t, cfg.Validate(), "invalid storage type")
+	})
+
+	t.Run("Empty root path", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Storage.RootPath = ""
+		assert.ErrorContains(t, cfg.Validate(), "root path cannot be empty")
+	})
+}
+
+func TestValidateQuorumConfig_MoreErrors(t *testing.T) {
+	makeServiceCfg := func(q QuorumConfig) *Configuration {
+		cfg, _ := NewConfiguration()
+		cfg.Woodpecker.Storage.Type = "service"
+		cfg.Woodpecker.Client.Quorum = q
+		return cfg
+	}
+
+	t.Run("BufferPool empty name", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "random",
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "name cannot be empty")
+	})
+
+	t.Run("BufferPool empty seeds", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "random",
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "must have at least one seed")
+	})
+
+	t.Run("BufferPool empty seed value", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{""}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "random",
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "seed 0 cannot be empty")
+	})
+
+	t.Run("Custom no placement", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom", CustomPlacement: []CustomPlacement{},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "requires at least one custom placement")
+	})
+
+	t.Run("Custom placement count mismatch", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom",
+				CustomPlacement: []CustomPlacement{
+					{Region: "pool", Az: "az1", ResourceGroup: "rg1"},
+				},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "must equal ensemble size")
+	})
+
+	t.Run("Custom placement empty region", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom",
+				CustomPlacement: []CustomPlacement{
+					{Region: "", Az: "az1", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "region cannot be empty")
+	})
+
+	t.Run("Custom placement empty az", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom",
+				CustomPlacement: []CustomPlacement{
+					{Region: "pool", Az: "", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "az cannot be empty")
+	})
+
+	t.Run("Custom placement empty resourceGroup", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom",
+				CustomPlacement: []CustomPlacement{
+					{Region: "pool", Az: "az1", ResourceGroup: ""},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "resource group cannot be empty")
+	})
+
+	t.Run("Custom placement unknown region", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "custom",
+				CustomPlacement: []CustomPlacement{
+					{Region: "unknown", Az: "az1", ResourceGroup: "rg1"},
+					{Region: "pool", Az: "az2", ResourceGroup: "rg2"},
+					{Region: "pool", Az: "az3", ResourceGroup: "rg3"},
+				},
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "unknown region")
+	})
+
+	t.Run("Cross-region too few pools", func(t *testing.T) {
+		cfg := makeServiceCfg(QuorumConfig{
+			BufferPools: []QuorumBufferPool{{Name: "pool", Seeds: []string{"s1"}}},
+			SelectStrategy: QuorumSelectStrategy{
+				Replicas: 3, Strategy: "cross-region",
+			},
+		})
+		assert.ErrorContains(t, cfg.Validate(), "requires at least 2 buffer pools")
+	})
 }
 
 // TestQuorumConfigReplicasHandling tests the replica-based configuration

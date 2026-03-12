@@ -170,6 +170,10 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	defer sp.End()
 	// sync call error, return directly
 	if err != nil {
+		// Skip further processing if operation already completed via FastFail/FastSuccess
+		if op.fastCalled.Load() {
+			return
+		}
 		op.channelErrors[serverIndex] = err
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, err, serverIndex, serverAddr)
 		return
@@ -179,6 +183,14 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 	defer cancel()
 	syncedResult, readChanErr := resultChan.ReadResult(subCtx)
 	sp.AddEvent("wait callback", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startRequestTime).Milliseconds()), attribute.Int("serverIndex", serverIndex), attribute.String("serverAddr", serverAddr)))
+
+	// If operation already completed via FastFail/FastSuccess, skip further processing
+	if op.fastCalled.Load() {
+		logger.Ctx(ctx).Debug("received ack but already fast completed",
+			zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr))
+		return
+	}
+
 	if readChanErr != nil {
 		if errors.IsAny(readChanErr, context.Canceled, context.DeadlineExceeded) {
 			// read chan timeout, retry
@@ -193,12 +205,6 @@ func (op *AppendOp) receivedAckCallback(ctx context.Context, startRequestTime ti
 		// read chan error, retry if necessary
 		op.channelErrors[serverIndex] = readChanErr
 		op.handle.HandleAppendRequestFailure(ctx, op.entryId, readChanErr, serverIndex, serverAddr)
-		return
-	}
-
-	if op.fastCalled.Load() {
-		logger.Ctx(ctx).Debug("received ack but already fast completed",
-			zap.Int64("syncedId", syncedResult.SyncedId), zap.Int64("logId", op.logId), zap.Int64("segId", op.segmentId), zap.Int64("entryId", op.entryId), zap.String("serverAddr", serverAddr))
 		return
 	}
 

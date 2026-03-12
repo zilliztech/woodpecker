@@ -60,6 +60,15 @@ jobs:
 
             gh pr comment $PR --repo $REPO --body "Rerunning $COUNT failed workflow(s). Check the [Actions tab](https://github.com/${REPO}/actions) for progress."
 
+          elif [ "$CMD" = "/rerun-all" ]; then
+            # Internal command: rerun ALL workflows (not just failed), no comment posted
+            ALL_RUNS=$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}" \
+              --jq '.workflow_runs[].id')
+
+            for run_id in $ALL_RUNS; do
+              gh api "repos/${REPO}/actions/runs/${run_id}/rerun" -X POST || true
+            done
+
           elif [ -n "${WORKFLOW_MAP[$CMD]+x}" ]; then
             # Rerun a specific workflow
             WORKFLOW_FILE="${WORKFLOW_MAP[$CMD]}"

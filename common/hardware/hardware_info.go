@@ -56,14 +56,12 @@ func GetCPUNum() int {
 func GetCPUUsage() float64 {
 	percents, err := cpu.Percent(0, false)
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("failed to get cpu usage",
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get cpu usage", zap.Error(err))
 		return 0
 	}
 
 	if len(percents) != 1 {
-		logger.Ctx(context.TODO()).Warn("something wrong in cpu.Percent, len(percents) must be equal to 1",
-			zap.Int("len(percents)", len(percents)))
+		logger.Ctx(context.TODO()).Warn("something wrong in cpu.Percent, len(percents) must be equal to 1", zap.Int("len(percents)", len(percents)))
 		return 0
 	}
 
@@ -75,8 +73,7 @@ func GetMemoryCount() uint64 {
 	// get host memory by `gopsutil`
 	stats, err := mem.VirtualMemory()
 	if err != nil {
-		logger.Ctx(context.TODO()).Warn("failed to get memory count",
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get memory count", zap.Error(err))
 		return 0
 	}
 
@@ -88,9 +85,7 @@ func GetMemoryCount() uint64 {
 	}
 
 	if err != nil || limit > stats.Total {
-		logger.Ctx(context.TODO()).Warn("failed to get container memory limit",
-			zap.Uint64("containerLimit", limit),
-			zap.Error(err))
+		logger.Ctx(context.TODO()).Warn("failed to get container memory limit", zap.Uint64("containerLimit", limit), zap.Error(err))
 	}
 	return stats.Total
 }
