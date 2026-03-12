@@ -26,8 +26,8 @@ import (
 
 func TestEmbedEtcdServer(t *testing.T) {
 	configPath := ""
-	dataDir := "/tmp/test_etcd_data"
-	logPath := "/tmp/test_etcd.log"
+	dataDir := t.TempDir()
+	logPath := t.TempDir() + "/test_etcd.log"
 	logLevel := "info"
 	// init etcd embed server
 	if err := InitEtcdServer(true, configPath, dataDir, logPath, logLevel); err != nil {
@@ -66,6 +66,16 @@ func TestEmbedEtcdServer(t *testing.T) {
 		"get data failed, expect 1 key exists, but got %d", len(getResponse.Kvs))
 	assert.Equalf(t, value, string(getResponse.Kvs[0].Value),
 		"get data failed, expect value=%s, but got %s", value, string(getResponse.Kvs[0].Value))
+
+	// test GetEtcdClient with useEmbedEtcd=true (uses the global etcdServer)
+	etcdCli, err := GetEtcdClient(true, false, []string{}, "", "", "", "")
+	assert.NoError(t, err)
+	if err == nil {
+		defer etcdCli.Close()
+		putKey := "test_get_etcd_client"
+		_, err = etcdCli.Put(ctx, putKey, "val")
+		assert.NoError(t, err)
+	}
 
 	// test summary
 	t.Logf("test embed etcd server success")

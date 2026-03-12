@@ -19,10 +19,14 @@ package minio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/zilliztech/woodpecker/common/config"
 )
 
 // testFileReader implements FileReader interface for testing
@@ -82,6 +86,70 @@ func (t *testFileReader) Seek(offset int64, whence int) (int64, error) {
 
 func (t *testFileReader) Size() (int64, error) {
 	return int64(len(t.data)), nil
+}
+
+func TestIsPreconditionFailed(t *testing.T) {
+	// Not a minio error → false
+	assert.False(t, IsPreconditionFailed(errors.New("random error")))
+
+	// PreconditionFailed
+	precondErr := minio.ErrorResponse{Code: "PreconditionFailed"}
+	assert.True(t, IsPreconditionFailed(precondErr))
+
+	// FileAlreadyExists
+	existsErr := minio.ErrorResponse{Code: "FileAlreadyExists"}
+	assert.True(t, IsPreconditionFailed(existsErr))
+
+	// Some other minio error
+	otherErr := minio.ErrorResponse{Code: "NoSuchBucket"}
+	assert.False(t, IsPreconditionFailed(otherErr))
+}
+
+func TestIsObjectNotExists(t *testing.T) {
+	assert.False(t, IsObjectNotExists(errors.New("random")))
+
+	noKeyErr := minio.ErrorResponse{Code: "NoSuchKey"}
+	assert.True(t, IsObjectNotExists(noKeyErr))
+
+	otherErr := minio.ErrorResponse{Code: "PreconditionFailed"}
+	assert.False(t, IsObjectNotExists(otherErr))
+}
+
+func TestIsFencedObject(t *testing.T) {
+	// Fenced
+	fenced := minio.ObjectInfo{
+		UserMetadata: map[string]string{FencedObjectMetaKey: "true"},
+	}
+	assert.True(t, IsFencedObject(fenced))
+
+	// Not fenced — value is "false"
+	notFenced := minio.ObjectInfo{
+		UserMetadata: map[string]string{FencedObjectMetaKey: "false"},
+	}
+	assert.False(t, IsFencedObject(notFenced))
+
+	// Not fenced — key missing
+	noKey := minio.ObjectInfo{
+		UserMetadata: map[string]string{},
+	}
+	assert.False(t, IsFencedObject(noKey))
+
+	// Not fenced — nil metadata
+	nilMeta := minio.ObjectInfo{}
+	assert.False(t, IsFencedObject(nilMeta))
+}
+
+func TestNewMinioHandlerWithClient(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	// Create a client with a dummy endpoint (no actual connection)
+	client, err := minio.New("localhost:9999", &minio.Options{
+		Secure: false,
+	})
+	assert.NoError(t, err)
+
+	handler, err := NewMinioHandlerWithClient(context.Background(), cfg, client)
+	assert.NoError(t, err)
+	assert.NotNil(t, handler)
 }
 
 func TestReadObjectFull(t *testing.T) {

@@ -31,8 +31,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/membership"
+	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 // createTestServer creates a minimal Server instance for testing without
@@ -425,6 +428,1016 @@ func (m *mockServerStream) SendHeader(metadata.MD) error { return nil }
 func (m *mockServerStream) SetTrailer(metadata.MD)       {}
 func (m *mockServerStream) SendMsg(interface{}) error    { return nil }
 func (m *mockServerStream) RecvMsg(interface{}) error    { return nil }
+
+// === RPC Handler Tests ===
+
+// fakeLogStore is a minimal LogStore implementation for RPC handler tests.
+type fakeLogStore struct {
+	addEntryFn      func(ctx context.Context, bucketName, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error)
+	getBatchFn      func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error)
+	fenceFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	completeFn      func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) (int64, error)
+	compactFn       func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error)
+	getLACFn        func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	getBlockCountFn func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error)
+	updateLACFn     func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error
+	cleanFn         func(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error
+}
+
+func (f *fakeLogStore) Start() error       { return nil }
+func (f *fakeLogStore) Stop() error        { return nil }
+func (f *fakeLogStore) SetAddress(string)  {}
+func (f *fakeLogStore) GetAddress() string { return "fake:8080" }
+func (f *fakeLogStore) AddEntry(ctx context.Context, bucketName, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+	return f.addEntryFn(ctx, bucketName, rootPath, logId, entry, syncedResultCh)
+}
+
+func (f *fakeLogStore) GetBatchEntriesAdv(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, fromEntryId, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+	return f.getBatchFn(ctx, bucketName, rootPath, logId, segmentId, fromEntryId, maxEntries, lastReadState)
+}
+
+func (f *fakeLogStore) FenceSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return f.fenceFn(ctx, bucketName, rootPath, logId, segmentId)
+}
+
+func (f *fakeLogStore) CompleteSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) (int64, error) {
+	return f.completeFn(ctx, bucketName, rootPath, logId, segmentId, lac)
+}
+
+func (f *fakeLogStore) CompactSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+	return f.compactFn(ctx, bucketName, rootPath, logId, segmentId)
+}
+
+func (f *fakeLogStore) GetSegmentLastAddConfirmed(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return f.getLACFn(ctx, bucketName, rootPath, logId, segmentId)
+}
+
+func (f *fakeLogStore) GetSegmentBlockCount(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64) (int64, error) {
+	return f.getBlockCountFn(ctx, bucketName, rootPath, logId, segmentId)
+}
+
+func (f *fakeLogStore) UpdateLastAddConfirmed(ctx context.Context, bucketName, rootPath string, logId int64, segmentId, lac int64) error {
+	return f.updateLACFn(ctx, bucketName, rootPath, logId, segmentId, lac)
+}
+
+func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath string, logId int64, segmentId int64, flag int) error {
+	return f.cleanFn(ctx, bucketName, rootPath, logId, segmentId, flag)
+}
+
+func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg, _ := config.NewConfiguration()
+	return &Server{
+		cfg:          cfg,
+		ctx:          ctx,
+		cancel:       cancel,
+		grpcErrChan:  make(chan error),
+		startupErrCh: make(chan error, 1),
+		serverConfig: &membership.ServerConfig{
+			AdvertiseAddr: "127.0.0.1",
+			AdvertisePort: 9999,
+		},
+		logStore: fake,
+	}
+}
+
+func TestServer_GetBatchEntriesAdv_Success(t *testing.T) {
+	expected := &proto.BatchReadResult{Entries: []*proto.LogEntry{{EntryId: 5}}}
+	fake := &fakeLogStore{
+		getBatchFn: func(ctx context.Context, bn, rp string, logId int64, segId, from, max int64, lrs *proto.LastReadState) (*proto.BatchReadResult, error) {
+			return expected, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetBatchEntriesAdv(context.Background(), &proto.GetBatchEntriesAdvRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0, FromEntryId: 0, MaxEntries: 10,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, expected, resp.Result)
+}
+
+func TestServer_GetBatchEntriesAdv_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		getBatchFn: func(ctx context.Context, bn, rp string, logId int64, segId, from, max int64, lrs *proto.LastReadState) (*proto.BatchReadResult, error) {
+			return nil, werr.ErrLogStoreShutdown
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetBatchEntriesAdv(context.Background(), &proto.GetBatchEntriesAdvRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err) // gRPC returns nil err, error in Status
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_FenceSegment_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		fenceFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return 42, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.FenceSegment(context.Background(), &proto.FenceSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, int64(42), resp.LastEntryId)
+}
+
+func TestServer_FenceSegment_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		fenceFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return -1, assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.FenceSegment(context.Background(), &proto.FenceSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_CompleteSegment_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		completeFn: func(ctx context.Context, bn, rp string, logId, segId, lac int64) (int64, error) {
+			return 10, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CompleteSegment(context.Background(), &proto.CompleteSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0, LastAddConfirmed: 10,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, int64(10), resp.LastEntryId)
+}
+
+func TestServer_CompleteSegment_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		completeFn: func(ctx context.Context, bn, rp string, logId, segId, lac int64) (int64, error) {
+			return -1, assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CompleteSegment(context.Background(), &proto.CompleteSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_CompactSegment_Success(t *testing.T) {
+	expectedMeta := &proto.SegmentMetadata{SegNo: 0}
+	fake := &fakeLogStore{
+		compactFn: func(ctx context.Context, bn, rp string, logId, segId int64) (*proto.SegmentMetadata, error) {
+			return expectedMeta, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CompactSegment(context.Background(), &proto.CompactSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, expectedMeta, resp.Metadata)
+}
+
+func TestServer_CompactSegment_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		compactFn: func(ctx context.Context, bn, rp string, logId, segId int64) (*proto.SegmentMetadata, error) {
+			return nil, assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CompactSegment(context.Background(), &proto.CompactSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_GetSegmentLastAddConfirmed_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		getLACFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return 99, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetSegmentLastAddConfirmed(context.Background(), &proto.GetSegmentLastAddConfirmedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, int64(99), resp.LastEntryId)
+}
+
+func TestServer_GetSegmentLastAddConfirmed_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		getLACFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return -1, assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetSegmentLastAddConfirmed(context.Background(), &proto.GetSegmentLastAddConfirmedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_GetSegmentBlockCount_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		getBlockCountFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return 7, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetSegmentBlockCount(context.Background(), &proto.GetSegmentBlockCountRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+	assert.Equal(t, int64(7), resp.BlockCount)
+}
+
+func TestServer_GetSegmentBlockCount_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		getBlockCountFn: func(ctx context.Context, bn, rp string, logId, segId int64) (int64, error) {
+			return -1, assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.GetSegmentBlockCount(context.Background(), &proto.GetSegmentBlockCountRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_CleanSegment_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		cleanFn: func(ctx context.Context, bn, rp string, logId, segId int64, flag int) error {
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CleanSegment(context.Background(), &proto.CleanSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0, Flag: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_CleanSegment_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		cleanFn: func(ctx context.Context, bn, rp string, logId, segId int64, flag int) error {
+			return assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.CleanSegment(context.Background(), &proto.CleanSegmentRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_UpdateLastAddConfirmed_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		updateLACFn: func(ctx context.Context, bn, rp string, logId, segId, lac int64) error {
+			return nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.UpdateLastAddConfirmed(context.Background(), &proto.UpdateLastAddConfirmedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1, SegmentId: 0, LastAddConfirmed: 10,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_UpdateLastAddConfirmed_Error(t *testing.T) {
+	fake := &fakeLogStore{
+		updateLACFn: func(ctx context.Context, bn, rp string, logId, segId, lac int64) error {
+			return assert.AnError
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	resp, err := s.UpdateLastAddConfirmed(context.Background(), &proto.UpdateLastAddConfirmedRequest{
+		BucketName: "b", RootPath: "r", LogId: 1,
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_SelectNodes_NilNode(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+
+	resp, err := s.SelectNodes(context.Background(), &proto.SelectNodesRequest{
+		Filters: []*proto.NodeFilter{{Limit: 3}},
+	})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code) // Error because serverNode is nil
+}
+
+func TestServer_SelectNodes_NoFilters(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	// Set a non-nil serverNode to bypass the nil check
+	s.serverNode = &membership.ServerNode{}
+
+	resp, err := s.SelectNodes(context.Background(), &proto.SelectNodesRequest{})
+	assert.NoError(t, err)
+	assert.NotEqual(t, int32(0), resp.Status.Code) // Error because no filters
+}
+
+func TestServer_GetServerNodeMemberlistStatus_NilNode(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+
+	status := s.GetServerNodeMemberlistStatus()
+	assert.Equal(t, "member not ready yet", status)
+}
+
+func TestServer_GetMemberCount_NilNode(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+
+	count := s.GetMemberCount()
+	assert.Equal(t, 0, count)
+}
+
+func TestServer_GetServiceAdvertiseAddrPort_NilNode(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+
+	addr := s.GetServiceAdvertiseAddrPort(context.Background())
+	assert.Equal(t, "", addr)
+}
+
+func TestServer_GetAdvertiseAddrPort(t *testing.T) {
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+
+	addr := s.GetAdvertiseAddrPort(context.Background())
+	assert.Equal(t, "127.0.0.1:9999", addr)
+}
+
+func TestServer_ShutdownUnaryInterceptor(t *testing.T) {
+	srvCtx, srvCancel := context.WithCancel(context.Background())
+	s := &Server{
+		ctx:          srvCtx,
+		cancel:       srvCancel,
+		serverConfig: &membership.ServerConfig{NodeID: "test-unary"},
+	}
+
+	interceptor := s.shutdownUnaryInterceptor()
+
+	handlerCalled := false
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		handlerCalled = true
+		return "ok", nil
+	}
+
+	resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{}, handler)
+	assert.NoError(t, err)
+	assert.True(t, handlerCalled)
+	assert.Equal(t, "ok", resp)
+	srvCancel()
+}
+
+// === NewServer / NewServerWithConfig Tests ===
+
+func TestNewServer_LocalStorage(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+
+	s, err := NewServer(context.Background(), cfg, 0, 0, nil)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	defer s.cancel()
+
+	assert.NotNil(t, s.logStore)
+	assert.NotNil(t, s.serverConfig)
+	assert.Equal(t, 0, s.serverConfig.BindPort)
+	assert.Equal(t, 0, s.serverConfig.ServicePort)
+	assert.Equal(t, 0, s.serverConfig.AdvertisePort)
+	assert.Equal(t, "default", s.serverConfig.ResourceGroup)
+	assert.Equal(t, "default", s.serverConfig.AZ)
+	assert.Equal(t, map[string]string{"role": "logstore"}, s.serverConfig.Tags)
+}
+
+func TestNewServerWithConfig_LocalStorage(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+
+	serverConfig := &membership.ServerConfig{
+		NodeID:               "test-node",
+		BindPort:             0,
+		ServicePort:          0,
+		AdvertisePort:        0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "rg1",
+		AZ:                   "az1",
+		Tags:                 map[string]string{"role": "test"},
+	}
+	seeds := []string{"host1:7946", "host2:7946"}
+
+	s, err := NewServerWithConfig(context.Background(), cfg, serverConfig, seeds)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	defer s.cancel()
+
+	assert.Equal(t, serverConfig, s.serverConfig)
+	assert.Equal(t, seeds, s.gossipSeeds)
+	assert.NotNil(t, s.logStore)
+}
+
+func TestNewServerWithConfig_WithGossipSeeds(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.Type = "local"
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+
+	seeds := []string{"seed1:7946", "seed2:7946"}
+	s, err := NewServer(context.Background(), cfg, 8080, 9090, seeds)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	defer s.cancel()
+
+	assert.Equal(t, seeds, s.gossipSeeds)
+	assert.Equal(t, 8080, s.serverConfig.BindPort)
+	assert.Equal(t, 9090, s.serverConfig.ServicePort)
+	assert.Equal(t, 8080, s.serverConfig.AdvertisePort)
+	assert.Equal(t, 9090, s.serverConfig.AdvertiseServicePort)
+}
+
+// === AddEntry Tests ===
+
+// mockAddEntryStream implements grpc.ServerStreamingServer[proto.AddEntryResponse] for testing.
+type mockAddEntryStream struct {
+	grpc.ServerStream
+	ctx       context.Context
+	responses []*proto.AddEntryResponse
+	sendErr   error // if set, Send returns this error
+}
+
+func (m *mockAddEntryStream) Send(resp *proto.AddEntryResponse) error {
+	if m.sendErr != nil {
+		return m.sendErr
+	}
+	m.responses = append(m.responses, resp)
+	return nil
+}
+
+func (m *mockAddEntryStream) Context() context.Context     { return m.ctx }
+func (m *mockAddEntryStream) SetHeader(metadata.MD) error  { return nil }
+func (m *mockAddEntryStream) SendHeader(metadata.MD) error { return nil }
+func (m *mockAddEntryStream) SetTrailer(metadata.MD)       {}
+func (m *mockAddEntryStream) SendMsg(interface{}) error    { return nil }
+func (m *mockAddEntryStream) RecvMsg(interface{}) error    { return nil }
+
+func TestServer_AddEntry_Success(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			// Simulate successful buffering then sync via result channel
+			go func() {
+				resultCh.SendResult(ctx, &channel.AppendResult{SyncedId: 42, Err: nil})
+			}()
+			return 42, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: context.Background()}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0, Values: []byte("hello")},
+	}
+
+	err := s.AddEntry(req, stream)
+	assert.NoError(t, err)
+	require.Len(t, stream.responses, 2)
+	assert.Equal(t, proto.AddEntryState_Buffered, stream.responses[0].State)
+	assert.Equal(t, int64(42), stream.responses[0].EntryId)
+	assert.Equal(t, proto.AddEntryState_Synced, stream.responses[1].State)
+	assert.Equal(t, int64(42), stream.responses[1].EntryId)
+}
+
+func TestServer_AddEntry_AddEntryError(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			return -1, werr.ErrLogStoreShutdown
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: context.Background()}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0, Values: []byte("hello")},
+	}
+
+	err := s.AddEntry(req, stream)
+	assert.Error(t, err)
+	require.Len(t, stream.responses, 1)
+	assert.Equal(t, proto.AddEntryState_Failed, stream.responses[0].State)
+}
+
+func TestServer_AddEntry_AddEntryError_SendFails(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			return -1, werr.ErrLogStoreShutdown
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: context.Background(), sendErr: fmt.Errorf("send failed")}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0},
+	}
+
+	err := s.AddEntry(req, stream)
+	assert.Error(t, err) // Returns the original logStore error, not sendErr
+}
+
+func TestServer_AddEntry_BufferedSendError(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			return 0, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: context.Background(), sendErr: fmt.Errorf("send failed")}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0},
+	}
+
+	err := s.AddEntry(req, stream)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "send failed")
+}
+
+func TestServer_AddEntry_ReadResultError(t *testing.T) {
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			go func() {
+				resultCh.SendResult(ctx, &channel.AppendResult{SyncedId: 5, Err: fmt.Errorf("sync failed")})
+			}()
+			return 0, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: context.Background()}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0},
+	}
+
+	err := s.AddEntry(req, stream)
+	// The result has Err set, so we get a Failed state
+	require.Len(t, stream.responses, 2)
+	assert.Equal(t, proto.AddEntryState_Buffered, stream.responses[0].State)
+	assert.Equal(t, proto.AddEntryState_Failed, stream.responses[1].State)
+	assert.Equal(t, int64(5), stream.responses[1].EntryId)
+	_ = err // sendErr for the Failed response
+}
+
+func TestServer_AddEntry_ReadResultContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fake := &fakeLogStore{
+		addEntryFn: func(ctx context.Context, bn, rp string, logId int64, entry *proto.LogEntry, resultCh channel.ResultChannel) (int64, error) {
+			// Cancel context so ReadResult fails
+			go func() {
+				cancel()
+			}()
+			return 0, nil
+		},
+	}
+	s := createTestServerWithFakeLogStore(fake)
+	defer s.cancel()
+
+	stream := &mockAddEntryStream{ctx: ctx}
+	req := &proto.AddEntryRequest{
+		BucketName: "b",
+		RootPath:   "r",
+		LogId:      1,
+		Entry:      &proto.LogEntry{SegId: 0, EntryId: 0},
+	}
+
+	err := s.AddEntry(req, stream)
+	// Should get at least the buffered response, and then a failed or send error
+	_ = err
+	require.GreaterOrEqual(t, len(stream.responses), 1)
+	assert.Equal(t, proto.AddEntryState_Buffered, stream.responses[0].State)
+}
+
+// === SelectNodes with actual ServerNode ===
+
+func TestServer_SelectNodes_WithStrategies(t *testing.T) {
+	// Create a real ServerNode for the test
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-select-strategies",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "rg1",
+		AZ:                   "az1",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	strategies := []proto.StrategyType{
+		proto.StrategyType_RANDOM,
+		proto.StrategyType_SINGLE_AZ_SINGLE_RG,
+		proto.StrategyType_SINGLE_AZ_MULTI_RG,
+		proto.StrategyType_MULTI_AZ_SINGLE_RG,
+		proto.StrategyType_MULTI_AZ_MULTI_RG,
+		proto.StrategyType_CUSTOM,
+		proto.StrategyType_CROSS_REGION,
+		proto.StrategyType_RANDOM_GROUP,
+		99, // Default case
+	}
+
+	for _, strategy := range strategies {
+		t.Run(fmt.Sprintf("strategy_%d", strategy), func(t *testing.T) {
+			resp, err := s.SelectNodes(context.Background(), &proto.SelectNodesRequest{
+				Strategy:     strategy,
+				AffinityMode: proto.AffinityMode_SOFT,
+				Filters: []*proto.NodeFilter{{
+					Limit: 1,
+				}},
+			})
+			assert.NoError(t, err)
+			assert.NotNil(t, resp)
+			// In soft mode, even if strategy can't find enough nodes, it returns success
+		})
+	}
+}
+
+func TestServer_SelectNodes_HardAffinity_Error(t *testing.T) {
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-select-hard",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "rg1",
+		AZ:                   "az1",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	// Use SINGLE_AZ_MULTI_RG with a filter requiring an AZ that doesn't exist
+	// This guarantees failure in HARD mode
+	resp, err := s.SelectNodes(context.Background(), &proto.SelectNodesRequest{
+		Strategy:     proto.StrategyType_SINGLE_AZ_MULTI_RG,
+		AffinityMode: proto.AffinityMode_HARD,
+		Filters: []*proto.NodeFilter{{
+			Az:    "nonexistent-az",
+			Limit: 1,
+		}},
+	})
+	assert.NoError(t, err) // gRPC handler returns nil err
+	assert.NotNil(t, resp)
+	// Hard mode returns error in Status when filter can't be satisfied
+	assert.NotEqual(t, int32(0), resp.Status.Code)
+}
+
+func TestServer_SelectNodes_MultipleFilters(t *testing.T) {
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-select-multi",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "rg1",
+		AZ:                   "az1",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	resp, err := s.SelectNodes(context.Background(), &proto.SelectNodesRequest{
+		Strategy:     proto.StrategyType_RANDOM,
+		AffinityMode: proto.AffinityMode_SOFT,
+		Filters: []*proto.NodeFilter{
+			{Limit: 1},
+			{Limit: 1},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, int32(0), resp.Status.Code)
+}
+
+// === Non-nil ServerNode helper tests ===
+
+func TestServer_GetServerNodeMemberlistStatus_WithNode(t *testing.T) {
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-status-node",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	status := s.GetServerNodeMemberlistStatus()
+	assert.NotEqual(t, "member not ready yet", status)
+}
+
+func TestServer_GetMemberCount_WithNode(t *testing.T) {
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-count-node",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	count := s.GetMemberCount()
+	assert.GreaterOrEqual(t, count, 1)
+}
+
+func TestServer_GetServiceAdvertiseAddrPort_WithNode(t *testing.T) {
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-svc-addr-node",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServerWithFakeLogStore(&fakeLogStore{})
+	defer s.cancel()
+	s.serverNode = node
+
+	addr := s.GetServiceAdvertiseAddrPort(context.Background())
+	assert.NotEmpty(t, addr)
+}
+
+// === monitorAndJoinSeeds Tests ===
+
+func TestServer_MonitorAndJoinSeeds_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-monitor-cancel",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServer(ctx, &membership.ServerConfig{NodeID: "test-monitor-cancel"})
+	s.serverNode = node
+
+	// Cancel context immediately to make monitorAndJoinSeeds exit quickly
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.monitorAndJoinSeeds(ctx, []string{"127.0.0.1:19999"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected: function returned after context cancellation
+	case <-time.After(5 * time.Second):
+		t.Fatal("monitorAndJoinSeeds did not return after context cancellation")
+	}
+}
+
+func TestServer_MonitorAndJoinSeeds_AllSeedsPresent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-monitor-present",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServer(ctx, &membership.ServerConfig{NodeID: "test-monitor-present"})
+	s.serverNode = node
+
+	// Use the node's own name as seed (will be found in memberlist)
+	members := node.GetMemberlist().Members()
+	var seeds []string
+	for _, m := range members {
+		seeds = append(seeds, fmt.Sprintf("%s:%d", m.Addr.String(), m.Port))
+	}
+
+	// Run briefly - should find all seeds present and switch to normalBackoff
+	go func() {
+		time.Sleep(3 * time.Second)
+		cancel()
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		s.monitorAndJoinSeeds(ctx, seeds)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected
+	case <-time.After(10 * time.Second):
+		t.Fatal("monitorAndJoinSeeds did not exit within timeout")
+	}
+}
+
+func TestServer_MonitorAndJoinSeeds_MissingSeeds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-monitor-missing",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServer(ctx, &membership.ServerConfig{NodeID: "test-monitor-missing"})
+	s.serverNode = node
+
+	// Use unreachable seeds - will trigger the join failure path
+	seeds := []string{"192.0.2.1:7946", "192.0.2.2:7946"}
+
+	done := make(chan struct{})
+	go func() {
+		s.monitorAndJoinSeeds(ctx, seeds)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected: context timeout causes exit
+	case <-time.After(10 * time.Second):
+		t.Fatal("monitorAndJoinSeeds did not exit within timeout")
+	}
+}
+
+func TestServer_MonitorAndJoinSeeds_InvalidSeedFormat(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	node, err := membership.NewServerNode(&membership.ServerConfig{
+		NodeID:               "test-monitor-invalid",
+		AdvertiseAddr:        "127.0.0.1",
+		BindPort:             0,
+		AdvertisePort:        0,
+		ServicePort:          0,
+		AdvertiseServicePort: 0,
+		ResourceGroup:        "default",
+		AZ:                   "default",
+		Tags:                 map[string]string{"role": "test"},
+	})
+	require.NoError(t, err)
+	defer node.Shutdown()
+
+	s := createTestServer(ctx, &membership.ServerConfig{NodeID: "test-monitor-invalid"})
+	s.serverNode = node
+
+	// Seeds with invalid format (no port) - SplitHostPort will fail, so seedHostnames will be empty
+	seeds := []string{"no-port-seed"}
+
+	done := make(chan struct{})
+	go func() {
+		s.monitorAndJoinSeeds(ctx, seeds)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected
+	case <-time.After(10 * time.Second):
+		t.Fatal("monitorAndJoinSeeds did not exit within timeout")
+	}
+}
 
 // TestShutdownInterceptor_CancelsStreamContext verifies that the shutdown stream
 // interceptor cancels handler contexts when the server context is cancelled.

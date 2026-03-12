@@ -1616,8 +1616,9 @@ func (e *metadataProviderEtcd) getContextWithTimeout(ctx context.Context) (conte
 	// but remove RBAC auth info to avoid auth contamination in etcd requests
 	newCtx := ctx
 
-	// Extract a metadata copy from incoming context and remove auth-related keys
-	if mdCopy, ok := metadata.FromIncomingContext(ctx); ok {
+	// Extract metadata from incoming context, copy it, and remove auth-related keys
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		mdCopy := md.Copy()
 		mdCopy.Delete("authorization")
 		mdCopy.Delete("token")
 		newCtx = metadata.NewIncomingContext(ctx, mdCopy)

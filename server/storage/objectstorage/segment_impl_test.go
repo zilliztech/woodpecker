@@ -253,4 +253,189 @@ func TestDeleteFileData(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 2, deleteCount)
 	})
+
+	t.Run("Flag1_DeleteOnlyRegularBlocks", func(t *testing.T) {
+		client := mocks_objectstorage.NewObjectStorage(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
+					},
+				},
+			},
+		}
+
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Walk returns regular and merged blocks
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_1.blk"})
+			}).Once()
+
+		// Only regular blocks should be deleted (not m_* blocks)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/1.blk", mock.Anything, mock.Anything).Return(nil)
+
+		deleteCount, err := impl.DeleteFileData(context.Background(), 1)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, deleteCount)
+	})
+
+	t.Run("Flag2_DeleteOnlyMergedBlocks", func(t *testing.T) {
+		client := mocks_objectstorage.NewObjectStorage(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
+					},
+				},
+			},
+		}
+
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Walk returns regular and merged blocks
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/1.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_1.blk"})
+			}).Once()
+
+		// Only merged blocks should be deleted (m_* blocks)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/m_1.blk", mock.Anything, mock.Anything).Return(nil)
+
+		deleteCount, err := impl.DeleteFileData(context.Background(), 2)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, deleteCount)
+	})
+
+	t.Run("FlagDefault_NoDeletion", func(t *testing.T) {
+		client := mocks_objectstorage.NewObjectStorage(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
+					},
+				},
+			},
+		}
+
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Walk returns blocks but unknown flag should cause no deletions
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/m_0.blk"})
+			}).Once()
+
+		// No RemoveObject calls expected
+		deleteCount, err := impl.DeleteFileData(context.Background(), 99)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, deleteCount)
+	})
+
+	t.Run("Flag0_DeletesLockFile", func(t *testing.T) {
+		client := mocks_objectstorage.NewObjectStorage(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
+					},
+				},
+			},
+		}
+
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Walk returns a block file and a lock file
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/segment.lock"})
+			}).Once()
+
+		// Both the block and the lock file should be deleted with flag=0
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/segment.lock", mock.Anything, mock.Anything).Return(nil)
+
+		deleteCount, err := impl.DeleteFileData(context.Background(), 0)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, deleteCount)
+	})
+
+	t.Run("Flag1_SkipsLockFile", func(t *testing.T) {
+		client := mocks_objectstorage.NewObjectStorage(t)
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Logstore: config.LogstoreConfig{
+					SegmentSyncPolicy: config.SegmentSyncPolicyConfig{
+						MaxEntries:      10,
+						MaxBytes:        1024 * 1024,
+						MaxInterval:     config.NewDurationMillisecondsFromInt(1000),
+						MaxFlushThreads: 5,
+						MaxFlushSize:    1024 * 1024,
+						MaxFlushRetries: 3,
+						RetryInterval:   config.NewDurationMillisecondsFromInt(100),
+					},
+				},
+			},
+		}
+
+		impl := NewSegmentImpl(context.TODO(), "test-bucket", "test-segment", 1, 0, client, cfg).(*SegmentImpl)
+
+		// Walk returns a regular block and a lock file
+		client.EXPECT().WalkWithObjects(mock.Anything, "test-bucket", "test-segment/1/0/", false, mock.Anything, mock.Anything, mock.Anything).
+			Return(nil).
+			Run(func(ctx context.Context, bucket, prefix string, recursive bool, walkFunc storageclient.ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) {
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/0.blk"})
+				walkFunc(&storageclient.ChunkObjectInfo{FilePath: "test-segment/1/0/segment.lock"})
+			}).Once()
+
+		// Only the regular block should be deleted; lock file is skipped for flag!=0
+		client.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-segment/1/0/0.blk", mock.Anything, mock.Anything).Return(nil)
+
+		deleteCount, err := impl.DeleteFileData(context.Background(), 1)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, deleteCount)
+	})
 }

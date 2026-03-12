@@ -21,6 +21,9 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/errors"
+	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestUtils_Code(t *testing.T) {
@@ -99,6 +102,66 @@ func TestUtils_StatusAndError(t *testing.T) {
 	if wpErr.Code() != expectedCode {
 		t.Errorf("Expected reconstructed error code %d, got %d", expectedCode, wpErr.Code())
 	}
+}
+
+func TestIsSegmentNotWritableErr(t *testing.T) {
+	// nil error
+	assert.False(t, IsSegmentNotWritableErr(nil))
+
+	// segment closed error
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentHandleSegmentClosed))
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentHandleSegmentClosed.WithCauseErrMsg("wrapped")))
+
+	// segment fenced error
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentFenced))
+	assert.True(t, IsSegmentNotWritableErr(ErrSegmentFenced.WithCauseErr(errors.New("cause"))))
+
+	// storage not writable error
+	assert.True(t, IsSegmentNotWritableErr(ErrStorageNotWritable))
+
+	// file writer finalized error
+	assert.True(t, IsSegmentNotWritableErr(ErrFileWriterFinalized))
+
+	// client closed error
+	assert.True(t, IsSegmentNotWritableErr(ErrWoodpeckerClientClosed))
+
+	// unrelated errors
+	assert.False(t, IsSegmentNotWritableErr(ErrInternalError))
+	assert.False(t, IsSegmentNotWritableErr(errors.New("random error")))
+	assert.False(t, IsSegmentNotWritableErr(ErrTimeoutError))
+}
+
+func TestIsTimeoutError(t *testing.T) {
+	// nil error
+	assert.False(t, IsTimeoutError(nil))
+
+	// context.Canceled
+	assert.True(t, IsTimeoutError(context.Canceled))
+
+	// context.DeadlineExceeded
+	assert.True(t, IsTimeoutError(context.DeadlineExceeded))
+
+	// gRPC DeadlineExceeded
+	grpcDeadlineErr := status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	assert.True(t, IsTimeoutError(grpcDeadlineErr))
+
+	// gRPC Canceled
+	grpcCanceledErr := status.Error(codes.Canceled, "canceled")
+	assert.True(t, IsTimeoutError(grpcCanceledErr))
+
+	// string matching: "context deadline exceeded"
+	assert.True(t, IsTimeoutError(errors.New("wrapped: context deadline exceeded")))
+
+	// string matching: "DeadlineExceeded"
+	assert.True(t, IsTimeoutError(errors.New("some DeadlineExceeded error")))
+
+	// string matching: "context canceled"
+	assert.True(t, IsTimeoutError(errors.New("request failed: context canceled")))
+
+	// non-timeout errors
+	assert.False(t, IsTimeoutError(errors.New("random error")))
+	assert.False(t, IsTimeoutError(ErrInternalError))
+	assert.False(t, IsTimeoutError(status.Error(codes.Internal, "internal error")))
 }
 
 func TestUtils_Success(t *testing.T) {

@@ -23,7 +23,40 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/zilliztech/woodpecker/proto"
 )
+
+// mockStreamClient is a mock implementation of grpc.ServerStreamingClient[proto.AddEntryResponse].
+type mockStreamClient struct {
+	recvFunc func() (*proto.AddEntryResponse, error)
+	closed   bool
+}
+
+func (m *mockStreamClient) Recv() (*proto.AddEntryResponse, error) {
+	return m.recvFunc()
+}
+
+func (m *mockStreamClient) CloseSend() error {
+	m.closed = true
+	return nil
+}
+
+func (m *mockStreamClient) Header() (metadata.MD, error) { return nil, nil }
+func (m *mockStreamClient) Trailer() metadata.MD         { return nil }
+func (m *mockStreamClient) Context() context.Context     { return context.Background() }
+func (m *mockStreamClient) SendMsg(any) error            { return nil }
+func (m *mockStreamClient) RecvMsg(any) error            { return nil }
+
+// mockStreamClientWithCloseError returns an error on CloseSend.
+type mockStreamClientWithCloseError struct {
+	mockStreamClient
+}
+
+func (m *mockStreamClientWithCloseError) CloseSend() error {
+	return errors.New("close error")
+}
 
 func TestNewRemoteResultChannel(t *testing.T) {
 	identifier := "test-channel-1"
@@ -303,4 +336,179 @@ func TestRemoteResultChannel_MockUsageWorkflow(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, channel.IsClosed())
 	})
+}
+
+func TestRemoteResultChannel_InitResponseStream(t *testing.T) {
+	channel := NewRemoteResultChannel("test-init-stream")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return &proto.AddEntryResponse{
+				EntryId: 42,
+				State:   proto.AddEntryState_Synced,
+			}, nil
+		},
+	}
+
+	channel.InitResponseStream(stream, ctx, cancel)
+	assert.Equal(t, stream, channel.ch)
+	assert.NotNil(t, channel.cancel)
+	cancel()
+}
+
+func TestRemoteResultChannel_InitResponseStream_AlreadyClosed(t *testing.T) {
+	channel := NewRemoteResultChannel("test-init-closed")
+	ctx := context.Background()
+
+	// Close the channel first
+	err := channel.Close(ctx)
+	assert.NoError(t, err)
+
+	// InitResponseStream on closed channel should cancel the context
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &mockStreamClient{}
+
+	channel.InitResponseStream(stream, streamCtx, cancel)
+	// Stream should NOT be set
+	assert.Nil(t, channel.ch)
+	// Context should be cancelled
+	assert.Error(t, streamCtx.Err())
+}
+
+func TestRemoteResultChannel_Close_WithCancelAndStream(t *testing.T) {
+	channel := NewRemoteResultChannel("test-close-stream")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stream := &mockStreamClient{}
+	channel.InitResponseStream(stream, ctx, cancel)
+
+	// Close should cancel context and close stream
+	err := channel.Close(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, channel.IsClosed())
+	assert.True(t, stream.closed)
+	assert.Error(t, ctx.Err()) // context should be cancelled
+}
+
+func TestRemoteResultChannel_Close_WithStreamCloseError(t *testing.T) {
+	channel := NewRemoteResultChannel("test-close-err")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stream := &mockStreamClientWithCloseError{}
+	channel.InitResponseStream(stream, ctx, cancel)
+
+	// Close should succeed even if CloseSend fails (logs warning)
+	err := channel.Close(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, channel.IsClosed())
+}
+
+func TestRemoteResultChannel_ReadResult_ViaStream_Synced(t *testing.T) {
+	channel := NewRemoteResultChannel("test-read-stream-synced")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return &proto.AddEntryResponse{
+				EntryId: 100,
+				State:   proto.AddEntryState_Synced,
+			}, nil
+		},
+	}
+	channel.InitResponseStream(stream, ctx, cancel)
+
+	result, err := channel.ReadResult(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, int64(100), result.SyncedId)
+	assert.NoError(t, result.Err)
+}
+
+func TestRemoteResultChannel_ReadResult_ViaStream_Failed(t *testing.T) {
+	channel := NewRemoteResultChannel("test-read-stream-fail")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return &proto.AddEntryResponse{
+				EntryId: 200,
+				State:   proto.AddEntryState_Failed, // not Synced
+				Status:  &proto.Status{Code: 500},
+			}, nil
+		},
+	}
+	channel.InitResponseStream(stream, ctx, cancel)
+
+	result, err := channel.ReadResult(context.Background())
+	assert.Error(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, int64(200), result.SyncedId)
+	assert.Error(t, result.Err)
+}
+
+func TestRemoteResultChannel_ReadResult_ViaStream_RecvError(t *testing.T) {
+	channel := NewRemoteResultChannel("test-read-stream-recv-err")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			return nil, errors.New("stream broken")
+		},
+	}
+	channel.InitResponseStream(stream, ctx, cancel)
+
+	result, err := channel.ReadResult(context.Background())
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "stream broken")
+}
+
+func TestRemoteResultChannel_ReadResult_ClosedDuringPoll(t *testing.T) {
+	channel := NewRemoteResultChannel("test-closed-during-poll")
+
+	// Start reading in goroutine (will enter polling loop since ch == nil)
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := channel.ReadResult(context.Background())
+		resultCh <- err
+	}()
+
+	// Wait for polling to start, then close
+	time.Sleep(30 * time.Millisecond)
+	channel.Close(context.Background())
+
+	// Should detect closed state during poll
+	select {
+	case err := <-resultCh:
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "is closed")
+	case <-time.After(1 * time.Second):
+		t.Fatal("ReadResult did not return after close")
+	}
+}
+
+func TestRemoteResultChannel_ReadResult_DirectResultAlreadySet(t *testing.T) {
+	channel := NewRemoteResultChannel("test-direct-already-set")
+	ctx := context.Background()
+
+	// Set result directly, then also init a stream (result should be returned without touching stream)
+	channel.SendResult(ctx, &AppendResult{SyncedId: 77, Err: nil})
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &mockStreamClient{
+		recvFunc: func() (*proto.AddEntryResponse, error) {
+			t.Fatal("stream Recv should not be called when direct result exists")
+			return nil, nil
+		},
+	}
+	channel.InitResponseStream(stream, streamCtx, cancel)
+
+	result, err := channel.ReadResult(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(77), result.SyncedId)
 }

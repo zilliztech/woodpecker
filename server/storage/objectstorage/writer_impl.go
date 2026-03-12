@@ -778,7 +778,11 @@ func (f *MinioFileWriter) GetLastEntryId(ctx context.Context) int64 {
 }
 
 func (f *MinioFileWriter) GetBlockCount(ctx context.Context) int64 {
-	return f.lastSubmittedUploadingBlockID.Load()
+	lastID := f.lastSubmittedUploadingBlockID.Load()
+	if lastID < 0 {
+		return 0
+	}
+	return lastID + 1
 }
 
 func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Context) error {
@@ -1516,7 +1520,11 @@ func (f *MinioFileWriter) waitIfSegmentLockedWhenConditionWriteDisabled(ctx cont
 	}
 	if isLocked {
 		logger.Ctx(ctx).Info("segment is locked which means other process is quit unexpectedly, wait for a while", zap.String("segmentFileKey", f.segmentFileKey))
-		time.Sleep(time.Second * 30)
+		select {
+		case <-time.After(time.Second * 30):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
@@ -1694,8 +1702,8 @@ func (f *MinioFileWriter) serialize(blockId int64, entries []*cache.BufferEntry)
 	blockCrc := crc32.ChecksumIEEE(blockDataBuffer)
 
 	// Add BlockHeaderRecord at the start of the block with calculated values
-	firstEntryID := entries[0].EntryId
-	lastEntryID := entries[len(entries)-1].EntryId
+	firstEntryID := entries[0].EntryId             //nolint:gosec // len(entries) > 0 guaranteed by check above
+	lastEntryID := entries[len(entries)-1].EntryId //nolint:gosec // len(entries) > 0 guaranteed by check above
 	blockHeaderRecord := &codec.BlockHeaderRecord{
 		BlockNumber:  int32(blockId),
 		FirstEntryID: firstEntryID,

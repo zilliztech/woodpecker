@@ -618,18 +618,12 @@ func TestLogHandle_Rolling_RollingPolicyBehavior(t *testing.T) {
 	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, time.Now().UnixMilli()))
 
 	// Test time-based rolling policy
-	// Note: MaxInterval is 10 minutes, and it's converted to milliseconds in NewDefaultRollingPolicy
-	oldTime := time.Now().Add(-15 * time.Minute).UnixMilli()   // 15 minutes ago
-	recentTime := time.Now().Add(-5 * time.Minute).UnixMilli() // 5 minutes ago
-
-	// Debug: print values to understand the behavior
-	t.Logf("Testing time-based rolling: oldTime=%d, recentTime=%d", oldTime, recentTime)
-	t.Logf("Should rollover old time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, oldTime))
-	t.Logf("Should rollover recent time: %v", logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, recentTime))
+	// Note: MaxInterval is 10 seconds (config.NewDurationSecondsFromInt(10)), converted to milliseconds
+	oldTime := time.Now().Add(-15 * time.Second).UnixMilli()   // 15 seconds ago, exceeds 10s threshold
+	recentTime := time.Now().Add(-5 * time.Second).UnixMilli() // 5 seconds ago, within 10s threshold
 
 	assert.True(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, oldTime))
-	// This might be failing - let's be more lenient and just check that old time triggers rolling
-	// assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, recentTime))
+	assert.False(t, logHandle.rollingPolicy.ShouldRollover(ctx, 1024, 500, recentTime))
 }
 
 // TestLogHandle_Rolling_ConcurrentAccess tests rolling behavior under concurrent access
@@ -745,19 +739,9 @@ func TestLogHandle_CompleteAllActiveSegmentIfExists_DataRaceProtection(t *testin
 	assert.NoError(t, completeErr)
 
 	// CompleteAllActiveSegmentIfExists does NOT clear the map — that's Close()'s job.
-	// Segments should still be present after completion.
-
-	// GetExistsReadonlySegmentHandle should either:
-	// 1. Return the segment handle if it got the lock first, OR
-	// 2. Return nil if CompleteAllActiveSegmentIfExists cleared the map first
-	// Both are valid outcomes due to the race condition
-	if getErr == nil {
-		// If no error, result should be either the segment handle or nil
-		t.Logf("GetExistsReadonlySegmentHandle result: %v", getResult)
-	} else {
-		// If there's an error, it should be a valid error (not a panic)
-		t.Logf("GetExistsReadonlySegmentHandle error: %v", getErr)
-	}
+	// So GetExistsReadonlySegmentHandle should always find the segment regardless of timing.
+	assert.NoError(t, getErr, "GetExistsReadonlySegmentHandle should succeed since CompleteAllActiveSegmentIfExists does not clear the map")
+	assert.Equal(t, mockSegment1, getResult, "Should return the cached segment handle")
 
 	// Verify all expectations
 	mockSegment1.AssertExpectations(t)
@@ -823,15 +807,13 @@ func TestLogHandle_Close_vs_GetExistsReadonlySegmentHandle_DataRaceProtection(t 
 	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
 
 	// GetExistsReadonlySegmentHandle should either:
-	// 1. Return the segment handle if it got the lock first, OR
-	// 2. Return nil if Close cleared the map first
-	// Both are valid outcomes due to the race condition
+	// 1. Return the segment handle if it got the lock before Close clears the map, OR
+	// 2. Return ErrSegmentNotFound if Close cleared the map first and metadata lookup fails
 	if getErr == nil {
-		// If no error, result should be either the segment handle or nil
-		t.Logf("GetExistsReadonlySegmentHandle result: %v", getResult)
+		assert.Equal(t, mockSegment1, getResult, "Should return the cached segment handle if acquired before Close")
 	} else {
-		// If there's an error, it should be a valid error (not a panic)
-		t.Logf("GetExistsReadonlySegmentHandle error: %v", getErr)
+		assert.Nil(t, getResult, "Should return nil result on error")
+		assert.True(t, werr.ErrSegmentNotFound.Is(getErr), "Error should be ErrSegmentNotFound, got: %v", getErr)
 	}
 
 	// Verify all expectations
@@ -1345,4 +1327,859 @@ func TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments(t *testing
 
 	mockSegment1.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
+}
+
+// TestLogHandle_GetLastRecordId tests that GetLastRecordId returns ErrOperationNotSupported
+func TestLogHandle_GetLastRecordId(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	result, err := logHandle.GetLastRecordId(ctx)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrOperationNotSupported.Is(err))
+}
+
+// TestLogHandle_GetTruncatedRecordId tests retrieving the truncation point
+func TestLogHandle_GetTruncatedRecordId(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		result, err := logHandle.GetTruncatedRecordId(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, int64(5), result.SegmentId)
+		assert.Equal(t, int64(10), result.EntryId)
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(nil, errors.New("metadata error"))
+
+		result, err := logHandle.GetTruncatedRecordId(ctx)
+		assert.Nil(t, result)
+		assert.Error(t, err)
+	})
+
+	t.Run("NoTruncation", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: -1,
+				TruncatedEntryId:   -1,
+			},
+			Revision: 1,
+		}, nil)
+
+		result, err := logHandle.GetTruncatedRecordId(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, int64(-1), result.SegmentId)
+		assert.Equal(t, int64(-1), result.EntryId)
+	})
+}
+
+// TestLogHandle_Truncate tests the Truncate method
+func TestLogHandle_Truncate(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 0,
+				TruncatedEntryId:   0,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(3)).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{
+				SegNo:       3,
+				State:       proto.SegmentState_Completed,
+				LastEntryId: 100,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().UpdateLogMeta(mock.Anything, "test-log", mock.Anything).Return(nil)
+
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 3, EntryId: 50})
+		assert.NoError(t, err)
+	})
+
+	t.Run("GetLogMetaError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(nil, errors.New("meta error"))
+
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 3, EntryId: 50})
+		assert.Error(t, err)
+	})
+
+	t.Run("TruncationPointBehindCurrent", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 10,
+				TruncatedEntryId:   50,
+			},
+			Revision: 1,
+		}, nil)
+
+		// Requesting truncation behind current point should succeed without error
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 5, EntryId: 10})
+		assert.NoError(t, err)
+	})
+
+	t.Run("SegmentNotFound", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 0,
+				TruncatedEntryId:   0,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(99)).Return(nil, werr.ErrSegmentNotFound)
+
+		// Segment not found should not return error (just skip)
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 99, EntryId: 0})
+		assert.NoError(t, err)
+	})
+
+	t.Run("InvalidEntryId", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 0,
+				TruncatedEntryId:   0,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(3)).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{
+				SegNo:       3,
+				State:       proto.SegmentState_Completed,
+				LastEntryId: 10,
+			},
+			Revision: 1,
+		}, nil)
+
+		// Entry ID 20 exceeds LastEntryId 10
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 3, EntryId: 20})
+		assert.Error(t, err)
+	})
+
+	t.Run("UpdateLogMetaError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 0,
+				TruncatedEntryId:   0,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(3)).Return(&meta.SegmentMeta{
+			Metadata: &proto.SegmentMetadata{
+				SegNo:       3,
+				State:       proto.SegmentState_Completed,
+				LastEntryId: 100,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().UpdateLogMeta(mock.Anything, "test-log", mock.Anything).Return(errors.New("update failed"))
+
+		err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 3, EntryId: 50})
+		assert.Error(t, err)
+	})
+}
+
+// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed tests segment truncation checking
+func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed(t *testing.T) {
+	t.Run("GetLogMetaError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(nil, errors.New("meta error"))
+
+		err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+		assert.Error(t, err)
+	})
+
+	t.Run("NoTruncationPointSet", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 0,
+				TruncatedEntryId:   0,
+			},
+			Revision: 1,
+		}, nil)
+
+		err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("GetSegmentsError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, errors.New("segments error"))
+
+		err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+		assert.Error(t, err)
+	})
+
+	t.Run("SegmentsAlreadyTruncated", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		segments := map[int64]*meta.SegmentMeta{
+			0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Truncated}, Revision: 1},
+			3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Truncated}, Revision: 1},
+			5: {Metadata: &proto.SegmentMetadata{SegNo: 5, State: proto.SegmentState_Active}, Revision: 1},
+		}
+		mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
+
+		err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+		assert.NoError(t, err)
+	})
+}
+
+// TestLogHandle_GetRecoverableSegmentHandle tests getting recoverable segment handles
+func TestLogHandle_GetRecoverableSegmentHandle(t *testing.T) {
+	t.Run("SegmentNotFound", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(99)).Return(nil, werr.ErrSegmentNotFound)
+
+		segHandle, err := logHandle.GetRecoverableSegmentHandle(ctx, 99)
+		assert.Nil(t, segHandle)
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentNotFound.Is(err))
+	})
+}
+
+// TestLogHandle_GetCurrentWritableSegmentHandle tests the test-only method
+func TestLogHandle_GetCurrentWritableSegmentHandle(t *testing.T) {
+	t.Run("NoWritableSegment", func(t *testing.T) {
+		logHandle, _ := createMockLogHandle(t)
+		ctx := context.Background()
+
+		// WritableSegmentId = -1 by default
+		segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+		assert.Nil(t, segHandle)
+	})
+
+	t.Run("HasWritableSegment", func(t *testing.T) {
+		logHandle, _ := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+		logHandle.SegmentHandles[5] = mockSegHandle
+		logHandle.WritableSegmentId = 5
+
+		segHandle := logHandle.GetCurrentWritableSegmentHandle(ctx)
+		assert.NotNil(t, segHandle)
+		assert.Equal(t, mockSegHandle, segHandle)
+	})
+}
+
+// TestLogHandle_GetRecoverableSegmentHandle_Success tests the success path
+func TestLogHandle_GetRecoverableSegmentHandle_Success(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+	logHandle.SegmentHandles[5] = mockSegHandle
+
+	segHandle, err := logHandle.GetRecoverableSegmentHandle(ctx, 5)
+	assert.NoError(t, err)
+	assert.Equal(t, mockSegHandle, segHandle)
+}
+
+// TestLogHandle_GetRecoverableSegmentHandle_NilSegment tests the nil segment case
+func TestLogHandle_GetRecoverableSegmentHandle_NilSegment(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Not in cache, metadata returns nil
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(99)).Return(nil, nil)
+
+	segHandle, err := logHandle.GetRecoverableSegmentHandle(ctx, 99)
+	assert.Nil(t, segHandle)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentNotFound.Is(err))
+}
+
+// TestLogHandle_GetExistsReadonlySegmentHandle_MetadataError tests metadata retrieval error
+func TestLogHandle_GetExistsReadonlySegmentHandle_MetadataError(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(99)).Return(nil, errors.New("connection error"))
+
+	segHandle, err := logHandle.GetExistsReadonlySegmentHandle(ctx, 99)
+	assert.Nil(t, segHandle)
+	assert.Error(t, err)
+}
+
+// TestLogHandle_GetExistsReadonlySegmentHandle_NilSegMeta tests when metadata returns nil
+func TestLogHandle_GetExistsReadonlySegmentHandle_NilSegMeta(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(99)).Return(nil, nil)
+
+	segHandle, err := logHandle.GetExistsReadonlySegmentHandle(ctx, 99)
+	assert.Nil(t, segHandle)
+	assert.Error(t, err)
+	assert.True(t, werr.ErrSegmentNotFound.Is(err))
+}
+
+// TestLogHandle_GetExistsReadonlySegmentHandle_FoundInMetadata tests the full path from metadata
+func TestLogHandle_GetExistsReadonlySegmentHandle_FoundInMetadata(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(10)).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 10,
+			State: proto.SegmentState_Sealed,
+		},
+		Revision: 1,
+	}, nil)
+
+	segHandle, err := logHandle.GetExistsReadonlySegmentHandle(ctx, 10)
+	assert.NoError(t, err)
+	assert.NotNil(t, segHandle)
+	// Verify it was cached
+	assert.Contains(t, logHandle.SegmentHandles, int64(10))
+}
+
+// TestLogHandle_AdjustPendingReadPointIfTruncated tests truncation adjustment logic
+func TestLogHandle_AdjustPendingReadPointIfTruncated(t *testing.T) {
+	t.Run("GetTruncatedRecordIdError", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(nil, errors.New("meta error"))
+
+		from := &LogMessageId{SegmentId: 0, EntryId: 0}
+		result := logHandle.adjustPendingReadPointIfTruncated(ctx, "reader-1", from)
+		// On error, should return original from
+		assert.Equal(t, from, result)
+	})
+
+	t.Run("NoTruncation_ReturnsOriginal", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: -1,
+				TruncatedEntryId:   -1,
+			},
+			Revision: 1,
+		}, nil)
+
+		from := &LogMessageId{SegmentId: 5, EntryId: 10}
+		result := logHandle.adjustPendingReadPointIfTruncated(ctx, "reader-1", from)
+		assert.Equal(t, from, result)
+	})
+
+	t.Run("FromEarliest_AdjustToTruncationPoint", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		earliest := EarliestLogMessageID()
+		from := &earliest
+		result := logHandle.adjustPendingReadPointIfTruncated(ctx, "reader-1", from)
+		// Should adjust to after truncation point
+		assert.Equal(t, int64(5), result.SegmentId)
+		assert.Equal(t, int64(11), result.EntryId)
+	})
+
+	t.Run("FromEarliest_AdjustSegment", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		// EarliestLogMessageID has segId=0, which is < truncatedSegId=5
+		earliest := EarliestLogMessageID()
+		from := &earliest
+		result := logHandle.adjustPendingReadPointIfTruncated(ctx, "reader-1", from)
+		assert.Equal(t, int64(5), result.SegmentId)
+		assert.Equal(t, int64(11), result.EntryId) // truncatedEntryId + 1
+	})
+
+	t.Run("SpecificPosition_NotAdjusted", func(t *testing.T) {
+		logHandle, mockMeta := createMockLogHandle(t)
+		ctx := context.Background()
+
+		mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+			Metadata: &proto.LogMeta{
+				TruncatedSegmentId: 5,
+				TruncatedEntryId:   10,
+			},
+			Revision: 1,
+		}, nil)
+
+		// Specific position (not earliest) should NOT be adjusted
+		from := &LogMessageId{SegmentId: 3, EntryId: 0}
+		result := logHandle.adjustPendingReadPointIfTruncated(ctx, "reader-1", from)
+		assert.Equal(t, from, result)
+	})
+}
+
+// TestLogHandle_ShouldMoveToTruncationPoint tests the truncation point decision
+func TestLogHandle_ShouldMoveToTruncationPoint(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+
+	t.Run("EarliestWithTruncation", func(t *testing.T) {
+		earliest := EarliestLogMessageID()
+		from := &earliest
+		truncatedId := &LogMessageId{SegmentId: 5, EntryId: 10}
+		assert.True(t, logHandle.shouldMoveToTruncationPoint(from, truncatedId))
+	})
+
+	t.Run("EarliestWithNegativeTruncation", func(t *testing.T) {
+		earliest := EarliestLogMessageID()
+		from := &earliest
+		truncatedId := &LogMessageId{SegmentId: -1, EntryId: -1}
+		assert.False(t, logHandle.shouldMoveToTruncationPoint(from, truncatedId))
+	})
+
+	t.Run("SpecificPositionNotMoved", func(t *testing.T) {
+		from := &LogMessageId{SegmentId: 3, EntryId: 5}
+		truncatedId := &LogMessageId{SegmentId: 5, EntryId: 10}
+		assert.False(t, logHandle.shouldMoveToTruncationPoint(from, truncatedId))
+	})
+}
+
+// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg tests truncation with active segment needing update
+func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_WithActiveSeg(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: 5,
+			TruncatedEntryId:   10,
+		},
+		Revision: 1,
+	}, nil)
+
+	segments := map[int64]*meta.SegmentMeta{
+		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Active}, Revision: 1},
+		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Completed}, Revision: 1},
+		5: {Metadata: &proto.SegmentMetadata{SegNo: 5, State: proto.SegmentState_Active}, Revision: 1}, // truncation segment - skip
+		8: {Metadata: &proto.SegmentMetadata{SegNo: 8, State: proto.SegmentState_Active}, Revision: 1}, // after truncation - skip
+	}
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
+
+	// Only segments 0 and 3 (before truncation seg 5) should be marked as truncated
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.MatchedBy(func(sm *meta.SegmentMeta) bool {
+		return sm.Metadata.State == proto.SegmentState_Truncated && sm.Metadata.SegNo == 0
+	}), proto.SegmentState_Active).Return(nil)
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.MatchedBy(func(sm *meta.SegmentMeta) bool {
+		return sm.Metadata.State == proto.SegmentState_Truncated && sm.Metadata.SegNo == 3
+	}), proto.SegmentState_Completed).Return(nil)
+
+	err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+	assert.NoError(t, err)
+}
+
+// TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_UpdateError tests update metadata error
+func TestLogHandle_CheckAndSetSegmentTruncatedIfNeed_UpdateError(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: 5,
+			TruncatedEntryId:   10,
+		},
+		Revision: 1,
+	}, nil)
+
+	segments := map[int64]*meta.SegmentMeta{
+		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Active}, Revision: 1},
+	}
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(segments, nil)
+
+	// Update fails but should not return error (logs and continues)
+	mockMeta.EXPECT().UpdateSegmentMetadata(mock.Anything, "test-log", int64(1), mock.Anything, mock.Anything).Return(errors.New("update error"))
+
+	err := logHandle.CheckAndSetSegmentTruncatedIfNeed(ctx)
+	assert.NoError(t, err) // error is logged but not returned
+}
+
+// TestLogHandle_OpenLogReader_Success tests successful reader opening
+func TestLogHandle_OpenLogReader_Success(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	// Mock GetTruncatedRecordId (via GetLogMeta)
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: -1,
+			TruncatedEntryId:   -1,
+		},
+		Revision: 1,
+	}, nil)
+
+	// Mock CreateReaderTempInfo success
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(nil)
+
+	reader, err := logHandle.OpenLogReader(ctx, &LogMessageId{SegmentId: 0, EntryId: 0}, "")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	// Cleanup
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	_ = reader.Close(ctx)
+}
+
+// TestLogHandle_OpenLogReader_WithReaderBaseName tests reader opening with a custom base name
+func TestLogHandle_OpenLogReader_WithReaderBaseName(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: -1,
+			TruncatedEntryId:   -1,
+		},
+		Revision: 1,
+	}, nil)
+
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(0), int64(0)).Return(nil)
+
+	reader, err := logHandle.OpenLogReader(ctx, &LogMessageId{SegmentId: 0, EntryId: 0}, "my-reader")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+	assert.Contains(t, reader.GetName(), "my-reader")
+
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	_ = reader.Close(ctx)
+}
+
+// TestLogHandle_OpenLogReader_WithTruncation tests reader opening with truncation adjustment
+func TestLogHandle_OpenLogReader_WithTruncation(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: 3,
+			TruncatedEntryId:   10,
+		},
+		Revision: 1,
+	}, nil)
+
+	// Reader starts from earliest, should be adjusted to after truncation point
+	mockMeta.EXPECT().CreateReaderTempInfo(mock.Anything, mock.AnythingOfType("string"), int64(1), int64(3), int64(11)).Return(nil)
+
+	earliest := EarliestLogMessageID()
+	reader, err := logHandle.OpenLogReader(ctx, &earliest, "")
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	mockMeta.EXPECT().DeleteReaderTempInfo(mock.Anything, int64(1), mock.AnythingOfType("string")).Return(nil)
+	_ = reader.Close(ctx)
+}
+
+// TestLogHandle_Truncate_GetSegmentMetadataOtherError tests non-SegmentNotFound metadata error
+func TestLogHandle_Truncate_GetSegmentMetadataOtherError(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: 0,
+			TruncatedEntryId:   0,
+		},
+		Revision: 1,
+	}, nil)
+
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, "test-log", int64(3)).Return(nil, errors.New("connection error"))
+
+	err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 3, EntryId: 50})
+	assert.Error(t, err)
+}
+
+// TestLogHandle_Truncate_SameSegmentBehindEntry tests truncation with same segment but behind entry
+func TestLogHandle_Truncate_SameSegmentBehindEntry(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetLogMeta(mock.Anything, "test-log").Return(&meta.LogMeta{
+		Metadata: &proto.LogMeta{
+			TruncatedSegmentId: 5,
+			TruncatedEntryId:   50,
+		},
+		Revision: 1,
+	}, nil)
+
+	// Same segment but entry behind current - should be treated as behind
+	err := logHandle.Truncate(ctx, &LogMessageId{SegmentId: 5, EntryId: 20})
+	assert.NoError(t, err)
+}
+
+// === Background cleanup tests ===
+
+func TestLogHandle_StopBackgroundCleanup_AlreadyStopped(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+
+	// Stop background cleanup (it was started by NewLogHandle)
+	logHandle.stopBackgroundCleanup()
+
+	// Call again - should be idempotent (already closed channel)
+	logHandle.stopBackgroundCleanup()
+}
+
+func TestLogHandle_BackgroundCleanupLoop_StopsOnCleanupDone(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+
+	// Stop the existing cleanup goroutine first
+	logHandle.stopBackgroundCleanup()
+
+	// Reset for manual testing
+	logHandle.cleanupDone = make(chan struct{})
+	logHandle.cleanupWg.Add(1)
+
+	done := make(chan struct{})
+	go func() {
+		logHandle.backgroundCleanupLoop()
+		close(done)
+	}()
+
+	// Signal stop
+	close(logHandle.cleanupDone)
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(3 * time.Second):
+		t.Fatal("backgroundCleanupLoop did not stop")
+	}
+}
+
+func TestLogHandle_BackgroundCleanupLoop_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
+					MaxInterval: config.NewDurationSecondsFromInt(10),
+					MaxSize:     64 * 1024 * 1024,
+					MaxBlocks:   1000,
+				},
+			},
+		},
+	}
+	cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
+
+	segments := map[int64]*meta.SegmentMeta{}
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
+		return &proto.QuorumInfo{Id: -1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"127.0.0.1:59456"}}, nil
+	}).(*logHandleImpl)
+
+	// Stop the default cleanup
+	logHandle.stopBackgroundCleanup()
+
+	// Replace context with cancellable one and restart
+	logHandle.ctx = ctx
+	logHandle.cleanupDone = make(chan struct{})
+	logHandle.cleanupWg.Add(1)
+
+	done := make(chan struct{})
+	go func() {
+		logHandle.backgroundCleanupLoop()
+		close(done)
+	}()
+
+	// Cancel context
+	cancel()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(3 * time.Second):
+		t.Fatal("backgroundCleanupLoop did not stop on context cancel")
+	}
+}
+
+func TestLogHandle_PerformBackgroundCleanup_NoHandles(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+
+	// No segment handles - cleanup should be a no-op
+	logHandle.performBackgroundCleanup(1 * time.Minute)
+	assert.Empty(t, logHandle.SegmentHandles)
+}
+
+func TestLogHandle_PerformBackgroundCleanup_RemovesIdleHandles(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+
+	mockIdleSegment := mocks_segment_handle.NewSegmentHandle(t)
+	mockRecentSegment := mocks_segment_handle.NewSegmentHandle(t)
+
+	logHandle.SegmentHandles[1] = mockIdleSegment
+	logHandle.SegmentHandles[2] = mockRecentSegment
+	logHandle.WritableSegmentId = -1 // No writable segment
+
+	// Idle segment (old access time)
+	mockIdleSegment.EXPECT().GetLastAccessTime().Return(time.Now().Add(-5 * time.Minute).UnixMilli())
+	mockIdleSegment.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil)
+
+	// Recent segment
+	mockRecentSegment.EXPECT().GetLastAccessTime().Return(time.Now().UnixMilli())
+
+	logHandle.performBackgroundCleanup(1 * time.Minute)
+
+	assert.Len(t, logHandle.SegmentHandles, 1)
+	assert.Contains(t, logHandle.SegmentHandles, int64(2))
+}
+
+// === Additional cleanupIdleSegmentHandlesUnsafe tests ===
+
+func TestLogHandle_CleanupIdleSegmentHandlesUnsafe_NoHandlesToClean(t *testing.T) {
+	logHandle, _ := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockSegment := mocks_segment_handle.NewSegmentHandle(t)
+	logHandle.SegmentHandles[1] = mockSegment
+
+	// Recent access time - should not be cleaned
+	mockSegment.EXPECT().GetLastAccessTime().Return(time.Now().UnixMilli())
+
+	logHandle.cleanupIdleSegmentHandlesUnsafe(ctx, 1*time.Minute)
+
+	assert.Len(t, logHandle.SegmentHandles, 1)
+}
+
+// === fenceAllActiveSegments additional test ===
+
+func TestFenceAllActiveSegments_GetSegmentsError(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, werr.ErrInternalError)
+
+	err := logHandle.fenceAllActiveSegments(ctx)
+	assert.Error(t, err)
+}
+
+// === GetNextSegmentId test ===
+
+func TestLogHandle_GetNextSegmentId_Error(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(nil, werr.ErrInternalError)
+
+	_, err := logHandle.GetNextSegmentId(ctx)
+	assert.Error(t, err)
+}
+
+// === createNewSegmentMeta tests ===
+
+func TestLogHandle_CreateNewSegmentMeta_QuorumError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
+					MaxInterval: config.NewDurationSecondsFromInt(10),
+					MaxSize:     64 * 1024 * 1024,
+					MaxBlocks:   1000,
+				},
+			},
+		},
+	}
+	cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
+
+	segments := map[int64]*meta.SegmentMeta{}
+	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
+		return nil, werr.ErrInternalError // Quorum selection fails
+	}).(*logHandleImpl)
+	defer logHandle.stopBackgroundCleanup()
+
+	ctx := context.Background()
+	_, err := logHandle.createNewSegmentMeta(ctx)
+	assert.Error(t, err)
+}
+
+func TestLogHandle_CreateNewSegmentMeta_StoreError(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything, mock.Anything).Return(werr.ErrInternalError)
+
+	_, err := logHandle.createNewSegmentMeta(ctx)
+	assert.Error(t, err)
 }

@@ -88,7 +88,22 @@ func NewSequentialBufferWithData(logId int64, segmentId int64, startEntryId int6
 		MaxEntries:   maxEntries,
 		FirstEntryId: startEntryId,
 	}
-	b.ExpectedNextEntryId.Store(startEntryId)
+	// Calculate DataSize, SequentialReadyDataSize, and ExpectedNextEntryId from pre-existing data
+	var dataSize int64
+	var seqSize int64
+	nextEntryId := startEntryId
+	for i := int64(0); i < int64(len(restData)) && i < maxEntries; i++ {
+		if restData[i] != nil {
+			dataSize += int64(len(restData[i].Data))
+			if startEntryId+i == nextEntryId {
+				seqSize += int64(len(restData[i].Data))
+				nextEntryId++
+			}
+		}
+	}
+	b.DataSize.Store(dataSize)
+	b.SequentialReadyDataSize.Store(seqSize)
+	b.ExpectedNextEntryId.Store(nextEntryId)
 	return b
 }
 

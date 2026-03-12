@@ -63,7 +63,7 @@ func NewMinioClient(address string, opts *minio.Options) (*minio.Client, error) 
 
 // Credential is defined to mock tencent credential.Credentials
 //
-//go:generate mockery --name=Credential --with-expecter
+//go:generate mockery --name=Credential --structname=MockCredential --output=mocks/mocks_tencent --filename=mock_credential.go --with-expecter --outpkg=mocks_tencent
 type Credential interface {
 	common.CredentialIface
 }

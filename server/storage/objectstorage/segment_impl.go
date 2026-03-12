@@ -114,7 +114,7 @@ func (s *SegmentImpl) DeleteFileData(ctx context.Context, flag int) (int, error)
 				shouldDelete = true
 			}
 		default:
-			// Delete all files
+			// Unknown flag, skip deletion
 			shouldDelete = false
 		}
 

@@ -25,7 +25,7 @@ import (
 )
 
 func Test_CheckGrpcReady(t *testing.T) {
-	errChan := make(chan error)
+	errChan := make(chan error, 1)
 
 	// test errChan can receive nil after interval
 	go CheckGrpcReady(context.TODO(), errChan)
@@ -33,8 +33,19 @@ func Test_CheckGrpcReady(t *testing.T) {
 	err := <-errChan
 	assert.NoError(t, err)
 
-	// test CheckGrpcReady can finish after context done
+	// test CheckGrpcReady finishes when context is done before timer fires
 	ctx, cancel := context.WithTimeout(context.TODO(), 10*time.Millisecond)
-	CheckGrpcReady(ctx, errChan)
-	cancel()
+	defer cancel()
+	go CheckGrpcReady(ctx, errChan)
+	// Wait for context to expire; CheckGrpcReady should return without sending
+	<-ctx.Done()
+	// Give it a moment to finish
+	time.Sleep(20 * time.Millisecond)
+	// errChan should be empty (no send because context expired first)
+	select {
+	case <-errChan:
+		t.Error("expected no value on errChan when context is cancelled before timer")
+	default:
+		// expected
+	}
 }

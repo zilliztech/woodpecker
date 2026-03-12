@@ -615,7 +615,7 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 	s.Lock()
 	defer s.Unlock()
 
-	var writerErr error
+	var writerErr, readerErr error
 
 	// close writer
 	if s.currentSegmentWriter != nil {
@@ -644,7 +644,7 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segId))
 
-		readerErr := s.currentSegmentReader.Close(ctx)
+		readerErr = s.currentSegmentReader.Close(ctx)
 		if readerErr != nil {
 			logger.Ctx(ctx).Warn("close segment reader failed", zap.Int64("logId", s.logId), zap.Int64("segId", s.segId), zap.Error(readerErr))
 		} else {
@@ -659,15 +659,20 @@ func (s *segmentProcessor) Close(ctx context.Context) error {
 	}
 	s.currentSegmentReader = nil
 
-	// Determine the final error to return
+	// Determine the final error to return (writer error takes priority)
 	closeDuration := time.Since(start)
-	if writerErr != nil {
+	closeErr := writerErr
+	if closeErr == nil {
+		closeErr = readerErr
+	}
+	if closeErr != nil {
 		logger.Ctx(ctx).Warn("Segment processor close operation completed with errors",
 			zap.Int64("logId", s.logId),
 			zap.Int64("segId", s.segId),
 			zap.Duration("totalDuration", closeDuration),
-			zap.Error(writerErr))
-		return writerErr
+			zap.NamedError("writerErr", writerErr),
+			zap.NamedError("readerErr", readerErr))
+		return closeErr
 	}
 
 	logger.Ctx(ctx).Info("Segment processor close operation completed successfully",

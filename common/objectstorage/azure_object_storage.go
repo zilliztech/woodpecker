@@ -45,12 +45,57 @@ import (
 
 var CheckBucketRetryAttempts uint = 20
 
+// AzureBlobClient abstracts Azure block blob operations for testability.
+// *blockblob.Client satisfies this interface via duck typing.
+type AzureBlobClient interface {
+	DownloadStream(ctx context.Context, o *blob.DownloadStreamOptions) (blob.DownloadStreamResponse, error)
+	UploadStream(ctx context.Context, body io.Reader, o *azblob.UploadStreamOptions) (blockblob.UploadStreamResponse, error)
+	Delete(ctx context.Context, o *blob.DeleteOptions) (blob.DeleteResponse, error)
+	GetProperties(ctx context.Context, o *blob.GetPropertiesOptions) (blob.GetPropertiesResponse, error)
+}
+
+// FlatBlobPager abstracts the pager for flat blob listing.
+type FlatBlobPager interface {
+	More() bool
+	NextPage(ctx context.Context) (container.ListBlobsFlatResponse, error)
+}
+
+// HierarchyBlobPager abstracts the pager for hierarchy blob listing.
+type HierarchyBlobPager interface {
+	More() bool
+	NextPage(ctx context.Context) (container.ListBlobsHierarchyResponse, error)
+}
+
+// AzureServiceClientAPI abstracts Azure service-level operations for testability.
+type AzureServiceClientAPI interface {
+	GetBlobClient(containerName, blobName string) AzureBlobClient
+	NewListBlobsFlatPager(containerName string, opts *azblob.ListBlobsFlatOptions) FlatBlobPager
+	NewListBlobsHierarchyPager(containerName, delimiter string, opts *container.ListBlobsHierarchyOptions) HierarchyBlobPager
+}
+
+// azureServiceClientWrapper wraps *service.Client to satisfy AzureServiceClientAPI.
+type azureServiceClientWrapper struct {
+	client *service.Client
+}
+
+func (w *azureServiceClientWrapper) GetBlobClient(containerName, blobName string) AzureBlobClient {
+	return w.client.NewContainerClient(containerName).NewBlockBlobClient(blobName)
+}
+
+func (w *azureServiceClientWrapper) NewListBlobsFlatPager(containerName string, opts *azblob.ListBlobsFlatOptions) FlatBlobPager {
+	return w.client.NewContainerClient(containerName).NewListBlobsFlatPager(opts)
+}
+
+func (w *azureServiceClientWrapper) NewListBlobsHierarchyPager(containerName, delimiter string, opts *container.ListBlobsHierarchyOptions) HierarchyBlobPager {
+	return w.client.NewContainerClient(containerName).NewListBlobsHierarchyPager(delimiter, opts)
+}
+
 var _ minioHandler.FileReader = (*BlobReader)(nil)
 
 // BlobReader is implemented because Azure's stream body does not have ReadAt and Seek interfaces.
 // BlobReader is not concurrency safe.
 type BlobReader struct {
-	client          *blockblob.Client
+	client          AzureBlobClient
 	position        int64
 	count           int64
 	body            io.ReadCloser
@@ -60,11 +105,11 @@ type BlobReader struct {
 
 // NewBlobReader construct a full blob reader
 // Deprecated
-func NewBlobReader(client *blockblob.Client, offset int64) (*BlobReader, error) {
+func NewBlobReader(client AzureBlobClient, offset int64) (*BlobReader, error) {
 	return &BlobReader{client: client, position: offset, count: 0, needResetStream: true}, nil
 }
 
-func NewBlobReaderWithSize(client *blockblob.Client, offset int64, size int64) (*BlobReader, error) {
+func NewBlobReaderWithSize(client AzureBlobClient, offset int64, size int64) (*BlobReader, error) {
 	return &BlobReader{client: client, position: offset, count: size, needResetStream: true}, nil
 }
 
@@ -72,7 +117,7 @@ func (b *BlobReader) Read(p []byte) (n int, err error) {
 	ctx := context.Background()
 
 	if b.needResetStream {
-		opts := &azblob.DownloadStreamOptions{
+		opts := &blob.DownloadStreamOptions{
 			Range: blob.HTTPRange{
 				Offset: b.position,
 				Count:  b.count,
@@ -147,7 +192,7 @@ func (b *BlobReader) Size() (int64, error) {
 var _ ObjectStorage = (*AzureObjectStorage)(nil)
 
 type AzureObjectStorage struct {
-	*service.Client
+	client AzureServiceClientAPI
 }
 
 func newAzureObjectStorageWithConfig(ctx context.Context, c *config.Configuration) (*AzureObjectStorage, error) {
@@ -155,7 +200,7 @@ func newAzureObjectStorageWithConfig(ctx context.Context, c *config.Configuratio
 	if err != nil {
 		return nil, err
 	}
-	return &AzureObjectStorage{Client: client}, nil
+	return &AzureObjectStorage{client: &azureServiceClientWrapper{client: client}}, nil
 }
 
 func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (*service.Client, error) {
@@ -210,18 +255,18 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 }
 
 func (a *AzureObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
-	return NewBlobReaderWithSize(a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName), offset, size)
+	return NewBlobReaderWithSize(a.client.GetBlobClient(bucketName, objectName), offset, size)
 }
 
 func (a *AzureObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
-	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{})
+	_, err := a.client.GetBlobClient(bucketName, objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{})
 	return err
 }
 
 func (a *AzureObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
 	start := time.Now()
 	eTagAny := azcore.ETag("*")
-	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{
+	_, err := a.client.GetBlobClient(bucketName, objectName).UploadStream(ctx, reader, &azblob.UploadStreamOptions{
 		AccessConditions: &azblob.AccessConditions{
 			ModifiedAccessConditions: &blob.ModifiedAccessConditions{
 				IfNoneMatch: &eTagAny,
@@ -260,7 +305,7 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 	fencedObjectReader := bytes.NewReader([]byte("F"))
 	eTagAny := azcore.ETag("*")
 	isFencedObject := "true"
-	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).UploadStream(ctx, fencedObjectReader, &azblob.UploadStreamOptions{
+	_, err := a.client.GetBlobClient(bucketName, objectName).UploadStream(ctx, fencedObjectReader, &azblob.UploadStreamOptions{
 		AccessConditions: &azblob.AccessConditions{
 			ModifiedAccessConditions: &blob.ModifiedAccessConditions{
 				IfNoneMatch: &eTagAny,
@@ -294,7 +339,7 @@ func (a *AzureObjectStorage) PutFencedObject(ctx context.Context, bucketName, ob
 }
 
 func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
-	info, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).GetProperties(ctx, &blob.GetPropertiesOptions{})
+	info, err := a.client.GetBlobClient(bucketName, objectName).GetProperties(ctx, &blob.GetPropertiesOptions{})
 	if err != nil {
 		return 0, false, err
 	}
@@ -307,7 +352,7 @@ func (a *AzureObjectStorage) StatObject(ctx context.Context, bucketName, objectN
 
 func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error {
 	if recursive {
-		pager := a.Client.NewContainerClient(bucketName).NewListBlobsFlatPager(&azblob.ListBlobsFlatOptions{
+		pager := a.client.NewListBlobsFlatPager(bucketName, &azblob.ListBlobsFlatOptions{
 			Prefix: &prefix,
 		})
 		for pager.More() {
@@ -322,7 +367,7 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 			}
 		}
 	} else {
-		pager := a.Client.NewContainerClient(bucketName).NewListBlobsHierarchyPager("/", &container.ListBlobsHierarchyOptions{
+		pager := a.client.NewListBlobsHierarchyPager(bucketName, "/", &container.ListBlobsHierarchyOptions{
 			Prefix: &prefix,
 		})
 		for pager.More() {
@@ -347,7 +392,7 @@ func (a *AzureObjectStorage) WalkWithObjects(ctx context.Context, bucketName str
 }
 
 func (a *AzureObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
-	_, err := a.Client.NewContainerClient(bucketName).NewBlockBlobClient(objectName).Delete(ctx, &blob.DeleteOptions{})
+	_, err := a.client.GetBlobClient(bucketName, objectName).Delete(ctx, &blob.DeleteOptions{})
 	return err
 }
 

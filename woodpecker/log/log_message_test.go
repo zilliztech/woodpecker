@@ -17,6 +17,7 @@
 package log
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -340,6 +341,119 @@ func TestUnmarshalMessage(t *testing.T) {
 			t.Skip("Protobuf accepts nil data")
 		}
 	})
+}
+
+func TestSerializeLogMessageId(t *testing.T) {
+	t.Run("BasicSerializeDeserialize", func(t *testing.T) {
+		id := &LogMessageId{
+			SegmentId: 42,
+			EntryId:   100,
+		}
+		data := id.Serialize()
+		require.NotNil(t, data)
+		assert.Greater(t, len(data), 0)
+
+		deserialized, err := DeserializeLogMessageId(data)
+		require.NoError(t, err)
+		assert.Equal(t, id.SegmentId, deserialized.SegmentId)
+		assert.Equal(t, id.EntryId, deserialized.EntryId)
+	})
+
+	t.Run("ZeroValues", func(t *testing.T) {
+		id := &LogMessageId{
+			SegmentId: 0,
+			EntryId:   0,
+		}
+		data := id.Serialize()
+		require.NotNil(t, data)
+
+		deserialized, err := DeserializeLogMessageId(data)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), deserialized.SegmentId)
+		assert.Equal(t, int64(0), deserialized.EntryId)
+	})
+
+	t.Run("LargeValues", func(t *testing.T) {
+		id := &LogMessageId{
+			SegmentId: 9223372036854775807, // max int64
+			EntryId:   9223372036854775807,
+		}
+		data := id.Serialize()
+		require.NotNil(t, data)
+
+		deserialized, err := DeserializeLogMessageId(data)
+		require.NoError(t, err)
+		assert.Equal(t, id.SegmentId, deserialized.SegmentId)
+		assert.Equal(t, id.EntryId, deserialized.EntryId)
+	})
+
+	t.Run("NegativeValues", func(t *testing.T) {
+		id := &LogMessageId{
+			SegmentId: -1,
+			EntryId:   -1,
+		}
+		data := id.Serialize()
+		require.NotNil(t, data)
+
+		deserialized, err := DeserializeLogMessageId(data)
+		require.NoError(t, err)
+		assert.Equal(t, int64(-1), deserialized.SegmentId)
+		assert.Equal(t, int64(-1), deserialized.EntryId)
+	})
+}
+
+func TestDeserializeLogMessageId_InvalidData(t *testing.T) {
+	t.Run("InvalidProtobuf", func(t *testing.T) {
+		invalidData := []byte("not valid protobuf")
+		_, err := DeserializeLogMessageId(invalidData)
+		require.Error(t, err)
+	})
+
+	t.Run("EmptyData", func(t *testing.T) {
+		// Empty data is valid protobuf (zero values), so this may succeed
+		result, err := DeserializeLogMessageId([]byte{})
+		if err == nil {
+			assert.Equal(t, int64(0), result.SegmentId)
+			assert.Equal(t, int64(0), result.EntryId)
+		}
+	})
+
+	t.Run("NilData", func(t *testing.T) {
+		result, err := DeserializeLogMessageId(nil)
+		if err == nil {
+			assert.Equal(t, int64(0), result.SegmentId)
+			assert.Equal(t, int64(0), result.EntryId)
+		}
+	})
+}
+
+func TestLatestLogMessageID(t *testing.T) {
+	latest := LatestLogMessageID()
+	assert.Equal(t, int64(math.MaxInt64), latest.SegmentId)
+	assert.Equal(t, int64(math.MaxInt64), latest.EntryId)
+}
+
+func TestEarliestLogMessageID(t *testing.T) {
+	earliest := EarliestLogMessageID()
+	assert.Equal(t, int64(0), earliest.SegmentId)
+	assert.Equal(t, int64(0), earliest.EntryId)
+}
+
+func TestSerializeRoundTrip(t *testing.T) {
+	// Test multiple IDs round-trip
+	ids := []*LogMessageId{
+		{SegmentId: 0, EntryId: 0},
+		{SegmentId: 1, EntryId: 42},
+		{SegmentId: 999, EntryId: 12345},
+		{SegmentId: -1, EntryId: -1},
+	}
+	for _, id := range ids {
+		data := id.Serialize()
+		deserialized, err := DeserializeLogMessageId(data)
+		require.NoError(t, err)
+		assert.Equal(t, id.SegmentId, deserialized.SegmentId)
+		assert.Equal(t, id.EntryId, deserialized.EntryId)
+	}
 }
 
 func BenchmarkMarshalMessage(b *testing.B) {
