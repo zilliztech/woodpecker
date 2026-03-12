@@ -617,6 +617,11 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	var result error
 	l.closeOnce.Do(func() {
 		start := time.Now()
+		logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+
+		// Mark session invalid immediately to reject concurrent writes,
+		// rather than relying on monitorSession goroutine to do it asynchronously.
+		l.sessionLock.MarkInvalid()
 
 		l.writerClose <- struct{}{}
 		close(l.writerClose)
