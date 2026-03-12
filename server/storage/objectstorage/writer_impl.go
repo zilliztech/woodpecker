@@ -667,7 +667,7 @@ func (f *MinioFileWriter) ack() {
 			}
 			f.fastFlushFailUnsafe(context.TODO(), task.flushData, task.flushFuture.Value().err)
 		}
-		f.flushingBufferSize.Add(-task.flushFuture.Value().block.Size)
+		f.flushingBufferSize.Add(-task.rawDataSize)
 	}
 }
 
@@ -1184,6 +1184,7 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 			flushData:             blockDataBuff,
 			flushDataFirstEntryId: blockFirstEntryId,
 			flushFuture:           resultFuture,
+			rawDataSize:           submitFlushingSize,
 		}
 		flushResultFutures = append(flushResultFutures, resultFuture)
 	}
@@ -2358,6 +2359,7 @@ type blockUploadTask struct {
 	flushData             []*cache.BufferEntry
 	flushDataFirstEntryId int64
 	flushFuture           *conc.Future[*blockUploadResult]
+	rawDataSize           int64 // raw data size before serialization, used for flushingBufferSize accounting
 }
 
 // blockUploadResult is the result of flush operation

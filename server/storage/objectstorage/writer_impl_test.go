@@ -2748,3 +2748,56 @@ func TestMinioFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
 	err = w.Close(ctx)
 	assert.NoError(t, err)
 }
+
+func TestMinioFileWriter_FlushingBufferSize_AccountingAccuracy(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	// Mock PutObjectIfNoneMatch to succeed for all block uploads
+	mockClient.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+
+	// Start the ack goroutine (normally started by run(), but we need it for the test)
+	go w.ack()
+
+	// Verify initial state
+	assert.Equal(t, int64(0), w.flushingBufferSize.Load(), "initial flushingBufferSize should be 0")
+
+	// Write multiple entries with known sizes
+	resultCh := newMockResultChannel()
+	for i := int64(0); i < 10; i++ {
+		data := make([]byte, 100+i*10) // varying sizes: 100, 110, 120, ..., 190
+		for j := range data {
+			data[j] = byte(i)
+		}
+		_, err := w.WriteDataAsync(ctx, i, data, resultCh)
+		require.NoError(t, err)
+	}
+
+	// Trigger sync to submit flush tasks (this increments flushingBufferSize)
+	err := w.Sync(ctx)
+	require.NoError(t, err)
+
+	// Wait for all pool tasks to complete and ack goroutine to process them
+	require.Eventually(t, func() bool {
+		return w.pool.Running() == 0
+	}, 5*time.Second, 50*time.Millisecond, "pool tasks should complete")
+
+	// Send termination signal to ack goroutine and wait for it to finish
+	w.flushingTaskList <- &blockUploadTask{
+		flushData:             nil,
+		flushDataFirstEntryId: 0,
+		flushFuture:           nil,
+	}
+	require.Eventually(t, func() bool {
+		return w.allUploadingTaskDone.Load()
+	}, 5*time.Second, 50*time.Millisecond, "ack goroutine should finish")
+
+	// The key assertion: flushingBufferSize must return to exactly 0
+	// Before the fix, this would be negative due to serialization overhead mismatch
+	finalSize := w.flushingBufferSize.Load()
+	assert.Equal(t, int64(0), finalSize,
+		"flushingBufferSize should be exactly 0 after all tasks are acked, got %d", finalSize)
+}
