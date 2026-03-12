@@ -1360,6 +1360,22 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 		return nil
 	}
+	// Ensure goroutine, channel, pool, and lock cleanup always runs,
+	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
+	defer func() {
+		if err := f.releaseSegmentLock(ctx); err != nil {
+			logger.Ctx(ctx).Warn("Failed to release segment lock during close",
+				zap.String("segmentFileKey", f.segmentFileKey),
+				zap.Error(err))
+		}
+		f.fileClose <- struct{}{}
+		close(f.fileClose)
+		close(f.flushingTaskList)
+		if f.pool != nil {
+			f.pool.Release()
+		}
+	}()
+
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("segmentFileKey", f.segmentFileKey), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
 	err := f.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
@@ -1374,23 +1390,11 @@ func (f *MinioFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Warn("wait flush error before close",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Error(waitErr))
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "close", "error").Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "close", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		return waitErr
 	}
 
-	// Release segment lock
-	if err := f.releaseSegmentLock(ctx); err != nil {
-		logger.Ctx(ctx).Warn("Failed to release segment lock during close",
-			zap.String("segmentFileKey", f.segmentFileKey),
-			zap.Error(err))
-	}
-
-	// close file
-	f.fileClose <- struct{}{}
-	close(f.fileClose)
-	close(f.flushingTaskList)
-	if f.pool != nil {
-		f.pool.Release()
-	}
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "close", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return nil

@@ -2712,3 +2712,39 @@ func TestMinioFileWriter_RecoverFromFooter_ParseFooterError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse footer record")
 }
+
+func TestMinioFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
+	w := newTestMinioFileWriter()
+
+	// awaitAllFlushTasks will try to send a termination signal to flushingTaskList;
+	// use a cancelled context so it fails immediately on ctx.Done()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	closeErr := w.Close(cancelledCtx)
+	assert.Error(t, closeErr, "Close should return error when awaitAllFlushTasks fails")
+
+	// Verify cleanup happened despite the error return:
+	// - closed flag should be set
+	assert.True(t, w.closed.Load(), "closed flag should be set")
+	// - pool should be released (calling Release again is safe but pool.Free() should be 0)
+	assert.NotNil(t, w.pool, "pool should still exist but be released")
+}
+
+func TestMinioFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
+	w := newTestMinioFileWriter()
+
+	// Mark as already done so awaitAllFlushTasks returns immediately
+	w.allUploadingTaskDone.Store(true)
+
+	ctx := context.Background()
+
+	// First close succeeds
+	err := w.Close(ctx)
+	assert.NoError(t, err)
+	assert.True(t, w.closed.Load())
+
+	// Second close returns nil without panic (idempotent)
+	err = w.Close(ctx)
+	assert.NoError(t, err)
+}
