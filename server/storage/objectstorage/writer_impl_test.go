@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -31,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	commonObjectStorage "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -1727,6 +1730,108 @@ func TestMinioFileWriter_Compact_PreservesLAC(t *testing.T) {
 	parsedFooter, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
 	require.NoError(t, parseErr)
 	assert.Equal(t, originalLAC, parsedFooter.LAC, "uploaded compacted footer must preserve original LAC")
+}
+
+// TestMinioFileWriter_Compact_MetricsAccuracy verifies that stored-bytes and stored-objects
+// gauges are correctly adjusted during compaction: new merged blocks are counted, original
+// blocks are decremented after deletion, and the footer overwrite adjusts the byte delta.
+// Regression test: previously footer bytes were never tracked, causing gauge drift.
+func TestMinioFileWriter_Compact_MetricsAccuracy(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	block0Data := w.serialize(0, []*cache.BufferEntry{
+		{EntryId: 0, Data: []byte("hello")},
+		{EntryId: 1, Data: []byte("world")},
+	})
+	block1Data := w.serialize(1, []*cache.BufferEntry{
+		{EntryId: 2, Data: []byte("foo")},
+	})
+
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  2,
+		TotalRecords: 3,
+		TotalSize:    uint64(len(block0Data) + len(block1Data)),
+		Version:      codec.FormatVersion,
+		Flags:        0,
+		LAC:          2,
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: uint32(len(block0Data)), FirstEntryID: 0, LastEntryID: 1},
+		{BlockNumber: 1, StartOffset: 1, BlockSize: uint32(len(block1Data)), FirstEntryID: 2, LastEntryID: 2},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(2)
+
+	// Capture old footer size before Compact overwrites it
+	oldFooterSize := float64(w.footerRecord.IndexLength) + float64(codec.RecordHeaderSize) + float64(codec.GetFooterRecordSize(w.footerRecord.Version))
+
+	// Read gauge values before compaction
+	getGauge := func(gv *prometheus.GaugeVec) float64 {
+		g, _ := gv.GetMetricWithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr)
+		m := &dto.Metric{}
+		_ = g.Write(m)
+		return m.GetGauge().GetValue()
+	}
+	bytesBefore := getGauge(metrics.WpObjectStorageStoredBytes)
+	objectsBefore := getGauge(metrics.WpObjectStorageStoredObjects)
+
+	// Mock: read block 0
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block0Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(block0Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block0Data}, nil).Once()
+
+	// Mock: read block 1
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block1Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", int64(0), int64(len(block1Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block1Data}, nil).Once()
+
+	// Mock: upload merged block 0
+	var mergedBlockSize int64
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ io.Reader, size int64, _ string, _ string) {
+			mergedBlockSize = size
+		}).
+		Return(nil).Once()
+
+	// Mock: upload compacted footer
+	var footerSize int64
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ io.Reader, size int64, _ string, _ string) {
+			footerSize = size
+		}).
+		Return(nil).Once()
+
+	// Mock: delete original blocks
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	_, err := w.Compact(ctx)
+	assert.NoError(t, err)
+
+	bytesAfter := getGauge(metrics.WpObjectStorageStoredBytes)
+	objectsAfter := getGauge(metrics.WpObjectStorageStoredObjects)
+
+	bytesDelta := bytesAfter - bytesBefore
+	objectsDelta := objectsAfter - objectsBefore
+
+	// Expected delta:
+	//   +mergedBlockSize (new merged block uploaded)
+	//   +(footerSize - oldFooterSize) (footer overwrite adjusts delta)
+	//   -(block0 + block1 sizes) (original blocks deleted)
+	originalBlockBytes := float64(len(block0Data) + len(block1Data))
+
+	expectedBytesDelta := float64(mergedBlockSize) + (float64(footerSize) - oldFooterSize) - originalBlockBytes
+	assert.InDelta(t, expectedBytesDelta, bytesDelta, 1.0, "stored bytes gauge should reflect net compaction change")
+
+	// Objects delta: +1 (merged block) -2 (original blocks), footer unchanged (overwrite)
+	assert.Equal(t, float64(-1), objectsDelta, "stored objects should decrease by 1 (2 blocks merged into 1, footer stays)")
 }
 
 // ===== Fence with mock =====

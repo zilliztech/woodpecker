@@ -911,6 +911,9 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	// Serialize new footer and indexes
 	footerData := f.serializeCompactedFooterAndIndexes(ctx, newBlockIndexes, newFooter)
 
+	// Compute old footer object size for metric adjustment (same key gets overwritten).
+	oldFooterObjSize := int64(f.footerRecord.IndexLength) + int64(codec.RecordHeaderSize) + int64(codec.GetFooterRecordSize(f.footerRecord.Version))
+
 	// Upload new footer
 	footerKey := getFooterBlockKey(f.segmentFileKey)
 	putErr := f.client.PutObject(ctx, f.bucket, footerKey, bytes.NewReader(footerData), int64(len(footerData)), f.nsStr, f.logIdStr)
@@ -920,6 +923,9 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 			zap.Error(putErr))
 		return -1, fmt.Errorf("failed to upload compacted footer: %w", putErr)
 	}
+	// Footer object is overwritten (same key), adjust stored-bytes gauge by the size delta.
+	// Object count stays the same since the key already existed.
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(int64(len(footerData)) - oldFooterObjSize))
 
 	// Clean up original block files after successful compaction
 	originalBlockIndexes := f.blockIndexes // Save original blocks before updating
@@ -1370,6 +1376,8 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 			zap.Error(putErr))
 		return -1, fmt.Errorf("failed to put object: %w", putErr)
 	}
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(len(footerBlockRawData)))
+	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Inc()
 	f.footerRecord = footer
 	logger.Ctx(ctx).Info("successfully finalized segment",
 		zap.String("segmentFileKey", f.segmentFileKey),
