@@ -479,10 +479,16 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	}
 	defer s.compacting.Store(false)
 
+	// Apply compaction timeout from config.
+	timeout := time.Duration(s.cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout.Seconds()) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	start := time.Now()
 	logger.Ctx(ctx).Info("Starting segment processor compact operation",
 		zap.Int64("logId", s.logId),
-		zap.Int64("segId", s.segId))
+		zap.Int64("segId", s.segId),
+		zap.Duration("timeout", timeout))
 
 	writer, err := s.getOrCreateSegmentWriter(ctx, true)
 	if err != nil {

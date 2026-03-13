@@ -373,6 +373,32 @@ func TestSegmentProcessor_Compact_MergeError(t *testing.T) {
 	assert.Nil(t, meta)
 }
 
+func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	// Set a very short compaction timeout (1 second)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = config.NewDurationSecondsFromInt(1)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil)
+	impl := sp.(*segmentProcessor)
+
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+		// Block until the context is cancelled (should happen after 1s timeout)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	})
+	impl.currentSegmentWriter = mockWriter
+
+	start := time.Now()
+	meta, err := impl.Compact(context.Background())
+	elapsed := time.Since(start)
+
+	assert.Nil(t, meta)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// Should complete within ~1s, not hang forever
+	assert.Less(t, elapsed, 3*time.Second)
+}
+
 func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	sp := newTestProcessor(t)
 	// Use a channel to hold the first Compact call so the second overlaps.
