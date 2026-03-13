@@ -1394,10 +1394,10 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 
 	var completeBlockData []byte
 	if mergedBlockID == 0 {
-		// First merged block: prepend HeaderRecord with compacted flag
+		// First merged block: prepend HeaderRecord with compacted flag, preserving existing flags
 		headerRecord := &codec.HeaderRecord{
 			Version:      codec.FormatVersion,
-			Flags:        codec.SetCompacted(0),
+			Flags:        codec.SetCompacted(w.recoveredFooter.Flags),
 			FirstEntryID: firstEntryID,
 		}
 		completeBlockData = append(completeBlockData, codec.EncodeRecord(headerRecord)...)
@@ -1499,8 +1499,8 @@ func (w *StagedFileWriter) uploadCompactedFooter(ctx context.Context, blockIndex
 		IndexOffset:  0,
 		IndexLength:  uint32(len(blockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)),
 		Version:      codec.FormatVersion,
-		Flags:        codec.SetCompacted(0), // Set compacted flag
-		LAC:          lac,                   // Set Last Add Confirmed ID from validation
+		Flags:        codec.SetCompacted(w.recoveredFooter.Flags), // Preserve existing flags, set compacted bit
+		LAC:          lac,                                         // Set Last Add Confirmed ID from validation
 	}
 
 	// Serialize footer and indexes

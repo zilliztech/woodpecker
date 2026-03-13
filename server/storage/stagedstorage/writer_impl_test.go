@@ -1099,6 +1099,89 @@ func TestStagedFileWriter_Compact_MergedBlockFormat(t *testing.T) {
 	writer.Close(context.Background())
 }
 
+// TestStagedFileWriter_Compact_FlagsPreserved verifies that compaction preserves
+// existing footer flags (e.g. future reserved bits) while adding the compacted bit.
+// Regression test: previously StagedFileWriter used SetCompacted(0), discarding
+// any pre-existing flags.
+func TestStagedFileWriter_Compact_FlagsPreserved(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = config.NewByteSize(10 * 1024 * 1024)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 1
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Write data and finalize
+	for i := int64(0); i < 3; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), nil)
+		require.NoError(t, err)
+	}
+	err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 2)
+	require.NoError(t, err)
+
+	// Simulate a pre-existing flag on bit 1 (reserved) in the footer
+	// This tests that compaction preserves flags it doesn't own
+	originalFlags := uint16(0x0002) // bit 1 set (a hypothetical future flag)
+	writer.recoveredFooter.Flags = originalFlags
+
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Capture uploaded data to verify flags
+	var capturedMergedBlockData []byte
+	var capturedFooterData []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+		return true
+	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, key string, reader io.Reader, size int64, _ string, _ string) {
+			data := make([]byte, size)
+			_, _ = io.ReadFull(reader, data)
+			if len(key) > 10 && key[len(key)-10:] == "footer.blk" {
+				capturedFooterData = data
+			} else {
+				capturedMergedBlockData = data
+			}
+		}).
+		Return(nil)
+
+	totalSize, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, totalSize, int64(0))
+
+	// Verify HeaderRecord in merged block preserves original flags + compacted bit
+	require.NotEmpty(t, capturedMergedBlockData)
+	records, decodeErr := codec.DecodeRecordList(capturedMergedBlockData)
+	require.NoError(t, decodeErr)
+
+	expectedFlags := originalFlags | codec.FooterFlagCompacted // 0x0003
+	for _, record := range records {
+		if h, ok := record.(*codec.HeaderRecord); ok {
+			assert.Equal(t, expectedFlags, h.Flags,
+				"HeaderRecord should preserve original flags (0x%04x) and add compacted bit", originalFlags)
+		}
+	}
+
+	// Verify Footer also preserves original flags + compacted bit
+	require.NotEmpty(t, capturedFooterData)
+	footer, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
+	require.NoError(t, parseErr)
+	assert.Equal(t, expectedFlags, footer.Flags,
+		"FooterRecord should preserve original flags (0x%04x) and add compacted bit", originalFlags)
+
+	writer.Close(context.Background())
+}
+
 func TestStagedFileWriter_Compact_NoBlocks(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
@@ -1246,6 +1329,7 @@ func TestStagedFileWriter_UploadCompactedFooter(t *testing.T) {
 
 	writer.firstEntryID.Store(0)
 	writer.lastEntryID.Store(9)
+	writer.recoveredFooter = &codec.FooterRecord{Flags: 0, Version: codec.FormatVersion}
 
 	blockIndexes := []*codec.IndexRecord{
 		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 9},
@@ -1269,6 +1353,7 @@ func TestStagedFileWriter_UploadCompactedFooter_PutError(t *testing.T) {
 
 	writer.firstEntryID.Store(0)
 	writer.lastEntryID.Store(9)
+	writer.recoveredFooter = &codec.FooterRecord{Flags: 0, Version: codec.FormatVersion}
 
 	blockIndexes := []*codec.IndexRecord{
 		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 9},

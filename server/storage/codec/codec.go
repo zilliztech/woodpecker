@@ -411,4 +411,3 @@ func ExtractDataRecordBytes(blockData []byte) ([]byte, error) {
 	}
 	return nil, nil
 }
-
