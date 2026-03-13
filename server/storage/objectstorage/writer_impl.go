@@ -2015,8 +2015,11 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 	readCompleteTime := time.Now()
 	sp.AddEvent("read complete", trace.WithAttributes(attribute.Int64("readTime", readCompleteTime.Sub(startTime).Milliseconds())))
 
+	// Derive lastEntryID from the sorted block indexes
+	lastEntryID := blockDataResults[len(blockDataResults)-1].blockIndex.LastEntryID
+
 	// Phase 3: Upload merged block
-	blockIndex, blockSize, err := f.uploadSingleMergedBlock(ctx, mergedData, mergedBlockID, firstEntryID, isFirstBlock)
+	blockIndex, blockSize, err := f.uploadSingleMergedBlock(ctx, mergedData, mergedBlockID, firstEntryID, lastEntryID, isFirstBlock)
 	if err != nil {
 		return &mergedBlockUploadResult{
 			blockIndex: nil,
@@ -2072,41 +2075,16 @@ func (f *MinioFileWriter) readBlockData(ctx context.Context, blockKey string) ([
 
 // extractDataRecords extracts only data records from a block, skipping header and block header records
 func (f *MinioFileWriter) extractDataRecords(blockData []byte) ([]byte, error) {
-	records, err := codec.DecodeRecordList(blockData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode records: %w", err)
-	}
-
-	var dataRecords []byte
-	for _, record := range records {
-		if record.Type() == codec.DataRecordType {
-			encodedRecord := codec.EncodeRecord(record)
-			dataRecords = append(dataRecords, encodedRecord...)
-		}
-	}
-
-	return dataRecords, nil
+	return codec.ExtractDataRecordBytes(blockData)
 }
 
 // uploadSingleMergedBlock uploads a single merged block with m_ prefix
-func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlockData []byte, mergedBlockID int64, firstEntryID int64, isFirstBlock bool) (*codec.IndexRecord, int64, error) {
+func (f *MinioFileWriter) uploadSingleMergedBlock(ctx context.Context, mergedBlockData []byte, mergedBlockID int64, firstEntryID int64, lastEntryID int64, isFirstBlock bool) (*codec.IndexRecord, int64, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "uploadSingleMergedBlock")
 	defer sp.End()
-	// Count data records to calculate entry range
-	records, err := codec.DecodeRecordList(mergedBlockData)
-	if err != nil {
-		return nil, -1, fmt.Errorf("failed to decode merged block data: %w", err)
-	}
-
-	dataRecordCount := 0
-	for _, record := range records {
-		if record.Type() == codec.DataRecordType {
-			dataRecordCount++
-		}
-	}
 
 	blockFirstEntryID := firstEntryID
-	blockLastEntryID := firstEntryID + int64(dataRecordCount) - 1
+	blockLastEntryID := lastEntryID
 
 	// Calculate block length and CRC for the merged block data
 	blockLength := uint32(len(mergedBlockData))

@@ -1481,34 +1481,9 @@ func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, block
 }
 
 // extractDataRecords extracts only DataRecords from block data by skipping
-// non-data record headers using fixed-size offsets, avoiding full decode/re-encode.
-// Block layout: [RecordHeader+HeaderPayload (optional)] + [RecordHeader+BlockHeaderPayload] + [DataRecords...]
+// non-data record headers using the codec-level zero-copy extraction.
 func extractDataRecords(blockData []byte) ([]byte, error) {
-	offset := 0
-	for offset < len(blockData) {
-		// Need at least RecordHeader to read the type and length
-		if offset+codec.RecordHeaderSize > len(blockData) {
-			return nil, fmt.Errorf("truncated record header at offset %d", offset)
-		}
-		recordType := blockData[offset+4] // CRC32(4) then Type(1)
-		payloadLength := int(blockData[offset+5]) |
-			int(blockData[offset+6])<<8 |
-			int(blockData[offset+7])<<16 |
-			int(blockData[offset+8])<<24
-		totalRecordLength := codec.RecordHeaderSize + payloadLength
-		if offset+totalRecordLength > len(blockData) {
-			return nil, fmt.Errorf("truncated record payload at offset %d", offset)
-		}
-
-		if recordType == codec.DataRecordType {
-			// All remaining bytes from the first DataRecord onward are DataRecords
-			return blockData[offset:], nil
-		}
-		// Skip HeaderRecord / BlockHeaderRecord
-		offset += totalRecordLength
-	}
-	// No data records found (empty block)
-	return nil, nil
+	return codec.ExtractDataRecordBytes(blockData)
 }
 
 // uploadCompactedFooter creates and uploads the footer for compacted segment

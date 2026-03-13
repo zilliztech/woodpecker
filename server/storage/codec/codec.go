@@ -387,3 +387,28 @@ func tryParseFooterSize(data []byte, footerSize int) (*FooterRecord, error) {
 
 	return footer, nil
 }
+
+// ExtractDataRecordBytes returns a zero-copy slice of blockData starting from the
+// first DataRecord, skipping any leading HeaderRecord / BlockHeaderRecord entries.
+// Block layout: [RecordHeader+HeaderPayload (optional)] + [RecordHeader+BlockHeaderPayload] + [DataRecords...]
+// Returns (nil, nil) if no DataRecords are found (empty block).
+func ExtractDataRecordBytes(blockData []byte) ([]byte, error) {
+	offset := 0
+	for offset < len(blockData) {
+		if offset+RecordHeaderSize > len(blockData) {
+			return nil, fmt.Errorf("truncated record header at offset %d", offset)
+		}
+		recordType := blockData[offset+4]
+		payloadLength := int(binary.LittleEndian.Uint32(blockData[offset+5 : offset+9]))
+		totalRecordLength := RecordHeaderSize + payloadLength
+		if offset+totalRecordLength > len(blockData) {
+			return nil, fmt.Errorf("truncated record payload at offset %d", offset)
+		}
+		if recordType == DataRecordType {
+			return blockData[offset:], nil
+		}
+		offset += totalRecordLength
+	}
+	return nil, nil
+}
+

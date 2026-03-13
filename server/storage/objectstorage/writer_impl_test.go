@@ -1549,7 +1549,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_FirstBlock(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, true)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, 1, true)
 	assert.NoError(t, err)
 	assert.NotNil(t, indexRecord)
 	assert.Greater(t, blockSize, int64(0))
@@ -1571,7 +1571,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_NonFirstBlock(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_1.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 1, 10, false)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 1, 10, 10, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, indexRecord)
 	assert.Greater(t, blockSize, int64(0))
@@ -1593,7 +1593,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_PutError(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.New("put error")).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, true)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, 0, true)
 	assert.Error(t, err)
 	assert.Nil(t, indexRecord)
 	assert.Equal(t, int64(-1), blockSize)
@@ -2369,10 +2369,11 @@ func TestMinioFileWriter_CleanupOriginalFilesIfCompacted_ListError(t *testing.T)
 
 func TestMinioFileWriter_ExtractDataRecords_TruncatedData(t *testing.T) {
 	w := newTestMinioFileWriter()
-	// Truncated data (less than record header size) returns empty result, no error
+	// Truncated data (less than record header size) returns error
 	result, err := w.extractDataRecords([]byte{0x01, 0x02})
-	assert.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "truncated record header at offset 0")
+	assert.Nil(t, result)
 }
 
 func TestMinioFileWriter_ExtractDataRecords_EmptyInput(t *testing.T) {
