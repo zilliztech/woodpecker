@@ -998,6 +998,94 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 	writer.Close(context.Background())
 }
 
+// TestStagedFileWriter_Compact_MergedBlockFormat verifies that compacted merged blocks
+// have the correct format: [HeaderRecord] + [single BlockHeaderRecord] + [DataRecords].
+// Regression test: previously raw block data (including multiple BlockHeaderRecords) was
+// concatenated directly, producing an inconsistent format with objectstorage compaction.
+func TestStagedFileWriter_Compact_MergedBlockFormat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	// Use a large target block size so all blocks merge into one
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = config.NewByteSize(10 * 1024 * 1024)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 1
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Write multiple entries and sync after each to force multiple blocks
+	for i := int64(0); i < 5; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), nil)
+		require.NoError(t, err)
+		err = writer.Sync(context.Background())
+		require.NoError(t, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 4)
+	require.NoError(t, err)
+
+	originalBlockCount := len(writer.blockIndexes)
+	require.Greater(t, originalBlockCount, 1, "test requires multiple blocks to verify merge")
+
+	// Capture uploaded merged block data
+	var capturedMergedBlockData []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+		return true
+	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, key string, reader io.Reader, size int64, _ string, _ string) {
+			data := make([]byte, size)
+			_, _ = io.ReadFull(reader, data)
+			// Capture the merged block (not footer)
+			if len(key) > 10 && key[len(key)-10:] != "footer.blk" {
+				capturedMergedBlockData = data
+			}
+		}).
+		Return(nil)
+
+	totalSize, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, totalSize, int64(0))
+
+	// Parse the captured merged block and verify its structure
+	require.NotEmpty(t, capturedMergedBlockData, "should have captured merged block data")
+
+	records, decodeErr := codec.DecodeRecordList(capturedMergedBlockData)
+	require.NoError(t, decodeErr)
+
+	// Count record types
+	headerCount := 0
+	blockHeaderCount := 0
+	dataRecordCount := 0
+	for _, record := range records {
+		switch record.Type() {
+		case codec.HeaderRecordType:
+			headerCount++
+		case codec.BlockHeaderRecordType:
+			blockHeaderCount++
+		case codec.DataRecordType:
+			dataRecordCount++
+		}
+	}
+
+	// Verify structure: exactly 1 HeaderRecord (first block), exactly 1 BlockHeaderRecord, 5 DataRecords
+	assert.Equal(t, 1, headerCount, "merged block should have exactly 1 HeaderRecord")
+	assert.Equal(t, 1, blockHeaderCount, "merged block should have exactly 1 BlockHeaderRecord (not one per original block)")
+	assert.Equal(t, 5, dataRecordCount, "merged block should contain all 5 data records")
+
+	// Verify the BlockHeaderRecord has correct entry range
+	for _, record := range records {
+		if bh, ok := record.(*codec.BlockHeaderRecord); ok {
+			assert.Equal(t, int64(0), bh.FirstEntryID, "BlockHeader FirstEntryID")
+			assert.Equal(t, int64(4), bh.LastEntryID, "BlockHeader LastEntryID")
+		}
+	}
+
+	writer.Close(context.Background())
+}
+
 func TestStagedFileWriter_Compact_NoBlocks(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)

@@ -1305,12 +1305,12 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		readFutures = append(readFutures, future)
 	}
 
-	// Collect raw block data from all futures
-	type rawBlockData struct {
-		blockIndex *codec.IndexRecord
-		data       []byte // raw BlockHeaderRecord + DataRecords
+	// Collect block data and extract only DataRecords from each block
+	type extractedBlockData struct {
+		blockIndex  *codec.IndexRecord
+		dataRecords []byte // only DataRecords (BlockHeaderRecord stripped)
 	}
-	var allRawBlocks []rawBlockData
+	var allBlocks []extractedBlockData
 	firstEntryID := int64(-1)
 	lastEntryID := int64(-1)
 
@@ -1322,9 +1322,17 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 			}
 		}
 
-		allRawBlocks = append(allRawBlocks, rawBlockData{
-			blockIndex: result.blockIndex,
-			data:       result.blockData,
+		// Extract only DataRecords, stripping BlockHeaderRecord and any HeaderRecord
+		dataRecords, extractErr := extractDataRecords(result.blockData)
+		if extractErr != nil {
+			return &mergedBlockUploadResult{
+				error: fmt.Errorf("failed to extract data records from block %d: %w", result.blockIndex.BlockNumber, extractErr),
+			}
+		}
+
+		allBlocks = append(allBlocks, extractedBlockData{
+			blockIndex:  result.blockIndex,
+			dataRecords: dataRecords,
 		})
 
 		// Track entry ID range
@@ -1337,12 +1345,30 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	}
 
 	// Sort by block number to maintain order
-	sort.Slice(allRawBlocks, func(i, j int) bool {
-		return allRawBlocks[i].blockIndex.BlockNumber < allRawBlocks[j].blockIndex.BlockNumber
+	sort.Slice(allBlocks, func(i, j int) bool {
+		return allBlocks[i].blockIndex.BlockNumber < allBlocks[j].blockIndex.BlockNumber
 	})
 
-	// Build the complete merged block data
-	// Format: [HeaderRecord (if first merged block)] + raw block data (preserving original structure)
+	// Merge all data records
+	var mergedDataRecords []byte
+	for _, blk := range allBlocks {
+		mergedDataRecords = append(mergedDataRecords, blk.dataRecords...)
+	}
+
+	// Build the complete merged block:
+	// Format: [HeaderRecord (if first)] + [BlockHeaderRecord] + [DataRecords]
+	// This matches objectstorage compaction format — one BlockHeader per merged block.
+	blockLength := uint32(len(mergedDataRecords))
+	blockCrc := crc32.ChecksumIEEE(mergedDataRecords)
+
+	blockHeaderRecord := &codec.BlockHeaderRecord{
+		BlockNumber:  int32(mergedBlockID),
+		FirstEntryID: firstEntryID,
+		LastEntryID:  lastEntryID,
+		BlockLength:  blockLength,
+		BlockCrc:     blockCrc,
+	}
+
 	var completeBlockData []byte
 	if mergedBlockID == 0 {
 		// First merged block: prepend HeaderRecord with compacted flag
@@ -1353,11 +1379,8 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 		}
 		completeBlockData = append(completeBlockData, codec.EncodeRecord(headerRecord)...)
 	}
-
-	// Concatenate raw block data as-is (each contains BlockHeaderRecord + DataRecords)
-	for _, rb := range allRawBlocks {
-		completeBlockData = append(completeBlockData, rb.data...)
-	}
+	completeBlockData = append(completeBlockData, codec.EncodeRecord(blockHeaderRecord)...)
+	completeBlockData = append(completeBlockData, mergedDataRecords...)
 
 	// Create block key for upload
 	blockKey := w.getCompactedBlockKey(mergedBlockID)
@@ -1432,6 +1455,37 @@ func (w *StagedFileWriter) readBlockDataFromLocalFile(ctx context.Context, block
 		blockData:  blockData,
 		error:      nil,
 	}
+}
+
+// extractDataRecords extracts only DataRecords from block data by skipping
+// non-data record headers using fixed-size offsets, avoiding full decode/re-encode.
+// Block layout: [RecordHeader+HeaderPayload (optional)] + [RecordHeader+BlockHeaderPayload] + [DataRecords...]
+func extractDataRecords(blockData []byte) ([]byte, error) {
+	offset := 0
+	for offset < len(blockData) {
+		// Need at least RecordHeader to read the type and length
+		if offset+codec.RecordHeaderSize > len(blockData) {
+			return nil, fmt.Errorf("truncated record header at offset %d", offset)
+		}
+		recordType := blockData[offset+4] // CRC32(4) then Type(1)
+		payloadLength := int(blockData[offset+5]) |
+			int(blockData[offset+6])<<8 |
+			int(blockData[offset+7])<<16 |
+			int(blockData[offset+8])<<24
+		totalRecordLength := codec.RecordHeaderSize + payloadLength
+		if offset+totalRecordLength > len(blockData) {
+			return nil, fmt.Errorf("truncated record payload at offset %d", offset)
+		}
+
+		if recordType == codec.DataRecordType {
+			// All remaining bytes from the first DataRecord onward are DataRecords
+			return blockData[offset:], nil
+		}
+		// Skip HeaderRecord / BlockHeaderRecord
+		offset += totalRecordLength
+	}
+	// No data records found (empty block)
+	return nil, nil
 }
 
 // uploadCompactedFooter creates and uploads the footer for compacted segment
