@@ -1536,7 +1536,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	// update segment state and meta
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Sealed
-	newSegmentMetadata.SealedTime = compactSegMetaInfo.CompletionTime
+	newSegmentMetadata.SealedTime = compactSegMetaInfo.SealedTime
 	newSegmentMetadata.Size = compactSegMetaInfo.Size
 	newSegMeta := &meta.SegmentMeta{
 		Metadata: newSegmentMetadata,
