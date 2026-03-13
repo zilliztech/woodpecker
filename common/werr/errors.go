@@ -106,6 +106,7 @@ var (
 	ErrSegmentProcessorCompactionFailed = newWoodpeckerError("segment processor compaction failed", 2107, true)
 	ErrSegmentProcessorRecoveryFailed   = newWoodpeckerError("segment processor recovery failed", 2108, true)
 	ErrSegmentProcessorCleanupFailed    = newWoodpeckerError("segment processor cleanup failed", 2109, true)
+	ErrSegmentProcessorAlreadyCompacting = newWoodpeckerError("segment processor is already compacting", 2110, false)
 
 	// file writer errors (2200-2299)
 	ErrFileWriterBufferFull           = newWoodpeckerError("writer buffer is full", 2200, true)

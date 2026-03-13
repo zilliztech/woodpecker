@@ -91,6 +91,7 @@ type segmentProcessor struct {
 
 	createTime     int64
 	lastAccessTime atomic.Int64
+	compacting     atomic.Bool
 
 	// for segment Impl
 	currentSegmentImpl   storage.Segment
@@ -468,6 +469,16 @@ func (s *segmentProcessor) Compact(ctx context.Context) (*proto.SegmentMetadata,
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, ProcessorScopeName, "Compact")
 	defer sp.End()
 	s.updateAccessTime()
+
+	// Atomic guard: prevent concurrent compaction on the same segment processor.
+	if !s.compacting.CompareAndSwap(false, true) {
+		logger.Ctx(ctx).Info("Compact already in progress, skipping",
+			zap.Int64("logId", s.logId),
+			zap.Int64("segId", s.segId))
+		return nil, werr.ErrSegmentProcessorAlreadyCompacting
+	}
+	defer s.compacting.Store(false)
+
 	start := time.Now()
 	logger.Ctx(ctx).Info("Starting segment processor compact operation",
 		zap.Int64("logId", s.logId),
