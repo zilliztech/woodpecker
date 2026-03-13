@@ -1795,6 +1795,9 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 	}
 
 	for mergedBlockID, task := range mergeBlockTasks {
+		if ctx.Err() != nil {
+			return nil, -1, ctx.Err()
+		}
 		// Capture variables for closure
 		taskBlocks := task.blocks
 		taskFirstEntryID := currentEntryID
@@ -1817,6 +1820,9 @@ func (f *MinioFileWriter) streamMergeAndUploadBlocks(ctx context.Context, target
 	fileSizeAfterCompact := int64(0)
 
 	for _, future := range mergeFutures {
+		if ctx.Err() != nil {
+			return nil, -1, ctx.Err()
+		}
 		result := future.Value()
 		if result.error != nil {
 			return nil, -1, fmt.Errorf("failed to process merge block: %w", result.error)
@@ -1926,6 +1932,9 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 	// Submit read tasks for all blocks in this merge block
 	var readFutures []*conc.Future[*blockDataResult]
 	for _, blockIndex := range blocks {
+		if ctx.Err() != nil {
+			return &mergedBlockUploadResult{error: ctx.Err()}, ctx.Err()
+		}
 		blockIdx := blockIndex // Capture for closure
 		future := readPool.Submit(func() (*blockDataResult, error) {
 			blockKey := getBlockKey(f.segmentFileKey, int64(blockIdx.BlockNumber))
@@ -1970,6 +1979,9 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 	// Wait for all reads to complete and collect results
 	blockDataResults := make([]*blockDataResult, len(readFutures))
 	for i, future := range readFutures {
+		if ctx.Err() != nil {
+			return &mergedBlockUploadResult{error: ctx.Err()}, ctx.Err()
+		}
 		result := future.Value()
 		blockDataResults[i] = result
 		if result.error != nil {

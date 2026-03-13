@@ -1192,6 +1192,47 @@ func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
 	writer.Close(context.Background())
 }
 
+// TestStagedFileWriter_Compact_CancelledContext verifies that Compact returns promptly
+// when the context is cancelled, instead of proceeding through the entire compaction.
+// Regression test: previously goroutines in the compaction path did not check ctx.Err().
+func TestStagedFileWriter_Compact_CancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 4
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	for i := int64(0); i < 10; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("test data"), nil)
+		require.NoError(t, err)
+	}
+	err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 9)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Use an already-cancelled context
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = writer.Compact(cancelCtx)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 // --- uploadCompactedFooter ---
 
 func TestStagedFileWriter_UploadCompactedFooter(t *testing.T) {

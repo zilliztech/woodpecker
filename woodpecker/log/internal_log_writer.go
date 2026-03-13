@@ -272,13 +272,13 @@ func (l *internalLogWriterImpl) runAuditor() {
 				stateBefore := seg.Metadata.State
 				if stateBefore == proto.SegmentState_Completed {
 					segmentsProcessed++
-					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.Metadata.SegNo)
+					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
 					if getRecoverySegmentHandleErr != nil {
 						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(getRecoverySegmentHandleErr))
 						segmentsFailed++
 						continue
 					}
-					maintainErr := recoverySegmentHandle.Compact(context.TODO())
+					maintainErr := recoverySegmentHandle.Compact(ctx)
 					if maintainErr != nil {
 						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(maintainErr))
 						segmentsFailed++

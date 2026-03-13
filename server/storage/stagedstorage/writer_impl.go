@@ -1200,6 +1200,9 @@ func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, ta
 	// Submit all merge tasks to the pool
 	var futures []*conc.Future[*mergedBlockUploadResult]
 	for i, task := range mergeTasks {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
 		// Capture variables for closure
 		taskCopy := task
 		mergedBlockID := int64(i)
@@ -1215,6 +1218,9 @@ func (w *StagedFileWriter) readLocalFileAndUploadToMinio(ctx context.Context, ta
 	totalSize := int64(0)
 
 	for _, future := range futures {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
 		result := future.Value()
 		if result.error != nil {
 			return nil, 0, fmt.Errorf("merge task failed: %w", result.error)
@@ -1307,6 +1313,9 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	// Submit all block read tasks to the pool
 	var readFutures []*conc.Future[*blockReadResult]
 	for _, blockIndex := range task.blocks {
+		if ctx.Err() != nil {
+			return &mergedBlockUploadResult{error: ctx.Err()}
+		}
 		// Capture variable for closure
 		blockIndexCopy := blockIndex
 
@@ -1326,6 +1335,9 @@ func (w *StagedFileWriter) processMergeTask(ctx context.Context, task *mergeBloc
 	lastEntryID := int64(-1)
 
 	for _, future := range readFutures {
+		if ctx.Err() != nil {
+			return &mergedBlockUploadResult{error: ctx.Err()}
+		}
 		result := future.Value()
 		if result.error != nil {
 			return &mergedBlockUploadResult{

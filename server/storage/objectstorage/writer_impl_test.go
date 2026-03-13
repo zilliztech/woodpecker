@@ -1095,6 +1095,36 @@ func TestMinioFileWriter_Compact_AlreadyCompacted(t *testing.T) {
 	assert.Equal(t, int64(500), size)
 }
 
+// TestMinioFileWriter_Compact_CancelledContext verifies that Compact returns promptly
+// when the context is cancelled, instead of proceeding through the entire compaction.
+// Regression test: previously goroutines in the compaction path did not check ctx.Err().
+func TestMinioFileWriter_Compact_CancelledContext(t *testing.T) {
+	w := newTestMinioFileWriter()
+	w.client = mocks_objectstorage.NewObjectStorage(t)
+
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  2,
+		TotalRecords: 3,
+		TotalSize:    200,
+		Version:      codec.FormatVersion,
+		Flags:        0, // NOT compacted
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 1},
+		{BlockNumber: 1, StartOffset: 1, BlockSize: 100, FirstEntryID: 2, LastEntryID: 2},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(2)
+
+	// Use an already-cancelled context
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := w.Compact(cancelCtx)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestMinioFileWriter_Compact_NotFinalized(t *testing.T) {
 	ctx := context.Background()
 	w := newTestMinioFileWriter()
