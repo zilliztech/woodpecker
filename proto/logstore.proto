@@ -25,6 +25,9 @@ message LogMessageIdData{
 message LogMessageLayout{
   bytes payload = 1;
   map<string, string> properties = 2;
+  // Optional idempotency identifier for dedup state reconstruction.
+  // When provided, enables idempotent write support.
+  string idempotency_id = 3;
 }
 
 message LastReadState {

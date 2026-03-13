@@ -1,0 +1,37 @@
+/**
+ * Dedup Snapshot for Idempotent Write
+ */
+syntax = "proto3";
+
+package woodpecker.proto.dedup;
+option go_package = "github.com/zilliztech/woodpecker/proto";
+
+// SegmentWatermark records the recovery point for a segment.
+message SegmentWatermark {
+  int64 segment_id = 1;
+  int64 last_entry_id = 2;
+}
+
+// DedupEntryProto represents a single dedup entry.
+message DedupEntryProto {
+  string idempotency_id = 1;
+  int64 segment_id = 2;
+  int64 entry_id = 3;
+  int64 timestamp_unix_nano = 4;  // Unix timestamp in nanoseconds
+}
+
+// DedupSnapshotProto is the serialized format for dedup state.
+message DedupSnapshotProto {
+  int64 log_id = 1;
+  int64 snapshot_timestamp_unix_nano = 2;  // Unix timestamp in nanoseconds
+
+  // Configuration
+  int64 window_duration_nano = 3;  // Window duration in nanoseconds
+  int32 max_keys = 4;
+
+  // Per-segment recovery points
+  repeated SegmentWatermark segment_watermarks = 5;
+
+  // Committed dedup entries
+  repeated DedupEntryProto dedup_entries = 6;
+}
