@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1065,6 +1066,16 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 		zap.String("segmentFilePath", w.segmentFilePath),
 		zap.Int("currentBlockCount", len(w.blockIndexes)))
 
+	// Check if segment is already compacted by reading MinIO footer (idempotency guard).
+	// This handles both in-process re-entry and cross-process recovery after interrupted compact.
+	if existingFooter, footerObjSize, err := w.readRemoteFooter(ctx); err == nil && existingFooter != nil && codec.IsCompacted(existingFooter.Flags) {
+		totalSize := int64(existingFooter.TotalSize) + footerObjSize
+		logger.Ctx(ctx).Info("segment is already compacted (remote footer has compacted flag), skipping",
+			zap.String("segmentFilePath", w.segmentFilePath),
+			zap.Int64("totalSize", totalSize))
+		return totalSize, nil
+	}
+
 	// Ensure segment is finalized before compaction
 	if !w.finalized.Load() {
 		logger.Ctx(ctx).Warn("segment must be finalized before compaction",
@@ -1540,6 +1551,48 @@ func (w *StagedFileWriter) serializeCompactedFooterAndIndexes(ctx context.Contex
 	serializedData = append(serializedData, encodedFooter...)
 
 	return serializedData
+}
+
+// readRemoteFooter reads and parses the compacted footer from MinIO.
+// Returns the parsed footer and the raw footer object size in bytes.
+// Returns (nil, 0, nil) if the footer object does not exist yet or if storage client is nil.
+func (w *StagedFileWriter) readRemoteFooter(ctx context.Context) (*codec.FooterRecord, int64, error) {
+	if w.storageCli == nil {
+		return nil, 0, nil
+	}
+	footerKey := w.getFooterBlockKey()
+
+	objSize, _, err := w.storageCli.StatObject(ctx, w.bucket, footerKey, w.nsStr, w.logIdStr)
+	if err != nil {
+		if w.storageCli.IsObjectNotExistsError(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("stat footer object: %w", err)
+	}
+
+	reader, err := w.storageCli.GetObject(ctx, w.bucket, footerKey, 0, objSize, w.nsStr, w.logIdStr)
+	if err != nil {
+		return nil, 0, fmt.Errorf("get footer object: %w", err)
+	}
+	defer reader.Close()
+
+	footerData := make([]byte, objSize)
+	if _, err = io.ReadFull(reader, footerData); err != nil {
+		return nil, 0, fmt.Errorf("read footer data: %w", err)
+	}
+
+	maxFooterSize := codec.GetMaxFooterReadSize()
+	if len(footerData) < maxFooterSize {
+		return nil, 0, fmt.Errorf("footer data too small: %d bytes", len(footerData))
+	}
+
+	footerBytes := footerData[len(footerData)-maxFooterSize:]
+	footer, err := codec.ParseFooterFromBytes(footerBytes)
+	if err != nil {
+		return nil, 0, fmt.Errorf("parse footer: %w", err)
+	}
+
+	return footer, objSize, nil
 }
 
 // getFooterBlockKey generates the object key for the footer block
