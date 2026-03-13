@@ -905,7 +905,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 		IndexLength:  uint32(len(newBlockIndexes) * (codec.RecordHeaderSize + codec.IndexRecordSize)), // IndexRecord size
 		Version:      codec.FormatVersion,
 		Flags:        codec.SetCompacted(f.footerRecord.Flags), // Set compacted flag=1 (bit 0)
-		LAC:          -1,                                       // Preserve LAC from original footer
+		LAC:          f.footerRecord.LAC,                       // Preserve LAC from original footer
 	}
 
 	// Serialize new footer and indexes

@@ -1630,6 +1630,75 @@ func TestMinioFileWriter_Compact_FullFlow(t *testing.T) {
 	assert.True(t, codec.IsCompacted(w.footerRecord.Flags))
 }
 
+// TestMinioFileWriter_Compact_PreservesLAC verifies that compaction preserves the
+// original footer's LAC value instead of resetting it to -1.
+// Regression test: previously LAC was hardcoded to -1 in the compacted footer.
+func TestMinioFileWriter_Compact_PreservesLAC(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	// Create valid block data
+	block0Data := w.serialize(0, []*cache.BufferEntry{
+		{EntryId: 0, Data: []byte("hello")},
+		{EntryId: 1, Data: []byte("world")},
+	})
+
+	// Set up finalized footer with a specific LAC value
+	originalLAC := int64(1)
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 2,
+		TotalSize:    uint64(len(block0Data)),
+		Version:      codec.FormatVersion,
+		Flags:        0,
+		LAC:          originalLAC,
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: uint32(len(block0Data)), FirstEntryID: 0, LastEntryID: 1},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(1)
+
+	// readBlockData for block 0
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block0Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(block0Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block0Data}, nil).Once()
+
+	// uploadSingleMergedBlock
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	// upload compacted footer — capture the footer data to verify LAC
+	var capturedFooterData []byte
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, reader io.Reader, size int64, _ string, _ string) {
+			capturedFooterData = make([]byte, size)
+			_, _ = io.ReadFull(reader, capturedFooterData)
+		}).
+		Return(nil).Once()
+
+	// delete original block
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	size, err := w.Compact(ctx)
+	assert.NoError(t, err)
+	assert.Greater(t, size, int64(0))
+
+	// Verify footer in memory has preserved LAC
+	assert.Equal(t, originalLAC, w.footerRecord.LAC, "compacted footer must preserve original LAC")
+	assert.True(t, codec.IsCompacted(w.footerRecord.Flags))
+
+	// Verify the uploaded footer also has the correct LAC
+	require.NotEmpty(t, capturedFooterData, "footer data should have been captured")
+	parsedFooter, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
+	require.NoError(t, parseErr)
+	assert.Equal(t, originalLAC, parsedFooter.LAC, "uploaded compacted footer must preserve original LAC")
+}
+
 // ===== Fence with mock =====
 
 func TestMinioFileWriter_Fence_ConditionWriteSuccess(t *testing.T) {
