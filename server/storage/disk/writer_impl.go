@@ -846,10 +846,18 @@ func (w *LocalFileWriter) writeRecord(ctx context.Context, record codec.Record) 
 }
 
 // Finalize finalizes the writer and writes the footer
-func (w *LocalFileWriter) Finalize(ctx context.Context, lac int64 /*not used, cause it always same as last flushed entryID */) (int64, error) {
+func (w *LocalFileWriter) Finalize(ctx context.Context, lac int64 /*not used, cause it always same as last flushed entryID */) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	w.finalizeMu.Lock()
 	defer w.finalizeMu.Unlock()
@@ -922,8 +930,6 @@ func (w *LocalFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized log file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.finalized.Store(true)
 	return w.lastEntryID.Load(), nil
@@ -994,10 +1000,18 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 }
 
 // Fence marks the writer as fenced
-func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
+func (w *LocalFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Fence")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	// Mark as fenced first to reject new AppendAsync calls (idempotent)
 	w.fenced.Store(true)
@@ -1053,9 +1067,6 @@ func (w *LocalFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("logId", w.logId),
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return lastEntryId, nil
 }

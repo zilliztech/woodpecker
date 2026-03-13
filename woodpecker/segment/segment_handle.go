@@ -262,7 +262,6 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	s.submittedSize.Add(int64(len(bytes)))
 	logIdStr := strconv.FormatInt(s.logId, 10)
-	metrics.WpClientAppendEntriesTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 }

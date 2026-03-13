@@ -104,6 +104,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 	}
 
 	for {
+		// Reset start time for each iteration to avoid inflating latency
+		// with wait/retry time from previous iterations
+		start = time.Now()
+
 		// Check if context is done
 		select {
 		case <-ctx.Done():
@@ -165,9 +169,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			lastReadState = l.batch.LastReadState
 		}
 		batchResult, readBatchErr := segHandle.ReadBatchAdv(ctx, entryId, DefaultBatchEntriesLimit, lastReadState)
-		if readBatchErr == nil {
-			metrics.WpClientReadRequestsTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
-		}
+		metrics.WpClientReadRequestsTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
 		if readBatchErr != nil {
 			// Check if it's end of file error - this is the only reliable way to know segment is finished
 			if werr.ErrFileReaderEndOfFile.Is(readBatchErr) {

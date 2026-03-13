@@ -858,10 +858,18 @@ func (w *StagedFileWriter) writeRecord(ctx context.Context, record codec.Record)
 }
 
 // Finalize finalizes the writer and writes the footer
-func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, error) {
+func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	if !w.finalized.CompareAndSwap(false, true) {
 		// if already finalized, return fast
@@ -929,8 +937,6 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (int64, erro
 		return w.lastEntryID.Load(), fmt.Errorf("final sync: %w", err)
 	}
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized staged file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.recoveredFooter = footer
 	w.finalized.Store(true)
@@ -996,10 +1002,18 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 }
 
 // Fence marks the writer as fenced
-func (w *StagedFileWriter) Fence(ctx context.Context) (int64, error) {
+func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Fence")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	// Mark as fenced first to reject new AppendAsync calls (idempotent)
 	w.fenced.Store(true)
@@ -1027,17 +1041,22 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("segmentId", w.segmentId),
 		zap.Int64("lastEntryId", lastEntryId))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	return lastEntryId, nil
 }
 
 // Compact performs compaction by reading local file, merging blocks and uploading to minio
-func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
+func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Compact")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -1118,9 +1137,6 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int64("totalSizeAfterCompact", totalSize),
 		zap.Int64("maxCompactedBlockSize", maxCompactedBlockSize),
 		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
 	return totalSize, nil
 }

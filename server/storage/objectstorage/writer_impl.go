@@ -831,10 +831,18 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 	}
 }
 
-func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
+func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Compact")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -938,6 +946,13 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		logger.Ctx(ctx).Info("successfully cleaned up all original block files",
 			zap.String("segmentFileKey", f.segmentFileKey),
 			zap.Int("deletedBlocks", originalBlockCount))
+		// Update stored metrics for deleted original blocks
+		var totalOriginalSize int64
+		for _, idx := range originalBlockIndexes {
+			totalOriginalSize += int64(idx.BlockSize)
+		}
+		metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Sub(float64(totalOriginalSize))
+		metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Sub(float64(len(originalBlockIndexes)))
 	}
 
 	logger.Ctx(ctx).Info("successfully compacted segment",
@@ -946,17 +961,22 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (int64, error) {
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
 		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	return fileSizeAfterCompact, nil
 }
 
 // Sync Implement sync logic, e.g., flush to persistent storage
-func (f *MinioFileWriter) Sync(ctx context.Context) error {
+func (f *MinioFileWriter) Sync(ctx context.Context) (retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "sync", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "sync", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 	f.syncMu.Lock() // ensure only one sync operation is running at a time
 	defer f.syncMu.Unlock()
 	defer func() {
@@ -1000,9 +1020,6 @@ func (f *MinioFileWriter) Sync(ctx context.Context) error {
 		zap.Int("toFlushEntries", len(toFlushData)),
 		zap.Int64("restDataFirstEntryId", currentBuffer.GetExpectedNextEntryId()),
 		zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "sync", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	return nil
 }
 
@@ -1172,8 +1189,10 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				err: flushErr,
 			}
 			logger.Ctx(ctx).Debug("complete flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
-			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
 			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(flushTaskStart).Milliseconds()))
+			if flushErr == nil {
+				metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
+			}
 			return result, flushErr
 		})
 
@@ -1292,10 +1311,18 @@ func (f *MinioFileWriter) quickSyncFailUnsafe(ctx context.Context, resultErr err
 	return resultErr
 }
 
-func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, cause it always same as last flushed entryID */) (int64, error) {
+func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, cause it always same as last flushed entryID */) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 
 	f.finalizeMu.Lock()
 	defer f.finalizeMu.Unlock()
@@ -1347,8 +1374,6 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 	logger.Ctx(ctx).Info("successfully finalized segment",
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.String("footerBlockKey", footerBlockKey))
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	f.finalized.Store(true)
 	return f.GetLastEntryId(ctx), nil
 }
@@ -1405,10 +1430,18 @@ func (f *MinioFileWriter) IsFenced(ctx context.Context) (bool, error) {
 	return f.fenced.Load(), nil
 }
 
-func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
+func (f *MinioFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Fence")
 	defer sp.End()
 	startTime := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "fence", status).Inc()
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "fence", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	}()
 	logger.Ctx(ctx).Info("start to fence segment", zap.String("segmentFileKey", f.segmentFileKey))
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1509,8 +1542,6 @@ func (f *MinioFileWriter) Fence(ctx context.Context) (int64, error) {
 		zap.Int64("lastBlockID", f.lastBlockID.Load()),
 		zap.Int64("lastEntryId", f.lastEntryID.Load()))
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "fence", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "fence", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	return f.lastEntryID.Load(), nil
 }
 
@@ -1978,6 +2009,8 @@ func (f *MinioFileWriter) processMergeBlockTask(ctx context.Context, blocks []*c
 	totalTime := time.Since(startTime)
 	metrics.WpFileCompactLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(totalTime.Milliseconds()))
 	metrics.WpFileCompactBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(blockSize))
+	metrics.WpObjectStorageStoredBytes.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(blockSize))
+	metrics.WpObjectStorageStoredObjects.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Inc()
 
 	logger.Ctx(ctx).Debug("completed merge block task",
 		zap.String("segmentFileKey", f.segmentFileKey),

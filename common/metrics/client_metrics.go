@@ -54,12 +54,6 @@ var (
 		Name:      "append_requests_total",
 		Help:      "Total number of append requests",
 	}, []string{"namespace", "log_id"})
-	WpClientAppendEntriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: woodpeckerNamespace,
-		Subsystem: clientRole,
-		Name:      "append_entries_total",
-		Help:      "Total number of entries appended",
-	}, []string{"namespace", "log_id"})
 	WpClientAppendBytes = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: woodpeckerNamespace,
 		Subsystem: clientRole,
@@ -189,7 +183,6 @@ func RegisterClientMetricsWithRegisterer(registerer prometheus.Registerer) {
 
 		// Client append metrics
 		registerer.MustRegister(WpClientAppendRequestsTotal)
-		registerer.MustRegister(WpClientAppendEntriesTotal)
 		registerer.MustRegister(WpClientAppendBytes)
 		registerer.MustRegister(WpClientAppendLatency)
 		// LogHandle metrics
