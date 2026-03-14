@@ -406,8 +406,8 @@ func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
 	proceed := make(chan struct{})
 	mockWriter := mocks_storage.NewWriter(t)
 	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
-		close(started)  // signal that first compact is running
-		<-proceed       // block until test releases
+		close(started) // signal that first compact is running
+		<-proceed      // block until test releases
 		return int64(1024), nil
 	})
 	sp.currentSegmentWriter = mockWriter
