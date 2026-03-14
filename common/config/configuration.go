@@ -158,9 +158,10 @@ type SegmentSyncPolicyConfig struct {
 }
 
 type SegmentCompactionPolicy struct {
-	MaxBytes           ByteSize `yaml:"maxBytes"`
-	MaxParallelUploads int      `yaml:"maxParallelUploads"`
-	MaxParallelReads   int      `yaml:"maxParallelReads"`
+	MaxBytes           ByteSize        `yaml:"maxBytes"`
+	MaxParallelUploads int             `yaml:"maxParallelUploads"`
+	MaxParallelReads   int             `yaml:"maxParallelReads"`
+	Timeout            DurationSeconds `yaml:"timeout"`
 }
 
 // RetentionPolicyConfig stores the data retention policy configuration.
@@ -639,6 +640,9 @@ func (c *Configuration) validateLogstoreConfig() error {
 	if logstore.SegmentCompactionPolicy.MaxParallelReads <= 0 {
 		return fmt.Errorf("segment compaction policy max parallel reads must be positive, got %d", logstore.SegmentCompactionPolicy.MaxParallelReads)
 	}
+	if logstore.SegmentCompactionPolicy.Timeout.Seconds() <= 0 {
+		return fmt.Errorf("segment compaction policy timeout must be positive, got %ds", logstore.SegmentCompactionPolicy.Timeout.Seconds())
+	}
 
 	// Validate SegmentReadPolicy
 	if logstore.SegmentReadPolicy.MaxBatchSize <= 0 {
@@ -721,6 +725,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxBytes:           ByteSize(32000000),
 				MaxParallelUploads: 4,
 				MaxParallelReads:   8,
+				Timeout:            NewDurationSecondsFromInt(300),
 			},
 			SegmentReadPolicy: SegmentReadPolicyConfig{
 				MaxBatchSize:    ByteSize(16000000),

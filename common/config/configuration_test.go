@@ -449,6 +449,7 @@ func TestQuorumConfigValidation(t *testing.T) {
 							MaxBytes:           NewByteSize(32000000),
 							MaxParallelUploads: 4,
 							MaxParallelReads:   8,
+							Timeout:            NewDurationSecondsFromInt(300),
 						},
 						SegmentReadPolicy: SegmentReadPolicyConfig{
 							MaxBatchSize:    NewByteSize(16000000),
@@ -702,6 +703,12 @@ func TestValidateLogstoreConfig_Errors(t *testing.T) {
 		cfg := newValidCfg()
 		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 0
 		assert.ErrorContains(t, cfg.Validate(), "max parallel reads must be positive")
+	})
+
+	t.Run("CompactionPolicy Timeout<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = NewDurationSecondsFromInt(0)
+		assert.ErrorContains(t, cfg.Validate(), "compaction policy timeout must be positive")
 	})
 
 	t.Run("ReadPolicy MaxBatchSize<=0", func(t *testing.T) {
@@ -983,6 +990,7 @@ func TestCustomPlacementConfiguration(t *testing.T) {
 					MaxBytes:           NewByteSize(32000000),
 					MaxParallelUploads: 4,
 					MaxParallelReads:   8,
+					Timeout:            NewDurationSecondsFromInt(300),
 				},
 				SegmentReadPolicy: SegmentReadPolicyConfig{
 					MaxBatchSize:    NewByteSize(16000000),

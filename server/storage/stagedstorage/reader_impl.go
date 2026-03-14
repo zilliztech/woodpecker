@@ -1044,6 +1044,7 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 	}
 
 	if len(entries) == 0 {
+		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),
@@ -1352,6 +1353,9 @@ func (r *StagedFileReaderAdv) readCompactedDataFromMinio(ctx context.Context, op
 		LastReadState: lastReadState,
 	}
 
+	metrics.WpFileReadBatchBytes.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Add(float64(readBytes))
+	metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+
 	logger.Ctx(ctx).Info("completed concurrent reading compacted data from minio",
 		zap.Int("entriesCount", len(entries)),
 		zap.Int64("readBytes", readBytes),
@@ -1447,8 +1451,8 @@ func (r *StagedFileReaderAdv) readBlockFromMinioByKey(ctx context.Context, objKe
 	}
 	defer reader.Close()
 
-	// Read all data
-	blockData, err := io.ReadAll(reader)
+	// Read all data using ReadObjectFull to ensure consistent metrics tracking
+	blockData, err := minioHandler.ReadObjectFull(ctx, reader, objSize, r.nsStr, r.logIdStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read block data: %w", err)
 	}

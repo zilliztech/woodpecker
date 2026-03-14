@@ -262,7 +262,6 @@ func (s *segmentHandleImpl) AppendAsync(ctx context.Context, bytes []byte, callb
 	s.appendOpsQueue.PushBack(appendOp)
 	s.submittedSize.Add(int64(len(bytes)))
 	logIdStr := strconv.FormatInt(s.logId, 10)
-	metrics.WpClientAppendEntriesTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 	metrics.WpClientAppendRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 	metrics.WpSegmentHandlePendingAppendOps.WithLabelValues(s.metricsNamespace, logIdStr).Inc()
 }
@@ -1537,7 +1536,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	// update segment state and meta
 	newSegmentMetadata := currentSegmentMeta.Metadata.CloneVT()
 	newSegmentMetadata.State = proto.SegmentState_Sealed
-	newSegmentMetadata.SealedTime = compactSegMetaInfo.CompletionTime
+	newSegmentMetadata.SealedTime = compactSegMetaInfo.SealedTime
 	newSegmentMetadata.Size = compactSegMetaInfo.Size
 	newSegMeta := &meta.SegmentMeta{
 		Metadata: newSegmentMetadata,

@@ -373,6 +373,82 @@ func TestSegmentProcessor_Compact_MergeError(t *testing.T) {
 	assert.Nil(t, meta)
 }
 
+func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	// Set a very short compaction timeout (1 second)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = config.NewDurationSecondsFromInt(1)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil)
+	impl := sp.(*segmentProcessor)
+
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+		// Block until the context is cancelled (should happen after 1s timeout)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	})
+	impl.currentSegmentWriter = mockWriter
+
+	start := time.Now()
+	meta, err := impl.Compact(context.Background())
+	elapsed := time.Since(start)
+
+	assert.Nil(t, meta)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// Should complete within ~1s, not hang forever
+	assert.Less(t, elapsed, 3*time.Second)
+}
+
+func TestSegmentProcessor_Compact_ConcurrentRejectsSecond(t *testing.T) {
+	sp := newTestProcessor(t)
+	// Use a channel to hold the first Compact call so the second overlaps.
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	mockWriter := mocks_storage.NewWriter(t)
+	mockWriter.EXPECT().Compact(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+		close(started) // signal that first compact is running
+		<-proceed      // block until test releases
+		return int64(1024), nil
+	})
+	sp.currentSegmentWriter = mockWriter
+
+	// Launch first Compact in a goroutine
+	errCh := make(chan error, 1)
+	metaCh := make(chan *proto.SegmentMetadata, 1)
+	go func() {
+		meta, err := sp.Compact(context.Background())
+		metaCh <- meta
+		errCh <- err
+	}()
+
+	// Wait until the first Compact is inside writer.Compact
+	<-started
+
+	// Second Compact should be rejected immediately
+	meta2, err2 := sp.Compact(context.Background())
+	assert.Nil(t, meta2)
+	assert.Error(t, err2)
+	assert.True(t, werr.ErrSegmentProcessorAlreadyCompacting.Is(err2))
+
+	// Release the first Compact
+	close(proceed)
+	meta1 := <-metaCh
+	err1 := <-errCh
+	assert.NoError(t, err1)
+	assert.NotNil(t, meta1)
+	assert.Equal(t, proto.SegmentState_Sealed, meta1.State)
+
+	// After first completes, a new Compact should succeed again
+	mockWriter2 := mocks_storage.NewWriter(t)
+	mockWriter2.EXPECT().Compact(mock.Anything).Return(int64(512), nil)
+	sp.currentSegmentWriter = mockWriter2
+
+	meta3, err3 := sp.Compact(context.Background())
+	assert.NoError(t, err3)
+	assert.NotNil(t, meta3)
+	assert.Equal(t, int64(512), meta3.Size)
+}
+
 // === Clean Tests ===
 
 func TestSegmentProcessor_Clean_Success(t *testing.T) {

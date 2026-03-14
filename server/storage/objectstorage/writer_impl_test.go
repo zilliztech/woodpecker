@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -31,6 +33,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	commonObjectStorage "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -1095,6 +1098,36 @@ func TestMinioFileWriter_Compact_AlreadyCompacted(t *testing.T) {
 	assert.Equal(t, int64(500), size)
 }
 
+// TestMinioFileWriter_Compact_CancelledContext verifies that Compact returns promptly
+// when the context is cancelled, instead of proceeding through the entire compaction.
+// Regression test: previously goroutines in the compaction path did not check ctx.Err().
+func TestMinioFileWriter_Compact_CancelledContext(t *testing.T) {
+	w := newTestMinioFileWriter()
+	w.client = mocks_objectstorage.NewObjectStorage(t)
+
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  2,
+		TotalRecords: 3,
+		TotalSize:    200,
+		Version:      codec.FormatVersion,
+		Flags:        0, // NOT compacted
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 1},
+		{BlockNumber: 1, StartOffset: 1, BlockSize: 100, FirstEntryID: 2, LastEntryID: 2},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(2)
+
+	// Use an already-cancelled context
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := w.Compact(cancelCtx)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestMinioFileWriter_Compact_NotFinalized(t *testing.T) {
 	ctx := context.Background()
 	w := newTestMinioFileWriter()
@@ -1516,7 +1549,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_FirstBlock(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, true)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, 1, true)
 	assert.NoError(t, err)
 	assert.NotNil(t, indexRecord)
 	assert.Greater(t, blockSize, int64(0))
@@ -1538,7 +1571,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_NonFirstBlock(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_1.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 1, 10, false)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 1, 10, 10, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, indexRecord)
 	assert.Greater(t, blockSize, int64(0))
@@ -1560,7 +1593,7 @@ func TestMinioFileWriter_UploadSingleMergedBlock_PutError(t *testing.T) {
 	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.New("put error")).Once()
 
-	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, true)
+	indexRecord, blockSize, err := w.uploadSingleMergedBlock(ctx, mergedData, 0, 0, 0, true)
 	assert.Error(t, err)
 	assert.Nil(t, indexRecord)
 	assert.Equal(t, int64(-1), blockSize)
@@ -1628,6 +1661,177 @@ func TestMinioFileWriter_Compact_FullFlow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Greater(t, size, int64(0))
 	assert.True(t, codec.IsCompacted(w.footerRecord.Flags))
+}
+
+// TestMinioFileWriter_Compact_PreservesLAC verifies that compaction preserves the
+// original footer's LAC value instead of resetting it to -1.
+// Regression test: previously LAC was hardcoded to -1 in the compacted footer.
+func TestMinioFileWriter_Compact_PreservesLAC(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	// Create valid block data
+	block0Data := w.serialize(0, []*cache.BufferEntry{
+		{EntryId: 0, Data: []byte("hello")},
+		{EntryId: 1, Data: []byte("world")},
+	})
+
+	// Set up finalized footer with a specific LAC value
+	originalLAC := int64(1)
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 2,
+		TotalSize:    uint64(len(block0Data)),
+		Version:      codec.FormatVersion,
+		Flags:        0,
+		LAC:          originalLAC,
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: uint32(len(block0Data)), FirstEntryID: 0, LastEntryID: 1},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(1)
+
+	// readBlockData for block 0
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block0Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(block0Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block0Data}, nil).Once()
+
+	// uploadSingleMergedBlock
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	// upload compacted footer — capture the footer data to verify LAC
+	var capturedFooterData []byte
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, reader io.Reader, size int64, _ string, _ string) {
+			capturedFooterData = make([]byte, size)
+			_, _ = io.ReadFull(reader, capturedFooterData)
+		}).
+		Return(nil).Once()
+
+	// delete original block
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	size, err := w.Compact(ctx)
+	assert.NoError(t, err)
+	assert.Greater(t, size, int64(0))
+
+	// Verify footer in memory has preserved LAC
+	assert.Equal(t, originalLAC, w.footerRecord.LAC, "compacted footer must preserve original LAC")
+	assert.True(t, codec.IsCompacted(w.footerRecord.Flags))
+
+	// Verify the uploaded footer also has the correct LAC
+	require.NotEmpty(t, capturedFooterData, "footer data should have been captured")
+	parsedFooter, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
+	require.NoError(t, parseErr)
+	assert.Equal(t, originalLAC, parsedFooter.LAC, "uploaded compacted footer must preserve original LAC")
+}
+
+// TestMinioFileWriter_Compact_MetricsAccuracy verifies that stored-bytes and stored-objects
+// gauges are correctly adjusted during compaction: new merged blocks are counted, original
+// blocks are decremented after deletion, and the footer overwrite adjusts the byte delta.
+// Regression test: previously footer bytes were never tracked, causing gauge drift.
+func TestMinioFileWriter_Compact_MetricsAccuracy(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	block0Data := w.serialize(0, []*cache.BufferEntry{
+		{EntryId: 0, Data: []byte("hello")},
+		{EntryId: 1, Data: []byte("world")},
+	})
+	block1Data := w.serialize(1, []*cache.BufferEntry{
+		{EntryId: 2, Data: []byte("foo")},
+	})
+
+	w.footerRecord = &codec.FooterRecord{
+		TotalBlocks:  2,
+		TotalRecords: 3,
+		TotalSize:    uint64(len(block0Data) + len(block1Data)),
+		Version:      codec.FormatVersion,
+		Flags:        0,
+		LAC:          2,
+	}
+	w.blockIndexes = []*codec.IndexRecord{
+		{BlockNumber: 0, StartOffset: 0, BlockSize: uint32(len(block0Data)), FirstEntryID: 0, LastEntryID: 1},
+		{BlockNumber: 1, StartOffset: 1, BlockSize: uint32(len(block1Data)), FirstEntryID: 2, LastEntryID: 2},
+	}
+	w.firstEntryID.Store(0)
+	w.lastEntryID.Store(2)
+
+	// Capture old footer size before Compact overwrites it
+	oldFooterSize := float64(w.footerRecord.IndexLength) + float64(codec.RecordHeaderSize) + float64(codec.GetFooterRecordSize(w.footerRecord.Version))
+
+	// Read gauge values before compaction
+	getGauge := func(gv *prometheus.GaugeVec) float64 {
+		g, _ := gv.GetMetricWithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr)
+		m := &dto.Metric{}
+		_ = g.Write(m)
+		return m.GetGauge().GetValue()
+	}
+	bytesBefore := getGauge(metrics.WpObjectStorageStoredBytes)
+	objectsBefore := getGauge(metrics.WpObjectStorageStoredObjects)
+
+	// Mock: read block 0
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block0Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", int64(0), int64(len(block0Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block0Data}, nil).Once()
+
+	// Mock: read block 1
+	mockClient.EXPECT().StatObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
+		Return(int64(len(block1Data)), false, nil).Once()
+	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", int64(0), int64(len(block1Data)), mock.Anything, mock.Anything).
+		Return(&writerMockFileReader{data: block1Data}, nil).Once()
+
+	// Mock: upload merged block 0
+	var mergedBlockSize int64
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/m_0.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ io.Reader, size int64, _ string, _ string) {
+			mergedBlockSize = size
+		}).
+		Return(nil).Once()
+
+	// Mock: upload compacted footer
+	var footerSize int64
+	mockClient.EXPECT().PutObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, _ string, _ io.Reader, size int64, _ string, _ string) {
+			footerSize = size
+		}).
+		Return(nil).Once()
+
+	// Mock: delete original blocks
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/0.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+	mockClient.EXPECT().RemoveObject(mock.Anything, "test-bucket", "test-base/1/0/1.blk", mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	_, err := w.Compact(ctx)
+	assert.NoError(t, err)
+
+	bytesAfter := getGauge(metrics.WpObjectStorageStoredBytes)
+	objectsAfter := getGauge(metrics.WpObjectStorageStoredObjects)
+
+	bytesDelta := bytesAfter - bytesBefore
+	objectsDelta := objectsAfter - objectsBefore
+
+	// Expected delta:
+	//   +mergedBlockSize (new merged block uploaded)
+	//   +(footerSize - oldFooterSize) (footer overwrite adjusts delta)
+	//   -(block0 + block1 sizes) (original blocks deleted)
+	originalBlockBytes := float64(len(block0Data) + len(block1Data))
+
+	expectedBytesDelta := float64(mergedBlockSize) + (float64(footerSize) - oldFooterSize) - originalBlockBytes
+	assert.InDelta(t, expectedBytesDelta, bytesDelta, 1.0, "stored bytes gauge should reflect net compaction change")
+
+	// Objects delta: +1 (merged block) -2 (original blocks), footer unchanged (overwrite)
+	assert.Equal(t, float64(-1), objectsDelta, "stored objects should decrease by 1 (2 blocks merged into 1, footer stays)")
 }
 
 // ===== Fence with mock =====
@@ -2165,10 +2369,11 @@ func TestMinioFileWriter_CleanupOriginalFilesIfCompacted_ListError(t *testing.T)
 
 func TestMinioFileWriter_ExtractDataRecords_TruncatedData(t *testing.T) {
 	w := newTestMinioFileWriter()
-	// Truncated data (less than record header size) returns empty result, no error
+	// Truncated data (less than record header size) returns error
 	result, err := w.extractDataRecords([]byte{0x01, 0x02})
-	assert.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "truncated record header at offset 0")
+	assert.Nil(t, result)
 }
 
 func TestMinioFileWriter_ExtractDataRecords_EmptyInput(t *testing.T) {
@@ -2711,4 +2916,93 @@ func TestMinioFileWriter_RecoverFromFooter_ParseFooterError(t *testing.T) {
 	err := w.recoverFromFooter(ctx, footerBlockKey, footerBlockSize)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse footer record")
+}
+
+func TestMinioFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
+	w := newTestMinioFileWriter()
+
+	// awaitAllFlushTasks will try to send a termination signal to flushingTaskList;
+	// use a cancelled context so it fails immediately on ctx.Done()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	closeErr := w.Close(cancelledCtx)
+	assert.Error(t, closeErr, "Close should return error when awaitAllFlushTasks fails")
+
+	// Verify cleanup happened despite the error return:
+	// - closed flag should be set
+	assert.True(t, w.closed.Load(), "closed flag should be set")
+	// - pool should be released (calling Release again is safe but pool.Free() should be 0)
+	assert.NotNil(t, w.pool, "pool should still exist but be released")
+}
+
+func TestMinioFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
+	w := newTestMinioFileWriter()
+
+	// Mark as already done so awaitAllFlushTasks returns immediately
+	w.allUploadingTaskDone.Store(true)
+
+	ctx := context.Background()
+
+	// First close succeeds
+	err := w.Close(ctx)
+	assert.NoError(t, err)
+	assert.True(t, w.closed.Load())
+
+	// Second close returns nil without panic (idempotent)
+	err = w.Close(ctx)
+	assert.NoError(t, err)
+}
+
+func TestMinioFileWriter_FlushingBufferSize_AccountingAccuracy(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks_objectstorage.NewObjectStorage(t)
+	w := newTestMinioFileWriter()
+	w.client = mockClient
+
+	// Mock PutObjectIfNoneMatch to succeed for all block uploads
+	mockClient.EXPECT().PutObjectIfNoneMatch(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil).Maybe()
+
+	// Start the ack goroutine (normally started by run(), but we need it for the test)
+	go w.ack()
+
+	// Verify initial state
+	assert.Equal(t, int64(0), w.flushingBufferSize.Load(), "initial flushingBufferSize should be 0")
+
+	// Write multiple entries with known sizes
+	resultCh := newMockResultChannel()
+	for i := int64(0); i < 10; i++ {
+		data := make([]byte, 100+i*10) // varying sizes: 100, 110, 120, ..., 190
+		for j := range data {
+			data[j] = byte(i)
+		}
+		_, err := w.WriteDataAsync(ctx, i, data, resultCh)
+		require.NoError(t, err)
+	}
+
+	// Trigger sync to submit flush tasks (this increments flushingBufferSize)
+	err := w.Sync(ctx)
+	require.NoError(t, err)
+
+	// Wait for all pool tasks to complete and ack goroutine to process them
+	require.Eventually(t, func() bool {
+		return w.pool.Running() == 0
+	}, 5*time.Second, 50*time.Millisecond, "pool tasks should complete")
+
+	// Send termination signal to ack goroutine and wait for it to finish
+	w.flushingTaskList <- &blockUploadTask{
+		flushData:             nil,
+		flushDataFirstEntryId: 0,
+		flushFuture:           nil,
+	}
+	require.Eventually(t, func() bool {
+		return w.allUploadingTaskDone.Load()
+	}, 5*time.Second, 50*time.Millisecond, "ack goroutine should finish")
+
+	// The key assertion: flushingBufferSize must return to exactly 0
+	// Before the fix, this would be negative due to serialization overhead mismatch
+	finalSize := w.flushingBufferSize.Load()
+	assert.Equal(t, int64(0), finalSize,
+		"flushingBufferSize should be exactly 0 after all tasks are acked, got %d", finalSize)
 }

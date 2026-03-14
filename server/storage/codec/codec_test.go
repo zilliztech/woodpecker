@@ -1347,3 +1347,71 @@ func TestFooterCompatibilityIntegration(t *testing.T) {
 		assert.True(t, parsed.IsCompacted())
 	})
 }
+
+func TestExtractDataRecordBytes(t *testing.T) {
+	t.Run("NormalBlock", func(t *testing.T) {
+		// Build a block: BlockHeaderRecord + 2 DataRecords
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 1, BlockLength: 100, BlockCrc: 0,
+		})
+		data1 := EncodeRecord(&DataRecord{Payload: []byte("hello")})
+		data2 := EncodeRecord(&DataRecord{Payload: []byte("world")})
+
+		blockData := append(blockHeader, data1...)
+		blockData = append(blockData, data2...)
+
+		result, err := ExtractDataRecordBytes(blockData)
+		require.NoError(t, err)
+		assert.Equal(t, append(data1, data2...), result)
+	})
+
+	t.Run("WithHeaderRecord", func(t *testing.T) {
+		// Build: HeaderRecord + BlockHeaderRecord + DataRecord
+		header := EncodeRecord(&HeaderRecord{Version: FormatVersion, FirstEntryID: 0})
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 0, BlockLength: 50, BlockCrc: 0,
+		})
+		data := EncodeRecord(&DataRecord{Payload: []byte("test")})
+
+		blockData := append(header, blockHeader...)
+		blockData = append(blockData, data...)
+
+		result, err := ExtractDataRecordBytes(blockData)
+		require.NoError(t, err)
+		assert.Equal(t, data, result)
+	})
+
+	t.Run("EmptyInput", func(t *testing.T) {
+		result, err := ExtractDataRecordBytes([]byte{})
+		assert.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("TruncatedHeader", func(t *testing.T) {
+		result, err := ExtractDataRecordBytes([]byte{0x01, 0x02})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "truncated record header at offset 0")
+		assert.Nil(t, result)
+	})
+
+	t.Run("TruncatedPayload", func(t *testing.T) {
+		// Valid header claiming 100 bytes payload but only 2 bytes present
+		buf := make([]byte, RecordHeaderSize+2)
+		buf[4] = BlockHeaderRecordType
+		buf[5] = 100 // payload length = 100
+		result, err := ExtractDataRecordBytes(buf)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "truncated record payload at offset 0")
+		assert.Nil(t, result)
+	})
+
+	t.Run("NoDataRecords", func(t *testing.T) {
+		// Only a BlockHeaderRecord, no DataRecords
+		blockHeader := EncodeRecord(&BlockHeaderRecord{
+			BlockNumber: 0, FirstEntryID: 0, LastEntryID: 0, BlockLength: 0, BlockCrc: 0,
+		})
+		result, err := ExtractDataRecordBytes(blockHeader)
+		assert.NoError(t, err)
+		assert.Nil(t, result)
+	})
+}

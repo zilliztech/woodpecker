@@ -347,13 +347,13 @@ func (l *logWriterImpl) runAuditor() {
 				stateBefore := seg.Metadata.State
 				if stateBefore == proto.SegmentState_Completed {
 					segmentsProcessed++
-					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(context.TODO(), seg.Metadata.SegNo)
+					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
 					if getRecoverySegmentHandleErr != nil {
 						logger.Ctx(ctx).Warn("get log segment failed when log auditor running", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(getRecoverySegmentHandleErr))
 						segmentsFailed++
 						continue
 					}
-					maintainErr := recoverySegmentHandle.Compact(context.TODO())
+					maintainErr := recoverySegmentHandle.Compact(ctx)
 					if maintainErr != nil {
 						logger.Ctx(ctx).Warn("auditor maintain the log segment failed", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", seg.Metadata.SegNo), zap.Error(maintainErr))
 						segmentsFailed++
@@ -562,6 +562,19 @@ func (l *logWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.Context)
 		return segmentIdsToClean[i] < segmentIdsToClean[j]
 	})
 
+	// Before starting cleanup, check for orphaned cleanup status records
+	// from segments older than the oldest pending segment. These are leftover
+	// records whose segment metadata was already deleted but cleanup status
+	// deletion was interrupted by a crash.
+	minSegId := segmentIdsToClean[0]
+	if err := l.cleanupManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned cleanup statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
+
 	logger.Ctx(ctx).Info("Identified truncated segments eligible for cleanup",
 		zap.String("logName", logName),
 		zap.Int64("logId", logId),
@@ -617,6 +630,11 @@ func (l *logWriterImpl) Close(ctx context.Context) error {
 	var result error
 	l.closeOnce.Do(func() {
 		start := time.Now()
+		logger.Ctx(ctx).Info("closing log writer", zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()))
+
+		// Mark session invalid immediately to reject concurrent writes,
+		// rather than relying on monitorSession goroutine to do it asynchronously.
+		l.sessionLock.MarkInvalid()
 
 		l.writerClose <- struct{}{}
 		close(l.writerClose)

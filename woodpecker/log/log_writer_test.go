@@ -49,6 +49,11 @@ func (m *mockCleanupManager) CleanupSegment(ctx context.Context, logName string,
 	return args.Error(0)
 }
 
+func (m *mockCleanupManager) CleanupOrphanedStatuses(ctx context.Context, logId int64, minSegmentId int64) error {
+	args := m.Called(ctx, logId, minSegmentId)
+	return args.Error(0)
+}
+
 // createTestInternalWriter creates an internalLogWriterImpl for testing without goroutines.
 func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segment.SegmentCleanupManager) *internalLogWriterImpl {
 	cfg := newTestConfig()
@@ -370,6 +375,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_NoTruncationPoint
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
 
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 
@@ -389,6 +395,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_GetTruncatedRecor
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
 
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 
@@ -406,6 +413,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_AlreadyInProgress
 	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
 
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 
@@ -428,6 +436,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_WithEligibleSegme
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 	// Set TTL to 0 so all segments are eligible
@@ -462,6 +471,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_ReadersProtectSeg
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 	w.cfg.Woodpecker.Logstore.RetentionPolicy.TTL = 0
@@ -498,6 +508,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_GetSegmentsError(
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 
@@ -519,6 +530,7 @@ func TestInternalLogWriter_CleanupTruncatedSegmentsIfNecessary_GetReadersError(t
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 
@@ -1035,6 +1047,7 @@ func TestLogWriter_CleanupTruncatedSegmentsIfNecessary_WithEligibleSegments(t *t
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1067,6 +1080,7 @@ func TestLogWriter_CleanupTruncatedSegmentsIfNecessary_CleanupError(t *testing.T
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1097,6 +1111,7 @@ func TestLogWriter_CleanupTruncatedSegmentsIfNecessary_TTLProtection(t *testing.
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1127,6 +1142,7 @@ func TestLogWriter_CleanupTruncatedSegmentsIfNecessary_CompletionTimeTTL(t *test
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1161,6 +1177,7 @@ func TestLogWriter_CleanupTruncatedSegmentsIfNecessary_SealedTimeTTL(t *testing.
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1367,6 +1384,7 @@ func TestInternalLogWriter_RunAuditor_TruncatedSegmentsCleanup(t *testing.T) {
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 	w.auditorMaxInterval = 1
@@ -1420,6 +1438,7 @@ func TestLogWriter_RunAuditor_WithCompletedAndTruncated(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1514,6 +1533,7 @@ func TestLogWriter_CleanupTruncatedSegments_GetReadersError(t *testing.T) {
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1535,6 +1555,7 @@ func TestLogWriter_CleanupTruncatedSegments_GetSegmentsError(t *testing.T) {
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1557,6 +1578,7 @@ func TestLogWriter_CleanupTruncatedSegments_ReadersProtectSegments(t *testing.T)
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	sessionLock := meta.NewSessionLockForTest(nil)
 	w := createTestSessionWriter(t, mockLogHandle, cleanupMgr, sessionLock)
@@ -1640,6 +1662,7 @@ func TestInternalLogWriter_CleanupTruncatedSegments_NoEligibleSegments(t *testin
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 	w.cfg.Woodpecker.Logstore.RetentionPolicy.TTL = 0
@@ -1669,6 +1692,7 @@ func TestInternalLogWriter_CleanupTruncatedSegments_SegmentAtTruncationPoint(t *
 
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	cleanupMgr := &mockCleanupManager{}
+	cleanupMgr.On("CleanupOrphanedStatuses", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	w := createTestInternalWriter(t, mockLogHandle, cleanupMgr)
 	w.cfg.Woodpecker.Logstore.RetentionPolicy.TTL = 0
