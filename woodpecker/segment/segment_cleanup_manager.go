@@ -151,7 +151,8 @@ func (s *segmentCleanupManagerImpl) handleExistingCleanupStatus(
 		// delete segmentMeta, delete segment clean info
 		deleteSegMetaErr := s.metadata.DeleteSegmentMetadata(ctx, logName, logId, segmentId, proto.SegmentState_Truncated)
 		if deleteSegMetaErr != nil && !werr.ErrSegmentNotFound.Is(deleteSegMetaErr) {
-			logger.Ctx(ctx).Warn("failed to clean truncated segment metadata", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteSegMetaErr))
+			logger.Ctx(ctx).Warn("failed to clean truncated segment metadata, will retry next auditor cycle", zap.String("logName", logName), zap.Int64("logId", logId), zap.Int64("segmentId", segmentId), zap.Error(deleteSegMetaErr))
+			return deleteSegMetaErr
 		} else {
 			logger.Ctx(ctx).Info("Successfully deleted segment metadata after cleanup completion",
 				zap.String("logName", logName),

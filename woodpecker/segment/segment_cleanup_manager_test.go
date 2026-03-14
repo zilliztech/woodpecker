@@ -255,7 +255,7 @@ func TestCleanupSegment_ExistingStatus_Completed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestCleanupSegment_ExistingStatus_Completed_DeleteErrors(t *testing.T) {
+func TestCleanupSegment_ExistingStatus_Completed_DeleteMetadataError_ReturnsError(t *testing.T) {
 	mockMeta := mocks_meta.NewMetadataProvider(t)
 	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
 
@@ -267,12 +267,14 @@ func TestCleanupSegment_ExistingStatus_Completed_DeleteErrors(t *testing.T) {
 		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
 	}, nil)
 
-	// Delete fails but not with ErrSegmentNotFound
+	// DeleteSegmentMetadata fails with non-NotFound error (e.g. etcd timeout)
+	// Should return error immediately without deleting cleanup status
 	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(werr.ErrInternalError)
-	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(werr.ErrInternalError)
+	// DeleteSegmentCleanupStatus should NOT be called
 
 	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
-	assert.NoError(t, err) // handleExistingCleanupStatus returns nil for COMPLETED
+	assert.Error(t, err)
+	assert.True(t, werr.ErrInternalError.Is(err))
 }
 
 func TestCleanupSegment_ExistingStatus_Completed_SegmentNotFoundIgnored(t *testing.T) {
