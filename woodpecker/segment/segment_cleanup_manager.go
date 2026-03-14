@@ -35,6 +35,12 @@ import (
 type SegmentCleanupManager interface {
 	// CleanupSegment sends cleanup requests to all quorum nodes concurrently
 	CleanupSegment(ctx context.Context, logName string, logId int64, segmentId int64) error
+
+	// CleanupOrphanedStatuses cleans up orphaned cleanup status records
+	// whose segmentId is less than minSegmentId. These are leftover records
+	// from segments whose metadata was already deleted but cleanup status
+	// deletion was interrupted (e.g., by a crash).
+	CleanupOrphanedStatuses(ctx context.Context, logId int64, minSegmentId int64) error
 }
 
 type segmentCleanupManagerImpl struct {
@@ -521,4 +527,60 @@ func (s *segmentCleanupManagerImpl) updateCleanupStatusWithResults(
 		zap.String("state", status.State.String()))
 
 	return status, nil
+}
+
+// CleanupOrphanedStatuses cleans up orphaned cleanup status records for a log.
+// It lists all cleanup statuses for the given log and deletes any whose segmentId
+// is less than minSegmentId. These records are orphaned because their segment metadata
+// has already been deleted (segments are cleaned in ascending order), but the cleanup
+// status deletion was interrupted (e.g., by a crash).
+func (s *segmentCleanupManagerImpl) CleanupOrphanedStatuses(ctx context.Context, logId int64, minSegmentId int64) error {
+	// List all cleanup statuses for this log
+	allStatuses, err := s.metadata.ListSegmentCleanupStatus(ctx, logId)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to list cleanup statuses for orphan check",
+			zap.Int64("logId", logId),
+			zap.Error(err))
+		return err
+	}
+
+	if len(allStatuses) == 0 {
+		return nil
+	}
+
+	orphanCount := 0
+	cleanedCount := 0
+	for _, status := range allStatuses {
+		if status.SegmentId >= minSegmentId {
+			continue
+		}
+
+		// This cleanup status is for a segment older than the oldest pending segment,
+		// meaning its segment metadata has already been deleted — this is an orphan.
+		orphanCount++
+		logger.Ctx(ctx).Info("Found orphaned cleanup status, deleting",
+			zap.Int64("logId", logId),
+			zap.Int64("segmentId", status.SegmentId),
+			zap.String("state", status.State.String()),
+			zap.Int64("minSegmentId", minSegmentId))
+
+		if deleteErr := s.metadata.DeleteSegmentCleanupStatus(ctx, logId, status.SegmentId); deleteErr != nil {
+			logger.Ctx(ctx).Warn("Failed to delete orphaned cleanup status",
+				zap.Int64("logId", logId),
+				zap.Int64("segmentId", status.SegmentId),
+				zap.Error(deleteErr))
+		} else {
+			cleanedCount++
+		}
+	}
+
+	if orphanCount > 0 {
+		logger.Ctx(ctx).Info("Orphaned cleanup status check completed",
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegmentId),
+			zap.Int("orphansFound", orphanCount),
+			zap.Int("orphansCleaned", cleanedCount))
+	}
+
+	return nil
 }

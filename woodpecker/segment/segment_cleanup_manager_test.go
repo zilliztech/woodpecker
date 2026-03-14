@@ -562,3 +562,88 @@ func TestSendCleanupRequestsToQuorumNodes_NodeFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "segment cleanup failed")
 }
+
+// === CleanupOrphanedStatuses tests ===
+
+func TestCleanupOrphanedStatuses_NoStatuses(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return(nil, nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_ListError(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return(nil, werr.ErrInternalError)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.Error(t, err)
+}
+
+func TestCleanupOrphanedStatuses_DeletesOrphans(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// Segment 3 and 5 are orphans (< minSegmentId=10), segment 10 and 15 are not
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 3, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 5, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 10, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+		{LogId: 1, SegmentId: 15, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+	}, nil)
+
+	// Should only delete segments 3 and 5
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(3)).Return(nil)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(5)).Return(nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_DeleteFailureContinues(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 3, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+		{LogId: 1, SegmentId: 5, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+	}, nil)
+
+	// First delete fails, second succeeds — should continue
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(3)).Return(werr.ErrInternalError)
+	mockMeta.EXPECT().DeleteSegmentCleanupStatus(mock.Anything, int64(1), int64(5)).Return(nil)
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}
+
+func TestCleanupOrphanedStatuses_NoOrphans(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	mockPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
+
+	// All statuses are >= minSegmentId, no orphans
+	mockMeta.EXPECT().ListSegmentCleanupStatus(mock.Anything, int64(1)).Return([]*proto.SegmentCleanupStatus{
+		{LogId: 1, SegmentId: 10, State: proto.SegmentCleanupState_CLEANUP_IN_PROGRESS},
+		{LogId: 1, SegmentId: 15, State: proto.SegmentCleanupState_CLEANUP_COMPLETED},
+	}, nil)
+
+	// No DeleteSegmentCleanupStatus calls expected
+
+	err := mgr.CleanupOrphanedStatuses(context.Background(), 1, 10)
+	assert.NoError(t, err)
+}

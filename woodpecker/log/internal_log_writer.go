@@ -487,6 +487,19 @@ func (l *internalLogWriterImpl) cleanupTruncatedSegmentsIfNecessary(ctx context.
 		return segmentIdsToClean[i] < segmentIdsToClean[j]
 	})
 
+	// Before starting cleanup, check for orphaned cleanup status records
+	// from segments older than the oldest pending segment. These are leftover
+	// records whose segment metadata was already deleted but cleanup status
+	// deletion was interrupted by a crash.
+	minSegId := segmentIdsToClean[0]
+	if err := l.cleanupManager.CleanupOrphanedStatuses(ctx, logId, minSegId); err != nil {
+		logger.Ctx(ctx).Warn("Failed to clean orphaned cleanup statuses",
+			zap.String("logName", logName),
+			zap.Int64("logId", logId),
+			zap.Int64("minSegmentId", minSegId),
+			zap.Error(err))
+	}
+
 	logger.Ctx(ctx).Info("Identified truncated segments eligible for cleanup",
 		zap.String("logName", logName),
 		zap.Int64("logId", logId),
