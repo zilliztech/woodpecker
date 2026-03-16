@@ -102,7 +102,6 @@ tests/monitor/
 | Metric Name | Type | Labels | Description | Key Design Metric |
 |---|---|---|---|---|
 | `woodpecker_client_append_requests_total` | Counter | log_id | Total append requests | Write QPS |
-| `woodpecker_client_append_entries_total` | Counter | log_id | Total entries appended | Write throughput (entries) |
 | `woodpecker_client_append_bytes` | Histogram | log_id | Append bytes distribution | Message size distribution P50/P99 |
 | `woodpecker_client_append_latency` | Histogram | log_id | Append latency | Write latency P50/P99 |
 

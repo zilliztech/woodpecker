@@ -764,6 +764,7 @@ func (r *LocalFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stora
 	}
 
 	if len(entries) == 0 {
+		metrics.WpFileReadBatchLatency.WithLabelValues(metrics.NodeID, r.nsStr, r.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Debug("no entry extracted",
 			zap.String("filePath", r.filePath),
 			zap.Int64("startEntryId", opt.StartEntryID),

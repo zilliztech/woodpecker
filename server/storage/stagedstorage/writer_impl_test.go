@@ -34,6 +34,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/mocks/mocks_minio"
 	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/server/storage/cache"
 	"github.com/zilliztech/woodpecker/server/storage/codec"
@@ -987,6 +988,12 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 	_, err = writer.Finalize(context.Background(), 9)
 	require.NoError(t, err)
 
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
 	// Mock PutObject for merged blocks and footer
 	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
 		return true // accept any key
@@ -995,6 +1002,183 @@ func TestStagedFileWriter_Compact_FullFlow(t *testing.T) {
 	totalSize, err := writer.Compact(context.Background())
 	assert.NoError(t, err)
 	assert.Greater(t, totalSize, int64(0))
+	writer.Close(context.Background())
+}
+
+// TestStagedFileWriter_Compact_MergedBlockFormat verifies that compacted merged blocks
+// have the correct format: [HeaderRecord] + [single BlockHeaderRecord] + [DataRecords].
+// Regression test: previously raw block data (including multiple BlockHeaderRecords) was
+// concatenated directly, producing an inconsistent format with objectstorage compaction.
+func TestStagedFileWriter_Compact_MergedBlockFormat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	// Use a large target block size so all blocks merge into one
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = config.NewByteSize(10 * 1024 * 1024)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 1
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Write multiple entries and sync after each to force multiple blocks
+	for i := int64(0); i < 5; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), nil)
+		require.NoError(t, err)
+		err = writer.Sync(context.Background())
+		require.NoError(t, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 4)
+	require.NoError(t, err)
+
+	originalBlockCount := len(writer.blockIndexes)
+	require.Greater(t, originalBlockCount, 1, "test requires multiple blocks to verify merge")
+
+	// readRemoteFooter: footer does not exist yet → not-found
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Capture uploaded merged block data
+	var capturedMergedBlockData []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+		return true
+	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, key string, reader io.Reader, size int64, _ string, _ string) {
+			data := make([]byte, size)
+			_, _ = io.ReadFull(reader, data)
+			// Capture the merged block (not footer)
+			if len(key) > 10 && key[len(key)-10:] != "footer.blk" {
+				capturedMergedBlockData = data
+			}
+		}).
+		Return(nil)
+
+	totalSize, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, totalSize, int64(0))
+
+	// Parse the captured merged block and verify its structure
+	require.NotEmpty(t, capturedMergedBlockData, "should have captured merged block data")
+
+	records, decodeErr := codec.DecodeRecordList(capturedMergedBlockData)
+	require.NoError(t, decodeErr)
+
+	// Count record types
+	headerCount := 0
+	blockHeaderCount := 0
+	dataRecordCount := 0
+	for _, record := range records {
+		switch record.Type() {
+		case codec.HeaderRecordType:
+			headerCount++
+		case codec.BlockHeaderRecordType:
+			blockHeaderCount++
+		case codec.DataRecordType:
+			dataRecordCount++
+		}
+	}
+
+	// Verify structure: exactly 1 HeaderRecord (first block), exactly 1 BlockHeaderRecord, 5 DataRecords
+	assert.Equal(t, 1, headerCount, "merged block should have exactly 1 HeaderRecord")
+	assert.Equal(t, 1, blockHeaderCount, "merged block should have exactly 1 BlockHeaderRecord (not one per original block)")
+	assert.Equal(t, 5, dataRecordCount, "merged block should contain all 5 data records")
+
+	// Verify the BlockHeaderRecord has correct entry range
+	for _, record := range records {
+		if bh, ok := record.(*codec.BlockHeaderRecord); ok {
+			assert.Equal(t, int64(0), bh.FirstEntryID, "BlockHeader FirstEntryID")
+			assert.Equal(t, int64(4), bh.LastEntryID, "BlockHeader LastEntryID")
+		}
+	}
+
+	writer.Close(context.Background())
+}
+
+// TestStagedFileWriter_Compact_FlagsPreserved verifies that compaction preserves
+// existing footer flags (e.g. future reserved bits) while adding the compacted bit.
+// Regression test: previously StagedFileWriter used SetCompacted(0), discarding
+// any pre-existing flags.
+func TestStagedFileWriter_Compact_FlagsPreserved(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxBytes = config.NewByteSize(10 * 1024 * 1024)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 1
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	// Write data and finalize
+	for i := int64(0); i < 3; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), nil)
+		require.NoError(t, err)
+	}
+	err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 2)
+	require.NoError(t, err)
+
+	// Simulate a pre-existing flag on bit 1 (reserved) in the footer
+	// This tests that compaction preserves flags it doesn't own
+	originalFlags := uint16(0x0002) // bit 1 set (a hypothetical future flag)
+	writer.recoveredFooter.Flags = originalFlags
+
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Capture uploaded data to verify flags
+	var capturedMergedBlockData []byte
+	var capturedFooterData []byte
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.MatchedBy(func(key string) bool {
+		return true
+	}), mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, key string, reader io.Reader, size int64, _ string, _ string) {
+			data := make([]byte, size)
+			_, _ = io.ReadFull(reader, data)
+			if len(key) > 10 && key[len(key)-10:] == "footer.blk" {
+				capturedFooterData = data
+			} else {
+				capturedMergedBlockData = data
+			}
+		}).
+		Return(nil)
+
+	totalSize, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, totalSize, int64(0))
+
+	// Verify HeaderRecord in merged block preserves original flags + compacted bit
+	require.NotEmpty(t, capturedMergedBlockData)
+	records, decodeErr := codec.DecodeRecordList(capturedMergedBlockData)
+	require.NoError(t, decodeErr)
+
+	expectedFlags := originalFlags | codec.FooterFlagCompacted // 0x0003
+	for _, record := range records {
+		if h, ok := record.(*codec.HeaderRecord); ok {
+			assert.Equal(t, expectedFlags, h.Flags,
+				"HeaderRecord should preserve original flags (0x%04x) and add compacted bit", originalFlags)
+		}
+	}
+
+	// Verify Footer also preserves original flags + compacted bit
+	require.NotEmpty(t, capturedFooterData)
+	footer, parseErr := codec.ParseFooterFromBytes(capturedFooterData)
+	require.NoError(t, parseErr)
+	assert.Equal(t, expectedFlags, footer.Flags,
+		"FooterRecord should preserve original flags (0x%04x) and add compacted bit", originalFlags)
+
 	writer.Close(context.Background())
 }
 
@@ -1015,6 +1199,123 @@ func TestStagedFileWriter_Compact_NoBlocks(t *testing.T) {
 	assert.Equal(t, int64(-1), totalSize)
 }
 
+// TestStagedFileWriter_Compact_Idempotent verifies that calling Compact twice returns the
+// same result without performing redundant I/O. The second call should short-circuit
+// by reading the remote footer from MinIO and detecting the compacted flag.
+// Regression test: previously there was no idempotency guard, so repeated calls would
+// re-read, re-merge and re-upload all blocks.
+func TestStagedFileWriter_Compact_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 4
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	for i := int64(0); i < 10; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("test data"), nil)
+		require.NoError(t, err)
+	}
+	err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 9)
+	require.NoError(t, err)
+
+	footerKey := "test-root/1/0/footer.blk"
+	notFoundErr := fmt.Errorf("object not found")
+
+	// First Compact: StatObject returns not-found for footer → full compaction runs.
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Capture the uploaded footer data so we can replay it for the second call.
+	var capturedFooterData []byte
+	putCallCount := 0
+	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, _ string, key string, body io.Reader, size int64, _ string, _ string) {
+			putCallCount++
+			if key == footerKey {
+				capturedFooterData = make([]byte, size)
+				_, _ = io.ReadFull(body, capturedFooterData)
+			}
+		}).
+		Return(nil)
+
+	// First compact
+	size1, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Greater(t, size1, int64(0))
+	require.NotEmpty(t, capturedFooterData, "footer should have been uploaded")
+	firstCompactCalls := putCallCount
+
+	// Second Compact: StatObject returns the footer size, GetObject returns footer bytes.
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", footerKey, mock.Anything, mock.Anything).
+		Return(int64(len(capturedFooterData)), true, nil).Once()
+	mockReader := mocks_minio.NewFileReader(t)
+	mockReader.EXPECT().Read(mock.Anything).RunAndReturn(func(p []byte) (int, error) {
+		n := copy(p, capturedFooterData)
+		return n, io.EOF
+	}).Maybe()
+	mockReader.EXPECT().Close().Return(nil).Once()
+	mockStorage.EXPECT().GetObject(mock.Anything, "test-bucket", footerKey, int64(0), int64(len(capturedFooterData)), mock.Anything, mock.Anything).
+		Return(mockReader, nil).Once()
+
+	// Second compact — should return immediately with same size, no new PutObject calls
+	size2, err := writer.Compact(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, size1, size2, "second Compact should return same size")
+	assert.Equal(t, firstCompactCalls, putCallCount, "second Compact should not trigger any PutObject calls")
+
+	writer.Close(context.Background())
+}
+
+// TestStagedFileWriter_Compact_CancelledContext verifies that Compact returns promptly
+// when the context is cancelled, instead of proceeding through the entire compaction.
+// Regression test: previously goroutines in the compaction path did not check ctx.Err().
+func TestStagedFileWriter_Compact_CancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelUploads = 4
+	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.MaxParallelReads = 4
+
+	mockStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, mockStorage, cfg)
+	require.NoError(t, err)
+
+	for i := int64(0); i < 10; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte("test data"), nil)
+		require.NoError(t, err)
+	}
+	err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	_, err = writer.Finalize(context.Background(), 9)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
+	// Use an already-cancelled context
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = writer.Compact(cancelCtx)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 // --- uploadCompactedFooter ---
 
 func TestStagedFileWriter_UploadCompactedFooter(t *testing.T) {
@@ -1028,6 +1329,7 @@ func TestStagedFileWriter_UploadCompactedFooter(t *testing.T) {
 
 	writer.firstEntryID.Store(0)
 	writer.lastEntryID.Store(9)
+	writer.recoveredFooter = &codec.FooterRecord{Flags: 0, Version: codec.FormatVersion}
 
 	blockIndexes := []*codec.IndexRecord{
 		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 9},
@@ -1051,6 +1353,7 @@ func TestStagedFileWriter_UploadCompactedFooter_PutError(t *testing.T) {
 
 	writer.firstEntryID.Store(0)
 	writer.lastEntryID.Store(9)
+	writer.recoveredFooter = &codec.FooterRecord{Flags: 0, Version: codec.FormatVersion}
 
 	blockIndexes := []*codec.IndexRecord{
 		{BlockNumber: 0, StartOffset: 0, BlockSize: 100, FirstEntryID: 0, LastEntryID: 9},
@@ -1198,6 +1501,12 @@ func TestCompact_UploadMergedBlockFails(t *testing.T) {
 
 	_, err = writer.Finalize(context.Background(), 4)
 	require.NoError(t, err)
+
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
 
 	// Mock PutObject to fail for block upload
 	mockStorage.EXPECT().PutObject(mock.Anything, "test-bucket", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -1676,6 +1985,12 @@ func TestCompact_UploadFooterFails(t *testing.T) {
 	require.NoError(t, err)
 	defer writer.Close(context.Background())
 
+	// readRemoteFooter: footer does not exist yet
+	notFoundErr := fmt.Errorf("object not found")
+	mockStorage.EXPECT().StatObject(mock.Anything, "test-bucket", "test-root/1/0/footer.blk", mock.Anything, mock.Anything).
+		Return(int64(0), false, notFoundErr).Once()
+	mockStorage.EXPECT().IsObjectNotExistsError(notFoundErr).Return(true).Once()
+
 	// Mock: PutObject succeeds for merged blocks but fails for footer
 	callCount := 0
 	mockStorage.EXPECT().PutObject(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -2024,4 +2339,45 @@ func TestRecoverBlocksFromFooter_BlockCountMismatch(t *testing.T) {
 			writer2.Close(context.Background())
 		}
 	}
+}
+
+func TestStagedFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+
+	// Verify resources are live before close
+	require.NotNil(t, writer.file)
+	require.NoError(t, writer.runCtx.Err())
+
+	// Cancel runCtx so the run goroutine exits, making awaitAllFlushTasks fail
+	writer.runCancel()
+	time.Sleep(100 * time.Millisecond)
+
+	// Close with an already-cancelled context so awaitAllFlushTasks returns error immediately
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	closeErr := writer.Close(cancelledCtx)
+	assert.Error(t, closeErr, "Close should return error when awaitAllFlushTasks fails")
+
+	// Verify cleanup happened despite the error return
+	assert.Nil(t, writer.file, "file should be closed and set to nil")
+	assert.Error(t, writer.runCtx.Err(), "runCtx should be cancelled")
+}
+
+func TestStagedFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+
+	// First close succeeds
+	err = writer.Close(context.Background())
+	assert.NoError(t, err)
+
+	// Second close returns nil without panic (idempotent)
+	err = writer.Close(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, writer.closed.Load())
 }

@@ -1678,3 +1678,44 @@ func TestNewLocalFileWriterWithMode_NegativeBlockSize(t *testing.T) {
 	// Should use default block size (2MB) because blockSize was <= 0
 	assert.Equal(t, int64(2*1024*1024), writer.maxFlushSize)
 }
+
+func TestLocalFileWriter_Close_ErrorCleansUpResources(t *testing.T) {
+	dir := getTempDir(t)
+	cfg, _ := config.NewConfiguration()
+	writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
+	require.NoError(t, err)
+
+	// Verify resources are live before close
+	require.NotNil(t, writer.file)
+	require.NoError(t, writer.runCtx.Err())
+
+	// Cancel runCtx so the run goroutine exits, making awaitAllFlushTasks fail
+	writer.runCancel()
+	time.Sleep(100 * time.Millisecond)
+
+	// Close with an already-cancelled context so awaitAllFlushTasks returns error immediately
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	closeErr := writer.Close(cancelledCtx)
+	assert.Error(t, closeErr, "Close should return error when awaitAllFlushTasks fails")
+
+	// Verify cleanup happened despite the error return
+	assert.Nil(t, writer.file, "file should be closed and set to nil")
+	assert.Error(t, writer.runCtx.Err(), "runCtx should be cancelled")
+}
+
+func TestLocalFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
+	dir := getTempDir(t)
+	cfg, _ := config.NewConfiguration()
+	writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
+	require.NoError(t, err)
+
+	// First close succeeds
+	err = writer.Close(context.Background())
+	assert.NoError(t, err)
+
+	// Second close returns nil without panic (idempotent)
+	err = writer.Close(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, writer.closed.Load())
+}
