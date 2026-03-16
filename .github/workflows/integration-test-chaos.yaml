@@ -41,8 +41,8 @@ jobs:
       - name: Start chaos test cluster
         run: |
           cd tests/docker/chaos
-          source ../common.sh
           SCRIPT_DIR="$(pwd)"
+          source ../common.sh
           OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.chaos.yaml"
           PROJECT_NAME="woodpecker-chaos"
           CONTAINERS="etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4"
