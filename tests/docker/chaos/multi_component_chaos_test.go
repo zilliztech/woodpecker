@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package chaos_extra
+package chaos
 
 import (
 	"context"
@@ -37,8 +37,8 @@ import (
 //   - Durability: data acknowledged before failure is preserved
 //   - Recovery completeness: system fully recovers from double failure
 //   - No stuck state: no permanently stuck segments
-func TestChaosExtra_Multi_ServerCrashPlusMinIODown(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Multi_ServerCrashPlusMinIODown(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -124,8 +124,8 @@ func TestChaosExtra_Multi_ServerCrashPlusMinIODown(t *testing.T) {
 // Invariants verified:
 //   - No stuck state: server handles etcd unavailability during startup
 //   - Recovery: server becomes functional after etcd is available
-func TestChaosExtra_Multi_EtcdDownThenServerRestart(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Multi_EtcdDownThenServerRestart(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -212,8 +212,8 @@ func TestChaosExtra_Multi_EtcdDownThenServerRestart(t *testing.T) {
 // Invariants verified:
 //   - Graceful degradation: server handles isolation without crashing
 //   - Recovery: server reconnects and resumes after partition heals
-func TestChaosExtra_Multi_ServerIsolatedFromEtcdAndMinIO(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Multi_ServerIsolatedFromEtcdAndMinIO(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -291,8 +291,8 @@ func TestChaosExtra_Multi_ServerIsolatedFromEtcdAndMinIO(t *testing.T) {
 // Invariants verified:
 //   - Quorum correctness: writes succeed with exactly aq nodes
 //   - Durability: data is safely stored on aq nodes
-func TestChaosExtra_Quorum_ExactAckQuorum(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Quorum_ExactAckQuorum(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -357,8 +357,8 @@ func TestChaosExtra_Quorum_ExactAckQuorum(t *testing.T) {
 // Invariants verified:
 //   - No stuck state: server cleans up after client disconnect
 //   - Recovery: new client can write to the same log
-func TestChaosExtra_Client_DisconnectDuringAppend(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Client_DisconnectDuringAppend(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	client1, etcdCli1, _ := cluster.NewClientManual(t, ctx)
