@@ -100,3 +100,119 @@ func (cc *ChaosCluster) TryConnectNetwork(t *testing.T, containerName string) {
 		t.Logf("Container %s reconnected to network", containerName)
 	}
 }
+
+// StopEtcd stops the etcd container gracefully.
+func (cc *ChaosCluster) StopEtcd(t *testing.T) {
+	t.Helper()
+	t.Logf("Stopping etcd...")
+	framework.RunCommandNoFail(t, "docker", "stop", "-t", "10", "etcd")
+	t.Logf("etcd stopped")
+}
+
+// StartEtcd starts the etcd container.
+func (cc *ChaosCluster) StartEtcd(t *testing.T) {
+	t.Helper()
+	t.Logf("Starting etcd...")
+	framework.RunCommandNoFail(t, "docker", "start", "etcd")
+	t.Logf("etcd started")
+}
+
+// KillEtcd sends SIGKILL to the etcd container.
+func (cc *ChaosCluster) KillEtcd(t *testing.T) {
+	t.Helper()
+	t.Logf("Killing etcd...")
+	framework.RunCommandNoFail(t, "docker", "kill", "etcd")
+	t.Logf("etcd killed")
+}
+
+// StopMinIO stops the MinIO container gracefully.
+func (cc *ChaosCluster) StopMinIO(t *testing.T) {
+	t.Helper()
+	t.Logf("Stopping MinIO...")
+	framework.RunCommandNoFail(t, "docker", "stop", "-t", "10", "minio")
+	t.Logf("MinIO stopped")
+}
+
+// StartMinIO starts the MinIO container.
+func (cc *ChaosCluster) StartMinIO(t *testing.T) {
+	t.Helper()
+	t.Logf("Starting MinIO...")
+	framework.RunCommandNoFail(t, "docker", "start", "minio")
+	t.Logf("MinIO started")
+}
+
+// KillMinIO sends SIGKILL to the MinIO container.
+func (cc *ChaosCluster) KillMinIO(t *testing.T) {
+	t.Helper()
+	t.Logf("Killing MinIO...")
+	framework.RunCommandNoFail(t, "docker", "kill", "minio")
+	t.Logf("MinIO killed")
+}
+
+// DisconnectEtcd disconnects etcd from the Docker network.
+func (cc *ChaosCluster) DisconnectEtcd(t *testing.T) {
+	t.Helper()
+	t.Logf("Disconnecting etcd from network %s...", cc.NetworkName)
+	framework.RunCommandNoFail(t, "docker", "network", "disconnect", "-f", cc.NetworkName, "etcd")
+	t.Logf("etcd disconnected from network")
+}
+
+// ConnectEtcd reconnects etcd to the Docker network.
+func (cc *ChaosCluster) ConnectEtcd(t *testing.T) {
+	t.Helper()
+	t.Logf("Connecting etcd to network %s...", cc.NetworkName)
+	framework.RunCommandNoFail(t, "docker", "network", "connect", cc.NetworkName, "etcd")
+	t.Logf("etcd connected to network")
+}
+
+// DisconnectMinIO disconnects MinIO from the Docker network.
+func (cc *ChaosCluster) DisconnectMinIO(t *testing.T) {
+	t.Helper()
+	t.Logf("Disconnecting MinIO from network %s...", cc.NetworkName)
+	framework.RunCommandNoFail(t, "docker", "network", "disconnect", "-f", cc.NetworkName, "minio")
+	t.Logf("MinIO disconnected from network")
+}
+
+// ConnectMinIO reconnects MinIO to the Docker network.
+func (cc *ChaosCluster) ConnectMinIO(t *testing.T) {
+	t.Helper()
+	t.Logf("Connecting MinIO to network %s...", cc.NetworkName)
+	framework.RunCommandNoFail(t, "docker", "network", "connect", cc.NetworkName, "minio")
+	t.Logf("MinIO connected to network")
+}
+
+// TryConnectEtcd reconnects etcd, ignoring errors. Useful in t.Cleanup.
+func (cc *ChaosCluster) TryConnectEtcd(t *testing.T) {
+	t.Helper()
+	_, _, err := framework.RunCommand(t, "docker", "network", "connect", cc.NetworkName, "etcd")
+	if err != nil {
+		t.Logf("TryConnectEtcd: ignored error (likely already connected): %v", err)
+	}
+}
+
+// TryConnectMinIO reconnects MinIO, ignoring errors. Useful in t.Cleanup.
+func (cc *ChaosCluster) TryConnectMinIO(t *testing.T) {
+	t.Helper()
+	_, _, err := framework.RunCommand(t, "docker", "network", "connect", cc.NetworkName, "minio")
+	if err != nil {
+		t.Logf("TryConnectMinIO: ignored error (likely already connected): %v", err)
+	}
+}
+
+// TryStartEtcd starts etcd, ignoring errors. Useful in t.Cleanup.
+func (cc *ChaosCluster) TryStartEtcd(t *testing.T) {
+	t.Helper()
+	_, _, err := framework.RunCommand(t, "docker", "start", "etcd")
+	if err != nil {
+		t.Logf("TryStartEtcd: ignored error: %v", err)
+	}
+}
+
+// TryStartMinIO starts MinIO, ignoring errors. Useful in t.Cleanup.
+func (cc *ChaosCluster) TryStartMinIO(t *testing.T) {
+	t.Helper()
+	_, _, err := framework.RunCommand(t, "docker", "start", "minio")
+	if err != nil {
+		t.Logf("TryStartMinIO: ignored error: %v", err)
+	}
+}
