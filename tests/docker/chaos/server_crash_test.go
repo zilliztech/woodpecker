@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package chaos_extra
+package chaos
 
 import (
 	"context"
@@ -39,8 +39,8 @@ import (
 //   - Durability: acknowledged writes are not lost
 //   - Recovery completeness: crashed node recovers and serves data
 //   - Ordering: entry order is preserved
-func TestChaosExtra_Server_CrashDuringActiveWrites(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Server_CrashDuringActiveWrites(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -102,8 +102,8 @@ func TestChaosExtra_Server_CrashDuringActiveWrites(t *testing.T) {
 //   - Recovery completeness: recovery reconstructs index from data blocks
 //   - Durability: synced data before crash is preserved
 //   - Metadata consistency: segment state is correct after recovery
-func TestChaosExtra_Server_CrashDuringFinalization(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Server_CrashDuringFinalization(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -178,8 +178,8 @@ func TestChaosExtra_Server_CrashDuringFinalization(t *testing.T) {
 // Invariants verified:
 //   - Recovery: compaction retries after server restart
 //   - Durability: all acknowledged data is preserved
-func TestChaosExtra_Server_CrashDuringCompaction(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Server_CrashDuringCompaction(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -253,8 +253,8 @@ func TestChaosExtra_Server_CrashDuringCompaction(t *testing.T) {
 // Invariants verified:
 //   - Fencing correctness: fencing state is consistent after crash
 //   - Recovery: server recovers and can serve new requests
-func TestChaosExtra_Server_CrashDuringFence(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Server_CrashDuringFence(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -332,8 +332,8 @@ func TestChaosExtra_Server_CrashDuringFence(t *testing.T) {
 // Invariants verified:
 //   - No stuck state: system handles paused node gracefully
 //   - Recovery: system recovers after node comes back
-func TestChaosExtra_Server_ProcessPause(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Server_ProcessPause(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {

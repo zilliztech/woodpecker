@@ -69,6 +69,9 @@ echo "       Waiting for gossip convergence..."
 sleep 15
 echo "       Cluster is ready"
 
+# Override default timeout for the merged chaos suite (includes server crash, etcd, minio tests)
+TEST_TIMEOUT="900s"
+
 # Step 4: Run chaos tests
 echo ""
 echo "[4/5] Running chaos tests..."

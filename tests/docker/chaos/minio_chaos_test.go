@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package chaos_extra
+package chaos
 
 import (
 	"context"
@@ -36,8 +36,8 @@ import (
 // Invariants verified:
 //   - Durability: data written before compaction is not lost
 //   - Recovery: compaction retries successfully after MinIO returns
-func TestChaosExtra_MinIO_CompactionDuringMinIODown(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_MinIO_CompactionDuringMinIODown(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -125,8 +125,8 @@ func TestChaosExtra_MinIO_CompactionDuringMinIODown(t *testing.T) {
 // Invariants verified:
 //   - Durability: staged storage local writes are not affected by MinIO restart
 //   - Recovery: compaction resumes after MinIO is available
-func TestChaosExtra_MinIO_RestartDuringWrites(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_MinIO_RestartDuringWrites(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -203,8 +203,8 @@ func TestChaosExtra_MinIO_RestartDuringWrites(t *testing.T) {
 // Invariants verified:
 //   - Durability: local staged writes are preserved during partition
 //   - Recovery: compaction completes after partition heals
-func TestChaosExtra_MinIO_NetworkPartition(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_MinIO_NetworkPartition(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {

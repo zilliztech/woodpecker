@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package chaos_extra
+package chaos
 
 import (
 	"context"
@@ -39,8 +39,8 @@ import (
 // Invariants verified:
 //   - Durability: acknowledged writes are not lost
 //   - No stuck state: system recovers after etcd returns
-func TestChaosExtra_Etcd_WritesDuringEtcdDown(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Etcd_WritesDuringEtcdDown(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	// Cleanup: ensure etcd is running at the end
@@ -120,8 +120,8 @@ func TestChaosExtra_Etcd_WritesDuringEtcdDown(t *testing.T) {
 // Invariants verified:
 //   - Metadata consistency: segment state is correct after recovery
 //   - Recovery completeness: all synced data is readable
-func TestChaosExtra_Etcd_SegmentCompletionDuringEtcdDown(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Etcd_SegmentCompletionDuringEtcdDown(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -197,8 +197,8 @@ func TestChaosExtra_Etcd_SegmentCompletionDuringEtcdDown(t *testing.T) {
 // Invariants verified:
 //   - No stuck state: CreateLog fails cleanly when etcd is down
 //   - Recovery: CreateLog succeeds after etcd recovery
-func TestChaosExtra_Etcd_LogCreationDuringEtcdDown(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Etcd_LogCreationDuringEtcdDown(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -270,8 +270,8 @@ func TestChaosExtra_Etcd_LogCreationDuringEtcdDown(t *testing.T) {
 // Invariants verified:
 //   - Single-writer guarantee: session lock behavior is correct across etcd restart
 //   - Durability: data written before restart is preserved
-func TestChaosExtra_Etcd_RestartDuringActiveSession(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Etcd_RestartDuringActiveSession(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
@@ -351,8 +351,8 @@ func TestChaosExtra_Etcd_RestartDuringActiveSession(t *testing.T) {
 //   - Durability: writes that succeeded are not lost
 //   - Metadata consistency: segment state converges after partition heals
 //   - No stuck state: system recovers after partition heals
-func TestChaosExtra_Etcd_NetworkPartitionFromServers(t *testing.T) {
-	cluster := newChaosExtraCluster(t)
+func TestChaos_Etcd_NetworkPartitionFromServers(t *testing.T) {
+	cluster := newChaosCluster(t)
 	ctx := context.Background()
 
 	t.Cleanup(func() {
