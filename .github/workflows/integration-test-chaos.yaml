@@ -1,0 +1,91 @@
+name: Chaos Test
+
+on:
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "deployments/**"
+      - "build/**"
+      - "tests/docker/**"
+      - ".github/workflows/integration-test-chaos.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Chaos-Test:
+    name: Chaos Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Build Docker image
+        run: ./build/build_image.sh ubuntu22.04 amd64 -t woodpecker:latest
+
+      - name: Start chaos test cluster
+        run: |
+          cd tests/docker/chaos
+          source ../common.sh
+          SCRIPT_DIR="$(pwd)"
+          OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.chaos.yaml"
+          PROJECT_NAME="woodpecker-chaos"
+          CONTAINERS="etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4"
+          compose_cmd up -d
+          echo "Waiting for containers..."
+          wait_for_containers
+          echo "Waiting for gossip convergence..."
+          sleep 15
+          echo "Cluster is ready"
+
+      - name: Run chaos tests
+        run: |
+          cd tests/docker/chaos
+          set +e
+          go test -v -timeout 900s -count=1 ./... 2>&1 | tee test-output.log
+          exit_code=${PIPESTATUS[0]}
+          exit $exit_code
+
+      - name: Collect container logs on failure
+        if: failure()
+        run: |
+          mkdir -p tests/docker/chaos/logs
+          for container in etcd minio woodpecker-node1 woodpecker-node2 woodpecker-node3 woodpecker-node4; do
+            docker logs "$container" > "tests/docker/chaos/logs/${container}.log" 2>&1 || true
+          done
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-test-logs
+          path: |
+            tests/docker/chaos/test-output.log
+            tests/docker/chaos/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop cluster
+        if: always()
+        run: |
+          cd tests/docker/chaos
+          DEPLOYMENTS_DIR="$(cd ../../.. && pwd)/deployments"
+          docker compose -f "$DEPLOYMENTS_DIR/docker-compose.yaml" \
+            -f docker-compose.chaos.yaml \
+            -p woodpecker-chaos down -v 2>/dev/null || true
+
