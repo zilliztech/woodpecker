@@ -53,7 +53,7 @@ jobs:
         run: |
           PR=${{ github.event.pull_request.number }}
           SELF="Lint"
-          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test")
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test")
           CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
           ALL_PASSED=true
           for check in "${REQUIRED_CHECKS[@]}"; do
@@ -103,7 +103,7 @@ jobs:
         run: |
           PR=${{ github.event.pull_request.number }}
           SELF="Go Mod Tidy Check"
-          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test")
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test")
           CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
           ALL_PASSED=true
           for check in "${REQUIRED_CHECKS[@]}"; do
