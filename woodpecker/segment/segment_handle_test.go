@@ -4182,17 +4182,96 @@ func TestCompact_Success(t *testing.T) {
 		Revision: 2,
 	}
 
+	expectedSealedTime := time.Now().UnixMilli()
 	compactedSegMetaInfo := &proto.SegmentMetadata{
-		SegNo:          1,
-		LastEntryId:    10,
-		Size:           1024,
-		CompletionTime: time.Now().UnixMilli(),
+		SegNo:       1,
+		LastEntryId: 10,
+		Size:        1024,
+		SealedTime:  expectedSealedTime,
 	}
 
 	// First call for RefreshAndGetMetadata, second for refresh after compaction
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Once()
-	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.Anything, proto.SegmentState_Completed).Return(nil)
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.MatchedBy(func(segMeta *meta.SegmentMeta) bool {
+		return segMeta.Metadata.SealedTime == expectedSealedTime &&
+			segMeta.Metadata.State == proto.SegmentState_Sealed &&
+			segMeta.Metadata.Size == 1024
+	}), proto.SegmentState_Completed).Return(nil)
+	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{
+					QueueSize:  10,
+					MaxRetries: 2,
+				},
+			},
+			Storage: config.StorageConfig{
+				Type: "minio",
+			},
+		},
+	}
+
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	err := segmentHandle.Compact(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestCompact_SealedTimeFromCompactResponse verifies that SealedTime in metadata update
+// comes from the compact response's SealedTime field, not CompletionTime.
+// Regression test: previously used CompletionTime (unset, always 0) instead of SealedTime.
+func TestCompact_SealedTimeFromCompactResponse(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, "127.0.0.1").Return(mockClient, nil).Maybe()
+
+	completedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Completed,
+			LastEntryId: 10,
+			Size:        2048,
+			Quorum: &proto.QuorumInfo{
+				Id:    1,
+				Aq:    1,
+				Es:    1,
+				Wq:    1,
+				Nodes: []string{"127.0.0.1"},
+			},
+		},
+		Revision: 1,
+	}
+
+	sealedMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo:       1,
+			State:       proto.SegmentState_Sealed,
+			LastEntryId: 10,
+			Size:        1024,
+		},
+		Revision: 2,
+	}
+
+	// Compact response sets SealedTime but NOT CompletionTime (CompletionTime defaults to 0).
+	// The bug was using CompletionTime (0) instead of SealedTime.
+	expectedSealedTime := int64(1700000000000)
+	compactedSegMetaInfo := &proto.SegmentMetadata{
+		SegNo:          1,
+		LastEntryId:    10,
+		Size:           1024,
+		SealedTime:     expectedSealedTime,
+		CompletionTime: 0, // explicitly 0 to verify we don't use this field
+	}
+
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(completedMeta, nil).Once()
+	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(sealedMeta, nil).Once()
+	mockMetadata.EXPECT().UpdateSegmentMetadata(mock.Anything, "testLog", int64(1), mock.MatchedBy(func(segMeta *meta.SegmentMeta) bool {
+		// Key assertion: SealedTime must equal the compact response's SealedTime, not 0
+		return segMeta.Metadata.SealedTime == expectedSealedTime
+	}), proto.SegmentState_Completed).Return(nil)
 	mockClient.EXPECT().SegmentCompact(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).Return(compactedSegMetaInfo, nil)
 
 	cfg := &config.Configuration{
