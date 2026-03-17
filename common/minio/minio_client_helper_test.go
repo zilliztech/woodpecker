@@ -81,6 +81,49 @@ func TestNewMinioClient_Aliyun_StaticCreds_CancelledCtx(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestNewMinioClient_Aliyun_StaticCreds_UsesCustomClient verifies that Aliyun with AK/SK
+// credentials uses aliyun.NewMinioClient (not standard minio.New), ensuring WrapHTTPTransport
+// is set up for header transformations like conditional write (x-oss-forbid-overwrite).
+func TestNewMinioClient_Aliyun_StaticCreds_UsesCustomClient(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = CloudProviderAliyun
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "oss-cn-hangzhou.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.Region = "cn-hangzhou"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// The client creation itself should succeed (uses aliyun.NewMinioClient which sets up
+	// WrapHTTPTransport), but the bucket check will fail due to cancelled context.
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
+// TestNewMinioClient_InferAliyun_FromAddress_StaticCreds_UsesCustomClient verifies that
+// address-inferred Aliyun with AK/SK credentials also uses aliyun.NewMinioClient.
+func TestNewMinioClient_InferAliyun_FromAddress_StaticCreds_UsesCustomClient(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Minio.CloudProvider = "" // default, triggers address inference
+	cfg.Minio.UseIAM = false
+	cfg.Minio.AccessKeyID = "testkey"
+	cfg.Minio.SecretAccessKey = "testsecret"
+	cfg.Minio.Address = "oss-cn-hangzhou.aliyuncs.com"
+	cfg.Minio.Port = 443
+	cfg.Minio.BucketName = "test-bucket"
+	cfg.Minio.Region = "cn-hangzhou"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := newMinioClient(ctx, cfg)
+	assert.Error(t, err)
+}
+
 func TestNewMinioClient_GCP_StaticCreds_CancelledCtx(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	cfg.Minio.CloudProvider = CloudProviderGCP

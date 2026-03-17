@@ -62,9 +62,8 @@ func newMinioClient(ctx context.Context, cfg *config.Configuration) (*minio.Clie
 	case CloudProviderAliyun:
 		// auto doesn't work for aliyun, so we set to dns deliberately
 		bucketLookupType = minio.BucketLookupDNS
-		if cfg.Minio.UseIAM {
-			newMinioFn = aliyun.NewMinioClient
-		} else {
+		newMinioFn = aliyun.NewMinioClient
+		if !cfg.Minio.UseIAM {
 			creds = credentials.NewStaticV4(cfg.Minio.AccessKeyID, cfg.Minio.SecretAccessKey, "")
 		}
 	case CloudProviderGCP:
@@ -100,9 +99,8 @@ func newMinioClient(ctx context.Context, cfg *config.Configuration) (*minio.Clie
 		case strings.Contains(cfg.Minio.Address, aliyun.OSSAddressFeatureString):
 			// auto doesn't work for aliyun, so we set to dns deliberately
 			bucketLookupType = minio.BucketLookupDNS
-			if cfg.Minio.UseIAM {
-				newMinioFn = aliyun.NewMinioClient
-			} else {
+			newMinioFn = aliyun.NewMinioClient
+			if !cfg.Minio.UseIAM {
 				creds = credentials.NewStaticV4(cfg.Minio.AccessKeyID, cfg.Minio.SecretAccessKey, "")
 			}
 		default:
