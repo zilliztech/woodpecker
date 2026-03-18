@@ -36,6 +36,7 @@ jobs:
           WORKFLOW_MAP["/rerun-e2e-objectstorage"]="integration-test-e2e-objectstorage.yaml"
           WORKFLOW_MAP["/rerun-e2e-service"]="integration-test-e2e-service.yaml"
           WORKFLOW_MAP["/rerun-component-test"]="integration-test-components.yaml"
+          WORKFLOW_MAP["/rerun-chaos"]="integration-test-chaos.yaml"
 
           HEAD_SHA=$(gh pr view $PR --repo $REPO --json headRefOid -q '.headRefOid')
 
@@ -85,5 +86,5 @@ jobs:
             gh pr comment $PR --repo $REPO --body "Rerunning **${CMD#/rerun-}** workflow. Check the [Actions tab](https://github.com/${REPO}/actions) for progress."
 
           else
-            gh pr comment $PR --repo $REPO --body "Unknown command \`${CMD}\`. Available commands: \`/rerun\`, \`/rerun-lint\`, \`/rerun-mod-tidy\`, \`/rerun-unit-test\`, \`/rerun-e2e-local\`, \`/rerun-e2e-objectstorage\`, \`/rerun-e2e-service\`, \`/rerun-component-test\`."
+            gh pr comment $PR --repo $REPO --body "Unknown command \`${CMD}\`. Available commands: \`/rerun\`, \`/rerun-lint\`, \`/rerun-mod-tidy\`, \`/rerun-unit-test\`, \`/rerun-e2e-local\`, \`/rerun-e2e-objectstorage\`, \`/rerun-e2e-service\`, \`/rerun-component-test\`, \`/rerun-chaos\`."
           fi
