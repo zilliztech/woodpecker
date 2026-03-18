@@ -1,0 +1,68 @@
+name: CI Status
+
+on:
+  workflow_run:
+    workflows:
+      - "Lint"
+      - "Go Mod Tidy Check"
+      - "Unit Test"
+      - "E2E Local"
+      - "E2E Object Storage"
+      - "E2E Service"
+      - "Component Integration Test"
+      - "Chaos Test"
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  update-status:
+    name: Update CI Status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+
+    steps:
+      - name: Get PR number
+        id: pr
+        run: |
+          # Get PR number from the workflow run
+          PR=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/attempts/1/jobs --jq '.jobs[0].run_id' 2>/dev/null || echo "")
+          # Try to get PR from the head branch
+          PR_NUMBER=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Handle workflow result
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ steps.pr.outputs.pr_number }}
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+
+          if [ "$CONCLUSION" = "failure" ]; then
+            gh pr comment $PR --body "❌ **${WORKFLOW_NAME}** failed. Check the [workflow run](${{ github.event.workflow_run.html_url }}) for details." 2>/dev/null || true
+            gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
+            exit 0
+          fi
+
+          # Check if all required workflows have passed
+          REQUIRED_CHECKS=("Lint" "Go Mod Tidy Check" "Unit Test" "E2E Local" "E2E Object Storage" "E2E Service" "Component Integration Test" "Chaos Test")
+          CHECKS=$(gh pr checks $PR --json name,bucket 2>/dev/null || echo "[]")
+          ALL_PASSED=true
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            bucket=$(echo "$CHECKS" | jq -r --arg n "$check" '.[] | select(.name == $n) | .bucket' | head -1)
+            if [ "$bucket" != "pass" ]; then
+              ALL_PASSED=false
+              break
+            fi
+          done
+
+          if [ "$ALL_PASSED" = true ]; then
+            gh pr edit $PR --add-label "ci-passed" 2>/dev/null || true
+          fi
