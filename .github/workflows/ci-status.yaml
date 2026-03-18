@@ -3,8 +3,7 @@ name: CI Status
 on:
   workflow_run:
     workflows:
-      - "Lint"
-      - "Go Mod Tidy Check"
+      - "Code Checker"
       - "Unit Test"
       - "E2E Local"
       - "E2E Object Storage"
