@@ -19,11 +19,14 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -969,4 +972,84 @@ func TestLogStore_BackgroundCleanup_PerformCleanup(t *testing.T) {
 	for i := int64(1); i <= 4; i++ {
 		mockProcessors[i].AssertExpectations(t)
 	}
+}
+
+func TestLogStore_GetActiveProcessorCount(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+	count := ls.GetActiveProcessorCount()
+	assert.Equal(t, 0, count)
+}
+
+func TestLogStore_RejectNewWrites(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+	concrete := ls.(*logStore)
+
+	// Before reject: rejectWrites should be false
+	assert.False(t, concrete.rejectWrites.Load())
+
+	ls.RejectNewWrites()
+
+	// After reject: rejectWrites should be true, but stopped should still be true
+	// (stopped is true by default until Start() is called)
+	assert.True(t, concrete.rejectWrites.Load())
+}
+
+func TestLogStore_HasLocalSegmentData_Empty(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	cfg.Woodpecker.Storage.RootPath = t.TempDir()
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Empty data dir — no segment data
+	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_WithDataLog(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Create a fake segment data file: <rootPath>/1/0/data.log
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("some data"), 0o644))
+
+	assert.True(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_OnlyManagementFiles(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// Only node_state.json and write.fence — no actual segment data
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "node_state.json"), []byte("{}"), 0o644))
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "write.fence"), []byte(""), 0o644))
+
+	assert.False(t, ls.HasLocalSegmentData())
+}
+
+func TestLogStore_HasLocalSegmentData_EmptyDataLog(t *testing.T) {
+	cfg, _ := config.NewConfiguration()
+	dir := t.TempDir()
+	cfg.Woodpecker.Storage.RootPath = dir
+	ctx := context.Background()
+	ls := NewLogStore(ctx, cfg, nil)
+
+	// data.log exists but is empty (0 bytes) — not counted as segment data
+	segDir := filepath.Join(dir, "1", "0")
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte{}, 0o644))
+
+	assert.False(t, ls.HasLocalSegmentData())
 }

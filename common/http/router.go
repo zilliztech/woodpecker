@@ -28,6 +28,15 @@ const LogLevelRouterPath = "/log/level"
 // AdminMemberlistPath is path for memberlist status.
 const AdminMemberlistPath = "/admin/memberlist"
 
+// AdminNodeStatusPath is path for node status API.
+const AdminNodeStatusPath = "/admin/node/status"
+
+// AdminNodeDecommissionPath is path for node decommission API.
+const AdminNodeDecommissionPath = "/admin/node/decommission"
+
+// AdminNodeDecommissionProgressPath is path for node decommission progress API.
+const AdminNodeDecommissionProgressPath = "/admin/node/decommission/progress"
+
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:
 // - /debug/pprof/

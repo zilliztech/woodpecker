@@ -76,7 +76,9 @@ func TestStartAndStop(t *testing.T) {
 	t.Setenv(ListenPortEnvKey, "19091") // use non-default port to avoid conflicts
 
 	cfg, _ := config.NewConfiguration()
-	err := Start(cfg, func() string { return "memberlist status" })
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "memberlist status" },
+	})
 	assert.NoError(t, err)
 	assert.NotNil(t, server)
 
@@ -95,6 +97,56 @@ func TestStartAndStop(t *testing.T) {
 	if httpErr == nil {
 		resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	err = Stop()
+	assert.NoError(t, err)
+}
+
+func TestStartAndStop_WithLifecycleEndpoints(t *testing.T) {
+	resetGlobals()
+	t.Setenv(PprofEnableEnvKey, "false")
+	t.Setenv(ListenPortEnvKey, "19092")
+
+	cfg, _ := config.NewConfiguration()
+
+	decommissioned := false
+	err := Start(cfg, AdminCallbacks{
+		GetMemberlistStatus: func() string { return "ok" },
+		GetNodeStatus: func() any {
+			return map[string]string{"state": "active"}
+		},
+		Decommission: func() error {
+			decommissioned = true
+			return nil
+		},
+		GetDecommissionProgress: func() any {
+			return map[string]any{"safe_to_terminate": decommissioned}
+		},
+	})
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	// Test GET /admin/node/status
+	resp, httpErr := http.Get("http://127.0.0.1:19092" + AdminNodeStatusPath)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	// Test POST /admin/node/decommission
+	resp, httpErr = http.Post("http://127.0.0.1:19092"+AdminNodeDecommissionPath, "", nil)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+	}
+	assert.True(t, decommissioned)
+
+	// Test GET /admin/node/decommission/progress
+	resp, httpErr = http.Get("http://127.0.0.1:19092" + AdminNodeDecommissionProgressPath)
+	if httpErr == nil {
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
 	}
 
 	err = Stop()

@@ -46,8 +46,11 @@ type Server struct {
 	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
 	gossipSeeds  []string                 // Seeds for cluster joining
 	logStore     LogStore
+	lifecycle    *NodeLifecycleManager
 	grpcWG       sync.WaitGroup
 	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
+	decommWG     sync.WaitGroup // tracks decommission monitor goroutine
+	decommOnce   sync.Once      // ensures monitor starts at most once
 	grpcErrChan  chan error
 	startupErrCh chan error // Channel to propagate async startup errors
 	grpcServer   *grpc.Server
@@ -55,6 +58,18 @@ type Server struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// NodeStatus represents the current status of this node for external management systems.
+type NodeStatus struct {
+	NodeID            string            `json:"node_id"`
+	State             string            `json:"state"`
+	IsDecommissioning bool              `json:"is_decommissioning"`
+	MemberCount       int               `json:"member_count"`
+	Address           string            `json:"address"`
+	ResourceGroup     string            `json:"resource_group"`
+	AZ                string            `json:"az"`
+	Tags              map[string]string `json:"tags"`
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
@@ -83,12 +98,18 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 			return nil, err
 		}
 	}
+	lifecycle, err := NewNodeLifecycleManagerWithPersistence(configuration.Woodpecker.Storage.RootPath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to init node lifecycle manager: %w", err)
+	}
 	s := &Server{
 		cfg:          configuration,
 		ctx:          ctx,
 		cancel:       cancel,
 		grpcErrChan:  make(chan error),
 		startupErrCh: make(chan error, 1), // Buffered channel to avoid blocking
+		lifecycle:    lifecycle,
 	}
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
@@ -177,6 +198,39 @@ func (s *Server) start() error {
 		return err
 	}
 	logger.Ctx(s.ctx).Info("log store started", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
+
+	// If the node was decommissioning before restart, re-apply write rejection and resume monitoring
+	if s.lifecycle.IsDecommissioning() {
+		s.logStore.RejectNewWrites()
+		s.startDecommissionMonitor()
+		// Broadcast decommission state once gossip is ready
+		go func() {
+			for {
+				s.serverNodeMu.RLock()
+				node := s.serverNode
+				s.serverNodeMu.RUnlock()
+				if node != nil {
+					currentMeta := node.GetMeta()
+					updatedTags := make(map[string]string)
+					for k, v := range currentMeta.Tags {
+						updatedTags[k] = v
+					}
+					updatedTags["status"] = "decommissioning"
+					node.UpdateMeta(map[string]interface{}{
+						"tags": updatedTags,
+					})
+					break
+				}
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+		}()
+		logger.Ctx(s.ctx).Info("node was decommissioning before restart, rejecting new writes and resuming monitor",
+			zap.String("nodeID", s.serverConfig.NodeID))
+	}
 	return nil
 }
 
@@ -237,7 +291,10 @@ func (s *Server) Stop() error {
 	// 6. Cancel server context
 	s.cancel()
 
-	// 7. Wait for gossip goroutine to finish
+	// 7. Wait for decommission monitor goroutine to finish
+	s.decommWG.Wait()
+
+	// 8. Wait for gossip goroutine to finish
 	s.gossipWG.Wait()
 
 	logger.Ctx(s.ctx).Info("server stopped", zap.String("nodeID", s.serverConfig.NodeID), zap.String("address", s.logStore.GetAddress()))
@@ -500,6 +557,100 @@ func (s *Server) GetMemberCount() int {
 		return 0
 	}
 	return node.GetMemberlist().NumMembers()
+}
+
+// GetNodeStatus returns the current node status for external management systems.
+func (s *Server) GetNodeStatus() NodeStatus {
+	return NodeStatus{
+		NodeID:            s.serverConfig.NodeID,
+		State:             string(s.lifecycle.GetState()),
+		IsDecommissioning: s.lifecycle.IsDecommissioning(),
+		MemberCount:       s.GetMemberCount(),
+		Address:           s.logStore.GetAddress(),
+		ResourceGroup:     s.serverConfig.ResourceGroup,
+		AZ:                s.serverConfig.AZ,
+		Tags:              s.serverConfig.Tags,
+	}
+}
+
+// Decommission marks the node for retirement. It stops accepting new writes
+// while allowing existing tasks to drain. A background monitor will automatically
+// mark the node as decommissioned once all segment processors have been cleaned up.
+func (s *Server) Decommission() error {
+	if err := s.lifecycle.StartDecommission(); err != nil {
+		return err
+	}
+	// Stop accepting new writes but allow reads and segment completions
+	s.logStore.RejectNewWrites()
+	// Broadcast decommission state via gossip so other nodes filter this node from quorum
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		currentMeta := node.GetMeta()
+		updatedTags := make(map[string]string)
+		for k, v := range currentMeta.Tags {
+			updatedTags[k] = v
+		}
+		updatedTags["status"] = "decommissioning"
+		node.UpdateMeta(map[string]interface{}{
+			"tags": updatedTags,
+		})
+	}
+	// Start background monitor to auto-mark decommissioned when drained
+	s.startDecommissionMonitor()
+	return nil
+}
+
+// GetDecommissionProgress returns the current decommission progress.
+func (s *Server) GetDecommissionProgress() DecommissionProgress {
+	remaining := s.logStore.GetActiveProcessorCount()
+	hasData := s.logStore.HasLocalSegmentData()
+	return s.lifecycle.GetProgress(remaining, hasData)
+}
+
+const decommissionCheckInterval = 5 * time.Second
+
+// startDecommissionMonitor starts a background goroutine (at most once) that
+// periodically checks whether all segment processors have drained. When the
+// count reaches zero, it automatically transitions the node to decommissioned.
+func (s *Server) startDecommissionMonitor() {
+	s.decommOnce.Do(func() {
+		s.decommWG.Add(1)
+		go s.decommissionMonitorLoop()
+	})
+}
+
+func (s *Server) decommissionMonitorLoop() {
+	defer s.decommWG.Done()
+
+	ticker := time.NewTicker(decommissionCheckInterval)
+	defer ticker.Stop()
+
+	logger.Ctx(s.ctx).Info("decommission monitor started",
+		zap.String("nodeID", s.serverConfig.NodeID),
+		zap.Duration("checkInterval", decommissionCheckInterval))
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			logger.Ctx(s.ctx).Info("decommission monitor stopped (context cancelled)")
+			return
+		case <-ticker.C:
+			hasData := s.logStore.HasLocalSegmentData()
+			logger.Ctx(s.ctx).Info("decommission monitor check",
+				zap.String("nodeID", s.serverConfig.NodeID),
+				zap.Int("remainingProcessors", s.logStore.GetActiveProcessorCount()),
+				zap.Bool("hasLocalSegmentData", hasData))
+
+			if !hasData {
+				s.lifecycle.MarkDecommissioned()
+				logger.Ctx(s.ctx).Info("node decommission complete — no local segment data remaining",
+					zap.String("nodeID", s.serverConfig.NodeID))
+				return
+			}
+		}
+	}
 }
 
 // GetServiceAdvertiseAddrPort use for test only
