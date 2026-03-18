@@ -187,7 +187,18 @@ func main() {
 	}
 
 	// Start HTTP server for metrics, health check, and pprof
-	if err := commonhttp.Start(cfg, srv.GetServerNodeMemberlistStatus); err != nil {
+	if err := commonhttp.Start(cfg, commonhttp.AdminCallbacks{
+		GetMemberlistStatus: srv.GetServerNodeMemberlistStatus,
+		GetNodeStatus: func() any {
+			return srv.GetNodeStatus()
+		},
+		Decommission: func() error {
+			return srv.Decommission()
+		},
+		GetDecommissionProgress: func() any {
+			return srv.GetDecommissionProgress()
+		},
+	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 	log.Printf("HTTP server started on port %s (metrics, health, pprof, admin)", commonhttp.DefaultListenPort)

@@ -51,6 +51,7 @@ func createTestServer(ctx context.Context, serverConfig *membership.ServerConfig
 		startupErrCh: make(chan error, 1),
 		serverConfig: serverConfig,
 		logStore:     NewLogStore(ctx, cfg, nil),
+		lifecycle:    NewNodeLifecycleManager(),
 	}
 }
 
@@ -396,7 +397,8 @@ func TestStop_LogStoreStoppedAfterGrpc(t *testing.T) {
 			AZ:                   "default",
 			Tags:                 map[string]string{"role": "test"},
 		},
-		logStore: mock,
+		logStore:  mock,
+		lifecycle: NewNodeLifecycleManager(),
 	}
 
 	require.NoError(t, s.Prepare())
@@ -484,6 +486,10 @@ func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath st
 	return f.cleanFn(ctx, bucketName, rootPath, logId, segmentId, flag)
 }
 
+func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
+func (f *fakeLogStore) RejectNewWrites()              {}
+func (f *fakeLogStore) HasLocalSegmentData() bool     { return false }
+
 func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg, _ := config.NewConfiguration()
@@ -497,7 +503,8 @@ func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 			AdvertiseAddr: "127.0.0.1",
 			AdvertisePort: 9999,
 		},
-		logStore: fake,
+		logStore:  fake,
+		lifecycle: NewNodeLifecycleManager(),
 	}
 }
 
@@ -1500,4 +1507,67 @@ func TestShutdownInterceptor_CancelsStreamContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handler did not return after context cancellation")
 	}
+}
+
+func TestServer_NodeLifecycle(t *testing.T) {
+	ctx := context.Background()
+	serverConfig := &membership.ServerConfig{
+		NodeID:        "test-lifecycle",
+		BindPort:      0,
+		ServicePort:   0,
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	}
+	srv := createTestServer(ctx, serverConfig)
+
+	// Server should have lifecycle manager
+	status := srv.GetNodeStatus()
+	assert.Equal(t, "active", status.State)
+	assert.False(t, status.IsDecommissioning)
+
+	// Decommission
+	err := srv.Decommission()
+	assert.NoError(t, err)
+
+	status = srv.GetNodeStatus()
+	assert.Equal(t, "decommissioning", status.State)
+	assert.True(t, status.IsDecommissioning)
+
+	// Get progress
+	progress := srv.GetDecommissionProgress()
+	assert.Equal(t, "decommissioning", progress.State)
+}
+
+func TestServer_DecommissionAutoComplete(t *testing.T) {
+	ctx := context.Background()
+	serverConfig := &membership.ServerConfig{
+		NodeID:        "test-auto-decomm",
+		BindPort:      0,
+		ServicePort:   0,
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	}
+	srv := createTestServer(ctx, serverConfig)
+
+	// LogStore has 0 processors (fresh), so decommission should auto-complete quickly
+	err := srv.Decommission()
+	require.NoError(t, err)
+	assert.Equal(t, "decommissioning", string(srv.lifecycle.GetState()))
+
+	// Wait for the monitor to detect 0 processors and mark decommissioned
+	assert.Eventually(t, func() bool {
+		return srv.lifecycle.GetState() == NodeStateDecommissioned
+	}, 15*time.Second, 500*time.Millisecond,
+		"node should auto-transition to decommissioned when processors reach 0")
+
+	// Progress should now show safe_to_terminate
+	progress := srv.GetDecommissionProgress()
+	assert.Equal(t, "decommissioned", progress.State)
+	assert.True(t, progress.SafeToTerminate)
+
+	// Cleanup: cancel context to stop monitor (already stopped, but for safety)
+	srv.cancel()
+	srv.decommWG.Wait()
 }

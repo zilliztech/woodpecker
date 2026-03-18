@@ -119,18 +119,22 @@ func (s *segmentCleanupManagerImpl) CleanupSegment(ctx context.Context, logName 
 		return err
 	}
 
-	// TODO  Currently only support embed standalone mode
-	// 2. Get segment info and find corresponding quorum info
-	// segMeta, err := s.metadata.GetSegmentMetadata(ctx, logName, segmentId)
-	// quorum, err := s.metadata.GetQuorumInfo(ctx, segMeta.QuorumId)
-	quorum := &proto.QuorumInfo{
-		Id: 0,
-		Es: 1,
-		Wq: 1,
-		Aq: 1,
-		Nodes: []string{
-			"127.0.0.1",
-		},
+	// 2. Get segment metadata and extract inline quorum info
+	segMeta, err := s.metadata.GetSegmentMetadata(ctx, logName, segmentId)
+	if err != nil {
+		logger.Ctx(ctx).Warn("Failed to get segment metadata for cleanup",
+			zap.String("logName", logName), zap.Int64("segmentId", segmentId), zap.Error(err))
+		return fmt.Errorf("failed to get segment metadata: %w", err)
+	}
+
+	// Quorum info is stored inline in SegmentMetadata.Quorum (the deprecated QuorumId field is not used)
+	quorum := segMeta.Metadata.GetQuorum()
+	if quorum == nil || len(quorum.Nodes) == 0 {
+		// Fallback for embed/standalone mode where quorum info is not stored
+		quorum = &proto.QuorumInfo{
+			Id: 0, Es: 1, Wq: 1, Aq: 1,
+			Nodes: []string{"127.0.0.1"},
+		}
 	}
 
 	logger.Ctx(ctx).Info("Quorum configuration loaded for segment cleanup",
