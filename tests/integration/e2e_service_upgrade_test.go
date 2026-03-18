@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -51,23 +50,24 @@ func TestServiceUpgrade_NodeStatus(t *testing.T) {
 			continue
 		}
 		status := srv.GetNodeStatus()
-		assert.Equal(t, "active", status.State, "node %d should be active", nodeIndex)
-		assert.False(t, status.IsDecommissioning, "node %d should not be decommissioning", nodeIndex)
-		assert.Equal(t, 3, status.MemberCount, "node %d should see 3 members", nodeIndex)
-		assert.NotEmpty(t, status.Address, "node %d should have an address", nodeIndex)
-		assert.Equal(t, "default", status.ResourceGroup)
-		assert.Equal(t, "default", status.AZ)
+		require.Equal(t, "active", status.State, "node %d should be active", nodeIndex)
+		require.False(t, status.IsDecommissioning, "node %d should not be decommissioning", nodeIndex)
+		require.Equal(t, 3, status.MemberCount, "node %d should see 3 members", nodeIndex)
+		require.NotEmpty(t, status.Address, "node %d should have an address", nodeIndex)
+		require.Equal(t, "default", status.ResourceGroup)
+		require.Equal(t, "default", status.AZ)
 		t.Logf("Node %d status: %+v", nodeIndex, status)
 	}
 }
 
 // TestServiceUpgrade_DecommissionRejectsWrites verifies that a decommissioned node
-// rejects new writes while the cluster remains functional.
+// rejects new writes while the cluster remains functional through other nodes.
 func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 	rootPath := t.TempDir()
 
-	// Start a 3-node cluster
-	cluster, _, _, _ := utils.StartMiniCluster(t, 3, rootPath)
+	// Start a 5-node cluster — enough nodes for quorum after 1 is decommissioned
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, 5, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
 	defer cluster.StopMultiNodeCluster(t)
 
 	// Pick node 0 to decommission
@@ -76,7 +76,7 @@ func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 
 	// Verify node is active
 	status := targetNode.GetNodeStatus()
-	assert.Equal(t, "active", status.State)
+	require.Equal(t, "active", status.State)
 
 	// Decommission the node
 	err := targetNode.Decommission()
@@ -84,8 +84,8 @@ func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 
 	// Verify state changed
 	status = targetNode.GetNodeStatus()
-	assert.Equal(t, "decommissioning", status.State)
-	assert.True(t, status.IsDecommissioning)
+	require.Equal(t, "decommissioning", status.State)
+	require.True(t, status.IsDecommissioning)
 
 	// Idempotent call should succeed
 	err = targetNode.Decommission()
@@ -93,7 +93,7 @@ func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 
 	// Check progress
 	progress := targetNode.GetDecommissionProgress()
-	assert.Equal(t, "decommissioning", progress.State)
+	require.Equal(t, "decommissioning", progress.State)
 	t.Logf("Decommission progress: %+v", progress)
 
 	// Other nodes should still be active
@@ -102,13 +102,39 @@ func TestServiceUpgrade_DecommissionRejectsWrites(t *testing.T) {
 			continue
 		}
 		otherStatus := srv.GetNodeStatus()
-		assert.Equal(t, "active", otherStatus.State, "node %d should still be active", nodeIndex)
+		require.Equal(t, "active", otherStatus.State, "node %d should still be active", nodeIndex)
 	}
 
-	// Note: We don't test writes-through-cluster here because the current client-side
-	// quorum selection does not automatically skip decommissioned nodes. If the decommissioned
-	// node is selected as part of the write quorum, the write will fail with ErrLogStoreShutdown.
-	// Client-side retry/failover for decommissioned nodes is a separate enhancement.
+	// Wait for gossip to propagate decommission tag
+	time.Sleep(2 * time.Second)
+
+	// Verify writes still succeed — quorum selection filters out decommissioned node
+	ctx := context.Background()
+	etcdCli, etcdErr := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, etcdErr)
+	defer etcdCli.Close()
+
+	wpClient, wpErr := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, wpErr)
+	defer func() { _ = wpClient.Close(ctx) }()
+
+	logName := fmt.Sprintf("test-decommission-writes-%d", time.Now().UnixMilli())
+	err = wpClient.CreateLog(ctx, logName)
+	require.NoError(t, err)
+
+	logHandle, err := wpClient.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	logWriter, err := logHandle.OpenLogWriter(ctx)
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		result := logWriter.Write(ctx, &log.WriteMessage{
+			Payload: []byte("test-data-after-decommission"),
+		})
+		require.NoError(t, result.Err, "write %d should succeed via remaining nodes", i)
+	}
+	t.Log("Successfully wrote 10 entries with a decommissioning node in the cluster")
 }
 
 // TestServiceUpgrade_DecommissionPersistenceAcrossRestart verifies that decommission
@@ -126,7 +152,7 @@ func TestServiceUpgrade_DecommissionPersistenceAcrossRestart(t *testing.T) {
 
 	err := targetNode.Decommission()
 	require.NoError(t, err)
-	assert.Equal(t, "decommissioning", targetNode.GetNodeStatus().State)
+	require.Equal(t, "decommissioning", targetNode.GetNodeStatus().State)
 
 	// Verify state file exists on disk
 	nodeDataDir := filepath.Join(rootPath, "node1")
@@ -153,9 +179,9 @@ func TestServiceUpgrade_DecommissionPersistenceAcrossRestart(t *testing.T) {
 
 	// Should still be decommissioning after restart
 	status := restartedNode.GetNodeStatus()
-	assert.Equal(t, "decommissioning", status.State,
+	require.Equal(t, "decommissioning", status.State,
 		"node should resume decommissioning state after restart")
-	assert.True(t, status.IsDecommissioning)
+	require.True(t, status.IsDecommissioning)
 	t.Logf("Restarted node status: %+v", status)
 }
 
@@ -177,22 +203,22 @@ func TestServiceUpgrade_DecommissionAutoCompleteWhenNoData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for the decommission monitor to detect no data and mark complete
-	assert.Eventually(t, func() bool {
+	require.Eventually(t, func() bool {
 		return targetNode.GetNodeStatus().State == string(server.NodeStateDecommissioned)
 	}, 15*time.Second, 500*time.Millisecond,
 		"node with no data should auto-transition to decommissioned")
 
-	// Progress should show safe to terminate
+	// Progress must show safe to terminate
 	progress := targetNode.GetDecommissionProgress()
-	assert.Equal(t, "decommissioned", progress.State)
-	assert.False(t, progress.HasLocalData)
-	assert.True(t, progress.SafeToTerminate)
+	require.Equal(t, "decommissioned", progress.State)
+	require.False(t, progress.HasLocalData)
+	require.True(t, progress.SafeToTerminate)
 	t.Logf("Auto-decommission complete: %+v", progress)
 
 	// Further decommission calls should return error
 	err = targetNode.Decommission()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "already decommissioned")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already decommissioned")
 }
 
 // TestServiceUpgrade_DecommissionWithActiveData verifies that a node with active
@@ -274,12 +300,12 @@ func TestServiceUpgrade_DecommissionWithActiveData(t *testing.T) {
 	time.Sleep(12 * time.Second)
 
 	status := targetNode.GetNodeStatus()
-	assert.Equal(t, "decommissioning", status.State,
+	require.Equal(t, "decommissioning", status.State,
 		"node with local data should remain decommissioning")
 
 	progress := targetNode.GetDecommissionProgress()
-	assert.True(t, progress.HasLocalData, "node should still have local data")
-	assert.False(t, progress.SafeToTerminate, "should not be safe to terminate with local data")
+	require.True(t, progress.HasLocalData, "node should still have local data")
+	require.False(t, progress.SafeToTerminate, "should not be safe to terminate with local data")
 	t.Logf("Node %d progress (with data): %+v", targetNodeIndex, progress)
 }
 
@@ -365,8 +391,8 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	// Decommission the target node
 	err = targetNode.Decommission()
 	require.NoError(t, err)
-	assert.Equal(t, "decommissioning", targetNode.GetNodeStatus().State)
-	assert.True(t, targetNode.GetDecommissionProgress().HasLocalData)
+	require.Equal(t, "decommissioning", targetNode.GetNodeStatus().State)
+	require.True(t, targetNode.GetDecommissionProgress().HasLocalData)
 
 	// Wait for gossip to propagate the decommission tag so new segments avoid this node
 	time.Sleep(2 * time.Second)
@@ -401,7 +427,7 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	// The decommission monitor will then detect no local data and mark decommissioned.
 	t.Log("Waiting for retention expiry + cleanup + decommission monitor...")
 
-	decommissioned := assert.Eventually(t, func() bool {
+	require.Eventually(t, func() bool {
 		state := targetNode.GetNodeStatus().State
 		progress := targetNode.GetDecommissionProgress()
 		t.Logf("  check: state=%s, hasLocalData=%v, remainingProcessors=%d, safeToTerminate=%v",
@@ -410,11 +436,10 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	}, 120*time.Second, 3*time.Second,
 		"node should auto-transition to decommissioned after data cleanup")
 
-	if decommissioned {
-		progress := targetNode.GetDecommissionProgress()
-		assert.Equal(t, "decommissioned", progress.State)
-		assert.False(t, progress.HasLocalData)
-		assert.True(t, progress.SafeToTerminate)
-		t.Logf("Full decommission lifecycle complete: %+v", progress)
-	}
+	// Verify final state
+	progress := targetNode.GetDecommissionProgress()
+	require.Equal(t, "decommissioned", progress.State)
+	require.False(t, progress.HasLocalData)
+	require.True(t, progress.SafeToTerminate)
+	t.Logf("Full decommission lifecycle complete: %+v", progress)
 }
