@@ -342,3 +342,24 @@ func TestNewMinioClient_CreatesTransportWhenNil(t *testing.T) {
 	assert.NotNil(t, client)
 	assert.NotNil(t, opts.Transport)
 }
+
+// TestNewMinioClient_WithStaticCreds_CreatesWrapTransport verifies that when static
+// credentials are provided (AK/SK mode), NewMinioClient still sets up WrapHTTPTransport.
+// This is critical because WrapHTTPTransport handles header transformations like
+// If-None-Match → x-oss-forbid-overwrite for conditional writes.
+func TestNewMinioClient_WithStaticCreds_CreatesWrapTransport(t *testing.T) {
+	creds := minioCred.NewStaticV4("AKID", "SECRET", "")
+	opts := &minio.Options{
+		Creds:  creds,
+		Region: "cn-hangzhou",
+	}
+	client, err := NewMinioClient("oss-cn-hangzhou.aliyuncs.com", opts)
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+
+	// Verify the transport is WrapHTTPTransport (not a plain http.Transport)
+	wrapTransport, ok := opts.Transport.(*WrapHTTPTransport)
+	assert.True(t, ok, "expected WrapHTTPTransport for static creds, got %T", opts.Transport)
+	assert.NotNil(t, wrapTransport)
+	assert.Equal(t, "cn-hangzhou", wrapTransport.region)
+}
