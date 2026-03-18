@@ -86,6 +86,20 @@ jobs:
           jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-failover.json
           exit $exit_code
 
+      - name: Run e2e service upgrade tests
+        run: |
+          set +e
+          gotestsum --format pkgname-and-test-fails \
+            --jsonfile test-output-upgrade.json \
+            -- -race -cover -failfast -timeout=25m \
+            -run "^TestServiceUpgrade" \
+            ./tests/integration/...
+          exit_code=$?
+          echo ""
+          echo "=== Test Results ==="
+          jq -r 'select(.Test != null and .Elapsed != null) | select(.Action == "pass" or .Action == "fail") | (if .Action == "fail" then "FAIL" else "PASS" end) + " " + .Test + " (" + (.Elapsed | tostring) + "s)"' test-output-upgrade.json
+          exit $exit_code
+
       - name: Upload test output on failure
         if: failure()
         uses: actions/upload-artifact@v4

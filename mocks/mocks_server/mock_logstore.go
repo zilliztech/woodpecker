@@ -724,6 +724,47 @@ func (_c *LogStore_UpdateLastAddConfirmed_Call) RunAndReturn(run func(context.Co
 	return _c
 }
 
+// HasLocalSegmentData provides a mock function with no fields
+func (_m *LogStore) HasLocalSegmentData() bool {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasLocalSegmentData")
+	}
+
+	var r0 bool
+	if rf, ok := ret.Get(0).(func() bool); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	return r0
+}
+
+// GetActiveProcessorCount provides a mock function with no fields
+func (_m *LogStore) GetActiveProcessorCount() int {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetActiveProcessorCount")
+	}
+
+	var r0 int
+	if rf, ok := ret.Get(0).(func() int); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+
+	return r0
+}
+
+// RejectNewWrites provides a mock function with no fields
+func (_m *LogStore) RejectNewWrites() {
+	_m.Called()
+}
+
 // NewLogStore creates a new instance of LogStore. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewLogStore(t interface {

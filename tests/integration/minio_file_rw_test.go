@@ -1110,8 +1110,8 @@ func TestMinioFileWriter_RecoveryDebug(t *testing.T) {
 	minioHdl, cfg := setupMinioFileWriterTest(t)
 	ctx := context.Background()
 
-	logId := int64(50)       // 修改为不同的 logId 避免冲突
-	segmentId := int64(5000) // 修改为不同的 segmentId 避免冲突
+	logId := int64(50)       // use a different logId to avoid conflicts
+	segmentId := int64(5000) // use a different segmentId to avoid conflicts
 	baseDir := fmt.Sprintf("test-recovery-debug-%d", time.Now().Unix())
 	defer cleanupMinioFileWriterObjects(t, minioHdl, baseDir)
 

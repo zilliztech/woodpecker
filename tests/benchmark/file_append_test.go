@@ -394,7 +394,7 @@ func TestFileFsyncPerformance(t *testing.T) {
 			panic(err)
 		}
 
-		// 开启 fsync
+		// enable fsync
 		err = file.Sync()
 		if err != nil {
 			panic(err)

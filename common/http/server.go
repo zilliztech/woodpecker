@@ -29,8 +29,17 @@ import (
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/http/health"
+	"github.com/zilliztech/woodpecker/common/http/management"
 	"github.com/zilliztech/woodpecker/common/logger"
 )
+
+// AdminCallbacks holds callbacks for admin HTTP endpoints.
+type AdminCallbacks struct {
+	GetMemberlistStatus     func() string
+	GetNodeStatus           func() any
+	Decommission            func() error
+	GetDecommissionProgress func() any
+}
 
 const (
 	DefaultListenPort = "9091"
@@ -102,7 +111,7 @@ func registerDefaults(cfg *config.Configuration) {
 }
 
 // Start initializes and starts the HTTP server
-func Start(cfg *config.Configuration, GetServerNodeMemberlistStatus func() string) error {
+func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	// Register default handlers
 	registerDefaults(cfg)
 
@@ -110,9 +119,29 @@ func Start(cfg *config.Configuration, GetServerNodeMemberlistStatus func() strin
 	Register(&Handler{
 		Path: AdminMemberlistPath,
 		HandlerFunc: func(writer http.ResponseWriter, request *http.Request) {
-			fmt.Fprint(writer, GetServerNodeMemberlistStatus())
+			fmt.Fprint(writer, callbacks.GetMemberlistStatus())
 		},
 	})
+
+	// Register node lifecycle admin handlers (if callbacks provided)
+	if callbacks.GetNodeStatus != nil {
+		Register(&Handler{
+			Path:        AdminNodeStatusPath,
+			HandlerFunc: management.NewNodeStatusHandler(callbacks.GetNodeStatus),
+		})
+	}
+	if callbacks.Decommission != nil {
+		Register(&Handler{
+			Path:        AdminNodeDecommissionPath,
+			HandlerFunc: management.NewNodeDecommissionHandler(callbacks.Decommission),
+		})
+	}
+	if callbacks.GetDecommissionProgress != nil {
+		Register(&Handler{
+			Path:        AdminNodeDecommissionProgressPath,
+			HandlerFunc: management.NewNodeDecommissionProgressHandler(callbacks.GetDecommissionProgress),
+		})
+	}
 
 	// Get listen port from environment or use default
 	port := os.Getenv(ListenPortEnvKey)

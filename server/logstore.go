@@ -20,6 +20,8 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +60,9 @@ type LogStore interface {
 	GetSegmentBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error)
 	UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error
 	CleanSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error
+	GetActiveProcessorCount() int
+	RejectNewWrites()
+	HasLocalSegmentData() bool
 }
 
 var _ LogStore = (*logStore)(nil)
@@ -73,9 +78,10 @@ type logStore struct {
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
 
 	// Background cleanup goroutine management
-	cleanupWg   sync.WaitGroup
-	cleanupDone chan struct{}
-	stopped     atomic.Bool
+	cleanupWg    sync.WaitGroup
+	cleanupDone  chan struct{}
+	stopped      atomic.Bool
+	rejectWrites atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
 }
 
 func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient storageclient.ObjectStorage) LogStore {
@@ -173,7 +179,7 @@ func (l *logStore) GetAddress() string {
 }
 
 func (l *logStore) AddEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
-	if l.stopped.Load() {
+	if l.stopped.Load() || l.rejectWrites.Load() {
 		return -1, werr.ErrLogStoreShutdown
 	}
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, LogStoreScopeName, "AddEntry")
@@ -501,6 +507,47 @@ func (l *logStore) UpdateLastAddConfirmed(ctx context.Context, bucketName string
 		metrics.WpLogStoreOperationLatency.WithLabelValues(metrics.NodeID, ns, logIdStr, "update_lac", "success").Observe(float64(time.Since(start).Milliseconds()))
 	}
 	return err
+}
+
+// GetActiveProcessorCount returns the total number of active segment processors.
+func (l *logStore) GetActiveProcessorCount() int {
+	l.spMu.RLock()
+	defer l.spMu.RUnlock()
+	return l.getTotalProcessorCountUnsafe()
+}
+
+// RejectNewWrites sets a flag to reject new write operations while allowing
+// reads and segment completions to continue (for graceful decommission).
+func (l *logStore) RejectNewWrites() {
+	l.rejectWrites.Store(true)
+}
+
+// HasLocalSegmentData scans the data directory for any remaining segment data files (data.log).
+// Returns true if at least one non-empty data.log file exists under the root path.
+// This is used during decommission to determine if all segment data has been cleaned up.
+func (l *logStore) HasLocalSegmentData() bool {
+	rootPath := l.cfg.Woodpecker.Storage.RootPath
+	if rootPath == "" {
+		return false
+	}
+	found := false
+	_ = filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if d.Name() == "data.log" {
+			info, statErr := d.Info()
+			if statErr == nil && info.Size() > 0 {
+				found = true
+				return filepath.SkipAll // stop walking, we found data
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 // closeSegmentProcessor closes a segment processor and updates metrics
