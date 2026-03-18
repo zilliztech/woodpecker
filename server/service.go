@@ -48,9 +48,9 @@ type Server struct {
 	logStore     LogStore
 	lifecycle    *NodeLifecycleManager
 	grpcWG       sync.WaitGroup
-	gossipWG     sync.WaitGroup        // tracks asyncStartAndJoinSeeds goroutine
-	decommWG     sync.WaitGroup        // tracks decommission monitor goroutine
-	decommOnce   sync.Once             // ensures monitor starts at most once
+	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
+	decommWG     sync.WaitGroup // tracks decommission monitor goroutine
+	decommOnce   sync.Once      // ensures monitor starts at most once
 	grpcErrChan  chan error
 	startupErrCh chan error // Channel to propagate async startup errors
 	grpcServer   *grpc.Server

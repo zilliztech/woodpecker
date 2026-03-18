@@ -487,8 +487,8 @@ func (f *fakeLogStore) CleanSegment(ctx context.Context, bucketName, rootPath st
 }
 
 func (f *fakeLogStore) GetActiveProcessorCount() int { return 0 }
-func (f *fakeLogStore) RejectNewWrites()              {}
-func (f *fakeLogStore) HasLocalSegmentData() bool     { return false }
+func (f *fakeLogStore) RejectNewWrites()             {}
+func (f *fakeLogStore) HasLocalSegmentData() bool    { return false }
 
 func createTestServerWithFakeLogStore(fake *fakeLogStore) *Server {
 	ctx, cancel := context.WithCancel(context.Background())

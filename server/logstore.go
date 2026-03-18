@@ -78,8 +78,8 @@ type logStore struct {
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
 
 	// Background cleanup goroutine management
-	cleanupWg   sync.WaitGroup
-	cleanupDone chan struct{}
+	cleanupWg    sync.WaitGroup
+	cleanupDone  chan struct{}
 	stopped      atomic.Bool
 	rejectWrites atomic.Bool // separate from stopped: only blocks new writes during decommission, not reads
 }

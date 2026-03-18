@@ -162,7 +162,7 @@ func TestNodeLifecycleManager_Persistence_ClearState(t *testing.T) {
 
 func TestNodeLifecycleManager_Persistence_CorruptFile(t *testing.T) {
 	dir := t.TempDir()
-	err := os.WriteFile(filepath.Join(dir, nodeStateFileName), []byte("not json"), 0644)
+	err := os.WriteFile(filepath.Join(dir, nodeStateFileName), []byte("not json"), 0o644)
 	require.NoError(t, err)
 
 	_, err = NewNodeLifecycleManagerWithPersistence(dir)
@@ -173,7 +173,7 @@ func TestNodeLifecycleManager_Persistence_CorruptFile(t *testing.T) {
 func TestNodeLifecycleManager_Persistence_UnknownState(t *testing.T) {
 	dir := t.TempDir()
 	data, _ := json.Marshal(nodeStatePersisted{State: "bogus", Timestamp: 1})
-	err := os.WriteFile(filepath.Join(dir, nodeStateFileName), data, 0644)
+	err := os.WriteFile(filepath.Join(dir, nodeStateFileName), data, 0o644)
 	require.NoError(t, err)
 
 	_, err = NewNodeLifecycleManagerWithPersistence(dir)

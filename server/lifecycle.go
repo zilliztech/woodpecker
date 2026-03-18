@@ -192,12 +192,12 @@ func (m *NodeLifecycleManager) persistStateLocked() error {
 		return err
 	}
 	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(m.stateFilePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.stateFilePath), 0o755); err != nil {
 		return fmt.Errorf("failed to create state file directory: %w", err)
 	}
 	// Write to temp file then rename for atomicity
 	tmpPath := m.stateFilePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 	if err := os.Rename(tmpPath, m.stateFilePath); err != nil {

@@ -1017,8 +1017,8 @@ func TestLogStore_HasLocalSegmentData_WithDataLog(t *testing.T) {
 
 	// Create a fake segment data file: <rootPath>/1/0/data.log
 	segDir := filepath.Join(dir, "1", "0")
-	require.NoError(t, os.MkdirAll(segDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("some data"), 0644))
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte("some data"), 0o644))
 
 	assert.True(t, ls.HasLocalSegmentData())
 }
@@ -1031,10 +1031,10 @@ func TestLogStore_HasLocalSegmentData_OnlyManagementFiles(t *testing.T) {
 	ls := NewLogStore(ctx, cfg, nil)
 
 	// Only node_state.json and write.fence — no actual segment data
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "node_state.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "node_state.json"), []byte("{}"), 0o644))
 	segDir := filepath.Join(dir, "1", "0")
-	require.NoError(t, os.MkdirAll(segDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(segDir, "write.fence"), []byte(""), 0644))
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "write.fence"), []byte(""), 0o644))
 
 	assert.False(t, ls.HasLocalSegmentData())
 }
@@ -1048,8 +1048,8 @@ func TestLogStore_HasLocalSegmentData_EmptyDataLog(t *testing.T) {
 
 	// data.log exists but is empty (0 bytes) — not counted as segment data
 	segDir := filepath.Join(dir, "1", "0")
-	require.NoError(t, os.MkdirAll(segDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte{}, 0644))
+	require.NoError(t, os.MkdirAll(segDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(segDir, "data.log"), []byte{}, 0o644))
 
 	assert.False(t, ls.HasLocalSegmentData())
 }

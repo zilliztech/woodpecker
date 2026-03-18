@@ -26,10 +26,24 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
 )
+
+// mockSegmentMetaWithQuorum sets up GetSegmentMetadata to return metadata with
+// the given quorum nodes. Used by tests that reach past GetSegmentCleanupStatus.
+func mockSegmentMetaWithQuorum(mockMeta *mocks_meta.MetadataProvider, logName string, segmentId int64, nodes []string) {
+	mockMeta.EXPECT().GetSegmentMetadata(mock.Anything, logName, segmentId).Return(&meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			Quorum: &proto.QuorumInfo{
+				Id: 1, Es: int32(len(nodes)), Wq: int32(len(nodes)), Aq: int32(len(nodes)),
+				Nodes: nodes,
+			},
+		},
+	}, nil).Maybe()
+}
 
 // === updateCleanupStatusWithResults tests ===
 
@@ -331,6 +345,9 @@ func TestCleanupSegment_NewCleanupTask_Success(t *testing.T) {
 	// No existing cleanup status
 	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, nil).Once()
 
+	// Segment metadata with quorum info
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
+
 	// Create cleanup status
 	mockMeta.EXPECT().CreateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(nil)
 
@@ -361,6 +378,7 @@ func TestCleanupSegment_NewCleanupTask_CreateStatusError(t *testing.T) {
 	mgr := NewSegmentCleanupManager("bucket", "root", mockMeta, mockPool).(*segmentCleanupManagerImpl)
 
 	mockMeta.EXPECT().GetSegmentCleanupStatus(mock.Anything, int64(1), int64(2)).Return(nil, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 	mockMeta.EXPECT().CreateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
 
 	err := mgr.CleanupSegment(context.Background(), "test-log", 1, 2)
@@ -380,6 +398,7 @@ func TestCleanupSegment_ExistingStatus_Completed(t *testing.T) {
 		SegmentId: 2,
 		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
 	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// Should delete segment metadata and cleanup status
 	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(nil)
@@ -400,6 +419,7 @@ func TestCleanupSegment_ExistingStatus_Completed_DeleteMetadataError_ReturnsErro
 		SegmentId: 2,
 		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
 	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// DeleteSegmentMetadata fails with non-NotFound error (e.g. etcd timeout)
 	// Should return error immediately without deleting cleanup status
@@ -422,6 +442,7 @@ func TestCleanupSegment_ExistingStatus_Completed_SegmentNotFoundIgnored(t *testi
 		SegmentId: 2,
 		State:     proto.SegmentCleanupState_CLEANUP_COMPLETED,
 	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// Delete returns ErrSegmentNotFound - should be ignored
 	mockMeta.EXPECT().DeleteSegmentMetadata(mock.Anything, "test-log", int64(1), int64(2), proto.SegmentState_Truncated).Return(werr.ErrSegmentNotFound)
@@ -449,6 +470,7 @@ func TestCleanupSegment_ExistingStatus_Failed_Resume(t *testing.T) {
 			"127.0.0.1": false,
 		},
 	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// handleExistingCleanupStatus updates status to IN_PROGRESS
 	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
@@ -490,6 +512,7 @@ func TestCleanupSegment_ExistingStatus_UpdateStatusError(t *testing.T) {
 			"127.0.0.1": false,
 		},
 	}, nil)
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// Update status fails
 	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.Anything).Return(werr.ErrInternalError)
@@ -514,6 +537,7 @@ func TestCleanupSegment_ExistingStatus_AllNodesAlreadyCompleted(t *testing.T) {
 			"127.0.0.1": true, // Already completed
 		},
 	}, nil).Once()
+	mockSegmentMetaWithQuorum(mockMeta, "test-log", int64(2), []string{"127.0.0.1"})
 
 	// handleExistingCleanupStatus updates to IN_PROGRESS
 	mockMeta.EXPECT().UpdateSegmentCleanupStatus(mock.Anything, mock.MatchedBy(func(s *proto.SegmentCleanupStatus) bool {
