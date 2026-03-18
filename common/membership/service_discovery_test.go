@@ -1690,6 +1690,170 @@ func TestRegexAnchoring(t *testing.T) {
 	})
 }
 
+// === RemoveServerIfMatch Tests ===
+
+func TestServiceDiscovery_RemoveServerIfMatch_EndpointChanged(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Simulate: old node joined, then new node rejoined with different endpoint
+	oldMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	newMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-2",
+		Endpoint:      "10.0.0.1:8081", // different endpoint
+		LastUpdate:    2000,
+	}
+
+	sd.UpdateServer("s1", newMeta) // new incarnation is already in discovery
+
+	// Stale leave event arrives with old metadata — should NOT remove
+	removed := sd.RemoveServerIfMatch("s1", oldMeta)
+	assert.False(t, removed, "should not remove when endpoint differs (new incarnation present)")
+
+	servers := sd.GetAllServers()
+	assert.Contains(t, servers, "s1")
+	assert.Equal(t, "10.0.0.1:8081", servers["s1"].Endpoint)
+	assert.Equal(t, "az-2", servers["s1"].Az)
+}
+
+func TestServiceDiscovery_RemoveServerIfMatch_TimestampNewer(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Same endpoint but newer LastUpdate in discovery
+	oldMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	newMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080", // same endpoint
+		LastUpdate:    2000,            // but newer timestamp
+	}
+
+	sd.UpdateServer("s1", newMeta)
+
+	removed := sd.RemoveServerIfMatch("s1", oldMeta)
+	assert.False(t, removed, "should not remove when current LastUpdate is newer")
+	assert.Contains(t, sd.GetAllServers(), "s1")
+}
+
+func TestServiceDiscovery_RemoveServerIfMatch_ExactMatch(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	meta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	sd.UpdateServer("s1", meta)
+
+	// Normal leave: metadata matches exactly — should remove
+	removed := sd.RemoveServerIfMatch("s1", meta)
+	assert.True(t, removed)
+	assert.Empty(t, sd.GetAllServers())
+	assert.Empty(t, sd.GetResourceGroups())
+}
+
+func TestServiceDiscovery_RemoveServerIfMatch_AlreadyGone(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	leavingMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+
+	// Node not in discovery at all — should return true (already gone)
+	removed := sd.RemoveServerIfMatch("s1", leavingMeta)
+	assert.True(t, removed)
+}
+
+func TestServiceDiscovery_RemoveServerIfMatch_IndexIntegrity(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	// Two nodes: s1 (az-1) and s2 (az-2), both in rg1
+	s1Meta := &proto.NodeMeta{NodeId: "s1", ResourceGroup: "rg1", Az: "az-1", Endpoint: "10.0.0.1:8080", LastUpdate: 1000}
+	s2OldMeta := &proto.NodeMeta{NodeId: "s2", ResourceGroup: "rg1", Az: "az-2", Endpoint: "10.0.0.1:8081", LastUpdate: 1000}
+	s2NewMeta := &proto.NodeMeta{NodeId: "s2", ResourceGroup: "rg1", Az: "az-3", Endpoint: "10.0.0.1:8082", LastUpdate: 2000}
+
+	sd.UpdateServer("s1", s1Meta)
+	sd.UpdateServer("s2", s2NewMeta) // s2 has already rejoined with new AZ
+
+	// Stale leave for s2 with old metadata — should be rejected
+	removed := sd.RemoveServerIfMatch("s2", s2OldMeta)
+	assert.False(t, removed)
+
+	// Verify s1 is unaffected
+	servers := sd.GetAllServers()
+	assert.Len(t, servers, 2)
+	assert.Equal(t, "az-1", servers["s1"].Az)
+	assert.Equal(t, "az-3", servers["s2"].Az)
+
+	// Verify AZ distribution is intact
+	dist := sd.GetAZDistribution("rg1")
+	assert.Equal(t, 1, dist["az-1"])
+	assert.Equal(t, 1, dist["az-3"])
+	assert.Equal(t, 0, dist["az-2"]) // old AZ should not be present
+}
+
+func TestServiceDiscovery_RemoveServerIfMatch_ConcurrentSafety(t *testing.T) {
+	sd := NewServiceDiscovery()
+
+	meta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	sd.UpdateServer("s1", meta)
+
+	var wg sync.WaitGroup
+	// Simulate concurrent stale leaves and rejoins
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func(ts int64) {
+			defer wg.Done()
+			newMeta := &proto.NodeMeta{
+				NodeId:        "s1",
+				ResourceGroup: "rg1",
+				Az:            "az-1",
+				Endpoint:      fmt.Sprintf("10.0.0.1:%d", 8080+ts),
+				LastUpdate:    ts,
+			}
+			sd.UpdateServer("s1", newMeta)
+		}(int64(i))
+		go func(ts int64) {
+			defer wg.Done()
+			staleMeta := &proto.NodeMeta{
+				NodeId:     "s1",
+				Endpoint:   fmt.Sprintf("10.0.0.1:%d", 8080+ts-1),
+				LastUpdate: ts - 1,
+			}
+			sd.RemoveServerIfMatch("s1", staleMeta)
+		}(int64(i))
+	}
+	wg.Wait()
+
+	// Should not panic — data integrity maintained
+}
+
 func TestCompareHardVsSoftMode(t *testing.T) {
 	t.Run("HARD vs SOFT mode comparison", func(t *testing.T) {
 		sd := NewServiceDiscovery()

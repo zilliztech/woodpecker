@@ -91,6 +91,29 @@ func (sd *ServiceDiscovery) RemoveServer(nodeID string) {
 	}
 }
 
+// RemoveServerIfMatch removes a server only if its current metadata matches the leaving node's metadata.
+// This prevents stale leave events from removing a node that has already rejoined with a new incarnation.
+// Returns true if the server was removed (or was already absent), false if a newer incarnation exists.
+func (sd *ServiceDiscovery) RemoveServerIfMatch(nodeID string, leavingMeta *proto.NodeMeta) bool {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
+	currentMeta, exists := sd.Nodes[nodeID]
+	if !exists {
+		return true // Already removed
+	}
+
+	// If the current node has a different endpoint or a newer timestamp,
+	// a new incarnation has joined — do not remove it.
+	if currentMeta.Endpoint != leavingMeta.Endpoint || currentMeta.LastUpdate > leavingMeta.LastUpdate {
+		return false
+	}
+
+	delete(sd.Nodes, nodeID)
+	sd.removeFromIndexes(nodeID, currentMeta)
+	return true
+}
+
 // addToIndexes adds node to all indexes
 func (sd *ServiceDiscovery) addToIndexes(nodeID string, meta *proto.NodeMeta) {
 	az := meta.Az

@@ -326,6 +326,145 @@ func TestEventDelegate_NotifyUpdate_NoMeta(t *testing.T) {
 	})
 }
 
+// === NotifyLeave stale event guard Tests ===
+
+func TestEventDelegate_NotifyLeave_StaleLeaveIgnored(t *testing.T) {
+	sd := NewServiceDiscovery()
+	ed := NewEventDelegate(sd, RoleClient, "localhost:9000")
+
+	// Step 1: Old node joins
+	oldMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg-1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	oldMetaData, _ := pb.Marshal(oldMeta)
+	ed.NotifyJoin(&memberlist.Node{Name: "s1", Meta: oldMetaData})
+	assert.Len(t, sd.GetAllServers(), 1)
+
+	// Step 2: New incarnation joins (simulates rejoin with different endpoint)
+	newMeta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg-1",
+		Az:            "az-2",
+		Endpoint:      "10.0.0.1:8081",
+		LastUpdate:    2000,
+	}
+	newMetaData, _ := pb.Marshal(newMeta)
+	ed.NotifyJoin(&memberlist.Node{Name: "s1", Meta: newMetaData})
+	assert.Len(t, sd.GetAllServers(), 1)
+	assert.Equal(t, "az-2", sd.GetAllServers()["s1"].Az)
+
+	// Step 3: Stale NotifyLeave arrives with OLD metadata
+	ed.NotifyLeave(&memberlist.Node{Name: "s1", Meta: oldMetaData})
+
+	// New incarnation should still be present
+	servers := sd.GetAllServers()
+	assert.Len(t, servers, 1, "stale leave should not remove the new incarnation")
+	assert.Equal(t, "10.0.0.1:8081", servers["s1"].Endpoint)
+	assert.Equal(t, "az-2", servers["s1"].Az)
+}
+
+func TestEventDelegate_NotifyLeave_NormalLeaveRemoves(t *testing.T) {
+	sd := NewServiceDiscovery()
+	ed := NewEventDelegate(sd, RoleServer, "localhost:9000")
+
+	meta := &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg-1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+		LastUpdate:    1000,
+	}
+	metaData, _ := pb.Marshal(meta)
+	ed.NotifyJoin(&memberlist.Node{Name: "s1", Meta: metaData})
+	assert.Len(t, sd.GetAllServers(), 1)
+
+	// Normal leave with matching metadata — should remove
+	ed.NotifyLeave(&memberlist.Node{Name: "s1", Meta: metaData})
+	assert.Empty(t, sd.GetAllServers())
+}
+
+func TestEventDelegate_NotifyLeave_NoMetaFallback(t *testing.T) {
+	sd := NewServiceDiscovery()
+	ed := NewEventDelegate(sd, RoleClient, "localhost:9000")
+
+	// Add server directly
+	sd.UpdateServer("s1", &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg-1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+	})
+	assert.Len(t, sd.GetAllServers(), 1)
+
+	// Leave with no metadata (e.g. client node) — should fall back to unconditional remove
+	ed.NotifyLeave(&memberlist.Node{Name: "s1", Meta: nil})
+	assert.Empty(t, sd.GetAllServers())
+}
+
+func TestEventDelegate_NotifyLeave_InvalidMetaFallback(t *testing.T) {
+	sd := NewServiceDiscovery()
+	ed := NewEventDelegate(sd, RoleClient, "localhost:9000")
+
+	sd.UpdateServer("s1", &proto.NodeMeta{
+		NodeId:        "s1",
+		ResourceGroup: "rg-1",
+		Az:            "az-1",
+		Endpoint:      "10.0.0.1:8080",
+	})
+	assert.Len(t, sd.GetAllServers(), 1)
+
+	// Leave with invalid protobuf — should fall back to unconditional remove
+	ed.NotifyLeave(&memberlist.Node{Name: "s1", Meta: []byte("invalid protobuf")})
+	assert.Empty(t, sd.GetAllServers())
+}
+
+func TestEventDelegate_NotifyLeave_FullRejoinSequence(t *testing.T) {
+	sd := NewServiceDiscovery()
+	ed := NewEventDelegate(sd, RoleClient, "localhost:9000")
+
+	// Simulate the exact sequence that causes the bug:
+	// 1. s1 and s2 join
+	s1Meta := &proto.NodeMeta{NodeId: "s1", ResourceGroup: "rg-1", Az: "az-1", Endpoint: "10.0.0.1:8080", LastUpdate: 1000}
+	s2OldMeta := &proto.NodeMeta{NodeId: "s2", ResourceGroup: "rg-1", Az: "az-2", Endpoint: "10.0.0.1:8081", LastUpdate: 1000}
+	s1Data, _ := pb.Marshal(s1Meta)
+	s2OldData, _ := pb.Marshal(s2OldMeta)
+
+	ed.NotifyJoin(&memberlist.Node{Name: "s1", Meta: s1Data})
+	ed.NotifyJoin(&memberlist.Node{Name: "s2", Meta: s2OldData})
+	assert.Len(t, sd.GetAllServers(), 2)
+
+	// 2. s2 leaves normally
+	ed.NotifyLeave(&memberlist.Node{Name: "s2", Meta: s2OldData})
+	assert.Len(t, sd.GetAllServers(), 1)
+	assert.NotContains(t, sd.GetAllServers(), "s2")
+
+	// 3. s2 rejoins with new AZ and endpoint
+	s2NewMeta := &proto.NodeMeta{NodeId: "s2", ResourceGroup: "rg-1", Az: "az-3", Endpoint: "10.0.0.1:8082", LastUpdate: 2000}
+	s2NewData, _ := pb.Marshal(s2NewMeta)
+	ed.NotifyJoin(&memberlist.Node{Name: "s2", Meta: s2NewData})
+	assert.Len(t, sd.GetAllServers(), 2)
+	assert.Equal(t, "az-3", sd.GetAllServers()["s2"].Az)
+
+	// 4. Stale leave for OLD s2 arrives (the suspect→dead timeout from memberlist)
+	ed.NotifyLeave(&memberlist.Node{Name: "s2", Meta: s2OldData})
+
+	// Both servers should still be present
+	servers := sd.GetAllServers()
+	assert.Len(t, servers, 2, "stale leave must not remove the rejoined node")
+	assert.Equal(t, "az-1", servers["s1"].Az)
+	assert.Equal(t, "az-3", servers["s2"].Az)
+	assert.Equal(t, "10.0.0.1:8082", servers["s2"].Endpoint)
+
+	// Verify indexes are consistent
+	dist := sd.GetAZDistribution("rg-1")
+	assert.Equal(t, 1, dist["az-1"])
+	assert.Equal(t, 1, dist["az-3"])
+}
+
 // === NodeRole Tests ===
 
 func TestNodeRole(t *testing.T) {

@@ -536,6 +536,41 @@ func TestSequentialExecutor_FullBufferContextCancel(t *testing.T) {
 	workerBlocked.Done()
 }
 
+func TestSequentialExecutor_DoubleStart(t *testing.T) {
+	executor := NewSequentialExecutor(10)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Second Start should be a no-op
+	assert.NotPanics(t, func() {
+		executor.Start(context.TODO())
+	})
+}
+
+type PanicMockOperation struct{}
+
+func (p *PanicMockOperation) Execute()           { panic("test panic in executor") }
+func (p *PanicMockOperation) Identifier() string { return "panic-op" }
+
+func TestSequentialExecutor_PanicRecovery(t *testing.T) {
+	executor := NewSequentialExecutor(10)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Submit an operation that panics
+	success := executor.Submit(context.TODO(), &PanicMockOperation{})
+	assert.True(t, success)
+
+	// Submit a normal operation after to verify executor still works
+	normalOp := createMockOperation(0)
+	success = executor.Submit(context.TODO(), normalOp)
+	assert.True(t, success)
+
+	// Give time for execution
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, normalOp.IsExecuted(), "executor should recover from panic and continue")
+}
+
 func TestSequentialExecutor_FullBufferStopUnblocks(t *testing.T) {
 	bufferSize := 2
 	executor := NewSequentialExecutor(bufferSize)
