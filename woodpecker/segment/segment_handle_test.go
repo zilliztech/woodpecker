@@ -5955,3 +5955,198 @@ func TestForceCompleteAndClose_NilCompletionMgr(t *testing.T) {
 	err := sh.ForceCompleteAndClose(context.Background())
 	assert.NoError(t, err) // Returns nil when completionMgr is nil
 }
+
+// TestAppendAsync_FencedAfterPreCheck_DetectedUnderLock verifies the double-check
+// fenced path under lock (L245-L248): fenced state is set after the pre-lock check
+// passes but before the under-lock check runs.
+func TestAppendAsync_FencedAfterPreCheck_DetectedUnderLock(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		impl.Lock()
+		close(ready)
+		// Wait for AppendAsync to pass the pre-lock check and block on Lock()
+		time.Sleep(50 * time.Millisecond)
+		// Set fenced AFTER AppendAsync passed the pre-lock check
+		impl.fencedState.Store(true)
+		impl.Unlock()
+	}()
+	<-ready
+	time.Sleep(10 * time.Millisecond) // Let goroutine settle past Lock()
+
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentFenced.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+// TestAppendAsync_RollingAfterPreCheck_DetectedUnderLock verifies the under-lock
+// rolling check (L252-L255): rolling state is set after the pre-lock check passes
+// but before the under-lock check runs.
+func TestAppendAsync_RollingAfterPreCheck_DetectedUnderLock(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"127.0.0.1"}},
+		},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	impl := sh.(*segmentHandleImpl)
+
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		impl.Lock()
+		close(ready)
+		// Wait for AppendAsync to pass the pre-lock check and block on Lock()
+		time.Sleep(50 * time.Millisecond)
+		// Set rolling AFTER AppendAsync passed the pre-lock check
+		impl.rollingState.Store(true)
+		impl.Unlock()
+	}()
+	<-ready
+	time.Sleep(10 * time.Millisecond) // Let goroutine settle past Lock()
+
+	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
+		assert.Error(t, err)
+		assert.True(t, werr.ErrSegmentHandleSegmentRolling.Is(err))
+		close(done)
+	})
+	<-done
+}
+
+// TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue tests the scenario where
+// HandleAppendRequestFailure is called for an entryId that's no longer in the queue.
+// This simulates a 3-node quorum (Es=3, Wq=3, Aq=2): 2 nodes succeed and the op is
+// removed via SendAppendSuccessCallbacks, then the 3rd node reports failure — the op
+// is already gone so HandleAppendRequestFailure should return early without panic.
+func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 3},
+			},
+		},
+	}
+
+	// 3-node quorum: Es=3, Wq=3, Aq=2
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1,
+			Quorum: &proto.QuorumInfo{
+				Id: 1, Aq: 2, Es: 3, Wq: 3,
+				Nodes: []string{"node1:8080", "node2:8080", "node3:8080"},
+			},
+		},
+		Revision: 1,
+	}
+
+	testQueue := list.New()
+	sh := NewSegmentHandleWithAppendOpsQueueWithWritable(
+		context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, testQueue, true)
+	impl := sh.(*segmentHandleImpl)
+
+	// Simulate: an AppendOp for entryId=0 was added and already completed by 2 nodes
+	callbackCount := 0
+	callback := func(segmentId int64, entryId int64, err error) {
+		callbackCount++
+	}
+	appendOp := NewAppendOp("bucket", "root", 1, 1, 0, []byte("data"), callback,
+		mockClientPool, sh, segmentMeta.Metadata.Quorum)
+
+	// Mark the op as completed (2 ack quorum nodes succeeded)
+	appendOp.completed.Store(true)
+	testQueue.PushBack(appendOp)
+
+	// SendAppendSuccessCallbacks removes the op from queue and triggers the callback once
+	impl.lastAddConfirmed.Store(-1)
+	sh.SendAppendSuccessCallbacks(context.Background(), 0)
+
+	// Verify op was removed from queue and callback was called exactly once
+	assert.Equal(t, 0, testQueue.Len(), "op should have been removed by SendAppendSuccessCallbacks")
+	assert.Equal(t, 1, callbackCount, "callback should have been called once by SendAppendSuccessCallbacks")
+
+	// Now the 3rd node reports failure — the op is no longer in the queue
+	// This should hit the "element == nil" early return path (L381-L384)
+	sh.HandleAppendRequestFailure(context.Background(), 0, errors.New("node3 timeout"), 2, "node3:8080")
+
+	// If we reach here without panic, the early return path worked correctly
+	assert.Equal(t, 0, testQueue.Len(), "queue should still be empty")
+	assert.Equal(t, 1, callbackCount, "callback should NOT have been called again by HandleAppendRequestFailure")
+}
+
+// TestFenceSegmentQuorum_CtxTimeout tests that fenceSegmentQuorum returns ctx.Err()
+// when the context times out before all quorum nodes respond.
+// This covers the case <-ctx.Done() branch (L1205-L1206).
+func TestFenceSegmentQuorum_CtxTimeout(t *testing.T) {
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentAppend: config.SegmentAppendConfig{QueueSize: 10, MaxRetries: 2},
+			},
+		},
+	}
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	// All nodes return a mock client that blocks on FenceSegment until ctx is cancelled
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).Return(mockClient, nil).Maybe()
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+			// Block until context is cancelled, simulating a slow/unresponsive node
+			<-ctx.Done()
+			return -1, ctx.Err()
+		}).Maybe()
+
+	segmentMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
+		Revision: 1,
+	}
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	impl := sh.(*segmentHandleImpl)
+
+	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
+
+	// Use a short timeout so the ctx expires before any node responds
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	lastEntryId, err := impl.fenceSegmentQuorum(ctx, quorum)
+	assert.Error(t, err)
+	assert.Equal(t, int64(-1), lastEntryId)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}

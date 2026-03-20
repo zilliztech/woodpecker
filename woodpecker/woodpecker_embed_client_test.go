@@ -28,6 +28,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -1342,4 +1343,33 @@ func TestNewEmbedClient_SkipsConditionWriteForNonMinio(t *testing.T) {
 	c, err := NewEmbedClient(ctx, cfg, etcdCli, nil, true)
 	assert.Error(t, err)
 	assert.Nil(t, c)
+}
+
+// TestNewEmbedClientFromConfig_MinioObjectStorageError tests that NewEmbedClientFromConfig
+// fails when minio storage client creation fails.
+// This covers L298-L303 in woodpecker_embed_client.go.
+func TestNewEmbedClientFromConfig_MinioObjectStorageError(t *testing.T) {
+	ctx := context.Background()
+	tracer.ResetForTesting()
+
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Storage: config.StorageConfig{
+				Type: "minio", // IsStorageMinio() returns true
+			},
+		},
+		Minio: config.MinioConfig{
+			CloudProvider: "azure", // Azure path fails fast with invalid connection string
+			UseIAM:        false,
+		},
+		Trace: config.TraceConfig{Exporter: "noop"},
+		Etcd: config.EtcdConfig{
+			Endpoints: []string{"localhost:2379"},
+		},
+	}
+
+	c, err := NewEmbedClientFromConfig(ctx, cfg)
+	assert.Error(t, err)
+	assert.Nil(t, c)
+	assert.True(t, werr.ErrWoodpeckerClientConnectionFailed.Is(err))
 }

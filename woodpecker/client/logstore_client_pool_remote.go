@@ -55,6 +55,7 @@ func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClien
 func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
 	p.RLock()
 	if p.clientClosed.Load() {
+		p.RUnlock()
 		return nil, werr.ErrWoodpeckerClientClosed
 	}
 	client, ok := p.clients[target]

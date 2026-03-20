@@ -51,11 +51,12 @@ func TestNodeLifecycleManager_Decommission(t *testing.T) {
 func TestNodeLifecycleManager_DecommissionAlreadyDone(t *testing.T) {
 	m := NewNodeLifecycleManager()
 	m.StartDecommission()
-	m.MarkDecommissioned()
+	err := m.MarkDecommissioned()
+	assert.NoError(t, err)
 	assert.Equal(t, NodeStateDecommissioned, m.GetState())
 
 	// Cannot decommission an already decommissioned node
-	err := m.StartDecommission()
+	err = m.StartDecommission()
 	assert.Error(t, err)
 }
 
@@ -126,7 +127,8 @@ func TestNodeLifecycleManager_Persistence_DecommissionedSurvivesRestart(t *testi
 	m1, err := NewNodeLifecycleManagerWithPersistence(dir)
 	require.NoError(t, err)
 	m1.StartDecommission()
-	m1.MarkDecommissioned()
+	err = m1.MarkDecommissioned()
+	require.NoError(t, err)
 
 	// Simulate restart
 	m2, err := NewNodeLifecycleManagerWithPersistence(dir)
