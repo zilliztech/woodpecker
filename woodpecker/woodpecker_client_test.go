@@ -785,78 +785,84 @@ func TestWoodpeckerClient_Close_ManagedEtcdWithAllErrors(t *testing.T) {
 	assert.Error(t, closeErr)
 }
 
-// TestNewClient_Success tests that NewClient returns a valid client when all
-// dependencies (etcd, quorum discovery, metadata init) are available.
-// Embedded etcd is started by TestMain.
-func TestNewClient_Success(t *testing.T) {
-	ctx := context.Background()
-	etcdCli, err := etcdutil.GetEmbedEtcdClient()
-	require.NoError(t, err)
-	defer etcdCli.Close()
+// TestNewClient_WithEmbedEtcd starts an embedded etcd server and runs subtests
+// that require a real etcd client.
+func TestNewClient_WithEmbedEtcd(t *testing.T) {
+	dataDir := t.TempDir()
+	logPath := dataDir + "/etcd.log"
+	err := etcdutil.StartEtcdServerUnsafe(true, "", dataDir, logPath, "warn")
+	require.NoError(t, err, "failed to start embedded etcd")
+	defer etcdutil.ShutdownEtcdServerUnsafe()
+	// Wait for leader election to settle.
+	time.Sleep(2 * time.Second)
 
-	tracer.ResetForTesting()
+	t.Run("Success", func(t *testing.T) {
+		ctx := context.Background()
+		etcdCli, err := etcdutil.GetEmbedEtcdClient()
+		require.NoError(t, err)
+		defer etcdCli.Close()
 
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
-						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
-					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "soft",
-						Replicas:     3,
-						Strategy:     "random",
-					},
-				},
-			},
-		},
-		Trace: config.TraceConfig{Exporter: "noop"},
-	}
+		tracer.ResetForTesting()
 
-	c, err := NewClient(ctx, cfg, etcdCli, false)
-	assert.NoError(t, err)
-	assert.NotNil(t, c)
-	assert.NotNil(t, c.GetMetadataProvider())
-
-	err = c.Close(ctx)
-	assert.NoError(t, err)
-}
-
-// TestNewClient_TracerInitError_StillSucceeds tests that NewClient succeeds even
-// when tracer initialization fails — the error is logged but does not block client creation.
-// This covers the if initTraceErr != nil branch (L85-L87 in woodpecker_client.go).
-func TestNewClient_TracerInitError_StillSucceeds(t *testing.T) {
-	ctx := context.Background()
-	etcdCli, err := etcdutil.GetEmbedEtcdClient()
-	require.NoError(t, err)
-	defer etcdCli.Close()
-
-	tracer.ResetForTesting()
-
-	cfg := &config.Configuration{
-		Woodpecker: config.WoodpeckerConfig{
-			Client: config.ClientConfig{
-				Quorum: config.QuorumConfig{
-					BufferPools: []config.QuorumBufferPool{
-						{Name: "default-pool", Seeds: []string{"node1:8888"}},
-					},
-					SelectStrategy: config.QuorumSelectStrategy{
-						AffinityMode: "soft",
-						Replicas:     3,
-						Strategy:     "random",
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Client: config.ClientConfig{
+					Quorum: config.QuorumConfig{
+						BufferPools: []config.QuorumBufferPool{
+							{Name: "default-pool", Seeds: []string{"node1:8888"}},
+						},
+						SelectStrategy: config.QuorumSelectStrategy{
+							AffinityMode: "soft",
+							Replicas:     3,
+							Strategy:     "random",
+						},
 					},
 				},
 			},
-		},
-		Trace: config.TraceConfig{Exporter: ""}, // triggers "Empty Trace" error
-	}
+			Trace: config.TraceConfig{Exporter: "noop"},
+		}
 
-	c, err := NewClient(ctx, cfg, etcdCli, false)
-	assert.NoError(t, err)
-	assert.NotNil(t, c)
-	assert.NotNil(t, c.GetMetadataProvider())
+		c, err := NewClient(ctx, cfg, etcdCli, false)
+		require.NoError(t, err)
+		require.NotNil(t, c)
+		assert.NotNil(t, c.GetMetadataProvider())
 
-	err = c.Close(ctx)
-	assert.NoError(t, err)
+		err = c.Close(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("TracerInitError_StillSucceeds", func(t *testing.T) {
+		ctx := context.Background()
+		etcdCli, err := etcdutil.GetEmbedEtcdClient()
+		require.NoError(t, err)
+		defer etcdCli.Close()
+
+		tracer.ResetForTesting()
+
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Client: config.ClientConfig{
+					Quorum: config.QuorumConfig{
+						BufferPools: []config.QuorumBufferPool{
+							{Name: "default-pool", Seeds: []string{"node1:8888"}},
+						},
+						SelectStrategy: config.QuorumSelectStrategy{
+							AffinityMode: "soft",
+							Replicas:     3,
+							Strategy:     "random",
+						},
+					},
+				},
+			},
+			Trace: config.TraceConfig{Exporter: ""}, // triggers "Empty Trace" error
+		}
+
+		c, err := NewClient(ctx, cfg, etcdCli, false)
+		require.NoError(t, err)
+		require.NotNil(t, c)
+		assert.NotNil(t, c.GetMetadataProvider())
+
+		err = c.Close(ctx)
+		assert.NoError(t, err)
+	})
 }
