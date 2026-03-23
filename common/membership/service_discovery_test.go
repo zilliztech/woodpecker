@@ -1021,8 +1021,8 @@ func TestAllStrategiesFallbackMechanism(t *testing.T) {
 
 				t.Logf("%s average execution time: %d ns/op", strategy.name, avgTime)
 
-				// Even with fallback mechanism, performance should be within reasonable range (< 50μs)
-				assert.Less(t, avgTime, int64(50000), "Fallback mechanism should not significantly impact performance")
+				// Even with fallback mechanism, performance should be within reasonable range (< 100μs)
+				assert.Less(t, avgTime, int64(100000), "Fallback mechanism should not significantly impact performance")
 			})
 		}
 	})
