@@ -113,11 +113,12 @@ func (m *NodeLifecycleManager) StartDecommission() error {
 }
 
 // MarkDecommissioned transitions the node to the decommissioned state.
-func (m *NodeLifecycleManager) MarkDecommissioned() {
+// Returns an error if persisting the state fails.
+func (m *NodeLifecycleManager) MarkDecommissioned() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state = NodeStateDecommissioned
-	_ = m.persistStateLocked()
+	return m.persistStateLocked()
 }
 
 // ClearState resets the node to active and removes the persisted state file.

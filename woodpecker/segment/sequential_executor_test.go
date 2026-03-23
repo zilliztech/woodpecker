@@ -536,6 +536,62 @@ func TestSequentialExecutor_FullBufferContextCancel(t *testing.T) {
 	workerBlocked.Done()
 }
 
+func TestSequentialExecutor_DoubleStart(t *testing.T) {
+	executor := NewSequentialExecutor(10)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Second Start should be a no-op
+	assert.NotPanics(t, func() {
+		executor.Start(context.TODO())
+	})
+}
+
+type PanicMockOperation struct{}
+
+func (p *PanicMockOperation) Execute()           { panic("test panic in executor") }
+func (p *PanicMockOperation) Identifier() string { return "panic-op" }
+
+func TestSequentialExecutor_PanicRecovery(t *testing.T) {
+	executor := NewSequentialExecutor(10)
+	executor.Start(context.TODO())
+	defer executor.Stop(context.TODO())
+
+	// Submit an operation that panics
+	success := executor.Submit(context.TODO(), &PanicMockOperation{})
+	assert.True(t, success)
+
+	// Submit a normal operation after to verify executor still works
+	normalOp := createMockOperation(0)
+	success = executor.Submit(context.TODO(), normalOp)
+	assert.True(t, success)
+
+	// Give time for execution
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, normalOp.IsExecuted(), "executor should recover from panic and continue")
+}
+
+// TestSequentialExecutor_SubmitWhileDoneClosedButNotMarkedClosed tests the defensive
+// case <-se.done branch in Submit (L130-L133). This simulates the scenario where the
+// done channel is closed but the closed flag hasn't been observed yet by Submit.
+// We bypass Stop() and close done directly to create this state deterministically.
+func TestSequentialExecutor_SubmitReturnsFalseWhenDoneClosed(t *testing.T) {
+	// Buffer size 0: sends always block unless there's a receiver
+	executor := NewSequentialExecutor(0)
+	// Don't start the worker — no goroutine to receive from the channel
+
+	// Directly close the done channel (bypassing Stop), leaving closed=false
+	close(executor.done)
+
+	// Submit: closed is false → passes check → wg.Add(1) → enters select →
+	// can't send to unbuffered queue (no receiver) → <-se.done fires → returns false
+	mockOp := createMockOperation(0)
+	result := executor.Submit(context.Background(), mockOp)
+
+	assert.False(t, result, "Submit should return false when done channel is closed")
+	assert.False(t, mockOp.IsExecuted(), "operation should not be executed")
+}
+
 func TestSequentialExecutor_FullBufferStopUnblocks(t *testing.T) {
 	bufferSize := 2
 	executor := NewSequentialExecutor(bufferSize)

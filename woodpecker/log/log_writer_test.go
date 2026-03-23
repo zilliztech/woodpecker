@@ -885,6 +885,31 @@ func TestLogWriter_WriteAsync_AppendError(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
+func TestLogWriter_WriteAsync_SegmentNotWritable_TriggersInvalidation(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	sessionLock := meta.NewSessionLockForTest(nil)
+	w := createTestSessionWriter(t, mockLogHandle, nil, sessionLock)
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+
+	// ErrSegmentHandleSegmentClosed is a "not writable" error — triggers onWriterInvalidated
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, bytes []byte, callback func(int64, int64, error)) {
+		callback(-1, -1, werr.ErrSegmentHandleSegmentClosed)
+	}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{Payload: []byte("test"), Properties: map[string]string{"k": "v"}}
+	ch := w.WriteAsync(ctx, msg)
+	result := <-ch
+	assert.Error(t, result.Err)
+	assert.False(t, sessionLock.IsValid(), "Session lock should be invalidated on segment not writable error")
+}
+
 func TestLogWriter_Close_Success(t *testing.T) {
 	mockLogHandle := &testLogHandleMock{}
 	mockLogHandle.Test(t)
@@ -1229,6 +1254,39 @@ func TestInternalLogWriter_WriteAsync_AppendError(t *testing.T) {
 	ch := w.WriteAsync(ctx, msg)
 	result := <-ch
 	assert.Error(t, result.Err)
+}
+
+func TestInternalLogWriter_WriteAsync_SegmentNotWritable_TriggersInvalidation(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	invalidated := atomic.Bool{}
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		invalidated.Store(true)
+		w.isWriterValid.Store(false)
+	}
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+
+	// ErrSegmentHandleSegmentClosed is a "not writable" error — triggers onWriterInvalidated
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, bytes []byte, callback func(int64, int64, error)) {
+		callback(-1, -1, werr.ErrSegmentHandleSegmentClosed)
+	}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{
+		Payload:    []byte("test data"),
+		Properties: map[string]string{"k": "v"},
+	}
+	ch := w.WriteAsync(ctx, msg)
+	result := <-ch
+	assert.Error(t, result.Err)
+	assert.True(t, invalidated.Load(), "Writer should be invalidated on segment not writable error")
+	assert.False(t, w.isWriterValid.Load(), "Writer should be marked as invalid")
 }
 
 // === runAuditor tests ===

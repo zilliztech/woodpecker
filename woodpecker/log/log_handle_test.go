@@ -61,6 +61,13 @@ func createMockLogHandle(t *testing.T) (*logHandleImpl, *mocks_meta.MetadataProv
 		}, nil
 	}).(*logHandleImpl)
 
+	// Ensure background cleanup goroutine is stopped when the test finishes,
+	// preventing panics from mock calls after test completion.
+	t.Cleanup(func() {
+		logHandle.stopBackgroundCleanup()
+		logHandle.cancel()
+	})
+
 	return logHandle, mockMeta
 }
 
@@ -2171,6 +2178,76 @@ func TestLogHandle_CreateNewSegmentMeta_QuorumError(t *testing.T) {
 	ctx := context.Background()
 	_, err := logHandle.createNewSegmentMeta(ctx)
 	assert.Error(t, err)
+}
+
+// TestNewLogHandle_WithExistingSegments tests that NewLogHandle correctly computes LastSegmentId
+// from a non-empty segments map, covering the loop that finds the max SegNo.
+func TestNewLogHandle_WithExistingSegments(t *testing.T) {
+	mockMeta := mocks_meta.NewMetadataProvider(t)
+	cfg := &config.Configuration{
+		Woodpecker: config.WoodpeckerConfig{
+			Client: config.ClientConfig{
+				SegmentRollingPolicy: config.SegmentRollingPolicyConfig{
+					MaxInterval: config.NewDurationSecondsFromInt(10),
+					MaxSize:     64 * 1024 * 1024,
+					MaxBlocks:   1000,
+				},
+			},
+		},
+	}
+	cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
+
+	segments := map[int64]*meta.SegmentMeta{
+		0: {Metadata: &proto.SegmentMetadata{SegNo: 0, State: proto.SegmentState_Completed}, Revision: 1},
+		3: {Metadata: &proto.SegmentMetadata{SegNo: 3, State: proto.SegmentState_Completed}, Revision: 2},
+		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Sealed}, Revision: 1},
+	}
+
+	logHandle := NewLogHandle("test-log-existing", 2, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
+		return &proto.QuorumInfo{
+			Id:    -1,
+			Wq:    1,
+			Aq:    1,
+			Es:    1,
+			Nodes: []string{"127.0.0.1:59456"},
+		}, nil
+	}).(*logHandleImpl)
+	defer logHandle.Close(context.Background())
+
+	// LastSegmentId should be the max SegNo from the provided segments map
+	assert.Equal(t, int64(3), logHandle.LastSegmentId.Load())
+	assert.Equal(t, "test-log-existing", logHandle.GetName())
+	assert.Equal(t, int64(2), logHandle.GetId())
+}
+
+// TestLogHandle_BackgroundCleanupLoop_TickerTriggered tests that the background cleanup goroutine
+// actually fires via the ticker and cleans up idle segment handles.
+func TestLogHandle_BackgroundCleanupLoop_TickerTriggered(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping background cleanup ticker test in short mode (requires ~31s wait)")
+	}
+
+	logHandle, _ := createMockLogHandle(t)
+	defer logHandle.Close(context.Background())
+
+	// Create a mock segment handle with an old access time (2 minutes ago, exceeds 1-minute maxIdleTime)
+	mockSegment := mocks_segment_handle.NewSegmentHandle(t)
+	oldTimeMs := time.Now().Add(-2 * time.Minute).UnixMilli()
+	mockSegment.EXPECT().GetLastAccessTime().Return(oldTimeMs).Maybe()
+	mockSegment.EXPECT().ForceCompleteAndClose(mock.Anything).Return(nil).Maybe()
+
+	// Add idle segment to the logHandle (not the writable segment)
+	logHandle.Lock()
+	logHandle.SegmentHandles[99] = mockSegment
+	logHandle.Unlock()
+
+	// Wait for the ticker (30s interval) to fire and trigger cleanup
+	assert.Eventually(t, func() bool {
+		logHandle.RLock()
+		defer logHandle.RUnlock()
+		_, exists := logHandle.SegmentHandles[99]
+		return !exists
+	}, 35*time.Second, 1*time.Second, "Background cleanup ticker should have removed idle segment handle")
 }
 
 func TestLogHandle_CreateNewSegmentMeta_StoreError(t *testing.T) {

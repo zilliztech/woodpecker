@@ -1552,3 +1552,51 @@ func TestQuorumDiscovery_RequestNodesFromSeed_InsufficientNodes(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient nodes")
 }
+
+func TestQuorumDiscovery_CustomPlacement_FinalValidation_NodeCountMismatch(t *testing.T) {
+	// Covers the final validation in selectCustomPlacementQuorum where
+	// len(allSelectedNodes) != requiredNodes (es).
+	// This can happen when es is set higher than the number of custom placement rules
+	// (e.g. struct constructed directly, bypassing buildCustomFilters validation).
+	ctx := context.Background()
+
+	mockClient := mocks_logstore_client.NewLogStoreClient(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+
+	mockClientPool.EXPECT().GetLogStoreClient(ctx, "s1:8080").Return(mockClient, nil).Maybe()
+	// Each placement rule selects 1 unique node, so we get 2 nodes total
+	mockClient.EXPECT().SelectNodes(ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]*proto.NodeMeta{
+			{Endpoint: "node1:8080"},
+			{Endpoint: "node2:8080"},
+		}, nil).Maybe()
+
+	d := &quorumDiscovery{
+		cfg: &config.QuorumConfig{
+			BufferPools: []config.QuorumBufferPool{
+				{Name: "r1", Seeds: []string{"s1:8080"}},
+			},
+			SelectStrategy: config.QuorumSelectStrategy{
+				CustomPlacement: []config.CustomPlacement{
+					{Region: "r1", Az: "az-1", ResourceGroup: "rg-1"},
+					{Region: "r1", Az: "az-2", ResourceGroup: "rg-2"},
+				},
+			},
+		},
+		clientPool:   mockClientPool,
+		strategyType: proto.StrategyType_CUSTOM,
+		affinityMode: proto.AffinityMode_HARD,
+		filters: []*proto.NodeFilter{
+			{Limit: 1, Az: "az-1", ResourceGroup: "rg-1"},
+			{Limit: 1, Az: "az-2", ResourceGroup: "rg-2"},
+		},
+		es: 3, // requiredNodes=3, but only 2 placements → 2 nodes selected
+		wq: 2,
+		aq: 1,
+	}
+
+	_, err := d.selectCustomPlacementQuorum(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "active custom placement validation failed")
+	assert.Contains(t, err.Error(), "expected 3 nodes, got 2 nodes")
+}

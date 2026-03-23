@@ -296,10 +296,7 @@ func (s *segmentHandleImpl) SendAppendSuccessCallbacks(ctx context.Context, trig
 	}
 	newLac := int64(-1)
 	for e := s.appendOpsQueue.Front(); e != nil; e = e.Next() {
-		op, ok := e.Value.(*AppendOp)
-		if !ok {
-			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks op is not append op", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.String("op", fmt.Sprintf("%v", e.Value)))
-		}
+		op := e.Value.(*AppendOp)
 		if !op.completed.Load() {
 			logger.Ctx(ctx).Debug("SendAppendSuccessCallbacks not completed", zap.String("logName", s.logName), zap.Int64("logId", s.logId), zap.Int64("segId", s.segmentId), zap.Int64("entryId", op.entryId), zap.Int64("triggerId", triggerEntryId))
 			break

@@ -644,7 +644,12 @@ func (s *Server) decommissionMonitorLoop() {
 				zap.Bool("hasLocalSegmentData", hasData))
 
 			if !hasData {
-				s.lifecycle.MarkDecommissioned()
+				if err := s.lifecycle.MarkDecommissioned(); err != nil {
+					logger.Ctx(s.ctx).Warn("failed to persist decommissioned state, will retry",
+						zap.String("nodeID", s.serverConfig.NodeID),
+						zap.Error(err))
+					continue
+				}
 				logger.Ctx(s.ctx).Info("node decommission complete — no local segment data remaining",
 					zap.String("nodeID", s.serverConfig.NodeID))
 				return
