@@ -6054,6 +6054,9 @@ func TestAppendAsync_RollingAfterPreCheck_DetectedUnderLock(t *testing.T) {
 func TestHandleAppendRequestFailure_OpAlreadyRemovedFromQueue(t *testing.T) {
 	mockMetadata := mocks_meta.NewMetadataProvider(t)
 	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	// Allow background syncLACToQuorumAsync goroutines to call GetLogStoreClient after test completes
+	mockClientPool.EXPECT().GetLogStoreClient(mock.Anything, mock.Anything).
+		Return(nil, errors.New("test ending")).Maybe()
 	cfg := &config.Configuration{
 		Woodpecker: config.WoodpeckerConfig{
 			Client: config.ClientConfig{
