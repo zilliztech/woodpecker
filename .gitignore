@@ -28,3 +28,6 @@ go.work.sum
 
 # env file
 .env
+
+# operator bin
+deployments/operator/bin/*
