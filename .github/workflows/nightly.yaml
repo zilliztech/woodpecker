@@ -2,8 +2,12 @@ name: Nightly Integration Tests
 
 on:
   schedule:
-    # TODO: revert to "0 17 * * *" (01:00 Beijing Time) after verification
-    - cron: "15 6 * * *"
+    # 16:15 UTC = 00:15 Beijing Time (UTC+8)
+    - cron: "15 16 * * *"
+    # 18:15 UTC = 02:15 Beijing Time (UTC+8)
+    - cron: "15 18 * * *"
+    # 20:15 UTC = 04:15 Beijing Time (UTC+8)
+    - cron: "15 20 * * *"
   workflow_dispatch:
 
 jobs:
