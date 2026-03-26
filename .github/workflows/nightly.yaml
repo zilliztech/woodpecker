@@ -1,0 +1,33 @@
+name: Nightly Integration Tests
+
+on:
+  schedule:
+    # TODO: revert to "0 17 * * *" (01:00 Beijing Time) after verification
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  e2e-local:
+    name: E2E Local
+    uses: ./.github/workflows/integration-test-e2e-local.yaml
+    secrets: inherit
+
+  e2e-objectstorage:
+    name: E2E Object Storage
+    uses: ./.github/workflows/integration-test-e2e-objectstorage.yaml
+    secrets: inherit
+
+  e2e-service:
+    name: E2E Service
+    uses: ./.github/workflows/integration-test-e2e-service.yaml
+    secrets: inherit
+
+  component-test:
+    name: Component Integration Test
+    uses: ./.github/workflows/integration-test-components.yaml
+    secrets: inherit
+
+  chaos-test:
+    name: Chaos Test
+    uses: ./.github/workflows/integration-test-chaos.yaml
+    secrets: inherit

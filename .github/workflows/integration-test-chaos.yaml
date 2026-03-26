@@ -14,6 +14,7 @@ on:
       - "build/**"
       - "tests/docker/**"
       - ".github/workflows/integration-test-chaos.yaml"
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -89,7 +90,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Handle failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -98,7 +99,7 @@ jobs:
           gh pr edit $PR --remove-label "ci-passed" 2>/dev/null || true
 
       - name: Add ci-passed label
-        if: success()
+        if: success() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
