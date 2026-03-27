@@ -185,6 +185,8 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 				logger.Ctx(ctx).Debug("segment reached end of file, move to next segment", zap.String("logName", l.logName), zap.Int64("logId", l.logId), zap.String("readerName", l.readerName), zap.Int64("segmentId", segId), zap.Int64("entryId", entryId))
 				l.pendingReadSegmentId = segId + 1
 				l.pendingReadEntryId = 0
+				// Reset backoff on segment transition so the next segment search starts with fast polling
+				l.currentPollInterval = DefaultNoDataReadMinIntervalMs * time.Millisecond
 				continue
 			}
 

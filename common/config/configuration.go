@@ -763,9 +763,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
 			},
 			ProcessorCleanupPolicy: ProcessorCleanupPolicyConfig{
-				CleanupInterval: DurationSeconds{Duration: Duration{duration: 30 * time.Second}},  // 30s - scan frequently for aggressive cleanup
-				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min - aggressive idle cleanup for 100K scale
-				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
+				CleanupInterval: DurationSeconds{Duration: Duration{duration: 30 * time.Second}}, // 30s - scan frequently for aggressive cleanup
+				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 60 * time.Second}}, // 1 min - aggressive idle cleanup for 100K scale
+				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}}, // 15s
 			},
 		},
 		Storage: StorageConfig{

@@ -390,6 +390,8 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
+		// Simulate accumulated backoff from previous empty polls
+		currentPollInterval: 5 * time.Second,
 	}
 
 	// First call: GetNextSegmentId returns 2 (latest=1)
@@ -433,6 +435,9 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 	assert.NotNil(t, msg)
 	assert.Equal(t, int64(1), msg.Id.SegmentId)
 	assert.Equal(t, int64(0), msg.Id.EntryId)
+	// Verify backoff was reset on segment EOF transition
+	assert.Equal(t, DefaultNoDataReadMinIntervalMs*time.Millisecond, reader.currentPollInterval,
+		"poll interval should be reset to minimum after segment EOF transition")
 }
 
 func TestLogReader_UnmarshalAndCreateLogMessage(t *testing.T) {
