@@ -146,14 +146,13 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		// try get next read point
 		segHandle, segId, entryId, err := l.getNextSegHandleAndIDs(ctx)
 		if err != nil && werr.ErrSegmentNotFound.Is(err) {
-			// segment not found, wait and try again
+			// segment not found, wait and try again with fixed short interval
+			// (no exponential backoff — segment creation is a one-time event,
+			// aggressive backoff only reduces retry chances within the read timeout)
+			l.currentPollInterval = DefaultNoDataReadMinIntervalMs * time.Millisecond
 			if waitErr := l.waitWithContext(ctx); waitErr != nil {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, waitErr
-			}
-			l.currentPollInterval = time.Duration(float64(l.currentPollInterval) * NoDataReadBackoffRate)
-			if l.currentPollInterval > DefaultNoDataReadMaxIntervalMs*time.Millisecond {
-				l.currentPollInterval = DefaultNoDataReadMaxIntervalMs * time.Millisecond
 			}
 			continue
 		}
