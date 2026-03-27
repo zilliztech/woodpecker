@@ -559,7 +559,7 @@ func TestStagedFileWriter_RecoveryModeAutoDetection(t *testing.T) {
 
 	// Step 1: Create initial data using a writer
 	t.Run("CreateInitialData", func(t *testing.T) {
-		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false, nil)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 
@@ -588,7 +588,7 @@ func TestStagedFileWriter_RecoveryModeAutoDetection(t *testing.T) {
 	// Without auto-detection, this would truncate the file and cause data loss
 	t.Run("ReopenWithRecoveryModeFalse", func(t *testing.T) {
 		// Try to create writer with recoveryMode=false
-		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false, nil)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 		defer writer.Close(ctx)
@@ -624,7 +624,7 @@ func TestStagedFileWriter_RecoveryModeAutoDetection(t *testing.T) {
 		os.RemoveAll(segmentDir)
 
 		// Recreate with fresh data
-		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false)
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, false, nil)
 		require.NoError(t, err)
 
 		for i := 0; i < 5; i++ {
@@ -644,7 +644,7 @@ func TestStagedFileWriter_RecoveryModeAutoDetection(t *testing.T) {
 
 	// Step 4: Test opening with recoveryMode=true (should always work correctly)
 	t.Run("ReopenWithRecoveryModeTrue", func(t *testing.T) {
-		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		writer, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, nil)
 		require.NoError(t, err)
 		require.NotNil(t, writer)
 		defer writer.Close(ctx)

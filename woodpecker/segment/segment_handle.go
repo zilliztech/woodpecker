@@ -206,6 +206,10 @@ type segmentHandleImpl struct {
 	doingCompact atomic.Bool
 
 	lastAccessTime atomic.Int64
+
+	// LAC sync coalescing: buffer LAC updates and batch them within a time window
+	pendingLAC       atomic.Int64 // latest LAC value awaiting sync
+	lacSyncScheduled atomic.Bool  // CAS guard: true = AfterFunc timer pending
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -982,9 +986,22 @@ func (s *segmentHandleImpl) completeSegmentQuorum(ctx context.Context, quorumInf
 	return nil
 }
 
+// lacSyncCoalesceInterval is the time window for batching LAC updates.
+// Multiple LAC advances within this window are coalesced into a single gRPC round.
+const lacSyncCoalesceInterval = 50 * time.Millisecond
+
 func (s *segmentHandleImpl) syncLAC(ctx context.Context, lac int64) {
-	// Asynchronously sync LAC updates to all quorum nodes
-	go s.syncLACToQuorumAsync(ctx, lac)
+	// Store the latest LAC value (always monotonically increasing)
+	s.pendingLAC.Store(lac)
+
+	// CAS: only the first call in the window registers the timer
+	if s.lacSyncScheduled.CompareAndSwap(false, true) {
+		time.AfterFunc(lacSyncCoalesceInterval, func() {
+			s.lacSyncScheduled.Store(false)
+			coalescedLAC := s.pendingLAC.Load()
+			go s.syncLACToQuorumAsync(context.Background(), coalescedLAC)
+		})
+	}
 }
 
 // syncLACToQuorumAsync asynchronously syncs LAC to all quorum nodes

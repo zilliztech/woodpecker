@@ -32,10 +32,12 @@ import (
 )
 
 const (
-	ReaderScopeName            = "LogReader"
-	UpdateReaderInfoIntervalMs = 30000
-	NoDataReadWaitIntervalMs   = 200
-	DefaultBatchEntriesLimit   = 200
+	ReaderScopeName                = "LogReader"
+	UpdateReaderInfoIntervalMs     = 30000
+	DefaultNoDataReadMinIntervalMs = 200  // minimum poll interval
+	DefaultNoDataReadMaxIntervalMs = 5000 // maximum poll interval after backoff
+	NoDataReadBackoffRate          = 1.5  // backoff multiplier per empty poll
+	DefaultBatchEntriesLimit       = 200
 )
 
 //go:generate mockery --dir=./woodpecker/log --name=LogReader --structname=LogReader --output=mocks/mocks_woodpecker/mocks_log_handle --filename=mock_log_reader.go --with-expecter=true  --outpkg=mocks_log_handle
@@ -68,6 +70,7 @@ type logBatchReaderImpl struct {
 	batch                *proto.BatchReadResult
 	next                 int
 	lastRead             int64
+	currentPollInterval  time.Duration
 }
 
 func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle segment.SegmentHandle, from *LogMessageId, readerName string, cfg *config.Configuration) (LogReader, error) {
@@ -85,6 +88,7 @@ func NewLogBatchReader(ctx context.Context, logHandle LogHandle, segmentHandle s
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
+		currentPollInterval:  DefaultNoDataReadMinIntervalMs * time.Millisecond,
 	}, nil
 }
 
@@ -131,6 +135,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			l.pendingReadEntryId += 1
 			l.next += 1
 			l.lastRead = time.Now().UnixMilli() // Update last read timestamp
+			l.currentPollInterval = DefaultNoDataReadMinIntervalMs * time.Millisecond
 			metrics.WpClientReadEntriesTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
 			metrics.WpLogReaderBytesRead.WithLabelValues(l.metricsNamespace, l.logIdStr, l.readerName).Add(float64(len(readEntryData.Values)))
 			metrics.WpClientReadLatency.WithLabelValues(l.metricsNamespace, l.logIdStr).Observe(float64(time.Since(start).Milliseconds()))
@@ -145,6 +150,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 			if waitErr := l.waitWithContext(ctx); waitErr != nil {
 				metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 				return nil, waitErr
+			}
+			l.currentPollInterval = time.Duration(float64(l.currentPollInterval) * NoDataReadBackoffRate)
+			if l.currentPollInterval > DefaultNoDataReadMaxIntervalMs*time.Millisecond {
+				l.currentPollInterval = DefaultNoDataReadMaxIntervalMs * time.Millisecond
 			}
 			continue
 		}
@@ -187,6 +196,10 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 					metrics.WpLogReaderOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "read_next", "cancel").Observe(float64(time.Since(start).Milliseconds()))
 					return nil, waitErr
 				}
+				l.currentPollInterval = time.Duration(float64(l.currentPollInterval) * NoDataReadBackoffRate)
+				if l.currentPollInterval > DefaultNoDataReadMaxIntervalMs*time.Millisecond {
+					l.currentPollInterval = DefaultNoDataReadMaxIntervalMs * time.Millisecond
+				}
 				continue
 			}
 
@@ -216,6 +229,7 @@ func (l *logBatchReaderImpl) ReadNext(ctx context.Context) (*LogMessage, error) 
 		l.pendingReadEntryId = oneEntry.EntryId + 1
 		l.next += 1
 		l.lastRead = time.Now().UnixMilli() // Update last read timestamp
+		l.currentPollInterval = DefaultNoDataReadMinIntervalMs * time.Millisecond
 
 		// update metrics
 		metrics.WpClientReadEntriesTotal.WithLabelValues(l.metricsNamespace, l.logIdStr).Inc()
@@ -475,7 +489,7 @@ func (l *logBatchReaderImpl) unmarshalAndCreateLogMessage(ctx context.Context, d
 // waitWithContext is a helper function to handle backoff with context cancellation
 func (l *logBatchReaderImpl) waitWithContext(ctx context.Context) error {
 	select {
-	case <-time.After(NoDataReadWaitIntervalMs * time.Millisecond):
+	case <-time.After(l.currentPollInterval):
 		return nil
 	case <-ctx.Done():
 		logger.Ctx(ctx).Debug("wait with context done",

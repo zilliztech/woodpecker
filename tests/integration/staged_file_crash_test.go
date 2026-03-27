@@ -212,7 +212,7 @@ func TestStagedFileWriter_CrashRecovery_Empty(t *testing.T) {
 
 		// test recover the completed empty file
 		recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
-			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+			cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, nil)
 		require.NoError(t, err, "Recovery empty completed file failed for log=%d segment=%d (expected recovery to always succeed)", logId, segmentId)
 		require.NotNil(t, recoveryWriter)
 		firstEntryID := recoveryWriter.GetFirstEntryId(context.TODO())
@@ -735,7 +735,7 @@ func testCrashRecoveryAtPosition(t *testing.T, ctx context.Context, cfg *config.
 	// Step 3: Recovery and Finalization
 	t.Log("Step 3: Recovery - starting writer in recovery mode")
 	recoveryWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket,
-		cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+		cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, nil)
 	require.NoError(t, err,
 		"Recovery failed at truncate position %d for log=%d segment=%d (expected recovery to always succeed)",
 		truncatePosition, logId, segmentId)

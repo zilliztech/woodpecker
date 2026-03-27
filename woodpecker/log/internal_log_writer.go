@@ -61,6 +61,10 @@ type internalLogWriterImpl struct {
 	cleanupMutex      sync.Mutex
 	cleanupInProgress bool
 	closeOnce         sync.Once
+
+	// Track segments that have already been successfully compacted to avoid redundant gRPC calls.
+	// No mutex needed since this is only accessed from the single runAuditor goroutine.
+	compactedSegments map[int64]bool
 }
 
 func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.Configuration) LogWriter {
@@ -74,6 +78,7 @@ func NewInternalLogWriter(ctx context.Context, logHandle LogHandle, cfg *config.
 		metricsNamespace:   metrics.BuildMetricsNamespace(cfg.Minio.BucketName, cfg.Minio.RootPath),
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     segment.NewSegmentCleanupManager(cfg.Minio.BucketName, cfg.Minio.RootPath, logHandle.GetMetadataProvider(), logHandle.(*logHandleImpl).ClientPool),
+		compactedSegments:  make(map[int64]bool),
 	}
 	// Set sessionValid to true
 	w.isWriterValid.Store(true)
@@ -274,6 +279,14 @@ func (l *internalLogWriterImpl) runAuditor() {
 			for _, seg := range segmentMetaList {
 				stateBefore := seg.Metadata.State
 				if stateBefore == proto.SegmentState_Completed {
+					// Skip segments that were already successfully compacted in a previous cycle
+					if l.compactedSegments[seg.Metadata.SegNo] {
+						logger.Ctx(ctx).Debug("Skipping already-compacted segment",
+							zap.String("logName", l.logHandle.GetName()),
+							zap.Int64("logId", l.logHandle.GetId()),
+							zap.Int64("segmentId", seg.Metadata.SegNo))
+						continue
+					}
 					segmentsProcessed++
 					recoverySegmentHandle, getRecoverySegmentHandleErr := l.logHandle.GetRecoverableSegmentHandle(ctx, seg.Metadata.SegNo)
 					if getRecoverySegmentHandleErr != nil {
@@ -292,6 +305,7 @@ func (l *internalLogWriterImpl) runAuditor() {
 					// This is a best-effort attempt to track the operation type
 					if stateBefore == proto.SegmentState_Completed {
 						segmentsCompacted++
+						l.compactedSegments[seg.Metadata.SegNo] = true
 						logger.Ctx(ctx).Info("Successfully compacted segment",
 							zap.String("logName", l.logHandle.GetName()),
 							zap.Int64("logId", l.logHandle.GetId()),
@@ -299,6 +313,8 @@ func (l *internalLogWriterImpl) runAuditor() {
 					}
 				} else if stateBefore == proto.SegmentState_Truncated {
 					truncatedSegmentExists = append(truncatedSegmentExists, seg.Metadata.SegNo)
+					// Remove from compacted tracking to avoid memory leak for deleted segments
+					delete(l.compactedSegments, seg.Metadata.SegNo)
 				}
 			}
 

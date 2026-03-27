@@ -28,6 +28,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
@@ -67,7 +68,7 @@ type SegmentProcessor interface {
 	GetWriterSnapshotDetailed() *storage.WriterSnapshotDetailed
 }
 
-func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
+func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage, syncPool *conc.Pool[struct{}]) SegmentProcessor {
 	ctime := time.Now().UnixMilli()
 	logger.Ctx(ctx).Info("new segment processor created", zap.Int64("ctime", ctime), zap.Int64("logId", logId), zap.Int64("segId", segId))
 	s := &segmentProcessor{
@@ -77,6 +78,7 @@ func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBuc
 		logId:         logId,
 		segId:         segId,
 		storageClient: storageClient,
+		syncPool:      syncPool,
 		createTime:    ctime,
 	}
 	s.lastAccessTime.Store(ctime)
@@ -93,6 +95,7 @@ type segmentProcessor struct {
 	logId         int64
 	segId         int64
 	storageClient storageclient.ObjectStorage
+	syncPool      *conc.Pool[struct{}]
 
 	createTime     int64
 	lastAccessTime atomic.Int64
@@ -440,7 +443,8 @@ func (s *segmentProcessor) getOrCreateSegmentWriter(ctx context.Context, recover
 			s.segId,
 			s.storageClient,
 			s.cfg,
-			recoverMode)
+			recoverMode,
+			s.syncPool)
 		if getWriterErr != nil {
 			return nil, getWriterErr
 		}

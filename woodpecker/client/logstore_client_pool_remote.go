@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -55,6 +56,8 @@ type logStoreClientPool struct {
 	connections    map[string]*grpc.ClientConn
 	clients        map[string]LogStoreClient
 	clientClosed   atomic.Bool
+	lastUsed       map[string]time.Time // track last use time per connection
+	cleanupDone    chan struct{}        // signal to stop cleanup goroutine
 }
 
 func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClientPool {
@@ -63,8 +66,11 @@ func NewLogStoreClientPool(maxSendMsgSize int, maxRecvMsgSize int) LogStoreClien
 		maxRecvMsgSize: maxRecvMsgSize,
 		connections:    make(map[string]*grpc.ClientConn),
 		clients:        make(map[string]LogStoreClient),
+		lastUsed:       make(map[string]time.Time),
+		cleanupDone:    make(chan struct{}),
 	}
 	p.clientClosed.Store(false)
+	go p.idleCleanupLoop()
 	return p
 }
 
@@ -78,6 +84,10 @@ func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target strin
 	cnx := p.connections[target]
 	p.RUnlock()
 	if ok && !isConnectionBroken(cnx) {
+		// Update last-used timestamp
+		p.Lock()
+		p.lastUsed[target] = time.Now()
+		p.Unlock()
 		return client, nil
 	}
 
@@ -99,6 +109,7 @@ func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target strin
 		// Another goroutine may have raced us and already built a fresh client
 		// for the same target. Reuse it unless it is also broken.
 		if !isConnectionBroken(p.connections[target]) {
+			p.lastUsed[target] = time.Now()
 			return existing, nil
 		}
 		p.clearUnsafe(target)
@@ -119,6 +130,7 @@ func (p *logStoreClientPool) GetLogStoreClient(ctx context.Context, target strin
 		target: target,
 	}
 	p.clients[target] = client
+	p.lastUsed[target] = time.Now()
 	return client, nil
 }
 
@@ -190,6 +202,8 @@ func (p *logStoreClientPool) clearUnsafe(target string) {
 		_ = client.Close(context.TODO())
 		delete(p.clients, target)
 	}
+
+	delete(p.lastUsed, target)
 }
 
 func (p *logStoreClientPool) Close(ctx context.Context) error {
@@ -199,6 +213,9 @@ func (p *logStoreClientPool) Close(ctx context.Context) error {
 		// already closed
 		return nil
 	}
+
+	// Stop the cleanup goroutine before marking as closed
+	close(p.cleanupDone)
 	p.clientClosed.Store(true)
 
 	// Close all clients first
@@ -219,5 +236,50 @@ func (p *logStoreClientPool) Close(ctx context.Context) error {
 
 	p.connections = make(map[string]*grpc.ClientConn)
 	p.clients = make(map[string]LogStoreClient)
+	p.lastUsed = make(map[string]time.Time)
 	return nil
+}
+
+const (
+	idleCleanupInterval = 1 * time.Minute
+	maxIdleTime         = 5 * time.Minute
+)
+
+func (p *logStoreClientPool) idleCleanupLoop() {
+	ticker := time.NewTicker(idleCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			p.cleanIdleConnections()
+		case <-p.cleanupDone:
+			return
+		}
+	}
+}
+
+func (p *logStoreClientPool) cleanIdleConnections() {
+	p.Lock()
+	defer p.Unlock()
+
+	if p.clientClosed.Load() {
+		return
+	}
+
+	now := time.Now()
+	for target, lastUse := range p.lastUsed {
+		if now.Sub(lastUse) > maxIdleTime {
+			// Close idle connection
+			if cnx, ok := p.connections[target]; ok {
+				cnx.Close()
+				delete(p.connections, target)
+			}
+			if client, ok := p.clients[target]; ok {
+				client.Close(context.TODO())
+				delete(p.clients, target)
+			}
+			delete(p.lastUsed, target)
+		}
+	}
 }

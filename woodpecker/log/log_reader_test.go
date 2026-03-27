@@ -478,6 +478,7 @@ func TestLogReader_WaitWithContext(t *testing.T) {
 		readerName:           "test-reader",
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
+		currentPollInterval:  DefaultNoDataReadMinIntervalMs * time.Millisecond,
 	}
 
 	t.Run("ContextCancelledDuringWait", func(t *testing.T) {
@@ -498,8 +499,8 @@ func TestLogReader_WaitWithContext(t *testing.T) {
 		err := reader.waitWithContext(ctx)
 		elapsed := time.Since(start)
 		assert.NoError(t, err)
-		// Should wait at least NoDataReadWaitIntervalMs
-		assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(NoDataReadWaitIntervalMs-50))
+		// Should wait at least DefaultNoDataReadMinIntervalMs
+		assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(DefaultNoDataReadMinIntervalMs-50))
 	})
 }
 

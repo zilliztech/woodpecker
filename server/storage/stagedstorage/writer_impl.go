@@ -31,7 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
@@ -107,34 +106,33 @@ type StagedFileWriter struct {
 	recovered      atomic.Bool
 
 	// Async flush management
-	flushTaskChan                chan *blockFlushTask
+	syncPool                     *conc.Pool[struct{}]
+	syncScheduled                atomic.Bool
+	syncInterval                 time.Duration
 	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
-	lastSubmittedFlushingBlockID atomic.Int64
-	allUploadingTaskDone         atomic.Bool
 	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
 
 	// Close management
-	fileClose  chan struct{} // Close signal
 	closed     atomic.Bool
 	finalizeMu sync.Mutex
-	runCtx     context.Context
-	runCancel  context.CancelFunc
 }
 
 // NewStagedFileWriter creates a new staged file writer
-func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration) (*StagedFileWriter, error) {
-	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false)
+func NewStagedFileWriter(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, syncPool ...*conc.Pool[struct{}]) (*StagedFileWriter, error) {
+	var pool *conc.Pool[struct{}]
+	if len(syncPool) > 0 {
+		pool = syncPool[0]
+	}
+	return NewStagedFileWriterWithMode(ctx, bucket, rootPath, localBaseDir, logId, segmentId, storageCli, cfg, false, pool)
 }
 
 // NewStagedFileWriterWithMode creates a new staged file writer with recovery mode option
-func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool) (*StagedFileWriter, error) {
+func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath string, localBaseDir string, logId int64, segmentId int64, storageCli objectstorage.ObjectStorage, cfg *config.Configuration, recoveryMode bool, syncPool *conc.Pool[struct{}]) (*StagedFileWriter, error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewStagedFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize.Int64()
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
-	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes.Int64()
-	flushQueueSize := max(int(maxBytes/blockSize), 300)
 	maxInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage.Milliseconds()
 	logger.Ctx(ctx).Debug("creating new staged file writer",
 		zap.String("localBaseDir", localBaseDir),
@@ -145,7 +143,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Int64("maxBlockSize", blockSize),
 		zap.Int("maxBufferEntries", maxBufferEntries),
 		zap.Int("maxInterval", maxInterval),
-		zap.Int("flushQueueSize", flushQueueSize),
 		zap.Bool("recoveryMode", recoveryMode))
 
 	segmentDir := getSegmentDir(localBaseDir, logId, segmentId)
@@ -162,9 +159,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.String("segmentDir", segmentDir),
 		zap.String("filePath", filePath))
 
-	// Create context for async operations
-	runCtx, runCancel := context.WithCancel(context.Background())
-
 	writer := &StagedFileWriter{
 		localBaseDir:        localBaseDir,
 		segmentFilePath:     filePath,
@@ -179,11 +173,10 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		blockIndexes:        make([]*codec.IndexRecord, 0),
 		writtenBytes:        0,
 		maxFlushSize:        blockSize,
-		maxBufferEntries:    int64(maxBufferEntries),                    // Default max entries per buffer
-		maxIntervalMs:       maxInterval,                                // 10ms default sync interval for more responsive syncing
-		flushTaskChan:       make(chan *blockFlushTask, flushQueueSize), // Increased buffer size to reduce blocking
-		runCtx:              runCtx,
-		runCancel:           runCancel,
+		maxBufferEntries:    int64(maxBufferEntries), // Default max entries per buffer
+		maxIntervalMs:       maxInterval,             // 10ms default sync interval for more responsive syncing
+		syncPool:            syncPool,
+		syncInterval:        time.Duration(maxInterval) * time.Millisecond,
 	}
 
 	// Initialize atomic values
@@ -198,8 +191,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
 	writer.lastSubmittedFlushingEntryID.Store(-1)
-	writer.lastSubmittedFlushingBlockID.Store(-1)
-	writer.allUploadingTaskDone.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
 
 	// Set default block size if not specified
@@ -229,7 +220,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 			logger.Ctx(ctx).Warn("failed to recover from existing file",
 				zap.String("filePath", filePath),
 				zap.Error(err))
-			runCancel()
 			return nil, fmt.Errorf("recover from existing file: %w", err)
 		}
 		if writer.lastEntryID.Load() != -1 {
@@ -259,7 +249,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 			zap.String("filePath", filePath),
 			zap.Bool("recoveryMode", recoveryMode),
 			zap.Error(err))
-		runCancel()
 		if file != nil {
 			closeFdErr := file.Close()
 			if closeFdErr != nil {
@@ -282,9 +271,6 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 		zap.Int64("maxBufferEntries", writer.maxBufferEntries),
 		zap.String("bufferInstance", fmt.Sprintf("%p", initialBuffer)))
 
-	// Start async flush goroutine
-	go writer.run()
-
 	logger.Ctx(ctx).Info("staged file writer created successfully",
 		zap.String("filePath", filePath),
 		zap.Int64("logId", logId),
@@ -298,125 +284,43 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	return writer, nil
 }
 
-// run is the main async goroutine that handles buffer flushing
-func (w *StagedFileWriter) run() {
-	ticker := time.NewTicker(time.Duration(w.maxIntervalMs) * time.Millisecond)
-	defer ticker.Stop()
-
-	metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Inc()
-
-	logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine started",
-		zap.Int64("logId", w.logId),
-		zap.Int64("segmentId", w.segmentId))
-
-	for {
-		select {
-		case <-w.runCtx.Done():
-			// Context cancelled, exit
-			logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to context cancellation")
-			metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-			return
-		case flushTask, ok := <-w.flushTaskChan:
-			// Process flush tasks with higher priority
-			if !ok {
-				// Channel closed, exit
-				logger.Ctx(w.runCtx).Debug("StagedFileWriter run goroutine stopping due to channel close")
-				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-				return
-			}
-			if flushTask.entries == nil {
-				logger.Ctx(context.TODO()).Debug("received termination signal, marking all upload tasks as done",
-					zap.String("segmentFilePath", w.segmentFilePath))
-				w.allUploadingTaskDone.Store(true)
-				metrics.WpFileWriters.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Dec()
-				return
-			}
-			// Process flush task synchronously
-			logger.Ctx(w.runCtx).Debug("Processing flush task from channel",
-				zap.Int64("logId", w.logId),
-				zap.Int64("segId", w.segmentId),
-				zap.Int32("blockNumber", flushTask.blockNumber),
-				zap.Int64("firstEntryId", flushTask.firstEntryId),
-				zap.Int64("lastEntryId", flushTask.lastEntryId),
-				zap.Int("entriesCount", len(flushTask.entries)))
-			w.processFlushTask(w.runCtx, flushTask)
-			logger.Ctx(w.runCtx).Debug("Flush task processing completed")
-		case <-ticker.C:
-			// Periodic sync check
-			autoSyncErr := w.Sync(w.runCtx)
-			if autoSyncErr != nil {
-				logger.Ctx(w.runCtx).Warn("auto sync error", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Error(autoSyncErr))
-			}
-			// Reset ticker after sync to ensure consistent intervals
-			ticker.Reset(time.Duration(w.maxIntervalMs) * time.Millisecond)
-		}
-	}
-}
-
 // Sync forces immediate sync of all buffered data
 func (w *StagedFileWriter) Sync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
-	// Use syncMu to ensure only one sync can proceed at a time
+
+	// Phase 1: Roll buffer (under mu)
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
-	if !w.storageWritable.Load() {
+	if !w.storageWritable.Load() || w.file == nil {
+		w.mu.Unlock()
 		return nil
 	}
 
 	currentBuffer := w.buffer.Load()
 	if currentBuffer == nil {
+		w.mu.Unlock()
 		return nil
-	}
-
-	// Check if sync is needed - simply check if there's any data to sync
-	bufferSize := currentBuffer.DataSize.Load()
-	entryCount := currentBuffer.GetExpectedNextEntryId() - currentBuffer.GetFirstEntryId()
-	hasEntries := entryCount > 0
-
-	// Sync if there's any data to sync
-	needSync := bufferSize > 0 || hasEntries
-
-	if needSync {
-		logger.Ctx(ctx).Debug("Sync: triggering rollBufferAndFlush", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Int64("entryCount", entryCount), zap.Int64("bufferSize", bufferSize), zap.String("bufInst", fmt.Sprintf("%p", currentBuffer)))
-		// Add global writer lock to prevent race conditions with WriteDataAsync
-		w.rollBufferAndSubmitFlushTaskUnsafe(ctx)
-	}
-
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
-	return nil
-}
-
-// rollBufferAndSubmitFlushTaskUnsafe rolls the current buffer and flushes it to disk (must be called with mu held)
-func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context) {
-	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "rollBufferAndFlushUnsafe")
-	defer sp.End()
-	startTime := time.Now()
-	currentBuffer := w.buffer.Load()
-	if currentBuffer == nil {
-		return
 	}
 
 	expectedNextEntryId := currentBuffer.ExpectedNextEntryId.Load()
 	if expectedNextEntryId-currentBuffer.FirstEntryId == 0 {
-		return
+		w.mu.Unlock()
+		return nil
 	}
 
-	// Get entries from old buffer
 	toFlushEntries, err := currentBuffer.ReadEntriesRange(currentBuffer.GetFirstEntryId(), currentBuffer.GetExpectedNextEntryId())
 	if err != nil {
-		logger.Ctx(ctx).Warn("rollBufferAndSubmitFlushTaskUnsafe: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
-		return
+		w.mu.Unlock()
+		logger.Ctx(ctx).Warn("Sync: error reading entries from buffer", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId), zap.Error(err))
+		return err
 	}
 	if len(toFlushEntries) == 0 {
-		return
+		w.mu.Unlock()
+		return nil
 	}
 
-	// Create flush task
 	blockNumber := w.currentBlockNumber.Load()
 	flushTask := &blockFlushTask{
 		entries:      toFlushEntries,
@@ -427,49 +331,33 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 
 	restData, err := currentBuffer.ReadEntriesToLast(expectedNextEntryId)
 	if err != nil {
-		return
+		w.mu.Unlock()
+		return err
 	}
-	restDataFirstEntryId := expectedNextEntryId
-	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, restDataFirstEntryId, w.maxBufferEntries, restData, w.nsStr)
+	newBuffer := cache.NewSequentialBufferWithData(w.logId, w.segmentId, expectedNextEntryId, w.maxBufferEntries, restData, w.nsStr)
 
-	// Submit flush task
-	logger.Ctx(ctx).Debug("Submitting flush task to channel",
-		zap.Int64("firstEntryId", flushTask.firstEntryId),
-		zap.Int64("lastEntryId", flushTask.lastEntryId),
-		zap.Int32("blockNumber", flushTask.blockNumber),
-		zap.Int("entriesCount", len(flushTask.entries)))
+	w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
+	w.currentBlockNumber.Add(1)
+	w.lastSyncTimestamp.Store(time.Now().UnixMilli())
+	w.buffer.Store(newBuffer)
 
-	select {
-	case w.flushTaskChan <- flushTask:
-		logger.Ctx(ctx).Debug("Flush task submitted successfully",
-			zap.Int64("firstEntryId", flushTask.firstEntryId),
-			zap.Int64("lastEntryId", flushTask.lastEntryId),
-			zap.Int32("blockNumber", flushTask.blockNumber),
-			zap.Int("entriesCount", len(flushTask.entries)))
-		// Update stats only after successful submission
-		// Update flushing size
-		w.lastSubmittedFlushingEntryID.Store(flushTask.lastEntryId)
-		w.lastSubmittedFlushingBlockID.Store(int64(flushTask.blockNumber))
-		// Increment block number for next block
-		w.currentBlockNumber.Add(1)
-		w.lastSyncTimestamp.Store(time.Now().UnixMilli())
-		// switch buffer
-		w.buffer.Store(newBuffer)
-	case <-ctx.Done():
-		logger.Ctx(ctx).Warn("Context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
-		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, ctx.Err())
-	case <-w.runCtx.Done():
-		logger.Ctx(ctx).Warn("Writer context cancelled while submitting flush task", zap.Int32("blockNumber", flushTask.blockNumber))
-		// Notify entries of cancellation
-		w.notifyFlushError(flushTask.entries, werr.ErrFileWriterAlreadyClosed)
-	}
+	w.mu.Unlock()
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
+	// Phase 2: Write to disk (under flushMu)
+	w.flushMu.Lock()
+	w.processFlushTask(ctx, flushTask)
+	w.flushMu.Unlock()
+
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
+
+	return nil
 }
 
-// processFlushTask processes a flush task by writing data to disk
+// processFlushTask processes a flush task by writing data to disk (must be called with flushMu held)
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
@@ -647,60 +535,6 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 	w.notifyFlushSuccess(task.entries)
 }
 
-func (f *StagedFileWriter) awaitAllFlushTasks(ctx context.Context) error {
-	logger.Ctx(ctx).Info("awaiting completion of all block flush tasks", zap.String("segmentFilePath", f.segmentFilePath))
-
-	// Fast return if already completed (idempotent for retry)
-	if f.allUploadingTaskDone.Load() {
-		return nil
-	}
-
-	// Now wait for the ack goroutine to process all completed tasks
-	// This ensures that blockIndexes are properly populated
-	logger.Ctx(ctx).Info("waiting for ack goroutine to process completed tasks", zap.String("segmentFilePath", f.segmentFilePath))
-
-	// Send termination signal to ack goroutine
-	select {
-	case f.flushTaskChan <- &blockFlushTask{
-		entries:      nil,
-		firstEntryId: -1,
-		lastEntryId:  -1,
-		blockNumber:  -1,
-	}:
-		logger.Ctx(ctx).Info("termination signal sent to ack goroutine", zap.String("segmentFilePath", f.segmentFilePath))
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Wait for ack goroutine to set the done flag
-	ackWaitTime := 15 * time.Second // TODO configurable
-	ackStartTime := time.Now()
-
-	for {
-		if f.allUploadingTaskDone.Load() {
-			logger.Ctx(ctx).Info("ack goroutine completed processing all tasks", zap.String("segmentFilePath", f.segmentFilePath))
-			return nil
-		}
-
-		// Check timeout
-		if time.Since(ackStartTime) > ackWaitTime {
-			logger.Ctx(ctx).Warn("timeout waiting for ack goroutine to complete",
-				zap.String("segmentFilePath", f.segmentFilePath),
-				zap.Bool("allUploadingTaskDone", f.allUploadingTaskDone.Load()),
-				zap.Duration("elapsed", time.Since(ackStartTime)))
-			return errors.New("timeout waiting for ack goroutine to complete")
-		}
-
-		// Short sleep to avoid busy waiting
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-			continue
-		}
-	}
-}
-
 // notifyFlushError notifies all result channels of flush error
 func (w *StagedFileWriter) notifyFlushError(entries []*cache.BufferEntry, err error) {
 	// Notify all pending entries result channels in sequential order
@@ -747,7 +581,9 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	}
 	if entryId <= w.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to storage. Return immediately.
-		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil, "", time.Time{})
+		if resultCh != nil {
+			cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil, "", time.Time{})
+		}
 		w.mu.Unlock()
 		return entryId, nil
 	}
@@ -780,7 +616,6 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	// Check if immediate sync is needed (still holding lock)
 	bufferSize := currentBuffer.DataSize.Load()
 	entryCount := currentBuffer.GetExpectedNextEntryId() - currentBuffer.GetFirstEntryId()
-	timeSinceLastSync := time.Now().UnixMilli() - w.lastSyncTimestamp.Load()
 	w.mu.Unlock()
 
 	logger.Ctx(ctx).Debug("WriteDataAsync sync check",
@@ -788,25 +623,40 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 		zap.Int64("maxFlushSize", w.maxFlushSize),
 		zap.Int64("entryCount", entryCount),
 		zap.Int64("maxBufferEntries", w.maxBufferEntries),
-		zap.Int64("timeSinceLastSync", timeSinceLastSync),
 		zap.Int64("lastSyncTimestamp", w.lastSyncTimestamp.Load()))
 
-	// Immediate sync conditions:
-	// - Buffer size exceeded
-	// - Too many entries
+	// Immediate sync: buffer size or entry count exceeded threshold
 	if bufferSize >= w.maxFlushSize || entryCount >= w.maxBufferEntries {
 		logger.Ctx(ctx).Info("Triggering immediate sync from WriteDataAsync",
 			zap.Int64("bufferSize", bufferSize),
-			zap.Int64("entryCount", entryCount),
-			zap.Int64("timeSinceLastSync", timeSinceLastSync))
-		triggerSyncErr := w.Sync(ctx)
-		if triggerSyncErr != nil {
-			logger.Ctx(ctx).Warn("reach max buffer size, but trigger sync failed",
-				zap.Int64("bufferSize", bufferSize),
-				zap.Int64("entryCount", entryCount),
-				zap.Int64("timeSinceLastSync", timeSinceLastSync),
-				zap.Error(triggerSyncErr),
-			)
+			zap.Int64("entryCount", entryCount))
+		if w.syncPool != nil {
+			w.syncPool.Submit(func() (struct{}, error) {
+				w.Sync(context.Background())
+				return struct{}{}, nil
+			})
+		} else {
+			w.Sync(ctx)
+		}
+		return entryId, nil
+	}
+
+	// Periodic sync: register AfterFunc on first write in this window (CAS dedup)
+	if w.syncScheduled.CompareAndSwap(false, true) {
+		syncInterval := w.syncInterval
+		if w.syncPool != nil {
+			time.AfterFunc(syncInterval, func() {
+				w.syncScheduled.Store(false)
+				w.syncPool.Submit(func() (struct{}, error) {
+					w.Sync(context.Background())
+					return struct{}{}, nil
+				})
+			})
+		} else {
+			time.AfterFunc(syncInterval, func() {
+				w.syncScheduled.Store(false)
+				w.Sync(context.Background())
+			})
 		}
 	}
 	return entryId, nil
@@ -920,15 +770,6 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	if err := w.Sync(ctx); err != nil {
 		return w.lastEntryID.Load(), err
 	}
-
-	// wait all flush
-	waitErr := w.awaitAllFlushTasks(ctx)
-	if waitErr != nil {
-		logger.Ctx(ctx).Warn("wait flush error before close",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(waitErr))
-		return -1, waitErr
-	}
 	flushDrained = true
 
 	w.mu.Lock()
@@ -996,7 +837,7 @@ func (w *StagedFileWriter) GetFirstEntryId(ctx context.Context) int64 {
 }
 
 func (w *StagedFileWriter) GetBlockCount(ctx context.Context) int64 {
-	return w.lastSubmittedFlushingBlockID.Load()
+	return w.currentBlockNumber.Load()
 }
 
 // Close closes the writer
@@ -1004,43 +845,37 @@ func (w *StagedFileWriter) Close(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Close")
 	defer sp.End()
 	startTime := time.Now()
-	if !w.closed.CompareAndSwap(false, true) { // mark close, and there will be no more add and sync in the future
-		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
+	if !w.closed.CompareAndSwap(false, true) {
+		logger.Ctx(ctx).Info("Close: already closed, skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
 	}
-	// Ensure goroutine, file, channel cleanup always runs,
-	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
-	defer func() {
-		w.runCancel()
-		if w.file != nil {
-			w.file.Close()
-			w.file = nil
-		}
-		close(w.flushTaskChan)
-	}()
 
-	logger.Ctx(ctx).Info("Close: trigger sync before close", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId))
-	err := w.Sync(ctx) // manual sync all pending append operation
+	logger.Ctx(ctx).Info("Close: trigger final sync", zap.Int64("logId", w.logId), zap.Int64("segmentId", w.segmentId))
+
+	// Final sync: flush any remaining buffered data
+	err := w.Sync(ctx)
 	if err != nil {
-		logger.Ctx(ctx).Warn("sync error before close",
+		logger.Ctx(ctx).Warn("sync error during close",
 			zap.String("segmentFilePath", w.segmentFilePath),
 			zap.Error(err))
 	}
 
-	// wait all flush
-	waitErr := w.awaitAllFlushTasks(ctx)
-	if waitErr != nil {
-		logger.Ctx(ctx).Warn("wait flush error before close",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(waitErr))
-		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "error").Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "error").Observe(float64(time.Since(startTime).Milliseconds()))
-		return waitErr
+	// Close file under mu to prevent races with AfterFunc-triggered Sync()
+	// Sync() checks w.file == nil under mu and returns early if so.
+	w.mu.Lock()
+	if w.file != nil {
+		w.file.Close()
+		w.file = nil
 	}
+	w.mu.Unlock()
 
-	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Inc()
-	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-	return nil
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", status).Inc()
+	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "close", status).Observe(float64(time.Since(startTime).Milliseconds()))
+	return err
 }
 
 // Fence marks the writer as fenced
@@ -1060,20 +895,9 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 	// Mark as fenced first to reject new AppendAsync calls (idempotent)
 	w.fenced.Store(true)
 
-	// If flush goroutine already terminated, all data is persisted, fast return
-	if w.allUploadingTaskDone.Load() {
-		return w.GetLastEntryId(ctx), nil
-	}
-
-	// Sync remaining buffer data to flush channel.
+	// Sync remaining buffer data.
 	// processFlushTask does not check fenced, so the task will be processed correctly.
 	if err := w.Sync(ctx); err != nil {
-		return w.GetLastEntryId(ctx), err
-	}
-
-	// Wait for all pending flush tasks (including the one just submitted by Sync) to complete.
-	// This also terminates the flush goroutine since no more writes are expected after fence.
-	if err := w.awaitAllFlushTasks(ctx); err != nil {
 		return w.GetLastEntryId(ctx), err
 	}
 

@@ -59,6 +59,9 @@ type Client interface {
 var _ Client = (*woodpeckerClient)(nil)
 
 // Implementation of the client interface for distributed service mode.
+// IMPORTANT: Create ONE woodpeckerClient per process and share it across all log
+// operations. Each client instance maintains its own gRPC connection pool — creating
+// multiple clients multiplies server-side connection count unnecessarily.
 type woodpeckerClient struct {
 	mu         sync.RWMutex
 	cfg        *config.Configuration

@@ -223,6 +223,20 @@ var (
 		Name:      "file_stored_count",
 		Help:      "Current number of local segment files",
 	}, []string{"node_id", "namespace", "log_id"})
+
+	// Sync pool metrics
+	WpSyncPoolRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_pool_running",
+		Help:      "Number of running workers in the sync pool",
+	}, []string{"node_id"})
+	WpSyncPoolCapacity = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_pool_capacity",
+		Help:      "Total capacity of the sync pool",
+	}, []string{"node_id"})
 )
 
 // RegisterServerMetricsWithRegisterer registers all server-side metrics and system metrics.
@@ -260,5 +274,8 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		// Sync pool metrics
+		registerer.MustRegister(WpSyncPoolRunning)
+		registerer.MustRegister(WpSyncPoolCapacity)
 	})
 }

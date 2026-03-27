@@ -36,7 +36,7 @@ import (
 
 func TestNewSegmentProcessor(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil, nil)
 	assert.NotNil(t, sp)
 
 	impl := sp.(*segmentProcessor)
@@ -49,20 +49,20 @@ func TestNewSegmentProcessor(t *testing.T) {
 
 func TestSegmentProcessor_GetLogId(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 42, 7, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 42, 7, nil, nil)
 	assert.Equal(t, int64(42), sp.GetLogId())
 }
 
 func TestSegmentProcessor_GetSegmentId(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 42, 7, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 42, 7, nil, nil)
 	assert.Equal(t, int64(7), sp.GetSegmentId())
 }
 
 func TestSegmentProcessor_GetLastAccessTime(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	before := time.Now().UnixMilli()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil, nil)
 	after := time.Now().UnixMilli()
 
 	accessTime := sp.GetLastAccessTime()
@@ -72,7 +72,7 @@ func TestSegmentProcessor_GetLastAccessTime(t *testing.T) {
 
 func TestSegmentProcessor_UpdateAccessTime(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil, nil)
 	impl := sp.(*segmentProcessor)
 
 	oldTime := impl.GetLastAccessTime()
@@ -85,21 +85,21 @@ func TestSegmentProcessor_UpdateAccessTime(t *testing.T) {
 
 func TestSegmentProcessor_GetInstanceBucket(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "my-bucket", "r", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "my-bucket", "r", 1, 1, nil, nil)
 	impl := sp.(*segmentProcessor)
 	assert.Equal(t, "my-bucket", impl.getInstanceBucket())
 }
 
 func TestSegmentProcessor_GetLogBaseDir(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "my-root", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "my-root", 1, 1, nil, nil)
 	impl := sp.(*segmentProcessor)
 	assert.Equal(t, "my-root", impl.getLogBaseDir())
 }
 
 func TestSegmentProcessor_Close_NilWriterReader(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil, nil)
 
 	// Close with nil writer and reader should succeed
 	err := sp.Close(context.Background())
@@ -108,7 +108,7 @@ func TestSegmentProcessor_Close_NilWriterReader(t *testing.T) {
 
 func TestSegmentProcessor_Close_Idempotent(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "b", "r", 1, 1, nil, nil)
 
 	// Double close should be fine
 	assert.NoError(t, sp.Close(context.Background()))
@@ -118,7 +118,7 @@ func TestSegmentProcessor_Close_Idempotent(t *testing.T) {
 // helper to create a segmentProcessor with injected mocks
 func newTestProcessor(t *testing.T) *segmentProcessor {
 	cfg, _ := config.NewConfiguration()
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil, nil)
 	return sp.(*segmentProcessor)
 }
 
@@ -377,7 +377,7 @@ func TestSegmentProcessor_Compact_Timeout(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	// Set a very short compaction timeout (1 second)
 	cfg.Woodpecker.Logstore.SegmentCompactionPolicy.Timeout = config.NewDurationSecondsFromInt(1)
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 2, nil, nil)
 	impl := sp.(*segmentProcessor)
 
 	mockWriter := mocks_storage.NewWriter(t)
@@ -565,7 +565,7 @@ func newLocalStorageProcessor(t *testing.T) *segmentProcessor {
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Storage.Type = "local"
 	cfg.Woodpecker.Storage.RootPath = t.TempDir()
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil, nil)
 	return sp.(*segmentProcessor)
 }
 
@@ -665,7 +665,7 @@ func TestSegmentProcessor_GetOrCreateSegmentImpl_Service(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Storage.Type = "service"
 	cfg.Woodpecker.Storage.RootPath = t.TempDir()
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil, nil)
 	impl := sp.(*segmentProcessor)
 
 	segImpl, err := impl.getOrCreateSegmentImpl(context.Background())
@@ -677,7 +677,7 @@ func TestSegmentProcessor_GetOrCreateSegmentImpl_Minio(t *testing.T) {
 	cfg, _ := config.NewConfiguration()
 	// default type is minio (empty or "minio" or "default")
 	cfg.Woodpecker.Storage.Type = "minio"
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil, nil)
 	impl := sp.(*segmentProcessor)
 
 	segImpl, err := impl.getOrCreateSegmentImpl(context.Background())
@@ -694,7 +694,7 @@ func newServiceStorageProcessor(t *testing.T) *segmentProcessor {
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Storage.Type = "service"
 	cfg.Woodpecker.Storage.RootPath = t.TempDir()
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, nil, nil)
 	return sp.(*segmentProcessor)
 }
 
@@ -724,7 +724,7 @@ func newMinioStorageProcessor(t *testing.T) (*segmentProcessor, *mocks_objectsto
 	cfg, _ := config.NewConfiguration()
 	cfg.Woodpecker.Storage.Type = "minio"
 	mockObjStorage := mocks_objectstorage.NewObjectStorage(t)
-	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, mockObjStorage)
+	sp := NewSegmentProcessor(context.Background(), cfg, "bucket", "root", 1, 0, mockObjStorage, nil)
 	return sp.(*segmentProcessor), mockObjStorage
 }
 

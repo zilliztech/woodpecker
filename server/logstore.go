@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/zilliztech/woodpecker/common/channel"
+	"github.com/zilliztech/woodpecker/common/conc"
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/metrics"
@@ -73,6 +75,7 @@ type logStore struct {
 	cancel        context.CancelFunc
 	storageClient storageclient.ObjectStorage
 	address       string
+	syncPool      *conc.Pool[struct{}]
 
 	spMu              sync.RWMutex
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
@@ -91,6 +94,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 		ctx:               ctx,
 		cancel:            cancel,
 		storageClient:     storageClient,
+		syncPool:          conc.NewPool[struct{}](runtime.NumCPU() * 2),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		address:           net.GetIP(""),
 		cleanupDone:       make(chan struct{}),
@@ -146,6 +150,11 @@ func (l *logStore) Stop() error {
 			totalProcessors += 1
 			l.closeSegmentProcessor(shutdownCtx, logKey, segmentId, processor)
 		}
+	}
+
+	// Release the sync pool
+	if l.syncPool != nil {
+		l.syncPool.Release()
 	}
 
 	// Clear the maps
@@ -246,7 +255,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 		zap.Int64("segmentId", segmentId),
 		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 
-	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient)
+	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient, l.syncPool)
 
 	// Initialize log map if not exists
 	if _, exists := l.segmentProcessors[logKey]; !exists {
@@ -796,5 +805,18 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		logger.Ctx(l.ctx).Info("cleaned up idle segment processor",
 			zap.String("logKey", item.logKey),
 			zap.Int64("segmentId", item.segmentId))
+	}
+
+	// Phase 3: Log cleanup summary and report accurate processor count
+	remainingProcessors := l.GetActiveProcessorCount()
+	logger.Ctx(l.ctx).Info("Background cleanup cycle completed",
+		zap.Int("totalProcessorsBefore", totalProcessors),
+		zap.Int("cleanedCount", len(idleProcessors)),
+		zap.Int("remainingProcessors", remainingProcessors))
+
+	// Report sync pool utilization metrics
+	if l.syncPool != nil {
+		metrics.WpSyncPoolRunning.WithLabelValues(metrics.NodeID).Set(float64(l.syncPool.Running()))
+		metrics.WpSyncPoolCapacity.WithLabelValues(metrics.NodeID).Set(float64(l.syncPool.Cap()))
 	}
 }
