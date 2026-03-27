@@ -772,8 +772,14 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	}
 	flushDrained = true
 
+	// Hold both locks to prevent concurrent access during finalization.
+	// Lock order: mu before flushMu (matching Sync()'s implicit order to avoid deadlock).
+	// - mu prevents concurrent buffer operations from WriteDataAsync/Sync Phase 1
+	// - flushMu prevents concurrent processFlushTask from modifying blockIndexes/writtenBytes
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 
 	// Write header if not written yet
 	if !w.headerWritten.Load() {
@@ -786,7 +792,6 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	// Write all index records
 	indexStartOffset := w.writtenBytes
 
-	// Lock to read blockIndexes safely
 	blockIndexesCopy := make([]*codec.IndexRecord, len(w.blockIndexes))
 	copy(blockIndexesCopy, w.blockIndexes)
 	blockIndexesLen := len(w.blockIndexes)
