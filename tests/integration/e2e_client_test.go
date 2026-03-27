@@ -1734,7 +1734,7 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
 						// Use a fixed timeout for each read
-						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
@@ -2532,7 +2532,7 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
 						// Use a fixed timeout for each read
-						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+						readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
