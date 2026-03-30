@@ -35,7 +35,7 @@ const (
 	ReaderScopeName                = "LogReader"
 	UpdateReaderInfoIntervalMs     = 30000
 	DefaultNoDataReadMinIntervalMs = 200  // minimum poll interval
-	DefaultNoDataReadMaxIntervalMs = 5000 // maximum poll interval after backoff
+	DefaultNoDataReadMaxIntervalMs = 2000 // maximum poll interval after backoff
 	NoDataReadBackoffRate          = 1.5  // backoff multiplier per empty poll
 	DefaultBatchEntriesLimit       = 200
 )
