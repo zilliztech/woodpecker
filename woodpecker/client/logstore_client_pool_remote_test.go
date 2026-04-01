@@ -18,6 +18,7 @@ package client
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -142,4 +143,69 @@ func TestRemotePool_Close_WithClients(t *testing.T) {
 	_, err = pool.GetLogStoreClient(ctx, "localhost:12345")
 	assert.Error(t, err)
 	assert.True(t, werr.ErrWoodpeckerClientClosed.Is(err))
+}
+
+// TestRemotePool_ConcurrentGetLogStoreClient_SameTarget verifies that concurrent
+// requests for the same target correctly hit the double-check cache path (L79-81).
+func TestRemotePool_ConcurrentGetLogStoreClient_SameTarget(t *testing.T) {
+	pool := NewLogStoreClientPool(4*1024*1024, 4*1024*1024)
+	ctx := context.Background()
+
+	const goroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	clients := make([]LogStoreClient, goroutines)
+	errs := make([]error, goroutines)
+
+	// Synchronize goroutine start to maximize contention
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-start
+			clients[i], errs[i] = pool.GetLogStoreClient(ctx, "localhost:12345")
+		}()
+	}
+
+	close(start) // release all at once
+	wg.Wait()
+
+	// All goroutines should succeed with the same client instance
+	for i := 0; i < goroutines; i++ {
+		assert.NoError(t, errs[i])
+		assert.NotNil(t, clients[i])
+		assert.Same(t, clients[0], clients[i])
+	}
+}
+
+// TestRemotePool_GetLogStoreClient_RaceWithClose runs GetLogStoreClient and Close
+// concurrently to exercise the double-check for clientClosed inside the write lock (L72-74).
+// The race window between RUnlock (L62) and Lock (L67) is very small, so this test
+// runs multiple iterations to increase the chance of hitting it. Even if the exact
+// coverage line isn't hit every time, -race will detect any data-race issues.
+func TestRemotePool_GetLogStoreClient_RaceWithClose(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		pool := NewLogStoreClientPool(4*1024*1024, 4*1024*1024)
+		ctx := context.Background()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			// Request an uncached target — will pass read-lock, then race for write-lock
+			_, _ = pool.GetLogStoreClient(ctx, "uncached-target")
+		}()
+
+		go func() {
+			defer wg.Done()
+			// Close races with GetLogStoreClient for the write lock
+			_ = pool.Close(ctx)
+		}()
+
+		wg.Wait()
+		// No deadlock and no panic is the success criterion
+	}
 }

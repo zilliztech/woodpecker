@@ -229,6 +229,40 @@ func TestParseSize_InvalidSuffixValues(t *testing.T) {
 	}
 }
 
+func TestParseSize_WhitespaceOnly(t *testing.T) {
+	result, err := parseSize("   ")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), result)
+}
+
+func TestParseDuration_WhitespaceOnly(t *testing.T) {
+	result, err := parseDuration("   ", time.Second)
+	assert.NoError(t, err)
+	assert.Equal(t, time.Duration(0), result)
+}
+
+func TestByteSizeUnmarshal_LargeInt(t *testing.T) {
+	// YAML parses large integers as int, not int64, but let's ensure both paths work
+	var config struct {
+		Size ByteSize `yaml:"size"`
+	}
+	// YAML int maps to Go int which is int64 on 64-bit platforms
+	err := yaml.Unmarshal([]byte("size: 9999999999"), &config)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(9999999999), config.Size.Int64())
+}
+
+func TestDurationUnmarshal_DefaultUnitZero(t *testing.T) {
+	// Duration with defaultUnit=0 should default to milliseconds
+	var d Duration
+	// defaultUnit is 0 (zero value)
+	node := yaml.Node{}
+	_ = yaml.Unmarshal([]byte("100"), &node)
+	err := d.UnmarshalYAML(&node)
+	assert.NoError(t, err)
+	assert.Equal(t, 100*time.Millisecond, d.Duration())
+}
+
 func TestDurationMillisecondsUnmarshal(t *testing.T) {
 	tests := []struct {
 		name       string

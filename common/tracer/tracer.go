@@ -35,16 +35,23 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 )
 
-var initOnce sync.Once
+var (
+	initOnce sync.Once
+	initErr  error
+)
+
+// ResetForTesting resets the tracer initialization state so InitTracer can be called again.
+// This is intended for use in tests only.
+func ResetForTesting() {
+	initOnce = sync.Once{}
+	initErr = nil
+}
 
 func InitTracer(cfg *config.Configuration, serviceName string, nodeID int64) error {
 	initOnce.Do(func() {
-		err := Init(cfg, serviceName, nodeID)
-		if err != nil {
-			panic(err)
-		}
+		initErr = Init(cfg, serviceName, nodeID)
 	})
-	return nil
+	return initErr
 }
 
 func Init(cfg *config.Configuration, serviceName string, nodeID int64) error {

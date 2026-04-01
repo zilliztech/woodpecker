@@ -28,6 +28,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	etcdutil "github.com/zilliztech/woodpecker/common/etcd"
+	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
@@ -781,4 +783,86 @@ func TestWoodpeckerClient_Close_ManagedEtcdWithAllErrors(t *testing.T) {
 
 	closeErr := c.Close(ctx)
 	assert.Error(t, closeErr)
+}
+
+// TestNewClient_WithEmbedEtcd starts an embedded etcd server and runs subtests
+// that require a real etcd client.
+func TestNewClient_WithEmbedEtcd(t *testing.T) {
+	dataDir := t.TempDir()
+	logPath := dataDir + "/etcd.log"
+	err := etcdutil.StartEtcdServerUnsafe(true, "", dataDir, logPath, "warn")
+	require.NoError(t, err, "failed to start embedded etcd")
+	defer etcdutil.ShutdownEtcdServerUnsafe()
+	// Wait for leader election to settle.
+	time.Sleep(2 * time.Second)
+
+	t.Run("Success", func(t *testing.T) {
+		ctx := context.Background()
+		etcdCli, err := etcdutil.GetEmbedEtcdClient()
+		require.NoError(t, err)
+		defer etcdCli.Close()
+
+		tracer.ResetForTesting()
+
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Client: config.ClientConfig{
+					Quorum: config.QuorumConfig{
+						BufferPools: []config.QuorumBufferPool{
+							{Name: "default-pool", Seeds: []string{"node1:8888"}},
+						},
+						SelectStrategy: config.QuorumSelectStrategy{
+							AffinityMode: "soft",
+							Replicas:     3,
+							Strategy:     "random",
+						},
+					},
+				},
+			},
+			Trace: config.TraceConfig{Exporter: "noop"},
+		}
+
+		c, err := NewClient(ctx, cfg, etcdCli, false)
+		require.NoError(t, err)
+		require.NotNil(t, c)
+		assert.NotNil(t, c.GetMetadataProvider())
+
+		err = c.Close(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("TracerInitError_StillSucceeds", func(t *testing.T) {
+		ctx := context.Background()
+		etcdCli, err := etcdutil.GetEmbedEtcdClient()
+		require.NoError(t, err)
+		defer etcdCli.Close()
+
+		tracer.ResetForTesting()
+
+		cfg := &config.Configuration{
+			Woodpecker: config.WoodpeckerConfig{
+				Client: config.ClientConfig{
+					Quorum: config.QuorumConfig{
+						BufferPools: []config.QuorumBufferPool{
+							{Name: "default-pool", Seeds: []string{"node1:8888"}},
+						},
+						SelectStrategy: config.QuorumSelectStrategy{
+							AffinityMode: "soft",
+							Replicas:     3,
+							Strategy:     "random",
+						},
+					},
+				},
+			},
+			Trace: config.TraceConfig{Exporter: ""}, // triggers "Empty Trace" error
+		}
+
+		c, err := NewClient(ctx, cfg, etcdCli, false)
+		require.NoError(t, err)
+		require.NotNil(t, c)
+		assert.NotNil(t, c.GetMetadataProvider())
+
+		err = c.Close(ctx)
+		assert.NoError(t, err)
+	})
 }

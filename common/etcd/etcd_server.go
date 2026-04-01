@@ -81,7 +81,7 @@ func StartEtcdServerUnsafe(useEmbedEtcd bool,
 	if len(path) > 0 {
 		cfgFromFile, err := embed.ConfigFromFile(path)
 		if err != nil {
-			initError = err
+			return err
 		}
 		cfg = cfgFromFile
 	} else {

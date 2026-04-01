@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/tests/utils"
@@ -199,14 +200,12 @@ func TestMiniCluster_Join(t *testing.T) {
 	assert.GreaterOrEqual(t, newNodeIndex, 0, "New node index should be valid")
 	assert.NotEmpty(t, newNodeAddr, "New node address should not be empty")
 
-	// Wait for the new node to join and propagate
-	time.Sleep(3 * time.Second)
-
-	// Verify the new node is discovered
-	updatedServers := discovery.GetAllServers()
+	// Wait for the client node to discover the new joined node via gossip propagation
 	expectedCount := initialNodeCount + 1
-	assert.Equal(t, expectedCount, len(updatedServers), "Should discover the new joined node")
-	t.Logf("After join: cluster has %d servers", len(updatedServers))
+	require.Eventually(t, func() bool {
+		return len(discovery.GetAllServers()) == expectedCount
+	}, 30*time.Second, 500*time.Millisecond, "Client should discover the new joined node within timeout")
+	t.Logf("After join: cluster has %d servers", len(discovery.GetAllServers()))
 
 	// Verify active nodes count
 	activeNodes := clientNode.GetDiscovery().GetAllServers()
@@ -266,17 +265,12 @@ func TestMiniCluster_Leave(t *testing.T) {
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, leftNodeIndex, 0, "Left node index should be valid")
 
-	// Wait for leave to propagate
-	time.Sleep(3 * time.Second)
-
-	// Verify one less node is active
-	activeNodes := clientNode.GetDiscovery().GetAllServers()
+	// Wait for the client node to detect the leave via gossip propagation
 	expectedActiveNodes := nodeCount - 1
-	assert.Equal(t, expectedActiveNodes, len(activeNodes), "Should have one less active node")
-
-	// Note: The gossip protocol might take time to detect the left node
-	// So we check if the discovery eventually reflects the change
-	t.Logf("Active nodes after leave: %d (expected: %d)", len(activeNodes), expectedActiveNodes)
+	require.Eventually(t, func() bool {
+		return len(clientNode.GetDiscovery().GetAllServers()) == expectedActiveNodes
+	}, 30*time.Second, 500*time.Millisecond, "Client should detect node leave within timeout")
+	t.Logf("Active nodes after leave: %d (expected: %d)", len(clientNode.GetDiscovery().GetAllServers()), expectedActiveNodes)
 
 	// Print updated status
 	clientNode.PrintStatus()
@@ -332,14 +326,12 @@ func TestMiniCluster_Restart(t *testing.T) {
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, stoppedNodeIndex, 0, "Stopped node index should be valid")
 
-	// Wait for stop to propagate
-	time.Sleep(2 * time.Second)
-
-	// Verify one less node is active
-	activeNodes := clientNode.GetDiscovery().GetAllServers()
+	// Wait for the client node to detect the stop via gossip propagation
 	expectedActiveNodes := nodeCount - 1
-	assert.Equal(t, expectedActiveNodes, len(activeNodes), "Should have one less active node after stop")
-	t.Logf("Active nodes after stop: %d", len(activeNodes))
+	require.Eventually(t, func() bool {
+		return len(clientNode.GetDiscovery().GetAllServers()) == expectedActiveNodes
+	}, 30*time.Second, 500*time.Millisecond, "Client should detect node stop within timeout")
+	t.Logf("Active nodes after stop: %d", len(clientNode.GetDiscovery().GetAllServers()))
 
 	// Now restart the stopped node
 	t.Logf("Restarting node %d...", stoppedNodeIndex)
@@ -348,16 +340,11 @@ func TestMiniCluster_Restart(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, restartedNodeAddr, "Restarted node address should not be empty")
 
-	// Wait for restart to complete and propagate
-	time.Sleep(3 * time.Second)
-
-	// Verify all nodes are active again
-	finalActiveNodes := clientNode.GetDiscovery().GetAllServers()
-	assert.Equal(t, nodeCount, len(finalActiveNodes), "Should have all nodes active after restart")
-	t.Logf("Active nodes after restart: %d", len(finalActiveNodes))
-
-	// Note: The gossip protocol might take time to detect the restarted node
-	// In a real deployment, this would be more reliable
+	// Wait for the client node to discover the restarted node via gossip propagation
+	require.Eventually(t, func() bool {
+		return len(clientNode.GetDiscovery().GetAllServers()) == nodeCount
+	}, 30*time.Second, 500*time.Millisecond, "Client should discover restarted node within timeout")
+	t.Logf("Active nodes after restart: %d", len(clientNode.GetDiscovery().GetAllServers()))
 
 	// Print final status
 	clientNode.PrintStatus()

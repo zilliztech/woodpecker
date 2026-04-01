@@ -56,7 +56,23 @@ func (e *EventDelegate) NotifyJoin(node *memberlist.Node) {
 
 // NotifyLeave node leaves
 func (e *EventDelegate) NotifyLeave(node *memberlist.Node) {
-	e.discovery.RemoveServer(node.Name)
+	// When metadata is available, use guarded removal to prevent stale leave events
+	// from removing a node that has already rejoined with a new incarnation.
+	if len(node.Meta) > 0 {
+		var leavingMeta proto.NodeMeta
+		if err := pb.Unmarshal(node.Meta, &leavingMeta); err == nil {
+			if !e.discovery.RemoveServerIfMatch(node.Name, &leavingMeta) {
+				log.Printf("[%s-EVENT] Ignored stale leave for %s (node has rejoined with updated endpoint/metadata)",
+					string(e.role), node.Name)
+				return
+			}
+		} else {
+			e.discovery.RemoveServer(node.Name)
+		}
+	} else {
+		e.discovery.RemoveServer(node.Name)
+	}
+
 	if e.role == RoleClient {
 		log.Printf("[CLIENT-WATCH] Node left: %s", node.Name)
 	} else {

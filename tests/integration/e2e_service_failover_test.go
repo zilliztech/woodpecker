@@ -4880,6 +4880,496 @@ func TestStagedStorageService_Chaos_DiskFailureDuringActiveWrite(t *testing.T) {
 	t.Logf("=== Chaos_DiskFailureDuringActiveWrite PASSED: %d entries read ===", totalRead)
 }
 
+// TestStagedStorageService_Chaos_AllNodesRestartFenceMarksLost_ConcurrentWriters tests the scenario:
+//
+// 3-node cluster (es=3, wq=3, aq=2). Writer A writes entries successfully. All 3 nodes
+// restart, causing all in-memory fence marks to be lost. After restart, Writer A (still
+// holding old segment handle references) attempts to write concurrently while a new
+// Writer B opens — triggering fenceAllActiveSegments. The fence may need retries since
+// Writer A is also operating.
+//
+// This tests the core quorum invariant when fence marks are lost after a full cluster
+// restart with two writers operating concurrently:
+//
+// Invariants verified:
+//   - ACK accuracy: every entry Writer A got an ACK for (before or after restart) is readable
+//   - LAC correctness: Writer B's successful fence returns the correct LAC
+//   - Writer B can write after fence succeeds and all entries are readable
+func TestStagedStorageService_Chaos_AllNodesRestartFenceMarksLost_ConcurrentWriters(t *testing.T) {
+	const clusterSize = 3
+
+	t.Logf("=== Chaos: All nodes restart, fence marks lost, concurrent writers ===")
+
+	// Phase 1: Setup 3-node cluster
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestChaos_FenceMarksLost")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx := context.Background()
+
+	// Setup etcd
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	// Client A
+	clientA, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if clientA != nil {
+			_ = clientA.Close(ctx)
+		}
+	}()
+
+	logName := fmt.Sprintf("chaos_fence_lost_%d", time.Now().UnixNano())
+	err = clientA.CreateLog(ctx, logName)
+	require.NoError(t, err)
+
+	logHandleA, err := clientA.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	// Phase 2: Writer A writes entries
+	t.Logf("Phase 2: Writer A writing 5 entries...")
+	writerA, err := logHandleA.OpenLogWriter(ctx)
+	require.NoError(t, err)
+
+	ackedBeforeRestart := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		payload := fmt.Sprintf("writerA-pre-restart-%d", i)
+		result := writerA.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Writer A pre-restart write %d failed", i)
+		ackedBeforeRestart = append(ackedBeforeRestart, payload)
+		t.Logf("Writer A ACKed entry %d: seg=%d, entry=%d",
+			i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+	}
+	t.Logf("Writer A: %d entries ACKed before restart", len(ackedBeforeRestart))
+
+	// Phase 3: Stop all nodes (crash — all in-memory fence marks lost)
+	t.Logf("Phase 3: Stopping all %d nodes (simulating full cluster crash)...", clusterSize)
+	cluster.StopMultiNodeCluster(t)
+	assert.Equal(t, 0, cluster.GetActiveNodes())
+	time.Sleep(2 * time.Second)
+
+	// Phase 4: Restart all nodes (service ports reused, gossip ports new)
+	// Node 0 bootstraps gossip with a dummy seed to trigger server node creation.
+	// Subsequent nodes join node 0 progressively.
+	t.Logf("Phase 4: Restarting all %d nodes...", clusterSize)
+	firstAddr, restartErr := cluster.RestartNode(t, 0, []string{"127.0.0.1:1"})
+	require.NoError(t, restartErr, "Failed to restart node 0")
+	for i := 1; i < clusterSize; i++ {
+		_, restartErr = cluster.RestartNode(t, i, []string{firstAddr})
+		require.NoError(t, restartErr, "Failed to restart node %d", i)
+	}
+
+	// Wait for gossip cluster to fully form (all nodes discover each other)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for idx, srv := range cluster.Servers {
+			if srv != nil && srv.GetMemberCount() < clusterSize {
+				t.Logf("Waiting for gossip: node %d sees %d/%d members", idx, srv.GetMemberCount(), clusterSize)
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			t.Logf("All %d nodes have discovered each other via gossip", clusterSize)
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	assert.Equal(t, clusterSize, cluster.GetActiveNodes())
+
+	// Phase 5: Writer A tries to write concurrently while Writer B fences
+	t.Logf("Phase 5: Concurrent operations — Writer A writes, Writer B fences...")
+
+	ackedAfterRestart := make([]string, 0)
+	var ackedAfterMu sync.Mutex
+
+	// Goroutine: Writer A attempts writes after restart
+	// The servers will likely reject these (segment file exists → recovery mode), but any
+	// ACKed write MUST be readable — that is the invariant under test.
+	writerADone := make(chan struct{})
+	go func() {
+		defer close(writerADone)
+		for i := 0; i < 5; i++ {
+			payload := fmt.Sprintf("writerA-post-restart-%d", i)
+			writeCtx, writeCancel := context.WithTimeout(ctx, 10*time.Second)
+			result := writerA.Write(writeCtx, &log.WriteMessage{Payload: []byte(payload)})
+			writeCancel()
+			if result.Err != nil {
+				fmt.Printf("[Writer A] post-restart write %d failed (expected): %v\n", i, result.Err)
+				break
+			}
+			ackedAfterMu.Lock()
+			ackedAfterRestart = append(ackedAfterRestart, payload)
+			ackedAfterMu.Unlock()
+			fmt.Printf("[Writer A] post-restart write %d ACKed\n", i)
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+
+	// Give Writer A a brief head start to attempt writes
+	time.Sleep(1 * time.Second)
+
+	// Writer B opens on a separate client — triggers fenceAllActiveSegments
+	t.Logf("Writer B: opening (triggers fenceAllActiveSegments)...")
+	etcdCli2, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli2.Close()
+
+	clientB, err := woodpecker.NewClient(ctx, cfg, etcdCli2, true)
+	require.NoError(t, err)
+	defer func() {
+		if clientB != nil {
+			_ = clientB.Close(ctx)
+		}
+	}()
+
+	logHandleB, err := clientB.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	writerB, err := logHandleB.OpenLogWriter(ctx)
+	require.NoError(t, err, "Writer B must open after fencing")
+	t.Logf("Writer B: opened successfully (fence completed, LAC determined)")
+
+	// Wait for Writer A goroutine to finish
+	<-writerADone
+
+	// Phase 6: Writer B writes entries
+	t.Logf("Phase 6: Writer B writing 5 entries...")
+	writerBEntries := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		payload := fmt.Sprintf("writerB-entry-%d", i)
+		result := writerB.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Writer B write %d failed", i)
+		writerBEntries = append(writerBEntries, payload)
+		t.Logf("Writer B wrote entry %d", i)
+	}
+
+	// Close writers
+	closeCtx, closeCancel := context.WithTimeout(ctx, 10*time.Second)
+	_ = writerA.Close(closeCtx) // may be invalid
+	closeCancel()
+	require.NoError(t, writerB.Close(ctx))
+
+	// Phase 7: Read all entries and verify invariants
+	t.Logf("Phase 7: Reading all entries and verifying invariants...")
+
+	earliest := log.EarliestLogMessageID()
+	reader, err := logHandleB.OpenLogReader(ctx, &earliest, "verify-reader")
+	require.NoError(t, err)
+	defer reader.Close(ctx)
+
+	readPayloads := make([]string, 0)
+	for {
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		msg, readErr := reader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil || msg == nil {
+			break
+		}
+		readPayloads = append(readPayloads, string(msg.Payload))
+		t.Logf("Read: seg=%d, entry=%d, payload=%s",
+			msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	}
+
+	// Invariant 1: All Writer A pre-restart ACKed entries MUST be readable
+	t.Logf("Verifying invariant 1: %d pre-restart ACKed entries are readable...", len(ackedBeforeRestart))
+	for _, acked := range ackedBeforeRestart {
+		found := false
+		for _, read := range readPayloads {
+			if read == acked {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "ACK accuracy violation: pre-restart ACKed entry not readable: %s", acked)
+	}
+
+	// Invariant 2: All Writer A post-restart ACKed entries MUST be readable
+	ackedAfterMu.Lock()
+	postRestartCopy := make([]string, len(ackedAfterRestart))
+	copy(postRestartCopy, ackedAfterRestart)
+	ackedAfterMu.Unlock()
+
+	t.Logf("Verifying invariant 2: %d post-restart ACKed entries are readable...", len(postRestartCopy))
+	for _, acked := range postRestartCopy {
+		found := false
+		for _, read := range readPayloads {
+			if read == acked {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "ACK accuracy violation: post-restart ACKed entry not readable: %s", acked)
+	}
+
+	// Invariant 3: All Writer B entries MUST be readable
+	t.Logf("Verifying invariant 3: %d Writer B entries are readable...", len(writerBEntries))
+	for _, entry := range writerBEntries {
+		found := false
+		for _, read := range readPayloads {
+			if read == entry {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Writer B entry not readable: %s", entry)
+	}
+
+	totalExpected := len(ackedBeforeRestart) + len(postRestartCopy) + len(writerBEntries)
+	assert.GreaterOrEqual(t, len(readPayloads), totalExpected,
+		"Should read at least all ACKed entries (pre=%d + post=%d + B=%d = %d)",
+		len(ackedBeforeRestart), len(postRestartCopy), len(writerBEntries), totalExpected)
+
+	t.Logf("=== Chaos_AllNodesRestartFenceMarksLost PASSED: total read=%d (pre=%d, post=%d, writerB=%d) ===",
+		len(readPayloads), len(ackedBeforeRestart), len(postRestartCopy), len(writerBEntries))
+}
+
+// TestStagedStorageService_Chaos_FinalizedSegmentSurvivesRestart_OldWriterRejected tests the scenario:
+//
+// 3-node cluster (es=3, wq=3, aq=2). Writer A writes entries. Writer B opens,
+// triggering FenceAndComplete which fences AND finalizes Writer A's segment (footer
+// written to disk, metadata updated to Completed). Then all 3 nodes restart.
+//
+// After restart, the finalized state (footer on disk) persists even though in-memory
+// fence marks are lost:
+//   - Old Writer A's writes to the finalized segment MUST fail (segment finalized on disk)
+//   - A new Writer C can re-fence idempotently (segment already Completed) and write to
+//     a new segment
+//
+// Invariants verified:
+//   - Finalize durability: finalized state survives full cluster restart
+//   - Old writer rejection: writes to finalized segment fail after restart
+//   - Fence idempotency: re-fencing a completed/finalized segment succeeds
+//   - New segment creation: new writer can create and write to a new segment after restart
+//   - Data integrity: all originally ACKed entries are readable
+func TestStagedStorageService_Chaos_FinalizedSegmentSurvivesRestart_OldWriterRejected(t *testing.T) {
+	const clusterSize = 3
+
+	t.Logf("=== Chaos: Finalized segment survives restart, old writer rejected ===")
+
+	// Phase 1: Setup 3-node cluster
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestChaos_FinalizedSurvivesRestart")
+	cluster, cfg, _, seeds := utils.StartMiniCluster(t, clusterSize, rootPath)
+	cfg.Woodpecker.Client.Quorum.BufferPools[0].Seeds = seeds
+	defer cluster.StopMultiNodeCluster(t)
+
+	time.Sleep(2 * time.Second)
+
+	ctx := context.Background()
+
+	// Setup etcd
+	etcdCli, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli.Close()
+
+	// Client A
+	clientA, err := woodpecker.NewClient(ctx, cfg, etcdCli, true)
+	require.NoError(t, err)
+	defer func() {
+		if clientA != nil {
+			_ = clientA.Close(ctx)
+		}
+	}()
+
+	logName := fmt.Sprintf("chaos_finalized_restart_%d", time.Now().UnixNano())
+	err = clientA.CreateLog(ctx, logName)
+	require.NoError(t, err)
+
+	logHandleA, err := clientA.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	// Phase 2: Writer A writes entries
+	t.Logf("Phase 2: Writer A writing 5 entries...")
+	writerA, err := logHandleA.OpenLogWriter(ctx)
+	require.NoError(t, err)
+
+	writerAEntries := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		payload := fmt.Sprintf("writerA-entry-%d", i)
+		result := writerA.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Writer A write %d failed", i)
+		writerAEntries = append(writerAEntries, payload)
+		t.Logf("Writer A wrote entry %d: seg=%d, entry=%d",
+			i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+	}
+	t.Logf("Writer A: 5 entries written and ACKed")
+
+	// Phase 3: Writer B opens — triggers FenceAndComplete on Writer A's segment
+	// This performs fence (sets fenced=true in memory) AND finalize (writes footer to disk)
+	// AND updates metadata to Completed in etcd.
+	t.Logf("Phase 3: Writer B opens (triggers fence + finalize on Writer A's segment)...")
+	etcdCli2, err := etcd.GetRemoteEtcdClient(cfg.Etcd.GetEndpoints())
+	require.NoError(t, err)
+	defer etcdCli2.Close()
+
+	clientB, err := woodpecker.NewClient(ctx, cfg, etcdCli2, true)
+	require.NoError(t, err)
+	defer func() {
+		if clientB != nil {
+			_ = clientB.Close(ctx)
+		}
+	}()
+
+	logHandleB, err := clientB.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	writerB, err := logHandleB.OpenLogWriter(ctx)
+	require.NoError(t, err)
+	t.Logf("Writer B opened — Writer A's segment is now fenced + finalized (footer on disk)")
+
+	// Close Writer B without writing (simulates "fence completed but writer not yet used")
+	require.NoError(t, writerB.Close(ctx))
+	t.Logf("Writer B closed (no writes, just triggered fence + finalize)")
+
+	// Phase 4: Stop all nodes
+	t.Logf("Phase 4: Stopping all %d nodes...", clusterSize)
+	cluster.StopMultiNodeCluster(t)
+	assert.Equal(t, 0, cluster.GetActiveNodes())
+	time.Sleep(2 * time.Second)
+
+	// Phase 5: Restart all nodes
+	// After restart: in-memory fence marks are gone, but finalized state (footer on disk)
+	// persists. This is the key difference from Case 1.
+	t.Logf("Phase 5: Restarting all %d nodes...", clusterSize)
+	firstAddr, restartErr := cluster.RestartNode(t, 0, []string{"127.0.0.1:1"})
+	require.NoError(t, restartErr, "Failed to restart node 0")
+	for i := 1; i < clusterSize; i++ {
+		_, restartErr = cluster.RestartNode(t, i, []string{firstAddr})
+		require.NoError(t, restartErr, "Failed to restart node %d", i)
+	}
+
+	// Wait for gossip cluster to fully form (all nodes discover each other)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for idx, srv := range cluster.Servers {
+			if srv != nil && srv.GetMemberCount() < clusterSize {
+				t.Logf("Waiting for gossip: node %d sees %d/%d members", idx, srv.GetMemberCount(), clusterSize)
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			t.Logf("All %d nodes have discovered each other via gossip", clusterSize)
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	assert.Equal(t, clusterSize, cluster.GetActiveNodes())
+
+	// Phase 6: Writer A tries to write — MUST fail (segment finalized on disk)
+	t.Logf("Phase 6: Writer A attempts write to finalized segment (should fail)...")
+	writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second)
+	result := writerA.Write(writeCtx, &log.WriteMessage{
+		Payload: []byte("writerA-after-finalize-should-fail"),
+	})
+	writeCancel()
+	assert.Error(t, result.Err,
+		"Writer A MUST fail when writing to finalized segment after restart")
+	t.Logf("Writer A write correctly rejected: %v", result.Err)
+
+	// Clean up old writer
+	closeCtx, closeCancel := context.WithTimeout(ctx, 5*time.Second)
+	_ = writerA.Close(closeCtx)
+	closeCancel()
+
+	// Phase 7: Writer C opens — fence is idempotent for already-completed segments
+	// The segment is already Completed in metadata, so fenceAllActiveSegments either
+	// skips it (no Active segments) or re-fences idempotently.
+	t.Logf("Phase 7: Writer C opens (fence should be idempotent for finalized segment)...")
+	logHandleC, err := clientB.OpenLog(ctx, logName)
+	require.NoError(t, err)
+
+	writerC, err := logHandleC.OpenLogWriter(ctx)
+	require.NoError(t, err, "Writer C must open: fence is idempotent for completed segments")
+	t.Logf("Writer C opened successfully — will write to new segment")
+
+	// Phase 8: Writer C writes to a new segment
+	t.Logf("Phase 8: Writer C writing 3 entries to new segment...")
+	writerCEntries := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		payload := fmt.Sprintf("writerC-entry-%d", i)
+		result := writerC.Write(ctx, &log.WriteMessage{Payload: []byte(payload)})
+		require.NoError(t, result.Err, "Writer C write %d failed", i)
+		writerCEntries = append(writerCEntries, payload)
+		t.Logf("Writer C wrote entry %d: seg=%d, entry=%d",
+			i, result.LogMessageId.SegmentId, result.LogMessageId.EntryId)
+	}
+	require.NoError(t, writerC.Close(ctx))
+	t.Logf("Writer C: 3 entries written and closed")
+
+	// Phase 9: Read all entries and verify
+	t.Logf("Phase 9: Reading all entries and verifying invariants...")
+
+	earliest := log.EarliestLogMessageID()
+	reader, err := logHandleC.OpenLogReader(ctx, &earliest, "verify-reader")
+	require.NoError(t, err)
+	defer reader.Close(ctx)
+
+	readPayloads := make([]string, 0)
+	for {
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		msg, readErr := reader.ReadNext(readCtx)
+		readCancel()
+		if readErr != nil || msg == nil {
+			break
+		}
+		readPayloads = append(readPayloads, string(msg.Payload))
+		t.Logf("Read: seg=%d, entry=%d, payload=%s",
+			msg.Id.SegmentId, msg.Id.EntryId, string(msg.Payload))
+	}
+
+	// Invariant 1: Writer A's original entries survive finalize + restart
+	t.Logf("Verifying invariant 1: Writer A's %d entries survive finalize + restart...", len(writerAEntries))
+	for _, entry := range writerAEntries {
+		found := false
+		for _, read := range readPayloads {
+			if read == entry {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found,
+			"Finalize durability violation: Writer A entry not readable after restart: %s", entry)
+	}
+
+	// Invariant 2: Writer C's entries are readable
+	t.Logf("Verifying invariant 2: Writer C's %d entries are readable...", len(writerCEntries))
+	for _, entry := range writerCEntries {
+		found := false
+		for _, read := range readPayloads {
+			if read == entry {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Writer C entry not readable: %s", entry)
+	}
+
+	// Invariant 3: Writer A's post-finalize write is NOT in the read data
+	t.Logf("Verifying invariant 3: Writer A's rejected write is not in read data...")
+	for _, read := range readPayloads {
+		assert.NotEqual(t, "writerA-after-finalize-should-fail", read,
+			"Writer A's post-finalize rejected write must NOT appear in read data")
+	}
+
+	totalExpected := len(writerAEntries) + len(writerCEntries)
+	assert.GreaterOrEqual(t, len(readPayloads), totalExpected,
+		"Should read at least Writer A (%d) + Writer C (%d) = %d entries",
+		len(writerAEntries), len(writerCEntries), totalExpected)
+
+	t.Logf("=== Chaos_FinalizedSegmentSurvivesRestart PASSED: total read=%d (writerA=%d, writerC=%d) ===",
+		len(readPayloads), len(writerAEntries), len(writerCEntries))
+}
+
 // makeTreeReadOnly recursively sets all directories and files under root to read-only.
 func makeTreeReadOnly(root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
