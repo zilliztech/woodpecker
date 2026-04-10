@@ -14,22 +14,25 @@
 # Update milvus-storage_VERSION for the first occurrence
 milvus_add_pkg_config("milvus-storage")
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES "")
-# TODO Use official repository version instead of private fork
-#set( milvus-storage_VERSION 839a8e5)
-#set( GIT_REPOSITORY  "https://github.com/milvus-io/milvus-storage.git")
-set( milvus-storage_VERSION 28056ac)
-set( GIT_REPOSITORY  "https://github.com/tinswzy/milvus-storage.git")
+set( milvus-storage_VERSION b86636f)
+set( GIT_REPOSITORY  "https://github.com/milvus-io/milvus-storage.git")
 message(STATUS "milvus-storage repo: ${GIT_REPOSITORY}")
 message(STATUS "milvus-storage version: ${milvus-storage_VERSION}")
 
 message(STATUS "Building milvus-storage-${milvus-storage_SOURCE_VER} from source")
 message(STATUS ${CMAKE_BUILD_TYPE})
 
-if ( ENABLE_AZURE_FS STREQUAL "ON" )
-    set(WITH_AZURE_FS ON CACHE BOOL "" FORCE )
-else ()
-    set(WITH_AZURE_FS OFF CACHE BOOL "" FORCE )
-endif ()
+# Inject a FindAzure.cmake shim. Upstream milvus-storage cpp/CMakeLists.txt calls
+# find_package(Azure REQUIRED) unconditionally, but conan installs the Azure SDK
+# transitively (via arrow:with_azure=True) under the package name azure-sdk-for-cpp,
+# producing Findazure-sdk-for-cpp.cmake — the names don't match. Generate a stub
+# FindAzure.cmake that delegates to azure-sdk-for-cpp; the conan-generated target
+# azure-sdk-for-cpp::azure-sdk-for-cpp is what milvus-storage links against, so no
+# target aliasing is needed.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cmake-shim/FindAzure.cmake"
+     "find_package(azure-sdk-for-cpp REQUIRED)\n"
+     "set(Azure_FOUND \${azure-sdk-for-cpp_FOUND})\n")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_BINARY_DIR}/cmake-shim")
 
 set( CMAKE_PREFIX_PATH ${CONAN_BOOST_ROOT} )
 FetchContent_Declare(

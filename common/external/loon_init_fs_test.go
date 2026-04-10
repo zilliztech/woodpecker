@@ -165,7 +165,7 @@ func TestBuildRemoteProperties(t *testing.T) {
 			LogLevel:         "info",
 			Region:           "us-east-1",
 			UseVirtualHost:   false,
-			RequestTimeoutMs: 1000,
+			RequestTimeoutMs: config.NewDurationMillisecondsFromInt(1000),
 		},
 	}
 
@@ -245,7 +245,7 @@ func TestPropertyKeysUsedInBuildFunctions(t *testing.T) {
 				LogLevel:          "info",
 				Region:            "us-east-1",
 				UseVirtualHost:    false,
-				RequestTimeoutMs:  1000,
+				RequestTimeoutMs:  config.NewDurationMillisecondsFromInt(1000),
 				IamEndpoint:       "iam.aws.com",
 				GcpCredentialJSON: "",
 				Ssl: config.MinioSslConfig{
@@ -293,19 +293,19 @@ func TestNormalizeLogLevel(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"Empty", "", "Info"},
-		{"Fatal lowercase", "fatal", "Fatal"},
-		{"Error lowercase", "error", "Error"},
-		{"Warn lowercase", "warn", "Warn"},
-		{"Warning", "warning", "Warn"},
-		{"Info lowercase", "info", "Info"},
-		{"Debug lowercase", "debug", "Debug"},
-		{"Trace lowercase", "trace", "Trace"},
-		{"Off lowercase", "off", "Off"},
-		{"Fatal uppercase", "FATAL", "Fatal"},
-		{"Error mixed case", "ErRoR", "Error"},
-		{"Unknown value", "unknown", "Info"},
-		{"Invalid value", "xyz", "Info"},
+		{"Empty", "", "info"},
+		{"Fatal lowercase", "fatal", "fatal"},
+		{"Error lowercase", "error", "error"},
+		{"Warn lowercase", "warn", "warn"},
+		{"Warning", "warning", "warn"},
+		{"Info lowercase", "info", "info"},
+		{"Debug lowercase", "debug", "debug"},
+		{"Trace lowercase", "trace", "trace"},
+		{"Off lowercase", "off", "off"},
+		{"Fatal uppercase", "FATAL", "fatal"},
+		{"Error mixed case", "ErRoR", "error"},
+		{"Unknown value", "unknown", "info"},
+		{"Invalid value", "xyz", "info"},
 	}
 
 	for _, tt := range tests {

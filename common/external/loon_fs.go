@@ -26,6 +26,7 @@ package external
 import "C"
 
 import (
+	"strings"
 	"unsafe"
 )
 
@@ -210,6 +211,10 @@ func DeleteFile(path string) error {
 func FileExists(path string) (bool, error) {
 	info, err := GetFileInfo(path)
 	if err != nil {
+		// TODO should use FFI Err Code instead
+		if strings.Contains(err.Error(), "File not found") {
+			return false, nil
+		}
 		return false, err
 	}
 	// File exists and is not a directory
@@ -271,50 +276,34 @@ func ListDir(path string, recursive bool) ([]DirEntry, error) {
 	pathLen := C.uint32_t(len(path))
 	defer C.free(unsafe.Pointer(cPath))
 
-	var paths **C.char
-	var pathLens *C.uint32_t
-	var isDirs *C.bool
-	var sizes *C.uint64_t
-	var mtimeNs *C.int64_t
-	var count C.uint32_t
-
-	result := C.loon_filesystem_list_dir(handle, cPath, pathLen, C.bool(recursive), &paths, &pathLens, &isDirs, &sizes, &mtimeNs, &count)
+	// loon_filesystem_list_dir is a caller-allocated output pattern: pass &outList
+	// (LoonFileInfoList*), the FFI fills entries/count, and we free via
+	// loon_filesystem_free_file_info_list which also takes the same pointer.
+	var outList C.LoonFileInfoList
+	result := C.loon_filesystem_list_dir(handle, cPath, pathLen, C.bool(recursive), &outList)
 	if err := HandleLoonFFIResult(&result, "ListDir failed"); err != nil {
 		return nil, err
 	}
+	defer C.loon_filesystem_free_file_info_list(&outList)
 
+	count := int(outList.count)
 	if count == 0 {
 		return []DirEntry{}, nil
 	}
 
-	// Convert to Go slice
-	pathsSlice := unsafe.Slice(paths, int(count))
-	pathLensSlice := unsafe.Slice(pathLens, int(count))
-	isDirsSlice := unsafe.Slice(isDirs, int(count))
-	sizesSlice := unsafe.Slice(sizes, int(count))
-	mtimeNsSlice := unsafe.Slice(mtimeNs, int(count))
-
-	defer func() {
-		// Free the arrays
-		for i := 0; i < int(count); i++ {
-			C.free(unsafe.Pointer(pathsSlice[i]))
-		}
-		C.free(unsafe.Pointer(paths))
-		C.free(unsafe.Pointer(pathLens))
-		C.free(unsafe.Pointer(isDirs))
-		C.free(unsafe.Pointer(sizes))
-		C.free(unsafe.Pointer(mtimeNs))
-	}()
-
-	entries := make([]DirEntry, int(count))
-	for i := 0; i < int(count); i++ {
-		// Use path length to properly handle paths with null bytes
-		pathBytes := C.GoBytes(unsafe.Pointer(pathsSlice[i]), C.int(pathLensSlice[i]))
+	// cgo does not allow indexing a C pointer (outList.entries[i]); convert it to a
+	// Go slice that views the same memory, valid until the deferred free runs.
+	entriesSlice := unsafe.Slice(outList.entries, count)
+	entries := make([]DirEntry, count)
+	for i := 0; i < count; i++ {
+		e := entriesSlice[i]
+		// Use path_len so paths containing embedded null bytes survive intact.
+		pathBytes := C.GoBytes(unsafe.Pointer(e.path), C.int(e.path_len))
 		entries[i] = DirEntry{
 			Path:    string(pathBytes),
-			IsDir:   bool(isDirsSlice[i]),
-			Size:    int64(sizesSlice[i]),
-			MTimeNs: int64(mtimeNsSlice[i]),
+			IsDir:   bool(e.is_dir),
+			Size:    int64(e.size),
+			MTimeNs: int64(e.mtime_ns),
 		}
 	}
 

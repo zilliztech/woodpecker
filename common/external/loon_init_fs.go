@@ -99,7 +99,7 @@ func CleanLoonFileSystem() {
 // TODO should be remove after storage v2 support case-insensitive
 func normalizeLogLevel(level string) string {
 	if level == "" {
-		return "Info" // default
+		return "info" // default
 	}
 
 	// Convert to lowercase first, then capitalize first letter
@@ -108,22 +108,22 @@ func normalizeLogLevel(level string) string {
 	// Map common variants
 	switch level {
 	case "fatal":
-		return "Fatal"
+		return "fatal"
 	case "error":
-		return "Error"
+		return "error"
 	case "warn", "warning":
-		return "Warn"
+		return "warn"
 	case "info":
-		return "Info"
+		return "info"
 	case "debug":
-		return "Debug"
+		return "debug"
 	case "trace":
-		return "Trace"
+		return "trace"
 	case "off":
-		return "Off"
+		return "off"
 	default:
 		// If unknown, default to Info
-		return "Info"
+		return "info"
 	}
 }
 
@@ -172,7 +172,7 @@ func buildRemoteProperties(cfg *config.Configuration) *C.LoonProperties {
 		normalizeLogLevel(cfg.Minio.LogLevel),
 		cfg.Minio.Region,
 		strconv.FormatBool(cfg.Minio.UseVirtualHost),
-		strconv.Itoa(cfg.Minio.RequestTimeoutMs),
+		strconv.Itoa(cfg.Minio.RequestTimeoutMs.Milliseconds()),
 		cfg.Minio.GcpCredentialJSON,
 	}
 

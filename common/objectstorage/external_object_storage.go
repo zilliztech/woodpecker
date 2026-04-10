@@ -28,6 +28,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/external"
 	"github.com/zilliztech/woodpecker/common/logger"
+	"github.com/zilliztech/woodpecker/common/metrics"
 	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
@@ -114,12 +115,15 @@ func (g *ExternalObjectStorage) buildPath(bucketName, objectName string) string 
 	return fmt.Sprintf("%s/%s", bucketName, objectName)
 }
 
-func (g *ExternalObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64) (minioHandler.FileReader, error) {
+func (g *ExternalObjectStorage) GetObject(ctx context.Context, bucketName, objectName string, offset int64, size int64, operatingNamespace string, operatingLogId string) (minioHandler.FileReader, error) {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 
 	// Read the entire file
 	data, err := external.ReadFile(path)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 	}
 
@@ -133,6 +137,8 @@ func (g *ExternalObjectStorage) GetObject(ctx context.Context, bucketName, objec
 		startOffset = 0
 	} else if offset >= fileSize {
 		// Offset beyond file size, return empty reader
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 		return &externalFileReader{
 			data:   []byte{},
 			offset: 0,
@@ -154,6 +160,8 @@ func (g *ExternalObjectStorage) GetObject(ctx context.Context, bucketName, objec
 	// Extract the requested portion
 	extractedData := data[startOffset : startOffset+readSize]
 
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "get_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return &externalFileReader{
 		data:   extractedData,
 		offset: 0,
@@ -161,25 +169,38 @@ func (g *ExternalObjectStorage) GetObject(ctx context.Context, bucketName, objec
 	}, nil
 }
 
-func (g *ExternalObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (g *ExternalObjectStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 
 	// Read all data from reader
 	data, err := io.ReadAll(reader)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return fmt.Errorf("failed to read from reader: %w", err)
 	}
 
 	// Write file without metadata
-	return external.WriteFile(path, data, nil)
+	if err := external.WriteFile(path, data, nil); err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return err
+	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return nil
 }
 
-func (g *ExternalObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64) error {
+func (g *ExternalObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 
 	// Read all data from reader
 	data, err := io.ReadAll(reader)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return fmt.Errorf("failed to read from reader: %w", err)
 	}
 
@@ -188,28 +209,39 @@ func (g *ExternalObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucket
 		minioHandler.FencedObjectMetaKey: "false",
 	})
 	if err != nil && g.IsPreconditionFailedError(err) {
-		_, isFencedObject, stateErr := g.StatObject(ctx, bucketName, objectName)
+		_, isFencedObject, stateErr := g.StatObject(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 		if stateErr != nil {
 			// return normal err, let task retry
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return stateErr
 		}
 		if isFencedObject {
 			logger.Ctx(ctx).Info("object already exists and it is a fence object", zap.String("objectName", objectName))
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "fenced").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "fenced").Observe(float64(time.Since(start).Milliseconds()))
 			return werr.ErrSegmentFenced.WithCauseErrMsg("already fenced")
 		}
 		// means it is a normal object already uploaded before this retry, idempotent flush success
 		logger.Ctx(ctx).Info("object already exists, idempotent flush success", zap.String("objectKey", objectName))
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "already_exists").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "already_exists").Observe(float64(time.Since(start).Milliseconds()))
 		return werr.ErrObjectAlreadyExists
 	}
 
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return err
 	}
 
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_object_if_none_match", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
-func (g *ExternalObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string) error {
+func (g *ExternalObjectStorage) PutFencedObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 	// Create a fenced object
 	putErr := external.WriteFile(path, []byte{'F'}, map[string]string{
@@ -219,51 +251,72 @@ func (g *ExternalObjectStorage) PutFencedObject(ctx context.Context, bucketName,
 	// if the object already exists, check if it's a fenced object
 	if putErr != nil && g.IsPreconditionFailedError(putErr) {
 		// check if the object exists
-		_, isFenced, stateErr := g.StatObject(ctx, bucketName, objectName)
+		_, isFenced, stateErr := g.StatObject(ctx, bucketName, objectName, operatingNamespace, operatingLogId)
 		if stateErr != nil {
 			// return normal err
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 			return stateErr
 		}
 		if isFenced {
-			// already fenced, return success
+			// already fenced, return success (idempotent)
 			logger.Ctx(ctx).Info("found fenced object exists, skip", zap.String("objectName", objectName))
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return nil
 		}
 		// return normal err
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "already_exists").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "already_exists").Observe(float64(time.Since(start).Milliseconds()))
 		return werr.ErrObjectAlreadyExists
 	}
 
-	// return normal err
-	return putErr
+	if putErr != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return putErr
+	}
+
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "put_fenced_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return nil
 }
 
-func (g *ExternalObjectStorage) StatObject(ctx context.Context, bucketName, objectName string) (int64, bool, error) {
+func (g *ExternalObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 
 	// Get file stats
 	stats, err := external.GetFileStats(path)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return -1, false, fmt.Errorf("failed to get file stats: %w", err)
 	}
 
 	// Check if it's a fenced object by checking metadata
 	isFenced := false
 	if stats.Metadata != nil {
-		if val, ok := stats.Metadata["fenced"]; ok && val == "true" {
+		if val, ok := stats.Metadata[minioHandler.FencedObjectMetaKey]; ok && val == "true" {
 			isFenced = true
 		}
 	}
 
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "stat_object", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return stats.Size, isFenced, nil
 }
 
-func (g *ExternalObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) error {
+func (g *ExternalObjectStorage) WalkWithObjects(ctx context.Context, bucketName string, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	// Build the full path to list
 	listPath := g.buildPath(bucketName, prefix)
 
 	// List directory contents
 	entries, err := external.ListDir(listPath, recursive)
 	if err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "error").Observe(float64(time.Since(start).Milliseconds()))
 		return fmt.Errorf("failed to list directory %s: %w", listPath, err)
 	}
 
@@ -303,16 +356,28 @@ func (g *ExternalObjectStorage) WalkWithObjects(ctx context.Context, bucketName 
 
 		// If walkFunc returns false, stop walking
 		if !walkFunc(chunkInfo) {
+			metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "success").Inc()
+			metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "success").Observe(float64(time.Since(start).Milliseconds()))
 			return nil
 		}
 	}
 
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "walk_with_objects", "success").Observe(float64(time.Since(start).Milliseconds()))
 	return nil
 }
 
-func (g *ExternalObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string) error {
+func (g *ExternalObjectStorage) RemoveObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) error {
+	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
-	return external.DeleteFile(path)
+	if err := external.DeleteFile(path); err != nil {
+		metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "error").Inc()
+		metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "error").Observe(float64(time.Since(start).Milliseconds()))
+		return err
+	}
+	metrics.WpObjectStorageOperationsTotal.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "success").Inc()
+	metrics.WpObjectStorageOperationLatency.WithLabelValues(metrics.NodeID, operatingNamespace, operatingLogId, "remove_object", "success").Observe(float64(time.Since(start).Milliseconds()))
+	return nil
 }
 
 func (g *ExternalObjectStorage) IsObjectNotExistsError(err error) bool {

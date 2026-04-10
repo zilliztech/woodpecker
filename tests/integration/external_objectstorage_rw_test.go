@@ -55,18 +55,18 @@ func TestExternalObjectStoragePutObject(t *testing.T) {
 
 	// 1. Test successful upload
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 	t.Logf("Object uploaded successfully: %s", objectName)
 
 	// 2. Verify object exists and content is correct
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testData)), objSize)
 	assert.False(t, isFenced)
 
 	// 3. Read and verify content
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "", "")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -75,7 +75,7 @@ func TestExternalObjectStoragePutObject(t *testing.T) {
 	assert.Equal(t, testData, readData)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -91,24 +91,24 @@ func TestExternalObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 
 	// 1. Test successful upload to non-existent object (should succeed)
 	err := storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 	t.Logf("Initial upload succeeded: %s", objectName)
 
 	// 2. Test failed upload to existing object (should return error)
 	newData := []byte("should not be uploaded")
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader(newData), int64(len(newData)))
+		bytes.NewReader(newData), int64(len(newData)), "", "")
 	require.Error(t, err)
 	assert.True(t, werr.ErrObjectAlreadyExists.Is(err), "Should return object already existing error")
 	t.Logf("Expected error for existing object: %v", err)
 
 	// 3. Verify original content is unchanged
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.False(t, isFenced)
 
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, objSize, "", "")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -117,7 +117,7 @@ func TestExternalObjectStoragePutObjectIfNoneMatch(t *testing.T) {
 	assert.Equal(t, testData, readData, "Original content should be unchanged")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -129,23 +129,23 @@ func TestExternalObjectStoragePutFencedObject(t *testing.T) {
 	objectName := fmt.Sprintf("test-external-put-fenced-%d", time.Now().UnixNano())
 
 	// 1. Test successful fenced object creation
-	err := storageCli.PutFencedObject(ctx, bucketName, objectName)
+	err := storageCli.PutFencedObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	t.Logf("Fenced object created successfully: %s", objectName)
 
 	// 2. Verify object is fenced
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.True(t, isFenced, "Object should be marked as fenced")
 	assert.Equal(t, int64(1), objSize, "Fenced object should have size 1")
 
 	// 3. Test idempotent behavior - calling PutFencedObject again should succeed
-	err = storageCli.PutFencedObject(ctx, bucketName, objectName)
+	err = storageCli.PutFencedObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	t.Logf("Idempotent fenced object creation succeeded")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -157,37 +157,37 @@ func TestExternalObjectStorageStatObject(t *testing.T) {
 	objectName := fmt.Sprintf("test-external-stat-object-%d", time.Now().UnixNano())
 
 	// 1. Test StatObject on non-existent object
-	_, _, err := storageCli.StatObject(ctx, bucketName, objectName)
+	_, _, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.Error(t, err)
 	assert.True(t, storageCli.IsObjectNotExistsError(err), "Should return object not exists error")
 
 	// 2. Create a regular object
 	testData := []byte("test data for stat")
 	err = storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 
 	// 3. Test StatObject on existing object
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(testData)), objSize)
 	assert.False(t, isFenced, "Regular object should not be fenced")
 
 	// 4. Create a fenced object
 	fencedObjectName := fmt.Sprintf("test-external-stat-fenced-%d", time.Now().UnixNano())
-	err = storageCli.PutFencedObject(ctx, bucketName, fencedObjectName)
+	err = storageCli.PutFencedObject(ctx, bucketName, fencedObjectName, "", "")
 	require.NoError(t, err)
 
 	// 5. Test StatObject on fenced object
-	fencedSize, isFenced, err := storageCli.StatObject(ctx, bucketName, fencedObjectName)
+	fencedSize, isFenced, err := storageCli.StatObject(ctx, bucketName, fencedObjectName, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), fencedSize, "Fenced object should have size 1")
 	assert.True(t, isFenced, "Object should be marked as fenced")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
-	err = storageCli.RemoveObject(ctx, bucketName, fencedObjectName)
+	err = storageCli.RemoveObject(ctx, bucketName, fencedObjectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -203,11 +203,11 @@ func TestExternalObjectStorageGetObject(t *testing.T) {
 
 	// 1. Upload object
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 
 	// 2. Read full object
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)))
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)), "", "")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -216,7 +216,7 @@ func TestExternalObjectStorageGetObject(t *testing.T) {
 	assert.Equal(t, testData, readData)
 
 	// 3. Test ReadAt
-	reader2, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)))
+	reader2, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)), "", "")
 	require.NoError(t, err)
 	defer reader2.Close()
 
@@ -227,7 +227,7 @@ func TestExternalObjectStorageGetObject(t *testing.T) {
 	assert.Equal(t, testData[:5], buf)
 
 	// 4. Test Seek
-	reader3, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)))
+	reader3, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(testData)), "", "")
 	require.NoError(t, err)
 	defer reader3.Close()
 
@@ -247,7 +247,7 @@ func TestExternalObjectStorageGetObject(t *testing.T) {
 	assert.Equal(t, int64(len(testData)), size)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -266,11 +266,11 @@ func TestExternalObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 
 	// 1. Upload the 100-byte object
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 
 	// 2. Read only first 50 bytes using offset=0, size=50
-	partialReader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 50)
+	partialReader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 50, "", "")
 	require.NoError(t, err)
 	defer partialReader.Close()
 
@@ -280,7 +280,7 @@ func TestExternalObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[:50], partialData)
 
 	// 3. Read middle 30 bytes using offset=35, size=30
-	middleReader, err := storageCli.GetObject(ctx, bucketName, objectName, 35, 30)
+	middleReader, err := storageCli.GetObject(ctx, bucketName, objectName, 35, 30, "", "")
 	require.NoError(t, err)
 	defer middleReader.Close()
 
@@ -290,7 +290,7 @@ func TestExternalObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[35:65], middleData)
 
 	// 4. Read last 25 bytes using offset=75, size=25
-	lastReader, err := storageCli.GetObject(ctx, bucketName, objectName, 75, 25)
+	lastReader, err := storageCli.GetObject(ctx, bucketName, objectName, 75, 25, "", "")
 	require.NoError(t, err)
 	defer lastReader.Close()
 
@@ -300,7 +300,7 @@ func TestExternalObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[75:100], lastData)
 
 	// 5. Test edge case: read beyond object size
-	beyondReader, err := storageCli.GetObject(ctx, bucketName, objectName, 90, 20)
+	beyondReader, err := storageCli.GetObject(ctx, bucketName, objectName, 90, 20, "", "")
 	require.NoError(t, err)
 	defer beyondReader.Close()
 
@@ -310,7 +310,7 @@ func TestExternalObjectStorageGetObjectWithOffsetAndSize(t *testing.T) {
 	assert.Equal(t, testData[90:100], beyondData)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -324,24 +324,24 @@ func TestExternalObjectStorageRemoveObject(t *testing.T) {
 	// 1. Create an object
 	testData := []byte("test data to be removed")
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(testData), int64(len(testData)))
+		bytes.NewReader(testData), int64(len(testData)), "", "")
 	require.NoError(t, err)
 
 	// 2. Verify object exists
-	_, _, err = storageCli.StatObject(ctx, bucketName, objectName)
+	_, _, err = storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 
 	// 3. Remove the object
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 
 	// 4. Verify object no longer exists
-	_, _, err = storageCli.StatObject(ctx, bucketName, objectName)
+	_, _, err = storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.Error(t, err)
 	assert.True(t, storageCli.IsObjectNotExistsError(err))
 
 	// 5. Test removing non-existent object (should return error)
-	err = storageCli.RemoveObject(ctx, bucketName, "non-existent-object")
+	err = storageCli.RemoveObject(ctx, bucketName, "non-existent-object", "", "")
 	require.Error(t, err)
 }
 
@@ -353,7 +353,7 @@ func TestExternalObjectStorageIsObjectNotExistsError(t *testing.T) {
 	objectName := fmt.Sprintf("test-external-error-check-%d", time.Now().UnixNano())
 
 	// 1. Test on non-existent object
-	_, _, err := storageCli.StatObject(ctx, bucketName, objectName)
+	_, _, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.Error(t, err)
 	assert.True(t, storageCli.IsObjectNotExistsError(err), "Should identify object not exists error")
 
@@ -362,16 +362,16 @@ func TestExternalObjectStorageIsObjectNotExistsError(t *testing.T) {
 
 	// 3. Test on other error (create then try to create again with PutObjectIfNoneMatch)
 	err = storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader([]byte("test")), 4)
+		bytes.NewReader([]byte("test")), 4, "", "")
 	require.NoError(t, err)
 
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader([]byte("test")), 4)
+		bytes.NewReader([]byte("test")), 4, "", "")
 	require.Error(t, err)
 	assert.True(t, werr.ErrObjectAlreadyExists.Is(err), "should be object already exists error")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -384,12 +384,12 @@ func TestExternalObjectStorageIsPreconditionFailedError(t *testing.T) {
 
 	// 1. Create an object
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader([]byte("test")), 4)
+		bytes.NewReader([]byte("test")), 4, "", "")
 	require.NoError(t, err)
 
 	// 2. Try PutObjectIfNoneMatch on existing object (should return precondition failed)
 	err = storageCli.PutObjectIfNoneMatch(ctx, bucketName, objectName,
-		bytes.NewReader([]byte("test")), 4)
+		bytes.NewReader([]byte("test")), 4, "", "")
 	require.Error(t, err)
 	assert.True(t, werr.ErrObjectAlreadyExists.Is(err), "Should identify object already exists error")
 
@@ -397,12 +397,12 @@ func TestExternalObjectStorageIsPreconditionFailedError(t *testing.T) {
 	assert.False(t, storageCli.IsPreconditionFailedError(nil))
 
 	// 4. Test on object not exists error
-	_, _, err = storageCli.StatObject(ctx, bucketName, "non-existent-object")
+	_, _, err = storageCli.StatObject(ctx, bucketName, "non-existent-object", "", "")
 	require.Error(t, err)
 	assert.False(t, storageCli.IsPreconditionFailedError(err), "Object not exists error should not be identified as precondition failed")
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -423,7 +423,7 @@ func TestExternalObjectStorageWalkWithObjects(t *testing.T) {
 	testData := []byte("test data for walk")
 	for _, objName := range testObjects {
 		err := storageCli.PutObject(ctx, bucketName, objName,
-			bytes.NewReader(testData), int64(len(testData)))
+			bytes.NewReader(testData), int64(len(testData)), "", "")
 		require.NoError(t, err)
 	}
 
@@ -432,7 +432,7 @@ func TestExternalObjectStorageWalkWithObjects(t *testing.T) {
 	err := storageCli.WalkWithObjects(ctx, bucketName, basePath, true, func(objInfo *storageclient.ChunkObjectInfo) bool {
 		foundObjects = append(foundObjects, objInfo.FilePath)
 		return true // continue walking
-	})
+	}, "", "")
 	require.NoError(t, err)
 
 	// Verify all objects were found
@@ -452,7 +452,7 @@ func TestExternalObjectStorageWalkWithObjects(t *testing.T) {
 
 	// Cleanup
 	for _, objName := range testObjects {
-		err = storageCli.RemoveObject(ctx, bucketName, objName)
+		err = storageCli.RemoveObject(ctx, bucketName, objName, "", "")
 		assert.NoError(t, err)
 	}
 }
@@ -466,17 +466,17 @@ func TestExternalObjectStorageEmptyFile(t *testing.T) {
 
 	// 1. Upload empty file
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader([]byte{}), 0)
+		bytes.NewReader([]byte{}), 0, "", "")
 	require.NoError(t, err)
 
 	// 2. Verify empty file
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), objSize)
 	assert.False(t, isFenced)
 
 	// 3. Read empty file
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 0)
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, 0, "", "")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -485,7 +485,7 @@ func TestExternalObjectStorageEmptyFile(t *testing.T) {
 	assert.Equal(t, 0, len(readData))
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 
@@ -504,17 +504,17 @@ func TestExternalObjectStorageLargeFile(t *testing.T) {
 
 	// 1. Upload large file
 	err := storageCli.PutObject(ctx, bucketName, objectName,
-		bytes.NewReader(largeData), int64(len(largeData)))
+		bytes.NewReader(largeData), int64(len(largeData)), "", "")
 	require.NoError(t, err)
 
 	// 2. Verify large file
-	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName)
+	objSize, isFenced, err := storageCli.StatObject(ctx, bucketName, objectName, "", "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(largeData)), objSize)
 	assert.False(t, isFenced)
 
 	// 3. Read large file in chunks
-	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(largeData)))
+	reader, err := storageCli.GetObject(ctx, bucketName, objectName, 0, int64(len(largeData)), "", "")
 	require.NoError(t, err)
 	defer reader.Close()
 
@@ -526,7 +526,7 @@ func TestExternalObjectStorageLargeFile(t *testing.T) {
 	assert.Equal(t, largeData[:1024], buf)
 
 	// Cleanup
-	err = storageCli.RemoveObject(ctx, bucketName, objectName)
+	err = storageCli.RemoveObject(ctx, bucketName, objectName, "", "")
 	assert.NoError(t, err)
 }
 

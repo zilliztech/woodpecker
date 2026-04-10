@@ -400,8 +400,7 @@ func TestLoonRemoteFileOperations(t *testing.T) {
 		assert.NoError(t, err, "Failed to delete file from MinIO")
 
 		exists, err := FileExists(testFileName)
-		assert.Error(t, err, "should return error when file does not exists")
-		assert.ErrorContainsf(t, err, "File not found", "should return 'File not found‘ error")
+		assert.NoError(t, err, "should return No error when file does not exists")
 		assert.False(t, exists, "File should not exist in MinIO after deletion")
 	})
 
