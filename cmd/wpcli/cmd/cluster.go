@@ -9,6 +9,7 @@ func newClusterCommand() *cobra.Command {
 	}
 	c.AddCommand(
 		newClusterInfoCommand(),
+		newClusterHealthCommand(),
 	)
 	return c
 }
