@@ -38,6 +38,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newClusterCommand())
 	root.AddCommand(newConfigCommand())
 	root.AddCommand(newEnvCommand())
+	root.AddCommand(newProfileCommand())
 
 	return root
 }
