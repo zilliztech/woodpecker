@@ -189,6 +189,7 @@ func main() {
 	// Start HTTP server for metrics, health check, and pprof
 	if err := commonhttp.Start(cfg, commonhttp.AdminCallbacks{
 		GetMemberlistStatus: srv.GetServerNodeMemberlistStatus,
+		GetMemberlistJSON:   srv.GetServerNodeMemberlistJSON,
 		GetNodeStatus: func() any {
 			return srv.GetNodeStatus()
 		},

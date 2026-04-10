@@ -547,6 +547,17 @@ func (s *Server) GetServerNodeMemberlistStatus() string {
 	return "member not ready yet"
 }
 
+// GetServerNodeMemberlistJSON returns the memberlist as JSON for the admin endpoint.
+func (s *Server) GetServerNodeMemberlistJSON() []byte {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		return node.GetMemberlistJSON()
+	}
+	return []byte(`{"members":[]}`)
+}
+
 // GetMemberCount returns the number of members known to this server's memberlist.
 // Returns 0 if the server node is not yet initialized.
 func (s *Server) GetMemberCount() int {

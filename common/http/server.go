@@ -36,6 +36,7 @@ import (
 // AdminCallbacks holds callbacks for admin HTTP endpoints.
 type AdminCallbacks struct {
 	GetMemberlistStatus     func() string
+	GetMemberlistJSON       func() []byte
 	GetNodeStatus           func() any
 	Decommission            func() error
 	GetDecommissionProgress func() any
@@ -110,17 +111,32 @@ func registerDefaults(cfg *config.Configuration) {
 	})
 }
 
+// newMemberlistHandler serves /admin/memberlist with content negotiation.
+// Returns JSON when Accept: application/json, plain text otherwise.
+func newMemberlistHandler(callbacks AdminCallbacks) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accept := r.Header.Get("Accept")
+		if accept == "application/json" && callbacks.GetMemberlistJSON != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(callbacks.GetMemberlistJSON())
+			return
+		}
+		if callbacks.GetMemberlistStatus != nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte(callbacks.GetMemberlistStatus()))
+		}
+	}
+}
+
 // Start initializes and starts the HTTP server
 func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	// Register default handlers
 	registerDefaults(cfg)
 
-	// Register admin handler for memberlist status
+	// Register admin handler for memberlist status (with content negotiation)
 	Register(&Handler{
-		Path: AdminMemberlistPath,
-		HandlerFunc: func(writer http.ResponseWriter, request *http.Request) {
-			fmt.Fprint(writer, callbacks.GetMemberlistStatus())
-		},
+		Path:        AdminMemberlistPath,
+		HandlerFunc: newMemberlistHandler(callbacks),
 	})
 
 	// Register node lifecycle admin handlers (if callbacks provided)
