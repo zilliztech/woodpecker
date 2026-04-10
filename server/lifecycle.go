@@ -121,6 +121,26 @@ func (m *NodeLifecycleManager) MarkDecommissioned() error {
 	return m.persistStateLocked()
 }
 
+// CancelDecommission transitions the node from decommissioning back to active.
+// Semantics:
+//   - decommissioning → active: transition, persist state
+//   - active → active: idempotent, returns nil
+//   - decommissioned → error: cannot un-retire a fully decommissioned node
+func (m *NodeLifecycleManager) CancelDecommission() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch m.state {
+	case NodeStateActive:
+		return nil // idempotent
+	case NodeStateDecommissioning:
+		m.state = NodeStateActive
+		return m.persistStateLocked()
+	case NodeStateDecommissioned:
+		return fmt.Errorf("cannot cancel: node already decommissioned")
+	}
+	return fmt.Errorf("unknown state: %s", m.state)
+}
+
 // ClearState resets the node to active and removes the persisted state file.
 // Used when a decommissioned node is re-commissioned or the state should be cleared.
 func (m *NodeLifecycleManager) ClearState() error {

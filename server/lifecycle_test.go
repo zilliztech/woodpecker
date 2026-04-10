@@ -200,3 +200,48 @@ func TestNodeLifecycleManager_Persistence_IdempotentNoExtraWrite(t *testing.T) {
 	info2, _ := os.Stat(filepath.Join(dir, nodeStateFileName))
 	assert.Equal(t, info1.ModTime(), info2.ModTime())
 }
+
+// --- CancelDecommission tests ---
+
+func TestCancelDecommission_FromDecommissioning(t *testing.T) {
+	m := NewNodeLifecycleManager()
+	require.NoError(t, m.StartDecommission())
+	require.Equal(t, NodeStateDecommissioning, m.GetState())
+
+	require.NoError(t, m.CancelDecommission())
+	require.Equal(t, NodeStateActive, m.GetState())
+}
+
+func TestCancelDecommission_FromActive_Idempotent(t *testing.T) {
+	m := NewNodeLifecycleManager()
+	require.Equal(t, NodeStateActive, m.GetState())
+
+	require.NoError(t, m.CancelDecommission())
+	require.Equal(t, NodeStateActive, m.GetState())
+}
+
+func TestCancelDecommission_FromDecommissioned_Errors(t *testing.T) {
+	m := NewNodeLifecycleManager()
+	require.NoError(t, m.StartDecommission())
+	require.NoError(t, m.MarkDecommissioned())
+	require.Equal(t, NodeStateDecommissioned, m.GetState())
+
+	err := m.CancelDecommission()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already decommissioned")
+	require.Equal(t, NodeStateDecommissioned, m.GetState(), "state must not change on error")
+}
+
+func TestCancelDecommission_StatePersisted(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewNodeLifecycleManagerWithPersistence(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, m.StartDecommission())
+	require.NoError(t, m.CancelDecommission())
+
+	// Reload from disk; should be active.
+	m2, err := NewNodeLifecycleManagerWithPersistence(dir)
+	require.NoError(t, err)
+	require.Equal(t, NodeStateActive, m2.GetState())
+}
