@@ -76,6 +76,11 @@ proto_clean:
 build: ## Build binary for current platform
 	go build -v -o bin/woodpecker ./cmd
 
+.PHONY: wpcli
+wpcli: | $(BIN_DIR) ## Build wp CLI binary (outputs bin/wp)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wp ./cmd/wpcli
+	@echo "Built $(BIN_DIR)/wp"
+
 test: build ## Run all tests
 	go test -cover -race ./...
 
