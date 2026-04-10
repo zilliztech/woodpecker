@@ -10,6 +10,7 @@ func newNodeCommand() *cobra.Command {
 	n.AddCommand(
 		newNodeListCommand(),
 		newNodeShowCommand(),
+		newNodeDecommissionCommand(),
 	)
 	return n
 }
