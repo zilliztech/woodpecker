@@ -173,6 +173,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		})
 	}
 
+	// /admin/env is self-contained — no callback needed.
+	Register(&Handler{
+		Path:        AdminEnvPath,
+		HandlerFunc: management.NewEnvHandler(),
+	})
+
 	// Get listen port from environment or use default
 	port := os.Getenv(ListenPortEnvKey)
 	if port == "" {

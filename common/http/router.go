@@ -43,6 +43,9 @@ const AdminNodeDecommissionCancelPath = "/admin/node/decommission/cancel"
 // AdminConfigPath is path for GET /admin/config.
 const AdminConfigPath = "/admin/config"
 
+// AdminEnvPath is path for GET /admin/env.
+const AdminEnvPath = "/admin/env"
+
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:
 // - /debug/pprof/
