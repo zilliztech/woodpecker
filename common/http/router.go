@@ -37,6 +37,9 @@ const AdminNodeDecommissionPath = "/admin/node/decommission"
 // AdminNodeDecommissionProgressPath is path for node decommission progress API.
 const AdminNodeDecommissionProgressPath = "/admin/node/decommission/progress"
 
+// AdminNodeDecommissionCancelPath is path for POST /admin/node/decommission/cancel.
+const AdminNodeDecommissionCancelPath = "/admin/node/decommission/cancel"
+
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:
 // - /debug/pprof/

@@ -199,6 +199,9 @@ func main() {
 		GetDecommissionProgress: func() any {
 			return srv.GetDecommissionProgress()
 		},
+		CancelDecommission: func() error {
+			return srv.CancelDecommission()
+		},
 	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}

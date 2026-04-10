@@ -19,6 +19,7 @@ package management
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -121,4 +122,40 @@ func TestNodeDecommissionProgressHandler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "decommissioning", result.State)
 	assert.False(t, result.SafeToTerminate)
+}
+
+func TestNewNodeCancelDecommissionHandler_Success(t *testing.T) {
+	called := false
+	handler := NewNodeCancelDecommissionHandler(func() error {
+		called = true
+		return nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/node/decommission/cancel", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	require.True(t, called)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	require.Contains(t, w.Body.String(), "cancelled")
+}
+
+func TestNewNodeCancelDecommissionHandler_WrongMethod(t *testing.T) {
+	handler := NewNodeCancelDecommissionHandler(func() error { return nil })
+	req := httptest.NewRequest(http.MethodGet, "/admin/node/decommission/cancel", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestNewNodeCancelDecommissionHandler_Conflict(t *testing.T) {
+	handler := NewNodeCancelDecommissionHandler(func() error {
+		return errors.New("cannot cancel: node already decommissioned")
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/node/decommission/cancel", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+	require.Equal(t, http.StatusConflict, w.Code)
+	require.Contains(t, w.Body.String(), "already decommissioned")
 }

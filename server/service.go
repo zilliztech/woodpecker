@@ -594,6 +594,11 @@ func (s *Server) GetNodeStatus() NodeStatus {
 	}
 }
 
+// CancelDecommission cancels an in-progress decommission and returns the node to active.
+func (s *Server) CancelDecommission() error {
+	return s.lifecycle.CancelDecommission()
+}
+
 // Decommission marks the node for retirement. It stops accepting new writes
 // while allowing existing tasks to drain. A background monitor will automatically
 // mark the node as decommissioned once all segment processors have been cleaned up.

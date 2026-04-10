@@ -40,6 +40,7 @@ type AdminCallbacks struct {
 	GetNodeStatus           func() any
 	Decommission            func() error
 	GetDecommissionProgress func() any
+	CancelDecommission      func() error
 }
 
 const (
@@ -156,6 +157,12 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminNodeDecommissionProgressPath,
 			HandlerFunc: management.NewNodeDecommissionProgressHandler(callbacks.GetDecommissionProgress),
+		})
+	}
+	if callbacks.CancelDecommission != nil {
+		Register(&Handler{
+			Path:        AdminNodeDecommissionCancelPath,
+			HandlerFunc: management.NewNodeCancelDecommissionHandler(callbacks.CancelDecommission),
 		})
 	}
 
