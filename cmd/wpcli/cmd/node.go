@@ -11,6 +11,7 @@ func newNodeCommand() *cobra.Command {
 		newNodeListCommand(),
 		newNodeShowCommand(),
 		newNodeDecommissionCommand(),
+		newNodeDrainStatusCommand(),
 	)
 	return n
 }
