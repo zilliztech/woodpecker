@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -35,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/membership"
 	wpNet "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/version"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 )
@@ -47,6 +49,7 @@ type Server struct {
 	gossipSeeds  []string                 // Seeds for cluster joining
 	logStore     LogStore
 	lifecycle    *NodeLifecycleManager
+	startedAtMS  atomic.Int64 // unix ms, when this process came up
 	grpcWG       sync.WaitGroup
 	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
 	decommWG     sync.WaitGroup // tracks decommission monitor goroutine
@@ -70,6 +73,9 @@ type NodeStatus struct {
 	ResourceGroup     string            `json:"resource_group"`
 	AZ                string            `json:"az"`
 	Tags              map[string]string `json:"tags"`
+	StartedAt         int64             `json:"started_at_ms"`
+	Version           string            `json:"version"`
+	LastHealthCheck   int64             `json:"last_health_check_ms"`
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
@@ -111,6 +117,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		startupErrCh: make(chan error, 1), // Buffered channel to avoid blocking
 		lifecycle:    lifecycle,
 	}
+	s.startedAtMS.Store(time.Now().UnixMilli())
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
@@ -581,6 +588,9 @@ func (s *Server) GetNodeStatus() NodeStatus {
 		ResourceGroup:     s.serverConfig.ResourceGroup,
 		AZ:                s.serverConfig.AZ,
 		Tags:              s.serverConfig.Tags,
+		StartedAt:         s.startedAtMS.Load(),
+		Version:           version.Info().Version,
+		LastHealthCheck:   time.Now().UnixMilli(),
 	}
 }
 
