@@ -33,6 +33,7 @@ func NewRootCommand() *cobra.Command {
 	pf.CountVarP(&Globals.Verbose, "verbose", "v", "Increase verbosity (-v, -vv, -vvv)")
 
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newCtxCommand())
 
 	return root
 }
