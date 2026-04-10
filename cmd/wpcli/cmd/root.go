@@ -35,6 +35,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newCtxCommand())
 	root.AddCommand(newNodeCommand())
+	root.AddCommand(newClusterCommand())
 
 	return root
 }
