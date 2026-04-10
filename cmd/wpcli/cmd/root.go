@@ -32,5 +32,7 @@ func NewRootCommand() *cobra.Command {
 	pf.BoolVar(&Globals.NoColor, "no-color", false, "Disable color in output")
 	pf.CountVarP(&Globals.Verbose, "verbose", "v", "Increase verbosity (-v, -vv, -vvv)")
 
+	root.AddCommand(newVersionCommand())
+
 	return root
 }
