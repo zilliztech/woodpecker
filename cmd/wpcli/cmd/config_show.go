@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -25,6 +27,33 @@ func fetchAdminJSON(peerURL, path string) ([]byte, error) {
 		return nil, wperrors.NewNetworkError(fmt.Sprintf("%s returned status %d", path, resp.StatusCode))
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// convertJSONNumbers recursively converts json.Number values to int64 or float64
+// so that YAML renders them as plain numbers instead of scientific notation.
+func convertJSONNumbers(v any) any {
+	switch val := v.(type) {
+	case json.Number:
+		if i, err := strconv.ParseInt(string(val), 10, 64); err == nil {
+			return i
+		}
+		if f, err := strconv.ParseFloat(string(val), 64); err == nil {
+			return f
+		}
+		return string(val)
+	case map[string]any:
+		for k, v2 := range val {
+			val[k] = convertJSONNumbers(v2)
+		}
+		return val
+	case []any:
+		for i, v2 := range val {
+			val[i] = convertJSONNumbers(v2)
+		}
+		return val
+	default:
+		return v
+	}
 }
 
 func newConfigShowCommand() *cobra.Command {
@@ -51,10 +80,16 @@ func newConfigShowCommand() *cobra.Command {
 				_, _ = w.Write(body)
 				return nil
 			default: // table, wide, yaml — render as indented YAML which reads well
+				// Use json.Decoder with UseNumber to preserve integer precision.
+				// Without this, large integers (e.g. 536870912) become float64
+				// and YAML renders them in scientific notation (5.36870912e+08).
+				dec := json.NewDecoder(bytes.NewReader(body))
+				dec.UseNumber()
 				var generic any
-				if err := json.Unmarshal(body, &generic); err != nil {
+				if err := dec.Decode(&generic); err != nil {
 					return wperrors.NewNetworkError(fmt.Sprintf("decode config: %v", err))
 				}
+				generic = convertJSONNumbers(generic)
 				enc := yaml.NewEncoder(w)
 				enc.SetIndent(2)
 				defer enc.Close()
