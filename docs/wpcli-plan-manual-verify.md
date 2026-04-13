@@ -10,14 +10,29 @@
 
 ## Prerequisites
 
-### 1. Build the CLI
+### 1. Build the server binary and Docker image
 
 ```bash
+# Build server binary
+make build
+
+# Build wp CLI binary
 make wpcli
 ./bin/wp version
 ```
 
-- [x] Expected: version string with git commit, e.g. `wp version v0.1.25-64-g8e96810 (...)`
+- [ ] Expected: `bin/woodpecker` and `bin/wp` both exist
+- [ ] `wp version` shows git commit, e.g. `wp version v0.1.25-64-g8e96810 (...)`
+
+```bash
+# Build Docker image (required for docker-compose)
+./build/build_image.sh
+```
+
+- [ ] Expected: `woodpecker:latest` image built successfully
+
+> **Tip:** If you want a specific OS base, use `./build/build_image.sh ubuntu22.04`.
+> To verify: `docker images | grep woodpecker`
 
 ### 2. Start the cluster
 
@@ -28,6 +43,11 @@ cd ..
 ```
 
 Wait ~15 seconds for all nodes to join gossip.
+
+> **Troubleshooting:** If nodes fail to start, check:
+> - `docker compose logs woodpecker-node1` — look for etcd/minio connection errors
+> - Ensure ports 9091-9094, 18080-18083 are not occupied
+> - Run `docker compose ps` to verify all 4 nodes are "healthy"
 
 ### 3. Configure CLI
 
@@ -593,12 +613,13 @@ rm -f /tmp/wp-heap.pb.gz
 
 | Category | Total Checks | Passed | Failed | Notes |
 |----------|-------------|--------|--------|-------|
+| Prerequisites | 4 | | | |
 | Phase 1 — Foundation | 25 | | | |
 | Phase 2 — Observability | 27 | | | |
 | Phase 3 — K8s & Release | 10 | | | |
 | Exit Codes | 8 | | | |
 | Known Limitations | 5 | | | |
-| **Total** | **75** | | | |
+| **Total** | **79** | | | |
 
 **Tester:** _______________
 **Date:** _______________
