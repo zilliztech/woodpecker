@@ -105,11 +105,8 @@ func registerDefaults(cfg *config.Configuration) {
 
 	// Register log level endpoint
 	Register(&Handler{
-		Path: LogLevelRouterPath,
-		HandlerFunc: func(w http.ResponseWriter, req *http.Request) {
-			// TODO: implement log level change at runtime
-			fmt.Fprintf(w, "Log level change endpoint - TODO\n")
-		},
+		Path:        LogLevelRouterPath,
+		HandlerFunc: management.NewLogLevelHandler(),
 	})
 }
 
