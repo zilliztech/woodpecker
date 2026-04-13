@@ -177,6 +177,7 @@ func main() {
 		Tags: map[string]string{
 			"role":       "logstore",
 			"admin_port": os.Getenv("METRICS_PORT"),
+			"cluster":    os.Getenv("CLUSTER_NAME"),
 		},
 	}
 

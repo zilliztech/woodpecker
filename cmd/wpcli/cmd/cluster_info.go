@@ -74,7 +74,11 @@ func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, b
 	w := cmd.OutOrStdout()
 
 	// Build overview block.
+	clusterName := clusterNameFromMembers(r.Members.Members)
 	fmt.Fprintln(w, "Cluster Overview")
+	if clusterName != "" {
+		fmt.Fprintf(w, "  Cluster:     %s\n", clusterName)
+	}
 	fmt.Fprintf(w, "  Endpoint:    %s\n", r.Context.Endpoint)
 	fmt.Fprintf(w, "  Total Nodes: %d\n", len(r.Members.Members))
 	fmt.Fprintln(w)
@@ -85,7 +89,11 @@ func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, b
 	fmt.Fprintln(w)
 
 	// Build topology tree.
-	root := &output.TreeNode{Label: "Topology"}
+	treeLabel := "Topology"
+	if clusterName != "" {
+		treeLabel = clusterName
+	}
+	root := &output.TreeNode{Label: treeLabel}
 	azKeys := sortedMapKeys(byAZRG)
 	for _, az := range azKeys {
 		azNode := &output.TreeNode{Label: az}
@@ -102,6 +110,16 @@ func renderClusterInfo(cmd *cobra.Command, r *resolved, states map[string]int, b
 		root.Children = append(root.Children, azNode)
 	}
 	return output.RenderTree(w, root)
+}
+
+// clusterNameFromMembers extracts the "cluster" tag from the first member that has it.
+func clusterNameFromMembers(members []client.Member) string {
+	for _, m := range members {
+		if v, ok := m.Tags["cluster"]; ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func sortedKeys(m map[string]int) []string {

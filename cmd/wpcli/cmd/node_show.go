@@ -57,12 +57,12 @@ func newNodeShowCommand() *cobra.Command {
 				return wperrors.NewNetworkError(fmt.Sprintf("decode node status: %v", err))
 			}
 
-			return renderNodeShow(cmd, dto)
+			return renderNodeShow(cmd, dto, target.Tags["cluster"])
 		},
 	}
 }
 
-func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO) error {
+func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO, cluster string) error {
 	w := cmd.OutOrStdout()
 	switch Globals.Output {
 	case "json":
@@ -83,10 +83,15 @@ func renderNodeShow(cmd *cobra.Command, dto nodeStatusDTO) error {
 			},
 			{
 				Title: "Placement",
-				Pairs: [][2]string{
-					{"az", dto.AZ},
-					{"rg", dto.ResourceGroup},
-				},
+				Pairs: func() [][2]string {
+					pairs := [][2]string{}
+					if cluster != "" {
+						pairs = append(pairs, [2]string{"cluster", cluster})
+					}
+					pairs = append(pairs, [2]string{"az", dto.AZ})
+					pairs = append(pairs, [2]string{"rg", dto.ResourceGroup})
+					return pairs
+				}(),
 			},
 			{
 				Title: "Lifecycle",

@@ -11,12 +11,13 @@ import (
 )
 
 type nodeListRow struct {
-	Name   string `json:"name"`
-	Addr   string `json:"addr"`
-	State  string `json:"state"`
-	AZ     string `json:"az"`
-	RG     string `json:"rg"`
-	Health string `json:"health"`
+	Name    string `json:"name"`
+	Cluster string `json:"cluster,omitempty"`
+	Addr    string `json:"addr"`
+	State   string `json:"state"`
+	AZ      string `json:"az"`
+	RG      string `json:"rg"`
+	Health  string `json:"health"`
 }
 
 func newNodeListCommand() *cobra.Command {
@@ -53,10 +54,11 @@ func newNodeListCommand() *cobra.Command {
 			rows := make([]nodeListRow, 0, len(r.Members.Members))
 			for i, m := range r.Members.Members {
 				row := nodeListRow{
-					Name: m.ID,
-					Addr: m.ServiceAddr,
-					AZ:   m.AZ,
-					RG:   m.RG,
+					Name:    m.ID,
+					Cluster: m.Tags["cluster"],
+					Addr:    m.ServiceAddr,
+					AZ:      m.AZ,
+					RG:      m.RG,
 				}
 				nr := res.Results[i]
 				if nr.OK {
@@ -106,10 +108,27 @@ func renderNodeList(cmd *cobra.Command, rows []nodeListRow) error {
 	case "wide":
 		fallthrough
 	default:
-		headers := []string{"NAME", "ADDR", "STATE", "AZ", "RG", "HEALTH"}
+		// Show CLUSTER column only if any node has a cluster tag.
+		hasCluster := false
+		for _, r := range rows {
+			if r.Cluster != "" {
+				hasCluster = true
+				break
+			}
+		}
+		var headers []string
+		if hasCluster {
+			headers = []string{"NAME", "CLUSTER", "ADDR", "STATE", "AZ", "RG", "HEALTH"}
+		} else {
+			headers = []string{"NAME", "ADDR", "STATE", "AZ", "RG", "HEALTH"}
+		}
 		table := make([][]string, len(rows))
 		for i, r := range rows {
-			table[i] = []string{r.Name, r.Addr, r.State, r.AZ, r.RG, r.Health}
+			if hasCluster {
+				table[i] = []string{r.Name, r.Cluster, r.Addr, r.State, r.AZ, r.RG, r.Health}
+			} else {
+				table[i] = []string{r.Name, r.Addr, r.State, r.AZ, r.RG, r.Health}
+			}
 		}
 		return output.RenderRowTable(w, headers, table)
 	}
