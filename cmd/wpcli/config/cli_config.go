@@ -9,6 +9,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// K8sConfig holds Kubernetes-specific settings for a CLI context.
+type K8sConfig struct {
+	Namespace   string `yaml:"namespace,omitempty"`
+	Cluster     string `yaml:"cluster,omitempty"`
+	KubeContext string `yaml:"kube_context,omitempty"`
+	Kubeconfig  string `yaml:"kubeconfig,omitempty"`
+	Kubectl     string `yaml:"kubectl,omitempty"`
+}
+
 // Context is one named cluster context in cli.yaml.
 type Context struct {
 	Endpoint    string        `yaml:"endpoint"`
@@ -16,8 +25,7 @@ type Context struct {
 	Timeout     time.Duration `yaml:"timeout"`
 	Concurrency int           `yaml:"concurrency"`
 	Strict      bool          `yaml:"strict"`
-	// K8s is populated in Phase 3; Phase 1 loader just ignores it safely.
-	K8s map[string]any `yaml:"k8s,omitempty"`
+	K8s         K8sConfig     `yaml:"k8s,omitempty"`
 }
 
 // Defaults carries the `defaults:` section of cli.yaml.
