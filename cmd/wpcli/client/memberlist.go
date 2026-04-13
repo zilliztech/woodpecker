@@ -80,14 +80,54 @@ func (c *Client) GetMemberlist() (*Memberlist, error) {
 }
 
 // PeerAdminURL returns the admin HTTP URL for a given member, using the configured admin port.
+//
+// Address resolution order:
+//  1. If the member has an "admin_port" tag, use it with the service_addr host.
+//  2. Otherwise use service_addr host + the configured AdminPort.
+//  3. Fall back to gossip_addr host + AdminPort if service_addr is empty.
+//
+// Using service_addr host (instead of gossip_addr) is important for Docker/NAT
+// environments where gossip_addr is an internal container IP not reachable from
+// the host machine.
 func (c *Client) PeerAdminURL(m Member) string {
-	host := m.GossipAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
+	// Pick the host from service_addr (preferred) or gossip_addr (fallback).
+	host := extractHost(m.ServiceAddr)
+	if host == "" {
+		host = extractHost(m.GossipAddr)
 	}
+
 	port := c.opts.AdminPort
 	if port == 0 {
 		port = 9091
 	}
+
+	// Check for per-node admin_port in tags.
+	if tagPort, ok := m.Tags["admin_port"]; ok {
+		if p := parsePort(tagPort); p > 0 {
+			port = p
+		}
+	}
+
 	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+func extractHost(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[:i]
+	}
+	return addr
+}
+
+func parsePort(s string) int {
+	var p int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		p = p*10 + int(c-'0')
+	}
+	return p
 }

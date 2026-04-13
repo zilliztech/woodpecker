@@ -174,7 +174,10 @@ func main() {
 		AdvertiseServicePort: advertiseServicePort,    // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
-		Tags:                 map[string]string{"role": "logstore"},
+		Tags: map[string]string{
+			"role":       "logstore",
+			"admin_port": os.Getenv("METRICS_PORT"),
+		},
 	}
 
 	// Create server
