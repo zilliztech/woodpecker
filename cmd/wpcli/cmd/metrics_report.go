@@ -239,12 +239,16 @@ func newMetricsReportCommand() *cobra.Command {
 			}
 			fmt.Fprintf(w, " %d samples collected\n\n", len(samples))
 
-			// Evaluate rules (simplified: check last sample for threshold conditions)
+			// Evaluate rules using first and last samples for delta-based checks.
 			var findings []finding
 			if len(samples) > 0 {
 				last := samples[len(samples)-1]
+				var firstFamilies map[string]*prom.MetricFamily
+				if len(samples) > 1 {
+					firstFamilies = samples[0].families
+				}
 				for _, rule := range sc.Rules {
-					f := evaluateRule(rule, last.families, nodeID)
+					f := evaluateRule(rule, sc, last.families, firstFamilies, nodeID)
 					if f != nil {
 						findings = append(findings, *f)
 					}
@@ -294,7 +298,7 @@ func newMetricsReportCommand() *cobra.Command {
 
 // evaluateRule applies a simplified rule evaluation against the scraped families.
 // In Phase 2, this is a basic heuristic; the full YAML DSL engine is deferred.
-func evaluateRule(rule ruleDef, families map[string]*prom.MetricFamily, nodeID string) *finding {
+func evaluateRule(rule ruleDef, sc scenarioDef, families map[string]*prom.MetricFamily, firstFamilies map[string]*prom.MetricFamily, nodeID string) *finding {
 	// Check for "evicted_old > 0" pattern
 	if strings.Contains(rule.Condition, "evicted_old") {
 		if mf, ok := families["woodpecker_server_op_registry_evicted_total"]; ok {
@@ -310,22 +314,44 @@ func evaluateRule(rule ruleDef, families map[string]*prom.MetricFamily, nodeID s
 		}
 	}
 
-	// Check for high latency patterns
+	// Check for high latency patterns — only on metrics declared by the scenario,
+	// and use delta (last - first sample) to avoid false positives from cumulative sums.
 	if strings.Contains(rule.Condition, "latency") || strings.Contains(rule.Condition, "p99") {
-		for _, mf := range families {
-			if mf.GetType().String() == "HISTOGRAM" {
-				for _, m := range mf.GetMetric() {
-					h := m.GetHistogram()
-					if h != nil && h.GetSampleCount() > 0 {
-						avgMs := h.GetSampleSum() / float64(h.GetSampleCount())
-						if avgMs > 5000 { // 5 second average = suspicious
-							labels := prom.LabelMap(m)
-							return &finding{
-								RuleID:   rule.ID,
-								Severity: rule.Severity,
-								Message:  fmt.Sprintf("high avg latency %.0fms (node=%s, labels=%v)", avgMs, nodeID, labels),
-								Hints:    rule.Hints,
+		for _, metricName := range sc.Metrics {
+			mf, ok := families[metricName]
+			if !ok || mf.GetType().String() != "HISTOGRAM" {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				h := m.GetHistogram()
+				if h == nil || h.GetSampleCount() == 0 {
+					continue
+				}
+				// Compute delta avg: (sum_now - sum_first) / (count_now - count_first)
+				// This gives the average latency within the observation window only.
+				deltaSum := h.GetSampleSum()
+				deltaCount := float64(h.GetSampleCount())
+				if firstFamilies != nil {
+					if firstMF, ok := firstFamilies[metricName]; ok {
+						labels := prom.LabelMap(m)
+						for _, fm := range firstMF.GetMetric() {
+							if prom.LabelsMatch(fm, labels) && fm.GetHistogram() != nil {
+								deltaSum -= fm.GetHistogram().GetSampleSum()
+								deltaCount -= float64(fm.GetHistogram().GetSampleCount())
+								break
 							}
+						}
+					}
+				}
+				if deltaCount > 0 {
+					deltaAvgMs := deltaSum / deltaCount
+					if deltaAvgMs > 5000 { // 5 second average within window = suspicious
+						labels := prom.LabelMap(m)
+						return &finding{
+							RuleID:   rule.ID,
+							Severity: rule.Severity,
+							Message:  fmt.Sprintf("high avg latency %.0fms in window (metric=%s, labels=%v)", deltaAvgMs, metricName, labels),
+							Hints:    rule.Hints,
 						}
 					}
 				}
@@ -333,9 +359,36 @@ func evaluateRule(rule ruleDef, families map[string]*prom.MetricFamily, nodeID s
 		}
 	}
 
-	// Check for rate == 0 patterns (stall detection)
-	if strings.Contains(rule.Condition, "rate == 0") {
-		// Would need two samples to compute rate — skip in single-sample mode
+	// Check for rate == 0 patterns (stall detection) — compare first and last sample.
+	if strings.Contains(rule.Condition, "rate == 0") && firstFamilies != nil {
+		for _, metricName := range sc.Metrics {
+			lastMF, ok := families[metricName]
+			if !ok {
+				continue
+			}
+			firstMF, ok := firstFamilies[metricName]
+			if !ok {
+				continue
+			}
+			for _, m := range lastMF.GetMetric() {
+				lastVal := prom.MetricValue(m)
+				labels := prom.LabelMap(m)
+				for _, fm := range firstMF.GetMetric() {
+					if prom.LabelsMatch(fm, labels) {
+						firstVal := prom.MetricValue(fm)
+						if lastVal == firstVal && lastVal > 0 {
+							return &finding{
+								RuleID:   rule.ID,
+								Severity: rule.Severity,
+								Message:  fmt.Sprintf("zero rate in window (metric=%s, value=%.0f, labels=%v)", metricName, lastVal, labels),
+								Hints:    rule.Hints,
+							}
+						}
+						break
+					}
+				}
+			}
+		}
 	}
 
 	return nil
