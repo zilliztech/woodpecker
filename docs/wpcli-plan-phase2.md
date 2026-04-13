@@ -1,6 +1,6 @@
 # wp CLI Phase 2 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship Phase 2 of the wp CLI — the observability & op registry layer. Adds the `common/runtime/opregistry/` package, `metrics.StartOp/End` abstraction, gRPC interceptor, ~12 business code metric migrations, 17 new CLI commands (C/D/E/G families), 10 new admin endpoints, dynamic log level control, and docker-compose E2E tests.
 
@@ -105,20 +105,20 @@
 **Files:**
 - Modify: `go.mod`, `go.sum`
 
-- [ ] **Step 1: Add dependency**
+- [x] **Step 1: Add dependency**
 
 ```bash
 go get github.com/jonboulle/clockwork@v0.2.2
 go mod tidy
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 ```bash
 go build ./...
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add go.mod go.sum
@@ -137,7 +137,7 @@ git commit -m "chore: add clockwork v0.2.2 for opregistry time mocking"
 
 **Spec reference:** §2.G.3 — OpRecord fields, OpType enum, Filter/Stats structures.
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Create `common/runtime/opregistry/types_test.go`:
 
@@ -192,7 +192,7 @@ func TestFilter_Matches(t *testing.T) {
 func ptr[T any](v T) *T { return &v }
 ```
 
-- [ ] **Step 2: Implement types**
+- [x] **Step 2: Implement types**
 
 Create `common/runtime/opregistry/types.go`:
 
@@ -292,13 +292,13 @@ type Stats struct {
 }
 ```
 
-- [ ] **Step 3: Verify tests pass**
+- [x] **Step 3: Verify tests pass**
 
 ```bash
 go test ./common/runtime/opregistry/... -count=1 -v
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/runtime/opregistry/types.go common/runtime/opregistry/types_test.go
@@ -316,7 +316,7 @@ git commit -m "feat(opregistry): add OpType, OpRecord, Filter, Stats types"
 
 **Spec reference:** §2.G.3 — bounded pool, drop-oldest eviction.
 
-- [ ] **Step 1: Implement Registry**
+- [x] **Step 1: Implement Registry**
 
 Create `common/runtime/opregistry/registry.go`:
 
@@ -390,13 +390,13 @@ Key invariants:
 - `Deregister()` removes from both `pool` and `index`
 - All methods are goroutine-safe (protected by `mu`)
 
-- [ ] **Step 2: Verify it compiles**
+- [x] **Step 2: Verify it compiles**
 
 ```bash
 go build ./common/runtime/opregistry/...
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/runtime/opregistry/registry.go
@@ -416,7 +416,7 @@ git commit -m "feat(opregistry): bounded pool with drop-oldest eviction"
 
 **Spec reference:** §2.G.3 — eviction-as-signal, Prometheus self-metrics.
 
-- [ ] **Step 1: Define Prometheus metrics**
+- [x] **Step 1: Define Prometheus metrics**
 
 Create `common/runtime/opregistry/metrics.go`:
 
@@ -456,7 +456,7 @@ func RegisterMetrics(registerer prometheus.Registerer) {
 }
 ```
 
-- [ ] **Step 2: Wire eviction callback in `New()`**
+- [x] **Step 2: Wire eviction callback in `New()`**
 
 In `registry.go`, the `New()` constructor should call `r.SetOnEvict(defaultEvictCallback)` where `defaultEvictCallback` observes the Prometheus metrics:
 
@@ -473,11 +473,11 @@ func defaultEvictCallback(age time.Duration, isOld bool) {
 
 Also update `Register()` and `Deregister()` to update `OpRegistryPoolUsage.Set(float64(len(r.pool)))`.
 
-- [ ] **Step 3: Register in `service_metrics.go`**
+- [x] **Step 3: Register in `service_metrics.go`**
 
 Add `opregistry.RegisterMetrics(registerer)` call in `RegisterServerMetricsWithRegisterer()`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/runtime/opregistry/metrics.go common/runtime/opregistry/registry.go common/metrics/service_metrics.go
@@ -493,7 +493,7 @@ git commit -m "feat(opregistry): eviction signaling with Prometheus young/old co
 **Files:**
 - Create: `common/runtime/opregistry/registry_test.go`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Test cases (minimum):
 
@@ -528,13 +528,13 @@ func TestRegistry_ConcurrentAccess(t *testing.T)
 // Run 100 goroutines doing Register+Deregister+List concurrently with -race.
 ```
 
-- [ ] **Step 2: Verify all pass**
+- [x] **Step 2: Verify all pass**
 
 ```bash
 go test ./common/runtime/opregistry/... -race -count=1 -v
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/runtime/opregistry/registry_test.go
@@ -554,7 +554,7 @@ git commit -m "test(opregistry): comprehensive unit tests with clockwork time mo
 
 **Spec reference:** §2.G.3 — OpObserver interface, RegisterOpObserver.
 
-- [ ] **Step 1: Create interface**
+- [x] **Step 1: Create interface**
 
 Create `common/metrics/op_observer.go`:
 
@@ -582,7 +582,7 @@ func RegisterOpObserver(o OpObserver) {
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add common/metrics/op_observer.go
@@ -601,7 +601,7 @@ git commit -m "feat(metrics): add OpObserver interface for op lifecycle notifica
 
 **Spec reference:** §2.G.3 — `StartOp` / `End` API, migration pattern.
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Create `common/metrics/op_test.go`:
 
@@ -622,7 +622,7 @@ func TestOp_WithNilHistogram(t *testing.T)
 // Verify End doesn't panic.
 ```
 
-- [ ] **Step 2: Implement Op**
+- [x] **Step 2: Implement Op**
 
 Create `common/metrics/op.go`:
 
@@ -686,13 +686,13 @@ func (o *Op) StartedAt() time.Time {
 }
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 ```bash
 go test ./common/metrics/... -race -count=1 -v
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/metrics/op.go common/metrics/op_test.go
@@ -711,7 +711,7 @@ git commit -m "feat(metrics): add StartOp/End bridge API with observer chain"
 
 **Spec reference:** §2.G.3 — observer implementation, zero business code import of opregistry.
 
-- [ ] **Step 1: Implement observer**
+- [x] **Step 1: Implement observer**
 
 Create `common/runtime/opregistry/observer.go`:
 
@@ -755,7 +755,7 @@ func generateOpID(opType string) string {
 }
 ```
 
-- [ ] **Step 2: Write test**
+- [x] **Step 2: Write test**
 
 Verify that `Registry` satisfies `metrics.OpObserver` and that `StartOp` → `End` results in the op being registered then deregistered from the pool:
 
@@ -773,7 +773,7 @@ func TestRegistry_AsOpObserver(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/runtime/opregistry/observer.go common/runtime/opregistry/observer_test.go
@@ -793,7 +793,7 @@ git commit -m "feat(opregistry): implement OpObserver interface for automatic op
 
 **Spec reference:** §5.4 — config additions.
 
-- [ ] **Step 1: Add config types**
+- [x] **Step 1: Add config types**
 
 In `common/config/configuration.go`, add after the `StorageConfig` types:
 
@@ -831,13 +831,13 @@ Runtime: RuntimeConfig{
 },
 ```
 
-- [ ] **Step 2: Verify build**
+- [x] **Step 2: Verify build**
 
 ```bash
 go build ./...
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/config/configuration.go
@@ -856,7 +856,7 @@ git commit -m "feat(config): add Runtime.OpRegistry.{Capacity, WarnAge} fields"
 
 **Spec reference:** §2.G.3 — gRPC interceptor.
 
-- [ ] **Step 1: Implement interceptor**
+- [x] **Step 1: Implement interceptor**
 
 Create `common/runtime/opregistry/interceptor.go`:
 
@@ -892,7 +892,7 @@ func UnaryInterceptor() grpc.UnaryServerInterceptor {
 }
 ```
 
-- [ ] **Step 2: Write test**
+- [x] **Step 2: Write test**
 
 Test that the interceptor calls StartOp and End:
 
@@ -917,7 +917,7 @@ func TestUnaryInterceptor_Error(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/runtime/opregistry/interceptor.go common/runtime/opregistry/interceptor_test.go
@@ -936,7 +936,7 @@ git commit -m "feat(opregistry): add gRPC UnaryServerInterceptor for automatic o
 
 **Important:** This task depends on Tasks 8, 9, 10, and Task 22 (ops handler). If the handler isn't ready yet, wire the callbacks as nil initially and fill them in Task 23.
 
-- [ ] **Step 1: Modify `server/service.go`**
+- [x] **Step 1: Modify `server/service.go`**
 
 Add an `OpRegistryInterceptor` field to the Server or accept it as a gRPC option parameter. Add it to the `grpc.ChainUnaryInterceptor` list at `service.go:176`:
 
@@ -948,7 +948,7 @@ grpc.ChainUnaryInterceptor(
 ),
 ```
 
-- [ ] **Step 2: Modify `cmd/main.go`**
+- [x] **Step 2: Modify `cmd/main.go`**
 
 Before `commonhttp.Start()` (around line 190):
 
@@ -962,14 +962,14 @@ metrics.RegisterOpObserver(opReg)
 
 Pass `opregistry.UnaryInterceptor()` to the server constructor or set it on the server struct.
 
-- [ ] **Step 3: Build and verify**
+- [x] **Step 3: Build and verify**
 
 ```bash
 go build ./...
 go test ./cmd/... -count=1
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/main.go server/service.go
@@ -992,7 +992,7 @@ git commit -m "feat(server): wire OpRegistry into startup — interceptor, obser
 
 **Target state:** A single `zap.AtomicLevel` controls the active logger. `SetLevel()` atomically changes the level. `GetLevel()` reads it. The `Ctx()` function continues to work as before (context-level override still supported).
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Create `common/logger/level_test.go`:
 
@@ -1018,7 +1018,7 @@ func TestSetLevel_InvalidLevel(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Refactor logger.go**
+- [x] **Step 2: Refactor logger.go**
 
 Key changes:
 1. Add a package-level `var globalLevel zap.AtomicLevel` initialized in `init()`
@@ -1027,14 +1027,14 @@ Key changes:
 4. `SetLevel(level string) error` — parses level string, calls `globalLevel.SetLevel()`
 5. The `Ctx()` function behavior is preserved: context-level loggers still work, but the default logger respects the dynamic level
 
-- [ ] **Step 3: Verify no regressions**
+- [x] **Step 3: Verify no regressions**
 
 ```bash
 go test ./common/logger/... -race -count=1 -v
 go test ./... -race -count=1 -short  # broader check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/logger/logger.go common/logger/level_test.go
@@ -1052,7 +1052,7 @@ git commit -m "feat(logger): refactor to zap.AtomicLevel for runtime GetLevel/Se
 - Create: `common/http/management/logging_handler_test.go`
 - Modify: `common/http/server.go` — replace TODO stub with real handler
 
-- [ ] **Step 1: Create handler**
+- [x] **Step 1: Create handler**
 
 Create `common/http/management/logging_handler.go`:
 
@@ -1097,11 +1097,11 @@ func NewLogLevelHandler() http.HandlerFunc {
 }
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test GET returns current level, POST changes it, POST with bad level returns 400.
 
-- [ ] **Step 3: Wire in `server.go`**
+- [x] **Step 3: Wire in `server.go`**
 
 Replace the TODO block at `server.go:107-113`:
 ```go
@@ -1111,13 +1111,13 @@ Register(&Handler{
 })
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```bash
 go test ./common/http/... -race -count=1 -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add common/http/management/logging_handler.go common/http/management/logging_handler_test.go common/http/server.go
@@ -1138,7 +1138,7 @@ git commit -m "feat(server): implement GET + POST /log/level handler (replace st
 
 **Spec reference:** §2.C.3 — Writer snapshot methods.
 
-- [ ] **Step 1: Define snapshot types**
+- [x] **Step 1: Define snapshot types**
 
 Add to `server/storage/writer.go` or a new `server/storage/types.go`:
 
@@ -1174,7 +1174,7 @@ type WriterSnapshotDetailed struct {
 }
 ```
 
-- [ ] **Step 2: Add methods to Writer interface**
+- [x] **Step 2: Add methods to Writer interface**
 
 ```go
 type Writer interface {
@@ -1188,13 +1188,13 @@ type Writer interface {
 }
 ```
 
-- [ ] **Step 3: Regenerate mock**
+- [x] **Step 3: Regenerate mock**
 
 ```bash
 ~/go/bin/mockery --dir=./server/storage --name=Writer --structname=Writer --output=mocks/mocks_server/mocks_storage --filename=mock_writer.go --with-expecter=true --outpkg=mocks_storage
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/storage/writer.go server/storage/types.go mocks/mocks_server/mocks_storage/mock_writer.go
@@ -1211,7 +1211,7 @@ git commit -m "feat(storage): add Snapshot/SnapshotDetailed to Writer interface"
 - Modify: `server/storage/objectstorage/writer_impl.go`
 - Create: `server/storage/objectstorage/snapshot_test.go`
 
-- [ ] **Step 1: Implement Snapshot methods**
+- [x] **Step 1: Implement Snapshot methods**
 
 Map existing `MinioFileWriter` fields to `WriterSnapshot` / `WriterSnapshotDetailed`:
 - `Backend`: `"objectstorage"`
@@ -1222,11 +1222,11 @@ Map existing `MinioFileWriter` fields to `WriterSnapshot` / `WriterSnapshotDetai
 - `BufferBytes`: from buffer pointer
 - `FlushQueueDepth`/`FlushQueueCapacity`: from flush channel len/cap
 
-- [ ] **Step 2: Write test**
+- [x] **Step 2: Write test**
 
 Create a test that initializes a `MinioFileWriter` (or uses the existing test setup), writes some entries, and verifies `Snapshot()` returns correct field values.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add server/storage/objectstorage/writer_impl.go server/storage/objectstorage/snapshot_test.go
@@ -1244,17 +1244,17 @@ git commit -m "feat(objectstorage): implement Writer.Snapshot/SnapshotDetailed"
 - Modify: `server/storage/disk/writer_impl.go`
 - Create: snapshot tests for each
 
-- [ ] **Step 1: Implement on StagedFileWriter**
+- [x] **Step 1: Implement on StagedFileWriter**
 
 Map fields similarly to Task 15. `Backend`: `"stagedstorage"`.
 
-- [ ] **Step 2: Implement on DiskFileWriter**
+- [x] **Step 2: Implement on DiskFileWriter**
 
 Map fields similarly. `Backend`: `"disk"`.
 
-- [ ] **Step 3: Write tests for both**
+- [x] **Step 3: Write tests for both**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/storage/stagedstorage/writer_impl.go server/storage/disk/writer_impl.go \
@@ -1274,7 +1274,7 @@ git commit -m "feat(storage): implement Snapshot/SnapshotDetailed on stagedstora
 
 **Spec reference:** §2.C.3 — WriterRegistry abstraction.
 
-- [ ] **Step 1: Define interface**
+- [x] **Step 1: Define interface**
 
 Create `server/storage/writer_registry.go`:
 
@@ -1310,13 +1310,13 @@ type WriterFilter struct {
 }
 ```
 
-- [ ] **Step 2: Implement on LogStoreImpl**
+- [x] **Step 2: Implement on LogStoreImpl**
 
 The `LogStoreImpl` already maintains a map of segment processors, each holding a writer. Implement `WriterRegistry` by iterating over all processors and collecting snapshots.
 
-- [ ] **Step 3: Write tests**
+- [x] **Step 3: Write tests**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/storage/writer_registry.go server/logstore.go
@@ -1334,7 +1334,7 @@ git commit -m "feat(storage): add WriterRegistry interface with logstore impleme
 **Files:**
 - Modify: `common/http/router.go`
 
-- [ ] **Step 1: Add constants**
+- [x] **Step 1: Add constants**
 
 ```go
 // C family — logstore
@@ -1350,7 +1350,7 @@ const AdminRuntimeOpsStatsPath = "/admin/runtime/ops/stats"
 
 Note: `/admin/logstore/segments/{log}/{seg}` and `/admin/runtime/ops/{op_id}` use query parameters or path parsing within the handler, not separate path constants.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add common/http/router.go
@@ -1366,7 +1366,7 @@ git commit -m "feat(http): add router path constants for C/G family endpoints"
 **Files:**
 - Modify: `common/http/server.go`
 
-- [ ] **Step 1: Add sub-structs**
+- [x] **Step 1: Add sub-structs**
 
 ```go
 // LogstoreCallbacks holds callbacks for logstore admin endpoints.
@@ -1403,7 +1403,7 @@ type AdminCallbacks struct {
 
 Note: LogLevel doesn't need a callback — the `management.NewLogLevelHandler()` is self-contained (calls `logger.GetLevel/SetLevel` directly).
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add common/http/server.go
@@ -1422,7 +1422,7 @@ git commit -m "feat(http): extend AdminCallbacks with Logstore and Ops sub-struc
 
 **Spec reference:** §2.C — C.1 segments list response structure, C.2 segment show.
 
-- [ ] **Step 1: Implement handlers**
+- [x] **Step 1: Implement handlers**
 
 ```go
 // NewLogstoreSegmentsHandler handles GET /admin/logstore/segments
@@ -1439,11 +1439,11 @@ Response format for list:
 {"segments": [{ "log_id": 42, "segment_id": 7, "backend": "staged", ... }]}
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test with mock callbacks. Verify query param parsing, JSON response shape, 404 on unknown segment.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/http/management/logstore_handler.go common/http/management/logstore_handler_test.go
@@ -1462,7 +1462,7 @@ git commit -m "feat(server): add GET /admin/logstore/segments list and show hand
 
 **Spec reference:** §2.C — C.5 force-flush, C.6 fence, C.7 compact.
 
-- [ ] **Step 1: Implement handlers**
+- [x] **Step 1: Implement handlers**
 
 ```go
 // NewLogstoreFlushHandler handles POST /admin/logstore/flush
@@ -1483,9 +1483,9 @@ Error responses:
 - 404: segment not found
 - 400: invalid request body
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/http/management/logstore_handler.go common/http/management/logstore_handler_test.go
@@ -1504,7 +1504,7 @@ git commit -m "feat(server): add POST /admin/logstore/flush, fence, compact hand
 
 **Spec reference:** §2.G — G.1 list, G.2 show, G.3 stats.
 
-- [ ] **Step 1: Implement handlers**
+- [x] **Step 1: Implement handlers**
 
 ```go
 // NewOpsListHandler handles GET /admin/runtime/ops
@@ -1518,11 +1518,11 @@ func NewOpsGetHandler(get func(opID string) *opregistry.OpRecord) http.HandlerFu
 func NewOpsStatsHandler(stats func() opregistry.Stats) http.HandlerFunc
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test with mock callbacks. Verify query param parsing for filters, 404 on unknown op_id, JSON response shape.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add common/http/management/ops_handler.go common/http/management/ops_handler_test.go
@@ -1539,7 +1539,7 @@ git commit -m "feat(server): add ops list/get/stats handlers for op registry"
 - Modify: `cmd/main.go` — fill `Logstore` and `Ops` callback fields
 - Modify: `common/http/server.go` — register new handlers in `Start()`
 
-- [ ] **Step 1: Wire callbacks in `cmd/main.go`**
+- [x] **Step 1: Wire callbacks in `cmd/main.go`**
 
 ```go
 Logstore: commonhttp.LogstoreCallbacks{
@@ -1566,7 +1566,7 @@ Ops: commonhttp.OpsCallbacks{
 },
 ```
 
-- [ ] **Step 2: Register handlers in `server.go` Start()**
+- [x] **Step 2: Register handlers in `server.go` Start()**
 
 Add conditional registration for all new endpoints (same pattern as Phase 1):
 
@@ -1581,14 +1581,14 @@ if callbacks.Ops.List != nil {
 }
 ```
 
-- [ ] **Step 3: Build and verify**
+- [x] **Step 3: Build and verify**
 
 ```bash
 go build ./...
 go test ./common/http/... -count=1 -v
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/main.go common/http/server.go
@@ -1684,7 +1684,7 @@ defer func() {
 
 This preserves exact backward compatibility of the histogram label values.
 
-- [ ] **Step 1: Apply the pattern to all 9 methods**
+- [x] **Step 1: Apply the pattern to all 9 methods**
 
 Methods to migrate (all in `server/logstore.go`):
 1. `AddEntry` (~line 185)
@@ -1697,14 +1697,14 @@ Methods to migrate (all in `server/logstore.go`):
 8. `CleanSegment` (~line 465)
 9. `UpdateLastAddConfirmed` (~line 495)
 
-- [ ] **Step 2: Build and verify existing tests pass**
+- [x] **Step 2: Build and verify existing tests pass**
 
 ```bash
 go build ./...
 go test ./server/... -race -count=1
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add server/logstore.go
@@ -1724,26 +1724,26 @@ git commit -m "refactor(logstore): migrate 9 methods to metrics.StartOp/End patt
 
 **Spec reference:** §2.G.3 — mechanical migration.
 
-- [ ] **Step 1: Migrate objectstorage**
+- [x] **Step 1: Migrate objectstorage**
 
 In `Sync()`, replace the manual `startTime := time.Now()` / `Observe(elapsed)` pattern with `StartOp("file.sync", nil, nil)` + deferred `End` + manual histogram observation.
 
-- [ ] **Step 2: Migrate stagedstorage**
+- [x] **Step 2: Migrate stagedstorage**
 
 In `processFlushTask()`, same pattern with `StartOp("file.flush", nil, nil)`.
 
-- [ ] **Step 3: Migrate disk**
+- [x] **Step 3: Migrate disk**
 
 In `processFlushTask()`, same pattern.
 
-- [ ] **Step 4: Build and verify**
+- [x] **Step 4: Build and verify**
 
 ```bash
 go build ./...
 go test ./server/storage/... -race -count=1
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/storage/objectstorage/writer_impl.go \
@@ -1762,7 +1762,7 @@ git commit -m "refactor(storage): migrate flush sites to metrics.StartOp/End pat
 - Create: `server/logstore_op_test.go`
 - Create: `server/storage/objectstorage/op_test.go` (or extend existing test files)
 
-- [ ] **Step 1: Write regression tests**
+- [x] **Step 1: Write regression tests**
 
 For each migration site, write a test that:
 1. Resets the relevant Prometheus metric (or uses a fresh registry)
@@ -1779,13 +1779,13 @@ func TestAddEntry_MetricMigration(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run all**
+- [x] **Step 2: Run all**
 
 ```bash
 go test ./server/... -race -count=1 -v -run "MetricMigration"
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add server/logstore_op_test.go server/storage/objectstorage/op_test.go
@@ -1808,11 +1808,11 @@ git commit -m "test(metrics): regression tests for 12 op-pattern metric migratio
 
 **Spec reference:** §2.E.3 — logging get-level.
 
-- [ ] **Step 1: Create parent command**
+- [x] **Step 1: Create parent command**
 
 `logging.go`: Create `newLoggingCommand()` that adds `get-level` and `set-level` subcommands.
 
-- [ ] **Step 2: Implement `get-level`**
+- [x] **Step 2: Implement `get-level`**
 
 `logging_get_level.go`:
 - Resolve node target (single node via `resolveAndDiscover`)
@@ -1823,13 +1823,13 @@ git commit -m "test(metrics): regression tests for 12 op-pattern metric migratio
 
 With `--all` flag: fan-out to all nodes, show level per node.
 
-- [ ] **Step 3: Write tests**
+- [x] **Step 3: Write tests**
 
 Test with httptest server returning `{"level": "debug"}`. Verify table and JSON output.
 
-- [ ] **Step 4: Register in root.go**
+- [x] **Step 4: Register in root.go**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logging.go cmd/wpcli/cmd/logging_get_level.go cmd/wpcli/cmd/logging_test.go cmd/wpcli/cmd/root.go
@@ -1848,18 +1848,18 @@ git commit -m "feat(wpcli): add logging get-level command"
 
 **Spec reference:** §2.E.4 — logging set-level.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required flag: `--level` (debug/info/warn/error)
 - `POST /log/level` with body `{"level": "debug"}`
 - Parse response, print confirmation
 - With `--all`: fan-out POST to all nodes
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test POST body construction, response parsing, error on invalid level.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logging_set_level.go cmd/wpcli/cmd/logging_test.go
@@ -1878,7 +1878,7 @@ git commit -m "feat(wpcli): add logging set-level command"
 - Create: `cmd/wpcli/cmd/logstore.go`
 - Modify: `cmd/wpcli/cmd/root.go`
 
-- [ ] **Step 1: Create parent**
+- [x] **Step 1: Create parent**
 
 ```go
 func newLogstoreCommand() *cobra.Command {
@@ -1899,9 +1899,9 @@ func newLogstoreCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 2: Register in root.go**
+- [x] **Step 2: Register in root.go**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore.go cmd/wpcli/cmd/root.go
@@ -1920,7 +1920,7 @@ git commit -m "feat(wpcli): add logstore parent command"
 
 **Spec reference:** §2.C.1 — segments list.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Fetch `GET /admin/logstore/segments?log_id=X&state=active&writable=true`
 - Parse response into `[]WriterSnapshot`
@@ -1928,9 +1928,9 @@ git commit -m "feat(wpcli): add logstore parent command"
 - Flags: `--log`, `--state`, `--writable`, `--all` (fan-out)
 - JSON/YAML: full response passthrough
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_segments.go cmd/wpcli/cmd/logstore_test.go
@@ -1949,16 +1949,16 @@ git commit -m "feat(wpcli): add logstore segments command"
 
 **Spec reference:** §2.C.2 — segment show.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required flags: `--log` and `--seg`
 - Optional: `--full` (includes all detail fields)
 - Fetch `GET /admin/logstore/segments?log_id=X&segment_id=Y&detailed=true`
 - Sectioned output (like `wp node show`): Identity, State, Buffer, Flush Queue, Timing
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_segment_show.go cmd/wpcli/cmd/logstore_test.go
@@ -1977,16 +1977,16 @@ git commit -m "feat(wpcli): add logstore segment-show command"
 
 **Spec reference:** §2.C.3 — buffer summary.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Reuses `GET /admin/logstore/segments` endpoint (same data, different view)
 - Client-side aggregation: sort by `buffer_bytes` descending, show top-N
 - Table columns: `LOG:SEG  BUFFER_BYTES  BUFFER_ENTRIES  PCT_OF_TOTAL`
 - Flags: `--top N` (default 20), `--all` (fan-out)
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_buffer.go cmd/wpcli/cmd/logstore_test.go
@@ -2005,16 +2005,16 @@ git commit -m "feat(wpcli): add logstore buffer command"
 
 **Spec reference:** §2.C.4 — flush queue summary.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Reuses `GET /admin/logstore/segments` endpoint
 - Client-side aggregation: sort by `flush_queue_depth` descending
 - Table columns: `LOG:SEG  QUEUE_DEPTH  QUEUE_CAP  UTILIZATION`
 - Flags: `--top N` (default 20), `--all` (fan-out)
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_flush_queue.go cmd/wpcli/cmd/logstore_test.go
@@ -2033,16 +2033,16 @@ git commit -m "feat(wpcli): add logstore flush-queue command"
 
 **Spec reference:** §2.C.5 — force flush.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - `POST /admin/logstore/flush` with body `{"log_id": X, "segment_id": Y}` or `{}`
 - Flags: `--log`, `--seg` (both 0 = flush all)
 - No confirmation prompt (flush is safe)
 - Print result: "Flushed segment 42:7" or "Flushed all segments"
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_force_flush.go cmd/wpcli/cmd/logstore_test.go
@@ -2062,22 +2062,22 @@ git commit -m "feat(wpcli): add logstore force-flush command"
 
 **Spec reference:** §2.C.6 (fence), §2.C.7 (compact).
 
-- [ ] **Step 1: Implement fence**
+- [x] **Step 1: Implement fence**
 
 - `POST /admin/logstore/fence` with body `{"log_id": X, "segment_id": Y, "reason": "..."}`
 - Required: `--log`, `--seg`, `--reason`
 - Confirmation prompt (unless `-y` / `--yes`)
 - Exit 7 on user abort
 
-- [ ] **Step 2: Implement compact**
+- [x] **Step 2: Implement compact**
 
 - `POST /admin/logstore/compact` with body `{"log_id": X, "segment_id": Y}`
 - Required: `--log`, `--seg`
 - No confirmation (compact is safe; server validates preconditions and returns 409 if not ready)
 
-- [ ] **Step 3: Write tests for both**
+- [x] **Step 3: Write tests for both**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/logstore_fence.go cmd/wpcli/cmd/logstore_compact.go cmd/wpcli/cmd/logstore_test.go
@@ -2100,9 +2100,9 @@ git commit -m "feat(wpcli): add logstore fence and compact commands"
 
 **Spec reference:** §2.G.1 — ops list.
 
-- [ ] **Step 1: Create parent + register**
+- [x] **Step 1: Create parent + register**
 
-- [ ] **Step 2: Implement `ops list`**
+- [x] **Step 2: Implement `ops list`**
 
 - Fetch `GET /admin/runtime/ops?type=...&log_id=...&segment_id=...&longer_than_ms=...&limit=...`
 - Table columns: `OP_TYPE  OP_ID  TRACE_ID  ELAPSED  LOG:SEG`
@@ -2110,9 +2110,9 @@ git commit -m "feat(wpcli): add logstore fence and compact commands"
 - Flags: `--type` (multi-value), `--log`, `--seg`, `--longer-than`, `--limit`, `--sort-by`, `--all` (fan-out)
 - Pool utilization header: `Pool: 487/1024 used (47.6%)  Evicted: total=12341 young=12287 old=54 ⚠`
 
-- [ ] **Step 3: Write tests**
+- [x] **Step 3: Write tests**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/ops.go cmd/wpcli/cmd/ops_list.go cmd/wpcli/cmd/ops_test.go cmd/wpcli/cmd/root.go
@@ -2131,7 +2131,7 @@ git commit -m "feat(wpcli): add ops list command with filtering"
 
 **Spec reference:** §2.G.2 — ops show.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required: `--op-id`
 - Fetch `GET /admin/runtime/ops?op_id=<id>` from the resolved node
@@ -2143,9 +2143,9 @@ git commit -m "feat(wpcli): add ops list command with filtering"
   - **Cross-references:** suggested follow-up commands
 - Exit 11 (ResourceNotFound) if op_id not found
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/ops_show.go cmd/wpcli/cmd/ops_test.go
@@ -2164,7 +2164,7 @@ git commit -m "feat(wpcli): add ops show command with cross-reference hints"
 
 **Spec reference:** §2.G.3 — ops stats.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Fetch `GET /admin/runtime/ops/stats`
 - Sectioned output:
@@ -2173,9 +2173,9 @@ git commit -m "feat(wpcli): add ops show command with cross-reference hints"
 - Flags: `--all` (fan-out, show stats per node)
 - JSON/YAML: full response passthrough
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/ops_stats.go cmd/wpcli/cmd/ops_test.go
@@ -2194,7 +2194,7 @@ git commit -m "feat(wpcli): add ops stats command with eviction analysis"
 - Create: `cmd/wpcli/internal/prom/parser.go`
 - Create: `cmd/wpcli/internal/prom/parser_test.go`
 
-- [ ] **Step 1: Implement parser**
+- [x] **Step 1: Implement parser**
 
 Use `github.com/prometheus/common/expfmt` to parse the Prometheus text exposition format:
 
@@ -2230,11 +2230,11 @@ func GetHistogramQuantile(mf *MetricFamily, labels map[string]string, quantile f
 func GetCounterValue(mf *MetricFamily, labels map[string]string) (float64, bool)
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test with sample Prometheus text output. Verify gauge, counter, histogram extraction.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/internal/prom/parser.go cmd/wpcli/internal/prom/parser_test.go
@@ -2255,9 +2255,9 @@ git commit -m "feat(wpcli): add Prometheus text format scrape parser"
 
 **Spec reference:** §2.D.1 — metrics list.
 
-- [ ] **Step 1: Create parent + register**
+- [x] **Step 1: Create parent + register**
 
-- [ ] **Step 2: Implement `metrics list`**
+- [x] **Step 2: Implement `metrics list`**
 
 - Scrape `GET /metrics` from target node
 - Parse with prom parser
@@ -2265,9 +2265,9 @@ git commit -m "feat(wpcli): add Prometheus text format scrape parser"
 - Flags: `--filter` (substring match on metric name)
 - JSON/YAML: structured metric family list
 
-- [ ] **Step 3: Write tests**
+- [x] **Step 3: Write tests**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/metrics.go cmd/wpcli/cmd/metrics_list.go cmd/wpcli/cmd/metrics_test.go cmd/wpcli/cmd/root.go
@@ -2286,7 +2286,7 @@ git commit -m "feat(wpcli): add metrics list command"
 
 **Spec reference:** §2.D.2 — metrics snapshot.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Scrape `GET /metrics` (single node or `--all` fan-out)
 - Parse and display selected metrics with current values
@@ -2294,9 +2294,9 @@ git commit -m "feat(wpcli): add metrics list command"
 - Table columns: `NODE  METRIC  LABELS  VALUE`
 - JSON: full parsed metric families
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/metrics_snapshot.go cmd/wpcli/cmd/metrics_test.go
@@ -2315,7 +2315,7 @@ git commit -m "feat(wpcli): add metrics snapshot command"
 
 **Spec reference:** §2.D.3 — metrics top.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required: `--by <metric_name>`
 - Fan-out scrape to all nodes
@@ -2323,9 +2323,9 @@ git commit -m "feat(wpcli): add metrics snapshot command"
 - Table columns: `RANK  NODE  VALUE  LABELS`
 - Flags: `--top N` (default 10), `--labels` (label filter)
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/metrics_top.go cmd/wpcli/cmd/metrics_test.go
@@ -2344,7 +2344,7 @@ git commit -m "feat(wpcli): add metrics top command for cross-node comparison"
 
 **Spec reference:** §2.D.4 — metrics watch.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required: positional arg `<metric_name>`
 - Periodic scrape of `GET /metrics` (default interval 1s, configurable with `--interval`)
@@ -2353,11 +2353,11 @@ git commit -m "feat(wpcli): add metrics top command for cross-node comparison"
 - Ctrl+C to exit (exit 130)
 - Flags: `--interval`, `--node` (single node, default first discovered), `--labels`
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test the metric comparison logic (delta, trend arrow). Use a cancellable context for the watch loop test.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/metrics_watch.go cmd/wpcli/cmd/metrics_test.go
@@ -2380,7 +2380,7 @@ git commit -m "feat(wpcli): add metrics watch command with trend arrows"
 
 **Spec reference:** §2.D.5 — metrics report, scenario YAML structure.
 
-- [ ] **Step 1: Define scenario types**
+- [x] **Step 1: Define scenario types**
 
 Create `cmd/wpcli/internal/scenarios/types.go`:
 
@@ -2417,7 +2417,7 @@ type Finding struct {
 }
 ```
 
-- [ ] **Step 2: Implement scenario engine**
+- [x] **Step 2: Implement scenario engine**
 
 `engine.go`:
 1. Load scenario from embedded YAML (via `embed.FS`)
@@ -2430,7 +2430,7 @@ The condition DSL is kept simple for Phase 2:
 - Sustained conditions: `for at least N% of window samples`
 - Rate comparisons: `rate > value`
 
-- [ ] **Step 3: Create 12 built-in scenario YAMLs**
+- [x] **Step 3: Create 12 built-in scenario YAMLs**
 
 Embed via `//go:embed builtin/*.yaml`:
 
@@ -2447,7 +2447,7 @@ Embed via `//go:embed builtin/*.yaml`:
 11. `quorum-degraded.yaml` — active replicas < ensemble
 12. `under-replication.yaml` — sustained under-replication
 
-- [ ] **Step 4: Implement `wp metrics report`**
+- [x] **Step 4: Implement `wp metrics report`**
 
 `metrics_report.go`:
 - Required: `--scenario <name>`
@@ -2456,11 +2456,11 @@ Embed via `//go:embed builtin/*.yaml`:
 - Output: severity-sorted findings with hints
 - Exit codes: 0 (all green), 8 (yellow finding), 9 (red finding)
 
-- [ ] **Step 5: Write tests**
+- [x] **Step 5: Write tests**
 
 Test engine with a mock scraper and a simple scenario YAML. Verify findings are produced correctly.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/internal/scenarios/ cmd/wpcli/cmd/metrics_report.go cmd/wpcli/cmd/metrics_test.go
@@ -2477,7 +2477,7 @@ git commit -m "feat(wpcli): add metrics report command with scenario YAML engine
 
 **Files:** None (verification only)
 
-- [ ] **Step 1: Run the full test suite**
+- [x] **Step 1: Run the full test suite**
 
 ```bash
 go test ./... -race -count=1
@@ -2485,7 +2485,7 @@ go test ./... -race -count=1
 
 Expected: PASS. All existing tests + all Phase 2 tests green.
 
-- [ ] **Step 2: Build and verify**
+- [x] **Step 2: Build and verify**
 
 ```bash
 make wpcli
@@ -2495,7 +2495,7 @@ make wpcli
 
 Expected: help lists all Phase 1 + Phase 2 subcommands: `node`, `cluster`, `config`, `env`, `profile`, `ctx`, `logging`, `logstore`, `ops`, `metrics`.
 
-- [ ] **Step 3: Command count verification**
+- [x] **Step 3: Command count verification**
 
 Count all subcommands — expected 31 total (14 Phase 1 + 17 Phase 2):
 
@@ -2503,11 +2503,11 @@ Phase 1 (14): node list/show/decommission/drain-status/cancel-decommission/resta
 
 Phase 2 (17): logging get-level/set-level, logstore segments/segment-show/buffer/flush-queue/force-flush/fence/compact, ops list/show/stats, metrics list/snapshot/top/watch/report
 
-- [ ] **Step 4: Spec coverage check**
+- [x] **Step 4: Spec coverage check**
 
 Open `docs/wpcli-design.md` §5.4 and verify every command, every server endpoint, and every package listed there has a corresponding completed task above. Any gap is a plan failure — add a task and re-execute.
 
-- [ ] **Step 5: Op registry verification (optional, docker-compose)**
+- [x] **Step 5: Op registry verification (optional, docker-compose)**
 
 On a docker-compose cluster:
 ```bash
@@ -2524,14 +2524,14 @@ Expected: All commands produce output without error.
 
 ## Self-Review Checklist
 
-- [ ] **Spec coverage:** every command in §2.C / §2.D / §2.E.3-E.4 / §2.G has a completed task
-- [ ] **Server endpoint coverage:** all 10 new endpoints from §6.3 Phase 2 rows have a completed task
-- [ ] **Exit code coverage:** every exit code a Phase 2 command can emit has at least one unit test
-- [ ] **No placeholders:** grep this plan for TODO / TBD — none should remain
-- [ ] **Type consistency:** function / method / struct names are identical across tasks
-- [ ] **Commit granularity:** each task ends in exactly one commit
-- [ ] **Metric regression:** all 12 migration sites have regression tests proving histogram behavior is preserved
-- [ ] **opregistry coverage:** unit tests ≥ 90% line coverage on `common/runtime/opregistry/`
+- [x] **Spec coverage:** every command in §2.C / §2.D / §2.E.3-E.4 / §2.G has a completed task
+- [x] **Server endpoint coverage:** all 10 new endpoints from §6.3 Phase 2 rows have a completed task
+- [x] **Exit code coverage:** every exit code a Phase 2 command can emit has at least one unit test
+- [x] **No placeholders:** grep this plan for TODO / TBD — none should remain
+- [x] **Type consistency:** function / method / struct names are identical across tasks
+- [x] **Commit granularity:** each task ends in exactly one commit
+- [x] **Metric regression:** all 12 migration sites have regression tests proving histogram behavior is preserved
+- [x] **opregistry coverage:** unit tests ≥ 90% line coverage on `common/runtime/opregistry/`
 
 ---
 

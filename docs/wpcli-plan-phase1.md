@@ -1,6 +1,6 @@
 # wp CLI Phase 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship Phase 1 of the wp CLI — a usable `wp` Go binary covering 14 feature commands (node lifecycle, cluster overview, config/env inspection, pprof) backed by 3 new admin endpoints + 2 existing endpoint enhancements. Zero business code metric migration, zero opregistry, zero k8s integration (those are Phase 2/3).
 
@@ -91,7 +91,7 @@
 - Create: `common/version/version_test.go`
 - Modify: `Makefile` — add `VERSION_PKG` variable + ldflags to existing server build target
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `common/version/version_test.go`:
 
@@ -129,7 +129,7 @@ func TestString_Format(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./common/version/...
@@ -137,7 +137,7 @@ go test ./common/version/...
 
 Expected: FAIL — `common/version` package does not exist.
 
-- [ ] **Step 3: Create `common/version/version.go`**
+- [x] **Step 3: Create `common/version/version.go`**
 
 ```go
 // Package version exposes build info populated via -ldflags at build time.
@@ -180,7 +180,7 @@ func (b BuildInfo) String() string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 ```bash
 go test ./common/version/... -v
@@ -188,7 +188,7 @@ go test ./common/version/... -v
 
 Expected: PASS on both tests.
 
-- [ ] **Step 5: Add Makefile ldflags variable**
+- [x] **Step 5: Add Makefile ldflags variable**
 
 Modify `Makefile` — at the top, near other variables, add:
 
@@ -205,13 +205,13 @@ LDFLAGS     := -ldflags "-s -w \
 
 Leave existing server build target for now (we'll wire ldflags into wpcli in Task 2). If the existing server target uses its own flags, do NOT modify them in this task — scope is just introducing the variables.
 
-- [ ] **Step 6: Verify Makefile parses**
+- [x] **Step 6: Verify Makefile parses**
 
 ```bash
 make -n 2>&1 | head -5    # dry-run, no errors expected
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add common/version/ Makefile
@@ -231,7 +231,7 @@ git commit -m "feat(version): add common/version package with build info ldflags
 - Modify: `Makefile` — add `wpcli` target
 - Modify: `go.mod` + `go.sum` (via `go get github.com/spf13/cobra`)
 
-- [ ] **Step 1: Add cobra dependency**
+- [x] **Step 1: Add cobra dependency**
 
 ```bash
 go get github.com/spf13/cobra@latest
@@ -240,7 +240,7 @@ go mod tidy
 
 Expected: `go.mod` picks up `github.com/spf13/cobra` and `github.com/spf13/pflag`.
 
-- [ ] **Step 2: Create `cmd/wpcli/README.md`** (placeholder, Task 32 expands it)
+- [x] **Step 2: Create `cmd/wpcli/README.md`** (placeholder, Task 32 expands it)
 
 ```markdown
 # wp — Woodpecker CLI
@@ -250,7 +250,7 @@ WIP. See [`docs/wpcli-design.md`](../../docs/wpcli-design.md) for the full desig
 Build: `make wpcli` (outputs `bin/wp`).
 ```
 
-- [ ] **Step 3: Create minimal `cmd/wpcli/cmd/root.go`**
+- [x] **Step 3: Create minimal `cmd/wpcli/cmd/root.go`**
 
 ```go
 // Package cmd holds the cobra commands for the wp CLI.
@@ -269,7 +269,7 @@ func NewRootCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Create `cmd/wpcli/main.go`**
+- [x] **Step 4: Create `cmd/wpcli/main.go`**
 
 ```go
 package main
@@ -290,7 +290,7 @@ func main() {
 }
 ```
 
-- [ ] **Step 5: Add `make wpcli` target**
+- [x] **Step 5: Add `make wpcli` target**
 
 Modify `Makefile`, add:
 
@@ -302,7 +302,7 @@ wpcli:
 	@echo "Built bin/wp"
 ```
 
-- [ ] **Step 6: Build and run**
+- [x] **Step 6: Build and run**
 
 ```bash
 make wpcli
@@ -311,7 +311,7 @@ make wpcli
 
 Expected output: cobra's default help for `wp`. Exit code 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cmd/wpcli/ Makefile go.mod go.sum
@@ -329,7 +329,7 @@ git commit -m "feat(wpcli): scaffold wp binary with cobra + make wpcli target"
 - Create: `cmd/wpcli/cmd/root_test.go`
 - Create: `cmd/wpcli/cmd/globals.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/root_test.go`:
 
@@ -375,7 +375,7 @@ func TestRootCommand_Help(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestRootCommand -v
@@ -383,7 +383,7 @@ go test ./cmd/wpcli/cmd/... -run TestRootCommand -v
 
 Expected: FAIL (flags not yet defined).
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/globals.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/globals.go`**
 
 ```go
 package cmd
@@ -408,7 +408,7 @@ type GlobalFlags struct {
 var Globals GlobalFlags
 ```
 
-- [ ] **Step 4: Update `cmd/wpcli/cmd/root.go`** to define all global flags
+- [x] **Step 4: Update `cmd/wpcli/cmd/root.go`** to define all global flags
 
 ```go
 // Package cmd holds the cobra commands for the wp CLI.
@@ -444,7 +444,7 @@ func NewRootCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestRootCommand -v
@@ -452,7 +452,7 @@ go test ./cmd/wpcli/cmd/... -run TestRootCommand -v
 
 Expected: PASS on all three.
 
-- [ ] **Step 6: Build to ensure no regressions**
+- [x] **Step 6: Build to ensure no regressions**
 
 ```bash
 make wpcli && ./bin/wp --help
@@ -460,7 +460,7 @@ make wpcli && ./bin/wp --help
 
 Expected: help output includes the 9 global flags.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/root.go cmd/wpcli/cmd/root_test.go cmd/wpcli/cmd/globals.go
@@ -479,7 +479,7 @@ git commit -m "feat(wpcli): add global flags on cobra root command"
 - Create: `cmd/wpcli/internal/errors/exit_test.go`
 - Modify: `cmd/wpcli/main.go` — wire the exit mapping
 
-- [ ] **Step 1: Write the test for the exit-code table**
+- [x] **Step 1: Write the test for the exit-code table**
 
 Create `cmd/wpcli/internal/errors/exit_test.go`:
 
@@ -525,7 +525,7 @@ func TestExitCodeFor_AllTypes(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/internal/errors/... -v
@@ -533,7 +533,7 @@ go test ./cmd/wpcli/internal/errors/... -v
 
 Expected: FAIL — package does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/internal/errors/types.go`**
+- [x] **Step 3: Create `cmd/wpcli/internal/errors/types.go`**
 
 ```go
 // Package errors centralizes wp CLI's error types and exit code mapping.
@@ -651,7 +651,7 @@ func NewKubectlPassthroughError(code int) *CLIError {
 }
 ```
 
-- [ ] **Step 4: Create `cmd/wpcli/internal/errors/exit.go`**
+- [x] **Step 4: Create `cmd/wpcli/internal/errors/exit.go`**
 
 ```go
 package errors
@@ -703,7 +703,7 @@ func ExitCodeFor(err error) int {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/internal/errors/... -v
@@ -711,7 +711,7 @@ go test ./cmd/wpcli/internal/errors/... -v
 
 Expected: PASS on all sub-tests.
 
-- [ ] **Step 6: Wire exit mapping into `cmd/wpcli/main.go`**
+- [x] **Step 6: Wire exit mapping into `cmd/wpcli/main.go`**
 
 Replace `cmd/wpcli/main.go` with:
 
@@ -736,7 +736,7 @@ func main() {
 }
 ```
 
-- [ ] **Step 7: Verify build still works**
+- [x] **Step 7: Verify build still works**
 
 ```bash
 make wpcli && ./bin/wp --help && echo "exit=$?"
@@ -744,7 +744,7 @@ make wpcli && ./bin/wp --help && echo "exit=$?"
 
 Expected: help output, `exit=0`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add cmd/wpcli/internal/errors/ cmd/wpcli/main.go
@@ -764,7 +764,7 @@ git commit -m "feat(wpcli): add structured error types and exit code mapping"
 - Create: `cmd/wpcli/config/testdata/bad-yaml.yaml`
 - Create: `cmd/wpcli/config/testdata/missing-context.yaml`
 
-- [ ] **Step 1: Create test fixtures**
+- [x] **Step 1: Create test fixtures**
 
 `cmd/wpcli/config/testdata/good.yaml`:
 
@@ -805,7 +805,7 @@ contexts:
     endpoint: http://prod.wp.svc:9091
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Create `cmd/wpcli/config/cli_config_test.go`:
 
@@ -869,7 +869,7 @@ func TestResolveContext_Defaults(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 ```bash
 go test ./cmd/wpcli/config/... -v
@@ -877,7 +877,7 @@ go test ./cmd/wpcli/config/... -v
 
 Expected: FAIL — package does not exist.
 
-- [ ] **Step 4: Create `cmd/wpcli/config/cli_config.go`**
+- [x] **Step 4: Create `cmd/wpcli/config/cli_config.go`**
 
 ```go
 // Package config loads and resolves the wp CLI configuration (cli.yaml).
@@ -971,7 +971,7 @@ func DefaultConfigPaths() []string {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/config/... -v
@@ -979,7 +979,7 @@ go test ./cmd/wpcli/config/... -v
 
 Expected: PASS on all tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/config/
@@ -997,7 +997,7 @@ git commit -m "feat(wpcli): add cli.yaml loader with context overlay"
 - Create: `cmd/wpcli/cmd/version_test.go`
 - Modify: `cmd/wpcli/cmd/root.go` — register the sub-command
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/version_test.go`:
 
@@ -1036,7 +1036,7 @@ func TestVersionCommand_JSON(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestVersionCommand -v
@@ -1044,7 +1044,7 @@ go test ./cmd/wpcli/cmd/... -run TestVersionCommand -v
 
 Expected: FAIL — `wp version` sub-command does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/version.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/version.go`**
 
 ```go
 package cmd
@@ -1083,7 +1083,7 @@ func newVersionCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register the sub-command in `cmd/wpcli/cmd/root.go`**
+- [x] **Step 4: Register the sub-command in `cmd/wpcli/cmd/root.go`**
 
 Modify `NewRootCommand` to add at the end before `return root`:
 
@@ -1091,7 +1091,7 @@ Modify `NewRootCommand` to add at the end before `return root`:
 	root.AddCommand(newVersionCommand())
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -v
@@ -1099,7 +1099,7 @@ go test ./cmd/wpcli/cmd/... -v
 
 Expected: PASS on all tests.
 
-- [ ] **Step 6: Build and exercise manually**
+- [x] **Step 6: Build and exercise manually**
 
 ```bash
 make wpcli
@@ -1109,7 +1109,7 @@ make wpcli
 
 Expected: text output on first call, JSON on second.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/version.go cmd/wpcli/cmd/version_test.go cmd/wpcli/cmd/root.go
@@ -1127,7 +1127,7 @@ git commit -m "feat(wpcli): add version command"
 - Create: `cmd/wpcli/cmd/ctx_test.go`
 - Modify: `cmd/wpcli/cmd/root.go` — register the sub-command
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Create `cmd/wpcli/cmd/ctx_test.go`:
 
@@ -1225,7 +1225,7 @@ func TestCtxUse_NonexistentContext(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestCtx -v
@@ -1233,7 +1233,7 @@ go test ./cmd/wpcli/cmd/... -run TestCtx -v
 
 Expected: FAIL — `ctx` sub-command does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/ctx.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/ctx.go`**
 
 ```go
 package cmd
@@ -1352,7 +1352,7 @@ func newCtxViewCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register `ctx` in `cmd/wpcli/cmd/root.go`**
+- [x] **Step 4: Register `ctx` in `cmd/wpcli/cmd/root.go`**
 
 Add to `NewRootCommand` just before `return root`:
 
@@ -1360,7 +1360,7 @@ Add to `NewRootCommand` just before `return root`:
 	root.AddCommand(newCtxCommand())
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestCtx -v
@@ -1368,7 +1368,7 @@ go test ./cmd/wpcli/cmd/... -run TestCtx -v
 
 Expected: PASS on all `TestCtx*`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/ctx.go cmd/wpcli/cmd/ctx_test.go cmd/wpcli/cmd/root.go
@@ -1389,7 +1389,7 @@ git commit -m "feat(wpcli): add ctx list/use/view commands"
 - Create: `cmd/wpcli/output/yaml.go`
 - Create: `cmd/wpcli/output/json_test.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/output/json_test.go`:
 
@@ -1425,7 +1425,7 @@ func TestRenderYAML(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/output/... -v
@@ -1433,7 +1433,7 @@ go test ./cmd/wpcli/output/... -v
 
 Expected: FAIL — package does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/output/output.go`**
+- [x] **Step 3: Create `cmd/wpcli/output/output.go`**
 
 ```go
 // Package output holds wp CLI output renderers.
@@ -1459,7 +1459,7 @@ type Renderer interface {
 }
 ```
 
-- [ ] **Step 4: Create `cmd/wpcli/output/json.go`**
+- [x] **Step 4: Create `cmd/wpcli/output/json.go`**
 
 ```go
 package output
@@ -1477,7 +1477,7 @@ func RenderJSON(w io.Writer, data any) error {
 }
 ```
 
-- [ ] **Step 5: Create `cmd/wpcli/output/yaml.go`**
+- [x] **Step 5: Create `cmd/wpcli/output/yaml.go`**
 
 ```go
 package output
@@ -1497,7 +1497,7 @@ func RenderYAML(w io.Writer, data any) error {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/output/... -v
@@ -1505,7 +1505,7 @@ go test ./cmd/wpcli/output/... -v
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cmd/wpcli/output/
@@ -1526,7 +1526,7 @@ Both use `text/tabwriter`.
 - Create: `cmd/wpcli/output/table.go`
 - Create: `cmd/wpcli/output/table_test.go`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
 
 Create `cmd/wpcli/output/table_test.go`:
 
@@ -1595,7 +1595,7 @@ func TestSectionedTable_Basic(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 go test ./cmd/wpcli/output/... -run "TestRowTable|TestSectionedTable" -v
@@ -1603,7 +1603,7 @@ go test ./cmd/wpcli/output/... -run "TestRowTable|TestSectionedTable" -v
 
 Expected: FAIL — functions do not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/output/table.go`**
+- [x] **Step 3: Create `cmd/wpcli/output/table.go`**
 
 ```go
 package output
@@ -1663,7 +1663,7 @@ func RenderSectionedTable(w io.Writer, sections []Section) error {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/output/... -v
@@ -1671,7 +1671,7 @@ go test ./cmd/wpcli/output/... -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/output/table.go cmd/wpcli/output/table_test.go
@@ -1688,7 +1688,7 @@ git commit -m "feat(wpcli): add row and sectioned table renderers"
 - Create: `cmd/wpcli/output/tree.go`
 - Create: `cmd/wpcli/output/tree_test.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/output/tree_test.go`:
 
@@ -1737,7 +1737,7 @@ func TestRenderTree_Simple(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/output/... -run TestRenderTree -v
@@ -1745,7 +1745,7 @@ go test ./cmd/wpcli/output/... -run TestRenderTree -v
 
 Expected: FAIL.
 
-- [ ] **Step 3: Create `cmd/wpcli/output/tree.go`**
+- [x] **Step 3: Create `cmd/wpcli/output/tree.go`**
 
 ```go
 package output
@@ -1800,7 +1800,7 @@ func renderChildren(w io.Writer, children []*TreeNode, prefix string) error {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/output/... -run TestRenderTree -v
@@ -1808,7 +1808,7 @@ go test ./cmd/wpcli/output/... -run TestRenderTree -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/output/tree.go cmd/wpcli/output/tree_test.go
@@ -1828,7 +1828,7 @@ This task defines the **expected JSON response schema** for `/admin/memberlist` 
 - Create: `cmd/wpcli/client/memberlist.go`
 - Create: `cmd/wpcli/client/memberlist_test.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/client/memberlist_test.go`:
 
@@ -1918,7 +1918,7 @@ func TestResolveNode_NotFound(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 go test ./cmd/wpcli/client/... -v
@@ -1926,7 +1926,7 @@ go test ./cmd/wpcli/client/... -v
 
 Expected: FAIL — package does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/client/client.go`**
+- [x] **Step 3: Create `cmd/wpcli/client/client.go`**
 
 ```go
 // Package client is the wp CLI's admin HTTP client.
@@ -1966,7 +1966,7 @@ func New(baseURL string, opts ClientOpts) *Client {
 }
 ```
 
-- [ ] **Step 4: Create `cmd/wpcli/client/memberlist.go`**
+- [x] **Step 4: Create `cmd/wpcli/client/memberlist.go`**
 
 ```go
 package client
@@ -2064,7 +2064,7 @@ func (c *Client) PeerAdminURL(m Member) string {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/client/... -v
@@ -2072,7 +2072,7 @@ go test ./cmd/wpcli/client/... -v
 
 Expected: PASS on all four sub-tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/client/
@@ -2089,7 +2089,7 @@ git commit -m "feat(wpcli): add admin HTTP client + memberlist JSON parser"
 - Create: `cmd/wpcli/client/fanout.go`
 - Create: `cmd/wpcli/client/fanout_test.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/client/fanout_test.go`:
 
@@ -2177,7 +2177,7 @@ func TestFanout_ConcurrencyBound(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 go test ./cmd/wpcli/client/... -run TestFanout -v
@@ -2185,7 +2185,7 @@ go test ./cmd/wpcli/client/... -run TestFanout -v
 
 Expected: FAIL — Fanout does not exist.
 
-- [ ] **Step 3: Create `cmd/wpcli/client/fanout.go`**
+- [x] **Step 3: Create `cmd/wpcli/client/fanout.go`**
 
 ```go
 package client
@@ -2301,7 +2301,7 @@ func (f *Fanout) Get(urls []string, path string, nodeIDHint string) *FanoutResul
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 ```bash
 go test ./cmd/wpcli/client/... -run TestFanout -v
@@ -2309,7 +2309,7 @@ go test ./cmd/wpcli/client/... -run TestFanout -v
 
 Expected: PASS on all four.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/client/fanout.go cmd/wpcli/client/fanout_test.go
@@ -2330,7 +2330,7 @@ These are the only Phase 1 changes to existing Woodpecker server code. Kept tigh
 - Modify: `common/membership/server_node.go` — add new method
 - Create: `common/membership/server_node_json_test.go` (or extend existing test file)
 
-- [ ] **Step 1: Inspect the existing `GetMemberlistStatus` implementation**
+- [x] **Step 1: Inspect the existing `GetMemberlistStatus` implementation**
 
 ```bash
 grep -n "GetMemberlistStatus" common/membership/server_node.go
@@ -2338,7 +2338,7 @@ grep -n "GetMemberlistStatus" common/membership/server_node.go
 
 Verify the existing method (around line 194) so the new JSON method can source from the same `n.memberlist.Members()` call.
 
-- [ ] **Step 2: Write the test**
+- [x] **Step 2: Write the test**
 
 Create or extend `common/membership/server_node_json_test.go`:
 
@@ -2401,7 +2401,7 @@ func TestGetMemberlistJSON_Shape(t *testing.T) {
 
 > **Note for implementer:** Inspect `NewServerNode` / `Prepare` signatures in `common/membership/server_node.go` before writing this test — constructor arg shape may differ from the draft above. Adjust to match the existing test pattern in `common/membership/cluster_test.go`.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 ```bash
 go test ./common/membership/... -run TestGetMemberlistJSON -v
@@ -2409,7 +2409,7 @@ go test ./common/membership/... -run TestGetMemberlistJSON -v
 
 Expected: FAIL — method does not exist.
 
-- [ ] **Step 4: Implement `GetMemberlistJSON` in `common/membership/server_node.go`**
+- [x] **Step 4: Implement `GetMemberlistJSON` in `common/membership/server_node.go`**
 
 Add below the existing `GetMemberlistStatus`:
 
@@ -2464,7 +2464,7 @@ func (n *ServerNode) GetMemberlistJSON() []byte {
 
 > **Implementation guardrail:** Verify the actual `NodeMeta` field names (`Az`, `ResourceGroup`, `ServiceHost`, `ServicePort`, `Tags`) against `common/membership/service_discovery.go` and `proto/meta.proto` before compiling. If `serviceDiscovery.GetByNodeID` is not the correct accessor, search `service_discovery.go` for the equivalent method and substitute. **Do not guess** — grep for it.
 
-- [ ] **Step 5: Add required imports**
+- [x] **Step 5: Add required imports**
 
 Ensure `common/membership/server_node.go` imports:
 
@@ -2481,7 +2481,7 @@ import (
 )
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 ```bash
 go test ./common/membership/... -run TestGetMemberlistJSON -v
@@ -2489,7 +2489,7 @@ go test ./common/membership/... -run TestGetMemberlistJSON -v
 
 Expected: PASS. If the test fails due to `NodeMeta` field mismatches, fix by consulting the actual proto / discovery code.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add common/membership/server_node.go common/membership/server_node_json_test.go
@@ -2507,7 +2507,7 @@ git commit -m "feat(membership): add GetMemberlistJSON for structured admin quer
 - Modify: `cmd/main.go` — pass the new `GetMemberlistJSON` callback
 - Create: `common/http/server_test.go` — if not present, add test for memberlist content negotiation
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create or extend `common/http/server_test.go`:
 
@@ -2555,7 +2555,7 @@ func TestMemberlistHandler_ContentNegotiation(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./common/http/... -run TestMemberlistHandler -v
@@ -2563,7 +2563,7 @@ go test ./common/http/... -run TestMemberlistHandler -v
 
 Expected: FAIL — `GetMemberlistJSON` field and `newMemberlistHandler` helper don't exist yet.
 
-- [ ] **Step 3: Add the callback field and extract the handler**
+- [x] **Step 3: Add the callback field and extract the handler**
 
 In `common/http/server.go`, modify the `AdminCallbacks` struct:
 
@@ -2598,7 +2598,7 @@ func newMemberlistHandler(callbacks AdminCallbacks) http.HandlerFunc {
 }
 ```
 
-- [ ] **Step 4: Update `Start()` to use the new helper**
+- [x] **Step 4: Update `Start()` to use the new helper**
 
 Replace the existing inline memberlist registration with:
 
@@ -2610,7 +2610,7 @@ Register(&Handler{
 })
 ```
 
-- [ ] **Step 5: Wire the new callback in `cmd/main.go`**
+- [x] **Step 5: Wire the new callback in `cmd/main.go`**
 
 In `cmd/main.go`, find the existing `commonhttp.Start(cfg, commonhttp.AdminCallbacks{ ... })` call and add:
 
@@ -2632,7 +2632,7 @@ func (s *Server) GetServerNodeMemberlistJSON() []byte {
 
 > **Guardrail:** Verify the exact name of the existing `GetServerNodeMemberlistStatus` wrapper in `server/service.go` before adding the new one — mirror its access pattern for `s.node`.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 ```bash
 go test ./common/http/... -run TestMemberlistHandler -v
@@ -2641,7 +2641,7 @@ go build ./...
 
 Expected: PASS + clean build.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add common/http/server.go common/http/server_test.go cmd/main.go server/service.go
@@ -2659,7 +2659,7 @@ git commit -m "feat(http): memberlist endpoint content negotiation (JSON support
 - Modify: `server/service_test.go` — assert new fields are populated
 - Modify: `server/lifecycle.go` (read-only) — if there's a `StartedAt` field on the server struct, reference it; otherwise add it
 
-- [ ] **Step 1: Write or extend a test**
+- [x] **Step 1: Write or extend a test**
 
 Add to `server/service_test.go` (near existing `TestGetNodeStatus` lines around 1520-1535):
 
@@ -2681,7 +2681,7 @@ func TestGetNodeStatus_AugmentedFields(t *testing.T) {
 
 > **Guardrail:** The exact constructor helper (e.g., `newTestServer`) may differ in the real test file. Inspect `server/service_test.go:1525` to see how the existing `TestGetNodeStatus` sets up its Server; mirror that pattern.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./server/... -run TestGetNodeStatus_AugmentedFields -v
@@ -2689,7 +2689,7 @@ go test ./server/... -run TestGetNodeStatus_AugmentedFields -v
 
 Expected: FAIL — fields do not exist.
 
-- [ ] **Step 3: Extend `NodeStatus` struct in `server/service.go`**
+- [x] **Step 3: Extend `NodeStatus` struct in `server/service.go`**
 
 Replace the existing struct (lines 63-73) with:
 
@@ -2712,7 +2712,7 @@ type NodeStatus struct {
 }
 ```
 
-- [ ] **Step 4: Track `StartedAt` on the `Server` struct**
+- [x] **Step 4: Track `StartedAt` on the `Server` struct**
 
 Find the `Server` struct definition in `server/service.go` and add a field:
 
@@ -2729,7 +2729,7 @@ In the constructor (`NewServerWithConfig`), set it:
 s.startedAtMS.Store(time.Now().UnixMilli())
 ```
 
-- [ ] **Step 5: Track `LastHealthCheck`**
+- [x] **Step 5: Track `LastHealthCheck`**
 
 Option A (preferred if a health check handler exists): update `lastHealthCheckMS` in the healthz handler.
 Option B (simpler, Phase 1 OK): return `time.Now().UnixMilli()` at call time — this is approximate but non-zero.
@@ -2745,7 +2745,7 @@ type Server struct {
 
 And wherever `healthz` handler is registered (check `common/http/health/health_handler.go`), call `s.lastHealthCheckMS.Store(time.Now().UnixMilli())`. If that requires a callback wiring change, simpler: populate it on demand in `GetNodeStatus()` with `time.Now().UnixMilli()` and leave the accurate tracking to Phase 2.
 
-- [ ] **Step 6: Update `GetNodeStatus()` to populate the new fields**
+- [x] **Step 6: Update `GetNodeStatus()` to populate the new fields**
 
 Find the existing method (around line 562) and extend the returned struct:
 
@@ -2766,7 +2766,7 @@ Add the import:
 "github.com/zilliztech/woodpecker/common/version"
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [x] **Step 7: Run tests to verify they pass**
 
 ```bash
 go test ./server/... -run TestGetNodeStatus -v
@@ -2775,7 +2775,7 @@ go build ./...
 
 Expected: PASS + clean build.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add server/service.go server/service_test.go
@@ -2794,7 +2794,7 @@ git commit -m "feat(server): augment NodeStatus with started_at, version, last_h
 - Modify: `server/lifecycle.go`
 - Modify: `server/lifecycle_test.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Add to `server/lifecycle_test.go`:
 
@@ -2842,7 +2842,7 @@ func TestCancelDecommission_StatePersisted(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 go test ./server/... -run TestCancelDecommission -v
@@ -2850,7 +2850,7 @@ go test ./server/... -run TestCancelDecommission -v
 
 Expected: FAIL — method does not exist.
 
-- [ ] **Step 3: Implement `CancelDecommission()` in `server/lifecycle.go`**
+- [x] **Step 3: Implement `CancelDecommission()` in `server/lifecycle.go`**
 
 Add after the existing `MarkDecommissioned` method:
 
@@ -2878,7 +2878,7 @@ func (m *NodeLifecycleManager) CancelDecommission() error {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 ```bash
 go test ./server/... -run TestCancelDecommission -v
@@ -2886,7 +2886,7 @@ go test ./server/... -run TestCancelDecommission -v
 
 Expected: PASS on all four.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/lifecycle.go server/lifecycle_test.go
@@ -2907,7 +2907,7 @@ git commit -m "feat(lifecycle): add NodeLifecycleManager.CancelDecommission stri
 - Modify: `cmd/main.go` — wire the callback
 - Modify: `server/service.go` — add `Server.CancelDecommission()` wrapper
 
-- [ ] **Step 1: Write the handler test**
+- [x] **Step 1: Write the handler test**
 
 Add to `common/http/management/node_handler_test.go`:
 
@@ -2949,7 +2949,7 @@ func TestNewNodeCancelDecommissionHandler_Conflict(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./common/http/management/... -run TestNewNodeCancelDecommissionHandler -v
@@ -2957,7 +2957,7 @@ go test ./common/http/management/... -run TestNewNodeCancelDecommissionHandler -
 
 Expected: FAIL.
 
-- [ ] **Step 3: Add the handler**
+- [x] **Step 3: Add the handler**
 
 In `common/http/management/node_handler.go`, add at the bottom:
 
@@ -2982,7 +2982,7 @@ func NewNodeCancelDecommissionHandler(cancel func() error) http.HandlerFunc {
 }
 ```
 
-- [ ] **Step 4: Add the path constant**
+- [x] **Step 4: Add the path constant**
 
 In `common/http/router.go`, add:
 
@@ -2991,7 +2991,7 @@ In `common/http/router.go`, add:
 const AdminNodeDecommissionCancelPath = "/admin/node/decommission/cancel"
 ```
 
-- [ ] **Step 5: Extend `AdminCallbacks` and register in `Start()`**
+- [x] **Step 5: Extend `AdminCallbacks` and register in `Start()`**
 
 In `common/http/server.go`, add to `AdminCallbacks`:
 
@@ -3010,7 +3010,7 @@ if callbacks.CancelDecommission != nil {
 }
 ```
 
-- [ ] **Step 6: Add `Server.CancelDecommission()` wrapper**
+- [x] **Step 6: Add `Server.CancelDecommission()` wrapper**
 
 In `server/service.go`, add near the existing `Decommission()` method:
 
@@ -3030,7 +3030,7 @@ func (s *Server) CancelDecommission() error {
 }
 ```
 
-- [ ] **Step 7: Wire the callback in `cmd/main.go`**
+- [x] **Step 7: Wire the callback in `cmd/main.go`**
 
 Add to the `commonhttp.AdminCallbacks{}` initialization:
 
@@ -3040,7 +3040,7 @@ CancelDecommission: func() error {
 },
 ```
 
-- [ ] **Step 8: Run tests + build**
+- [x] **Step 8: Run tests + build**
 
 ```bash
 go test ./common/http/management/... -run TestNewNodeCancelDecommissionHandler -v
@@ -3049,7 +3049,7 @@ go build ./...
 
 Expected: PASS + clean build.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add common/http/ server/service.go cmd/main.go
@@ -3069,7 +3069,7 @@ git commit -m "feat(server): add POST /admin/node/decommission/cancel endpoint"
 - Modify: `common/http/server.go` — extend `AdminCallbacks` + register
 - Modify: `cmd/main.go` — wire the callback
 
-- [ ] **Step 1: Write the handler test**
+- [x] **Step 1: Write the handler test**
 
 Create `common/http/management/config_handler_test.go`:
 
@@ -3111,7 +3111,7 @@ func TestNewConfigHandler_WrongMethod(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./common/http/management/... -run TestNewConfigHandler -v
@@ -3119,7 +3119,7 @@ go test ./common/http/management/... -run TestNewConfigHandler -v
 
 Expected: FAIL.
 
-- [ ] **Step 3: Create the handler**
+- [x] **Step 3: Create the handler**
 
 Create `common/http/management/config_handler.go`:
 
@@ -3150,7 +3150,7 @@ func NewConfigHandler(getConfig func() any) http.HandlerFunc {
 }
 ```
 
-- [ ] **Step 4: Add the path constant**
+- [x] **Step 4: Add the path constant**
 
 In `common/http/router.go`:
 
@@ -3159,7 +3159,7 @@ In `common/http/router.go`:
 const AdminConfigPath = "/admin/config"
 ```
 
-- [ ] **Step 5: Extend `AdminCallbacks` and register**
+- [x] **Step 5: Extend `AdminCallbacks` and register**
 
 In `common/http/server.go`, add to `AdminCallbacks`:
 
@@ -3178,7 +3178,7 @@ if callbacks.GetConfig != nil {
 }
 ```
 
-- [ ] **Step 6: Wire the callback in `cmd/main.go`**
+- [x] **Step 6: Wire the callback in `cmd/main.go`**
 
 Add to the `commonhttp.AdminCallbacks{}` initialization:
 
@@ -3188,14 +3188,14 @@ GetConfig: func() any {
 },
 ```
 
-- [ ] **Step 7: Run tests + build**
+- [x] **Step 7: Run tests + build**
 
 ```bash
 go test ./common/http/management/... -run TestNewConfigHandler -v
 go build ./...
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add common/http/ cmd/main.go
@@ -3215,7 +3215,7 @@ git commit -m "feat(server): add GET /admin/config endpoint"
 - Modify: `common/http/server.go` — extend `AdminCallbacks` + register
 - Modify: `cmd/main.go` — wire the callback
 
-- [ ] **Step 1: Write the handler test**
+- [x] **Step 1: Write the handler test**
 
 Create `common/http/management/env_handler_test.go`:
 
@@ -3279,7 +3279,7 @@ func TestNewEnvHandler_WrongMethod(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./common/http/management/... -run TestNewEnvHandler -v
@@ -3287,7 +3287,7 @@ go test ./common/http/management/... -run TestNewEnvHandler -v
 
 Expected: FAIL.
 
-- [ ] **Step 3: Create the handler**
+- [x] **Step 3: Create the handler**
 
 Create `common/http/management/env_handler.go`:
 
@@ -3378,7 +3378,7 @@ func NewEnvHandler() http.HandlerFunc {
 }
 ```
 
-- [ ] **Step 4: Add the path constant**
+- [x] **Step 4: Add the path constant**
 
 In `common/http/router.go`:
 
@@ -3387,7 +3387,7 @@ In `common/http/router.go`:
 const AdminEnvPath = "/admin/env"
 ```
 
-- [ ] **Step 5: Register in `Start()`**
+- [x] **Step 5: Register in `Start()`**
 
 In `common/http/server.go`, after other registrations:
 
@@ -3401,7 +3401,7 @@ Register(&Handler{
 
 > **Note:** This endpoint is unconditionally registered (no nil-check on a callback) because `NewEnvHandler()` takes no arguments — it reads `os.Environ()` etc. at request time.
 
-- [ ] **Step 6: Run tests + build**
+- [x] **Step 6: Run tests + build**
 
 ```bash
 go test ./common/http/management/... -run TestNewEnvHandler -v
@@ -3410,7 +3410,7 @@ go build ./...
 
 Expected: PASS + clean build.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add common/http/
@@ -3434,7 +3434,7 @@ All A-family commands share a "resolver" helper: `(ContextSettings, *client.Clie
 - Create: `cmd/wpcli/cmd/node_list_test.go`
 - Modify: `cmd/wpcli/cmd/root.go` — register `node` sub-command
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_list_test.go`:
 
@@ -3536,7 +3536,7 @@ func TestNodeList_HappyPath(t *testing.T) {
 > }
 > ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeList -v
@@ -3544,7 +3544,7 @@ go test ./cmd/wpcli/cmd/... -run TestNodeList -v
 
 Expected: FAIL — `node list` command does not exist.
 
-- [ ] **Step 3: Create the shared resolver**
+- [x] **Step 3: Create the shared resolver**
 
 Create `cmd/wpcli/cmd/resolver.go`:
 
@@ -3620,7 +3620,7 @@ func resolveAndDiscover() (*resolved, error) {
 }
 ```
 
-- [ ] **Step 4: Create the `node` sub-command group**
+- [x] **Step 4: Create the `node` sub-command group**
 
 Create `cmd/wpcli/cmd/node.go`:
 
@@ -3647,7 +3647,7 @@ func newNodeCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 5: Create `node list` command**
+- [x] **Step 5: Create `node list` command**
 
 Create `cmd/wpcli/cmd/node_list.go`:
 
@@ -3774,7 +3774,7 @@ func renderNodeList(cmd *cobra.Command, rows []nodeListRow) error {
 var _ = fmt.Sprintf
 ```
 
-- [ ] **Step 6: Register `node` in root**
+- [x] **Step 6: Register `node` in root**
 
 In `cmd/wpcli/cmd/root.go`, add to `NewRootCommand`:
 
@@ -3782,7 +3782,7 @@ In `cmd/wpcli/cmd/root.go`, add to `NewRootCommand`:
 	root.AddCommand(newNodeCommand())
 ```
 
-- [ ] **Step 7: Run tests + build**
+- [x] **Step 7: Run tests + build**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeList -v
@@ -3791,7 +3791,7 @@ make wpcli
 
 Expected: PASS + clean build.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/resolver.go cmd/wpcli/cmd/node.go cmd/wpcli/cmd/node_list.go cmd/wpcli/cmd/node_list_test.go cmd/wpcli/cmd/root.go
@@ -3809,7 +3809,7 @@ git commit -m "feat(wpcli): add node list command with fan-out + resolver"
 - Create: `cmd/wpcli/cmd/node_show_test.go`
 - Modify: `cmd/wpcli/cmd/node.go` — register sub-command
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_show_test.go`:
 
@@ -3883,7 +3883,7 @@ func TestNodeShow_NotInMemberlist(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeShow -v
@@ -3891,7 +3891,7 @@ go test ./cmd/wpcli/cmd/... -run TestNodeShow -v
 
 Expected: FAIL.
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/node_show.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/node_show.go`**
 
 ```go
 package cmd
@@ -4006,11 +4006,11 @@ func renderNodeShow(cmd *cobra.Command, nodeID string, dto nodeStatusDTO) error 
 }
 ```
 
-- [ ] **Step 4: Register in `node.go`**
+- [x] **Step 4: Register in `node.go`**
 
 Modify `cmd/wpcli/cmd/node.go` — uncomment / add `newNodeShowCommand()` in the `AddCommand` call.
 
-- [ ] **Step 5: Run tests + build**
+- [x] **Step 5: Run tests + build**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeShow -v
@@ -4018,7 +4018,7 @@ go test ./cmd/wpcli/cmd/... -run TestNodeShow -v
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/node_show.go cmd/wpcli/cmd/node_show_test.go cmd/wpcli/cmd/node.go
@@ -4036,7 +4036,7 @@ git commit -m "feat(wpcli): add node show command with sectioned output"
 - Create: `cmd/wpcli/cmd/node_decommission_test.go`
 - Modify: `cmd/wpcli/cmd/node.go` — register
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_decommission_test.go`:
 
@@ -4120,7 +4120,7 @@ func TestNodeDecommission_WaitUntilSafe(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeDecommission -v
@@ -4128,7 +4128,7 @@ go test ./cmd/wpcli/cmd/... -run TestNodeDecommission -v
 
 Expected: FAIL.
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/node_decommission.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/node_decommission.go`**
 
 ```go
 package cmd
@@ -4265,7 +4265,7 @@ func promptConfirm(cmd *cobra.Command, action string) bool {
 }
 ```
 
-- [ ] **Step 4: Register + run tests**
+- [x] **Step 4: Register + run tests**
 
 Update `cmd/wpcli/cmd/node.go` to add `newNodeDecommissionCommand()` in `AddCommand`.
 
@@ -4275,7 +4275,7 @@ go test ./cmd/wpcli/cmd/... -run TestNodeDecommission -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/node_decommission.go cmd/wpcli/cmd/node_decommission_test.go cmd/wpcli/cmd/node.go
@@ -4293,7 +4293,7 @@ git commit -m "feat(wpcli): add node decommission command with wait and heartbea
 - Create: `cmd/wpcli/cmd/node_drain_status_test.go`
 - Modify: `cmd/wpcli/cmd/node.go` — register
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_drain_status_test.go`:
 
@@ -4333,13 +4333,13 @@ func TestNodeDrainStatus_OneShot(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestNodeDrainStatus -v
 ```
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/node_drain_status.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/node_drain_status.go`**
 
 ```go
 package cmd
@@ -4434,7 +4434,7 @@ func newNodeDrainStatusCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Update `cmd/wpcli/cmd/node.go`. Run:
 
@@ -4442,7 +4442,7 @@ Update `cmd/wpcli/cmd/node.go`. Run:
 go test ./cmd/wpcli/cmd/... -run TestNodeDrainStatus -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/node_drain_status.go cmd/wpcli/cmd/node_drain_status_test.go cmd/wpcli/cmd/node.go
@@ -4460,7 +4460,7 @@ git commit -m "feat(wpcli): add node drain-status command with watch mode"
 - Create: `cmd/wpcli/cmd/node_cancel_decommission_test.go`
 - Modify: `cmd/wpcli/cmd/node.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_cancel_decommission_test.go`:
 
@@ -4523,9 +4523,9 @@ func TestNodeCancelDecommission_Conflict(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/node_cancel_decommission.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/node_cancel_decommission.go`**
 
 ```go
 package cmd
@@ -4579,7 +4579,7 @@ func newNodeCancelDecommissionCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Update `cmd/wpcli/cmd/node.go`. Run:
 
@@ -4587,7 +4587,7 @@ Update `cmd/wpcli/cmd/node.go`. Run:
 go test ./cmd/wpcli/cmd/... -run TestNodeCancelDecommission -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/node_cancel_decommission.go cmd/wpcli/cmd/node_cancel_decommission_test.go cmd/wpcli/cmd/node.go
@@ -4605,7 +4605,7 @@ git commit -m "feat(wpcli): add node cancel-decommission command"
 - Create: `cmd/wpcli/cmd/node_restart_test.go`
 - Modify: `cmd/wpcli/cmd/node.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/node_restart_test.go`:
 
@@ -4635,9 +4635,9 @@ func TestNodeRestart_StubExit10(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Create the stub**
+- [x] **Step 3: Create the stub**
 
 ```go
 // cmd/wpcli/cmd/node_restart.go
@@ -4673,7 +4673,7 @@ Restart responsibility belongs to the orchestrator.`)
 }
 ```
 
-- [ ] **Step 4: Register + test**
+- [x] **Step 4: Register + test**
 
 Update `cmd/wpcli/cmd/node.go`. Run:
 
@@ -4681,7 +4681,7 @@ Update `cmd/wpcli/cmd/node.go`. Run:
 go test ./cmd/wpcli/cmd/... -run TestNodeRestart -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/node_restart.go cmd/wpcli/cmd/node_restart_test.go cmd/wpcli/cmd/node.go
@@ -4702,7 +4702,7 @@ git commit -m "feat(wpcli): add node restart stub with exit code 10"
 - Create: `cmd/wpcli/cmd/cluster_info_test.go`
 - Modify: `cmd/wpcli/cmd/root.go` — register `cluster` sub-command
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/cluster_info_test.go`:
 
@@ -4749,13 +4749,13 @@ func TestClusterInfo_HappyPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestClusterInfo -v
 ```
 
-- [ ] **Step 3: Create the `cluster` sub-command group**
+- [x] **Step 3: Create the `cluster` sub-command group**
 
 Create `cmd/wpcli/cmd/cluster.go`:
 
@@ -4779,7 +4779,7 @@ func newClusterCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Create `cluster info` command**
+- [x] **Step 4: Create `cluster info` command**
 
 Create `cmd/wpcli/cmd/cluster_info.go`:
 
@@ -4926,7 +4926,7 @@ func sortedKeysInner(m map[string][]struct {
 
 > **Implementation note:** Go doesn't let you pass anonymous-struct map types around easily. If the compile complains about the anonymous-struct-in-map-value, promote `nodeInfo` to a package-level type and use it in both `newClusterInfoCommand` and the sort helpers. Keep it local to this file.
 
-- [ ] **Step 5: Register + test**
+- [x] **Step 5: Register + test**
 
 Add `newClusterCommand()` to `NewRootCommand()` in `cmd/wpcli/cmd/root.go`. Run:
 
@@ -4934,7 +4934,7 @@ Add `newClusterCommand()` to `NewRootCommand()` in `cmd/wpcli/cmd/root.go`. Run:
 go test ./cmd/wpcli/cmd/... -run TestClusterInfo -v
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/cluster.go cmd/wpcli/cmd/cluster_info.go cmd/wpcli/cmd/cluster_info_test.go cmd/wpcli/cmd/root.go
@@ -4952,7 +4952,7 @@ git commit -m "feat(wpcli): add cluster info command with topology tree"
 - Create: `cmd/wpcli/cmd/cluster_health_test.go`
 - Modify: `cmd/wpcli/cmd/cluster.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/cluster_health_test.go`:
 
@@ -5023,13 +5023,13 @@ func TestClusterHealth_Red_OneUnreachable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestClusterHealth -v
 ```
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/cluster_health.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/cluster_health.go`**
 
 ```go
 package cmd
@@ -5142,7 +5142,7 @@ func newClusterHealthCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Update `cmd/wpcli/cmd/cluster.go` to add `newClusterHealthCommand()`. Run:
 
@@ -5150,7 +5150,7 @@ Update `cmd/wpcli/cmd/cluster.go` to add `newClusterHealthCommand()`. Run:
 go test ./cmd/wpcli/cmd/... -run TestClusterHealth -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/cluster_health.go cmd/wpcli/cmd/cluster_health_test.go cmd/wpcli/cmd/cluster.go
@@ -5168,7 +5168,7 @@ git commit -m "feat(wpcli): add cluster health command (fallback mode, replica-a
 - Create: `cmd/wpcli/cmd/cluster_gossip_diff_test.go`
 - Modify: `cmd/wpcli/cmd/cluster.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/cluster_gossip_diff_test.go`:
 
@@ -5256,13 +5256,13 @@ func TestClusterGossipDiff_Inconsistent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 go test ./cmd/wpcli/cmd/... -run TestClusterGossipDiff -v
 ```
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/cluster_gossip_diff.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/cluster_gossip_diff.go`**
 
 ```go
 package cmd
@@ -5371,7 +5371,7 @@ func stringSlicesEqual(a, b []string) bool {
 }
 ```
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Update `cmd/wpcli/cmd/cluster.go`. Run:
 
@@ -5379,7 +5379,7 @@ Update `cmd/wpcli/cmd/cluster.go`. Run:
 go test ./cmd/wpcli/cmd/... -run TestClusterGossipDiff -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/cluster_gossip_diff.go cmd/wpcli/cmd/cluster_gossip_diff_test.go cmd/wpcli/cmd/cluster.go
@@ -5401,7 +5401,7 @@ git commit -m "feat(wpcli): add cluster gossip-diff command"
 - Create: `cmd/wpcli/cmd/config_test.go`
 - Modify: `cmd/wpcli/cmd/root.go` — register `config` sub-command
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 Create `cmd/wpcli/cmd/config_test.go`:
 
@@ -5457,9 +5457,9 @@ func TestConfigDiff_NoDrift(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/config.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/config.go`**
 
 ```go
 package cmd
@@ -5476,7 +5476,7 @@ func newConfigCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Create `cmd/wpcli/cmd/config_show.go`**
+- [x] **Step 4: Create `cmd/wpcli/cmd/config_show.go`**
 
 ```go
 package cmd
@@ -5552,7 +5552,7 @@ func newConfigShowCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 5: Create `cmd/wpcli/cmd/config_diff.go`**
+- [x] **Step 5: Create `cmd/wpcli/cmd/config_diff.go`**
 
 ```go
 package cmd
@@ -5647,7 +5647,7 @@ func newConfigDiffCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 6: Register + tests**
+- [x] **Step 6: Register + tests**
 
 Add `newConfigCommand()` to `NewRootCommand()`. Run:
 
@@ -5655,7 +5655,7 @@ Add `newConfigCommand()` to `NewRootCommand()`. Run:
 go test ./cmd/wpcli/cmd/... -run TestConfig -v
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/config.go cmd/wpcli/cmd/config_show.go cmd/wpcli/cmd/config_diff.go cmd/wpcli/cmd/config_test.go cmd/wpcli/cmd/root.go
@@ -5675,7 +5675,7 @@ git commit -m "feat(wpcli): add config show and config diff commands"
 - Create: `cmd/wpcli/cmd/env_test.go`
 - Modify: `cmd/wpcli/cmd/root.go`
 
-- [ ] **Step 1: Write a happy-path test**
+- [x] **Step 1: Write a happy-path test**
 
 Create `cmd/wpcli/cmd/env_test.go`:
 
@@ -5716,9 +5716,9 @@ func TestEnvShow_Build(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Create the sub-command group + two sub-commands**
+- [x] **Step 3: Create the sub-command group + two sub-commands**
 
 Create `cmd/wpcli/cmd/env.go`:
 
@@ -5885,7 +5885,7 @@ func newEnvDiffCommand() *cobra.Command {
 
 > **Phase 1 known limitation:** `env diff` does a raw byte comparison. A proper implementation filters noise keys (HOSTNAME, PWD, SHLVL, KUBERNETES_*_PORT_*) per spec §2.E.7. Deferred to a Phase 1.5 micro-task to keep Phase 1 scope bounded. Noted inline so reviewers know it's intentional.
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Add `newEnvCommand()` to `NewRootCommand()`. Run:
 
@@ -5893,7 +5893,7 @@ Add `newEnvCommand()` to `NewRootCommand()`. Run:
 go test ./cmd/wpcli/cmd/... -run TestEnv -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/env.go cmd/wpcli/cmd/env_show.go cmd/wpcli/cmd/env_diff.go cmd/wpcli/cmd/env_test.go cmd/wpcli/cmd/root.go
@@ -5911,7 +5911,7 @@ git commit -m "feat(wpcli): add env show and env diff commands"
 - Create: `cmd/wpcli/cmd/profile_test.go`
 - Modify: `cmd/wpcli/cmd/root.go`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `cmd/wpcli/cmd/profile_test.go`:
 
@@ -5965,9 +5965,9 @@ func TestProfile_DownloadsFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
-- [ ] **Step 3: Create `cmd/wpcli/cmd/profile.go`**
+- [x] **Step 3: Create `cmd/wpcli/cmd/profile.go`**
 
 ```go
 package cmd
@@ -6047,7 +6047,7 @@ func newProfileCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 4: Register + tests**
+- [x] **Step 4: Register + tests**
 
 Add `newProfileCommand()` to `NewRootCommand()`. Run:
 
@@ -6055,7 +6055,7 @@ Add `newProfileCommand()` to `NewRootCommand()`. Run:
 go test ./cmd/wpcli/cmd/... -run TestProfile -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/profile.go cmd/wpcli/cmd/profile_test.go cmd/wpcli/cmd/root.go
@@ -6073,7 +6073,7 @@ git commit -m "feat(wpcli): add profile command for pprof download"
 **Files:**
 - Modify: `cmd/wpcli/README.md` (expand from the stub created in Task 2)
 
-- [ ] **Step 1: Replace `cmd/wpcli/README.md` with a real quickstart**
+- [x] **Step 1: Replace `cmd/wpcli/README.md` with a real quickstart**
 
 ```markdown
 # wp — Woodpecker Operational CLI
@@ -6139,7 +6139,7 @@ The following command families are planned for Phase 2 and Phase 3:
 - `wp k8s *` — Phase 3
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add cmd/wpcli/README.md
@@ -6154,7 +6154,7 @@ git commit -m "docs(wpcli): add Phase 1 quickstart README"
 
 **Files:** None (verification only)
 
-- [ ] **Step 1: Run the full test suite**
+- [x] **Step 1: Run the full test suite**
 
 ```bash
 go test ./... -race -count=1
@@ -6162,7 +6162,7 @@ go test ./... -race -count=1
 
 Expected: PASS. If any existing test fails due to Phase 1 changes (e.g., `cmd/main.go` rewiring), fix the breakage in that test's commit rather than suppressing.
 
-- [ ] **Step 2: Build the wp binary**
+- [x] **Step 2: Build the wp binary**
 
 ```bash
 make wpcli
@@ -6172,7 +6172,7 @@ make wpcli
 
 Expected: version shows a git-derived value (not `dev` if you're on a committed tree), help lists all Phase 1 sub-commands.
 
-- [ ] **Step 3: Smoke test against a local docker-compose cluster**
+- [x] **Step 3: Smoke test against a local docker-compose cluster**
 
 (Optional but recommended — `tests/docker/wpcli/` infrastructure doesn't exist yet in Phase 1, so this is manual.)
 
@@ -6199,11 +6199,11 @@ EOF
 
 Expected: All three commands produce output without error. Record any problems found for hotfix in a follow-up commit.
 
-- [ ] **Step 4: Spec coverage check**
+- [x] **Step 4: Spec coverage check**
 
 Open `docs/wpcli-design.md` §5.3 (Phase 1 Scope) and verify every command and every server change listed there has a corresponding completed task above. Any gap is a plan failure — add a task and re-execute.
 
-- [ ] **Step 5: Commit verification log (optional)**
+- [x] **Step 5: Commit verification log (optional)**
 
 If you kept notes during verification, commit them as a release-notes stub:
 
@@ -6321,13 +6321,13 @@ Phase 3 adds K8s hybrid mode and release polish (spec §5.5). Smallest phase in 
 
 Run these checks after finishing Phase 1 execution:
 
-- [ ] **Spec coverage:** every command in spec §2.A / §2.B / §5.3 E-subset / §2.E.5 has a completed task here
-- [ ] **Server endpoint coverage:** all 3 new endpoints + 2 enhancements from §6.3 Phase 1 rows have a completed task
-- [ ] **Exit code coverage:** every exit code a Phase 1 command can emit has at least one unit test (spec §3.5)
-- [ ] **No placeholders:** grep this plan for TODO / TBD / 待填 — none should remain (the `(待填)` author field in the design doc header is intentional and not in this plan)
-- [ ] **Type consistency:** function / method / struct names are identical across tasks (e.g., `CancelDecommission` not `cancelDecommission` in some tasks)
-- [ ] **Commit granularity:** each task ends in exactly one commit with a clear conventional-commits subject
-- [ ] **Test-first:** every non-trivial task writes its failing test before the implementation
+- [x] **Spec coverage:** every command in spec §2.A / §2.B / §5.3 E-subset / §2.E.5 has a completed task here
+- [x] **Server endpoint coverage:** all 3 new endpoints + 2 enhancements from §6.3 Phase 1 rows have a completed task
+- [x] **Exit code coverage:** every exit code a Phase 1 command can emit has at least one unit test (spec §3.5)
+- [x] **No placeholders:** grep this plan for TODO / TBD / 待填 — none should remain (the `(待填)` author field in the design doc header is intentional and not in this plan)
+- [x] **Type consistency:** function / method / struct names are identical across tasks (e.g., `CancelDecommission` not `cancelDecommission` in some tasks)
+- [x] **Commit granularity:** each task ends in exactly one commit with a clear conventional-commits subject
+- [x] **Test-first:** every non-trivial task writes its failing test before the implementation
 
 ---
 

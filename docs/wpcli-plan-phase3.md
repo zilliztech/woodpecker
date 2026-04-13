@@ -1,6 +1,6 @@
 # wp CLI Phase 3 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Ship Phase 3 of the wp CLI — K8s hybrid commands (print/execute dual mode), cross-platform release build, Docker image integration, and full documentation suite. This is the smallest phase in scope: pure CLI-side work, zero server code changes.
 
@@ -77,7 +77,7 @@
 
 **Spec reference:** §2.F.2 — shared K8s flags, cli.yaml k8s sub-block.
 
-- [ ] **Step 1: Add K8sConfig struct**
+- [x] **Step 1: Add K8sConfig struct**
 
 ```go
 // K8sConfig holds Kubernetes-specific settings for a CLI context.
@@ -90,7 +90,7 @@ type K8sConfig struct {
 }
 ```
 
-- [ ] **Step 2: Add to Context struct**
+- [x] **Step 2: Add to Context struct**
 
 ```go
 type Context struct {
@@ -103,7 +103,7 @@ type Context struct {
 }
 ```
 
-- [ ] **Step 3: Write tests**
+- [x] **Step 3: Write tests**
 
 Test that `cli.yaml` with a `k8s:` block parses correctly:
 ```yaml
@@ -116,7 +116,7 @@ contexts:
       kubeconfig: /etc/kube/config
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add cmd/wpcli/config/cli_config.go cmd/wpcli/config/cli_config_test.go
@@ -135,7 +135,7 @@ git commit -m "feat(wpcli): add k8s sub-block to cli.yaml context config"
 
 **Spec reference:** §2.F.1 — print vs execute mode, kubectl missing auto-downgrade.
 
-- [ ] **Step 1: Implement executor**
+- [x] **Step 1: Implement executor**
 
 ```go
 package k8s
@@ -179,11 +179,11 @@ func (e *Executor) Run(stdout, stderr io.Writer, args ...string) (exitCode int, 
 func (e *Executor) PrintCommand(w io.Writer, args ...string)
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test `BuildCommand` output with various flag combinations. Test `KubectlAvailable` with a non-existent path. Test `Run` with a simple command (e.g., `kubectl version --client`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/internal/k8s/executor.go cmd/wpcli/internal/k8s/executor_test.go
@@ -200,7 +200,7 @@ git commit -m "feat(wpcli): add kubectl executor with print/execute dual mode"
 - Create: `cmd/wpcli/internal/k8s/builder.go`
 - Create: `cmd/wpcli/internal/k8s/builder_test.go`
 
-- [ ] **Step 1: Implement builder functions**
+- [x] **Step 1: Implement builder functions**
 
 ```go
 package k8s
@@ -227,11 +227,11 @@ func LogsCommand(cluster, target string, follow bool, tail int, since string) []
 func ResolvePodName(cluster, nodeIdentifier string) string
 ```
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test each builder function with various inputs. Verify correct flag ordering and quoting.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/internal/k8s/builder.go cmd/wpcli/internal/k8s/builder_test.go
@@ -247,7 +247,7 @@ git commit -m "feat(wpcli): add kubectl command builder for F family commands"
 **Files:**
 - Create: `cmd/wpcli/cmd/k8s_flags.go`
 
-- [ ] **Step 1: Implement shared flags**
+- [x] **Step 1: Implement shared flags**
 
 ```go
 package cmd
@@ -281,7 +281,7 @@ func AddK8sFlags(cmd *cobra.Command, flags *K8sFlags) {
 func (f *K8sFlags) ResolveExecutor(cliK8s config.K8sConfig) *k8s.Executor
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s_flags.go
@@ -300,7 +300,7 @@ git commit -m "feat(wpcli): add shared K8s flags for F family commands"
 - Create: `cmd/wpcli/cmd/k8s.go`
 - Modify: `cmd/wpcli/cmd/root.go`
 
-- [ ] **Step 1: Create parent**
+- [x] **Step 1: Create parent**
 
 ```go
 func newK8sCommand() *cobra.Command {
@@ -321,9 +321,9 @@ func newK8sCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 2: Register in root.go**
+- [x] **Step 2: Register in root.go**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s.go cmd/wpcli/cmd/root.go
@@ -342,7 +342,7 @@ git commit -m "feat(wpcli): add k8s parent command"
 
 **Spec reference:** §2.F.1 — k8s status, print/execute dual mode.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 Print mode (default):
 ```
@@ -360,11 +360,11 @@ Execute mode (`-x`):
 - If kubectl not found: downgrade to print mode + warning
 - Exit code: `100 + kubectl_exit_code` if kubectl fails
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test print mode output format. Test execute mode with a mock executor.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s_status.go cmd/wpcli/cmd/k8s_test.go
@@ -383,16 +383,16 @@ git commit -m "feat(wpcli): add k8s status command with print/execute dual mode"
 
 **Spec reference:** §2.F.2 — k8s scale.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Required: `--replicas N`
 - Confirmation prompt in execute mode (scaling is impactful)
 - Print mode: show the kubectl patch command
 - Execute mode: run `kubectl patch woodpeckercluster <cluster> --type merge -p '{"spec":{"replicas":N}}'`
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s_scale.go cmd/wpcli/cmd/k8s_test.go
@@ -411,18 +411,18 @@ git commit -m "feat(wpcli): add k8s scale command"
 
 **Spec reference:** §2.F.3 — k8s logs.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 - Positional arg: `<node-or-pod>` — if it looks like a node ID, resolve to pod name via `<cluster>-server-<ordinal>`
 - Flags: `-f` / `--follow`, `--tail N` (default 100), `--since` (e.g., "1h")
 - Print mode: show the kubectl logs command
 - Execute mode: run and stream output, `-f` passthrough
 
-- [ ] **Step 2: Write tests**
+- [x] **Step 2: Write tests**
 
 Test pod name resolution. Test flag passthrough.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s_logs.go cmd/wpcli/cmd/k8s_test.go
@@ -441,7 +441,7 @@ git commit -m "feat(wpcli): add k8s logs command with node-to-pod resolution"
 
 **Spec reference:** §2.F.4 — k8s doctor, permanent stub.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 ```go
 func newK8sDoctorCommand() *cobra.Command {
@@ -455,11 +455,11 @@ func newK8sDoctorCommand() *cobra.Command {
 }
 ```
 
-- [ ] **Step 2: Write test**
+- [x] **Step 2: Write test**
 
 Verify exit code 10, verify message mentions "not yet implemented".
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/wpcli/cmd/k8s_doctor.go cmd/wpcli/cmd/k8s_test.go
@@ -477,7 +477,7 @@ git commit -m "feat(wpcli): add k8s doctor stub (exit 10, future release)"
 **Files:**
 - Modify: `Makefile`
 
-- [ ] **Step 1: Add target**
+- [x] **Step 1: Add target**
 
 ```makefile
 WPCLI_PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64 windows/amd64
@@ -493,7 +493,7 @@ wpcli-release: ## Build wp CLI for all release platforms
 	done
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 ```bash
 make wpcli-release
@@ -502,7 +502,7 @@ ls -la bin/wp-*
 
 Expected: 4 binaries (wp-linux-amd64, wp-linux-arm64, wp-darwin-arm64, wp-windows-amd64.exe).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Makefile
@@ -518,7 +518,7 @@ git commit -m "build: add make wpcli-release for cross-platform wp binaries"
 **Files:**
 - Modify: `build/Dockerfile` (or whichever Dockerfile builds the server image)
 
-- [ ] **Step 1: Add build stage + COPY**
+- [x] **Step 1: Add build stage + COPY**
 
 Add after the server binary build stage:
 
@@ -530,14 +530,14 @@ RUN CGO_ENABLED=0 go build ${LDFLAGS} -o /wp ./cmd/wpcli
 COPY --from=builder /wp /usr/local/bin/wp
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 ```bash
 docker build -f build/Dockerfile -t woodpecker-test .
 docker run --rm woodpecker-test wp version
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add build/Dockerfile
@@ -553,7 +553,7 @@ git commit -m "build: embed wp CLI in server Docker image"
 **Files:**
 - Create: `.github/workflows/release-wpcli.yaml`
 
-- [ ] **Step 1: Create workflow**
+- [x] **Step 1: Create workflow**
 
 ```yaml
 name: Release wp CLI
@@ -581,7 +581,7 @@ jobs:
           files: bin/wp-*
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add .github/workflows/release-wpcli.yaml
@@ -599,7 +599,7 @@ git commit -m "ci: add GitHub Actions workflow for wp CLI release"
 **Files:**
 - Modify: `cmd/wpcli/README.md`
 
-- [ ] **Step 1: Add Phase 2 + 3 command sections**
+- [x] **Step 1: Add Phase 2 + 3 command sections**
 
 Add after the Phase 1 commands section:
 
@@ -638,7 +638,7 @@ Add after the Phase 1 commands section:
 
 Remove the "Phase 1 NOT yet implemented" section.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add cmd/wpcli/README.md
@@ -654,7 +654,7 @@ git commit -m "docs(wpcli): expand README with Phase 2 + Phase 3 commands"
 **Files:**
 - Create: `docs/wpcli/quickstart.md`
 
-- [ ] **Step 1: Write quickstart**
+- [x] **Step 1: Write quickstart**
 
 Sections:
 1. **Install** — `make wpcli` or download from GitHub Releases
@@ -664,7 +664,7 @@ Sections:
 5. **Common workflows** — decommission a node, check stuck flushes, download a pprof profile
 6. **K8s integration** — configure k8s sub-block, `wp k8s status`, `wp k8s logs`
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/wpcli/quickstart.md
@@ -680,7 +680,7 @@ git commit -m "docs(wpcli): add 15-minute quickstart guide"
 **Files:**
 - Create: `docs/wpcli/cookbook.md`
 
-- [ ] **Step 1: Write cookbook**
+- [x] **Step 1: Write cookbook**
 
 Recipes:
 1. **Decommission a node safely** — `wp node decommission`, `wp node drain-status -w`
@@ -694,7 +694,7 @@ Recipes:
 9. **Scale a K8s cluster** — `wp k8s scale --replicas 5 -x`
 10. **Quick health check** — `wp cluster health`, interpret red/yellow/green
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/wpcli/cookbook.md
@@ -710,7 +710,7 @@ git commit -m "docs(wpcli): add 10-recipe incident response cookbook"
 **Files:**
 - Create: `docs/wpcli/configuration.md`
 
-- [ ] **Step 1: Write reference**
+- [x] **Step 1: Write reference**
 
 Sections:
 1. **File location** — `$WOODPECKER_CLI_CONFIG`, `$XDG_CONFIG_HOME/woodpecker/cli.yaml`, `~/.woodpecker/cli.yaml`
@@ -722,7 +722,7 @@ Sections:
 7. **Precedence** — flag > env var > cli.yaml > default
 8. **Examples** — single-node dev, multi-context prod/staging, K8s-enabled
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/wpcli/configuration.md
@@ -741,7 +741,7 @@ git commit -m "docs(wpcli): add full cli.yaml configuration reference"
 
 **Spec reference:** §4.4 — kind cluster verification.
 
-- [ ] **Step 1: Set up kind cluster**
+- [x] **Step 1: Set up kind cluster**
 
 ```bash
 kind create cluster --name wp-test
@@ -749,7 +749,7 @@ kind create cluster --name wp-test
 kubectl apply -f deploy/operator/crd.yaml  # or similar
 ```
 
-- [ ] **Step 2: Test F family commands**
+- [x] **Step 2: Test F family commands**
 
 ```bash
 ./bin/wp k8s status                    # print mode
@@ -761,11 +761,11 @@ kubectl apply -f deploy/operator/crd.yaml  # or similar
 
 Expected: print mode produces correct kubectl commands; execute mode runs them (may fail if no real cluster, which is OK for verification — the point is that the commands are constructed correctly and kubectl is invoked).
 
-- [ ] **Step 3: Record results**
+- [x] **Step 3: Record results**
 
 Note any issues found for hotfix.
 
-- [ ] **Step 4: Clean up**
+- [x] **Step 4: Clean up**
 
 ```bash
 kind delete cluster --name wp-test
@@ -781,7 +781,7 @@ kind delete cluster --name wp-test
 - Modify: `docs/wpcli-design.md` — remove WIP header, set status to "Implemented"
 - Create: `docs/wpcli/phase3-verification.md` (optional verification log)
 
-- [ ] **Step 1: Run full test suite**
+- [x] **Step 1: Run full test suite**
 
 ```bash
 go test ./... -race -count=1
@@ -789,7 +789,7 @@ go test ./... -race -count=1
 
 Expected: PASS.
 
-- [ ] **Step 2: Build and verify**
+- [x] **Step 2: Build and verify**
 
 ```bash
 make wpcli
@@ -799,19 +799,19 @@ make wpcli
 
 Expected: help lists all 10 command groups (node, cluster, config, env, profile, ctx, logging, logstore, ops, metrics, k8s). Version shows clean git commit.
 
-- [ ] **Step 3: Command count verification**
+- [x] **Step 3: Command count verification**
 
 Total 35 commands (14 Phase 1 + 17 Phase 2 + 4 Phase 3).
 
-- [ ] **Step 4: Spec coverage check**
+- [x] **Step 4: Spec coverage check**
 
 Open `docs/wpcli-design.md` §5.3, §5.4, §5.5. Verify every listed command, endpoint, and package has been implemented across the three phases.
 
-- [ ] **Step 5: Update design doc**
+- [x] **Step 5: Update design doc**
 
 Remove the WIP marker from the header. Set status to "Implemented — Phase 1/2/3 complete."
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/wpcli-design.md
@@ -822,13 +822,13 @@ git commit -m "docs(wpcli): finalize spec — mark all phases as Implemented"
 
 ## Self-Review Checklist
 
-- [ ] **Spec coverage:** every command in §2.F / §5.5 has a completed task
-- [ ] **No server changes:** Phase 3 touches zero files in `server/`, `common/http/`, or `common/metrics/`
-- [ ] **Exit code coverage:** k8s passthrough exit code (100+) has a test
-- [ ] **Print/execute duality:** every F family command works in both modes
-- [ ] **kubectl missing handling:** auto-downgrade to print mode when kubectl not in PATH
-- [ ] **Cross-platform build:** 4 binaries produced by `make wpcli-release`
-- [ ] **Documentation completeness:** README, quickstart, cookbook, configuration reference all present
+- [x] **Spec coverage:** every command in §2.F / §5.5 has a completed task
+- [x] **No server changes:** Phase 3 touches zero files in `server/`, `common/http/`, or `common/metrics/`
+- [x] **Exit code coverage:** k8s passthrough exit code (100+) has a test
+- [x] **Print/execute duality:** every F family command works in both modes
+- [x] **kubectl missing handling:** auto-downgrade to print mode when kubectl not in PATH
+- [x] **Cross-platform build:** 4 binaries produced by `make wpcli-release`
+- [x] **Documentation completeness:** README, quickstart, cookbook, configuration reference all present
 
 ---
 
