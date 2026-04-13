@@ -39,6 +39,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 // parseAdvertiseAddr parses address:port format and returns address and port
@@ -215,6 +216,42 @@ func main() {
 		GetConfig: func() any {
 			return cfg
 		},
+		Logstore: commonhttp.LogstoreCallbacks{
+			ListSegments: func(logID *int64, writable *bool) []any {
+				reg := srv.GetWriterRegistry()
+				filter := storage.WriterFilter{LogID: logID, Writable: writable}
+				snaps := reg.ListWriterSnapshots(context.Background(), filter)
+				result := make([]any, len(snaps))
+				for i := range snaps {
+					result[i] = snaps[i]
+				}
+				return result
+			},
+			GetSegment: func(logID, segmentID int64) (any, error) {
+				reg := srv.GetWriterRegistry()
+				return reg.GetWriterSnapshotDetailed(context.Background(), logID, segmentID)
+			},
+			ForceFlush: func(logID, segmentID int64) error {
+				return srv.GetWriterRegistry().ForceFlush(context.Background(), logID, segmentID)
+			},
+			ForceFence: func(logID, segmentID int64, reason string) error {
+				return srv.GetWriterRegistry().ForceFence(context.Background(), logID, segmentID, reason)
+			},
+			ForceCompact: func(logID, segmentID int64) error {
+				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID)
+			},
+		},
+		Ops: commonhttp.OpsCallbacks{
+			List: func(params map[string]string) any {
+				return opReg.List(opregistry.Filter{})
+			},
+			Get: func(opID string) any {
+				return opReg.Get(opID)
+			},
+			Stats: func() any {
+				return opReg.Stats()
+			},
+		},
 	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
@@ -223,6 +260,7 @@ func main() {
 	// Set node identity and namespace for metrics, then register all metrics
 	metrics.RegisterServerMetricsWithRegisterer(prometheus.DefaultRegisterer)
 	metrics.RegisterSystemMetrics(prometheus.DefaultRegisterer)
+	opregistry.RegisterMetrics(prometheus.DefaultRegisterer)
 
 	// Start system metrics collector
 	metrics.StartSystemMetricsCollector(ctx, cfg.Woodpecker.Storage.RootPath, 15*time.Second)

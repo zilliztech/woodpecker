@@ -39,6 +39,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/version"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 type Server struct {
@@ -635,6 +636,11 @@ func (s *Server) Decommission() error {
 	// Start background monitor to auto-mark decommissioned when drained
 	s.startDecommissionMonitor()
 	return nil
+}
+
+// GetWriterRegistry returns the logStore as a WriterRegistry for admin inspection.
+func (s *Server) GetWriterRegistry() storage.WriterRegistry {
+	return s.logStore.(*logStore)
 }
 
 // GetDecommissionProgress returns the current decommission progress.

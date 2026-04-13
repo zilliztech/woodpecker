@@ -197,6 +197,59 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		HandlerFunc: management.NewEnvHandler(),
 	})
 
+	// Register logstore admin handlers (Phase 2)
+	if callbacks.Logstore.ListSegments != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreSegmentsPath,
+			HandlerFunc: management.NewLogstoreSegmentsHandler(callbacks.Logstore.ListSegments),
+		})
+	}
+	if callbacks.Logstore.GetSegment != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreSegmentsPath + "/detail",
+			HandlerFunc: management.NewLogstoreSegmentShowHandler(callbacks.Logstore.GetSegment),
+		})
+	}
+	if callbacks.Logstore.ForceFlush != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreFlushPath,
+			HandlerFunc: management.NewLogstoreFlushHandler(callbacks.Logstore.ForceFlush),
+		})
+	}
+	if callbacks.Logstore.ForceFence != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreFencePath,
+			HandlerFunc: management.NewLogstoreFenceHandler(callbacks.Logstore.ForceFence),
+		})
+	}
+	if callbacks.Logstore.ForceCompact != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreCompactPath,
+			HandlerFunc: management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact),
+		})
+	}
+
+	// Register ops admin handlers (Phase 2)
+	if callbacks.Ops.List != nil {
+		Register(&Handler{
+			Path:        AdminRuntimeOpsPath,
+			HandlerFunc: management.NewOpsListHandler(callbacks.Ops.List),
+		})
+	}
+	if callbacks.Ops.Get != nil {
+		// ops get uses a separate path with query param
+		Register(&Handler{
+			Path:        AdminRuntimeOpsPath + "/get",
+			HandlerFunc: management.NewOpsGetHandler(callbacks.Ops.Get),
+		})
+	}
+	if callbacks.Ops.Stats != nil {
+		Register(&Handler{
+			Path:        AdminRuntimeOpsStatsPath,
+			HandlerFunc: management.NewOpsStatsHandler(callbacks.Ops.Stats),
+		})
+	}
+
 	// Get listen port from environment or use default
 	port := os.Getenv(ListenPortEnvKey)
 	if port == "" {
