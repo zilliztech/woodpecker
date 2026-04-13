@@ -40,6 +40,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newEnvCommand())
 	root.AddCommand(newProfileCommand())
 	root.AddCommand(newLoggingCommand())
+	root.AddCommand(newLogstoreCommand())
 
 	return root
 }
