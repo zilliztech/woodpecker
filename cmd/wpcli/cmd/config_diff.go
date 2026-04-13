@@ -63,6 +63,7 @@ func newConfigDiffCommand() *cobra.Command {
 			}
 
 			w := cmd.OutOrStdout()
+			fmt.Fprintf(w, "%s: (reference)\n", refID)
 			anyDrift := false
 			for _, t := range targets {
 				if t.ID == refID {

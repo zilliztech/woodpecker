@@ -37,6 +37,7 @@ func newEnvDiffCommand() *cobra.Command {
 				refID = m.ID
 				break
 			}
+			fmt.Fprintf(w, "%s: (reference)\n", refID)
 			anyDrift := false
 			for _, m := range r.Members.Members {
 				if m.ID == refID {
