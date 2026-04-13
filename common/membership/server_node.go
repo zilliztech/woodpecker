@@ -47,6 +47,7 @@ type ServerNode struct {
 type ServerConfig struct {
 	// node info
 	NodeID        string
+	ClusterName   string // cluster/region name; auto-injected into Tags["cluster"]
 	ResourceGroup string
 	AZ            string
 	Tags          map[string]string
@@ -78,13 +79,22 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		endpointPort = config.AdvertiseServicePort
 	}
 
+	// Auto-inject ClusterName into tags if set.
+	tags := config.Tags
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	if config.ClusterName != "" {
+		tags["cluster"] = config.ClusterName
+	}
+
 	meta := &proto.NodeMeta{
 		NodeId:        config.NodeID,
 		ResourceGroup: config.ResourceGroup,
 		Az:            config.AZ,
 		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
-		Tags:          config.Tags,
-		LastUpdate:    time.Now().UnixMilli(), // Convert to Unix timestamp in milliseconds
+		Tags:          tags,
+		LastUpdate:    time.Now().UnixMilli(),
 		Version:       NodeMetaVersion,
 	}
 	discovery := NewServiceDiscovery()
