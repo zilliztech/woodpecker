@@ -60,6 +60,11 @@ type SegmentProcessor interface {
 	Clean(ctx context.Context, flag int) error
 	UpdateSegmentLastAddConfirmed(ctx context.Context, lac int64) error
 	Close(ctx context.Context) error
+
+	// GetWriterSnapshot returns a snapshot of the writer state, or nil if no writer is active.
+	GetWriterSnapshot() *storage.WriterSnapshot
+	// GetWriterSnapshotDetailed returns a detailed snapshot, or nil if no writer is active.
+	GetWriterSnapshotDetailed() *storage.WriterSnapshotDetailed
 }
 
 func NewSegmentProcessor(ctx context.Context, cfg *config.Configuration, userBucketName string, userRootPath string, logId int64, segId int64, storageClient storageclient.ObjectStorage) SegmentProcessor {
@@ -97,6 +102,28 @@ type segmentProcessor struct {
 	currentSegmentImpl   storage.Segment
 	currentSegmentWriter storage.Writer
 	currentSegmentReader storage.Reader
+}
+
+func (s *segmentProcessor) GetWriterSnapshot() *storage.WriterSnapshot {
+	s.RLock()
+	w := s.currentSegmentWriter
+	s.RUnlock()
+	if w == nil {
+		return nil
+	}
+	snap := w.Snapshot()
+	return &snap
+}
+
+func (s *segmentProcessor) GetWriterSnapshotDetailed() *storage.WriterSnapshotDetailed {
+	s.RLock()
+	w := s.currentSegmentWriter
+	s.RUnlock()
+	if w == nil {
+		return nil
+	}
+	snap := w.SnapshotDetailed()
+	return &snap
 }
 
 func (s *segmentProcessor) GetLogId() int64 {
