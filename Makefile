@@ -81,6 +81,21 @@ wpcli: | $(BIN_DIR) ## Build wp CLI binary (outputs bin/wp)
 	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wp ./cmd/wpcli
 	@echo "Built $(BIN_DIR)/wp"
 
+WPCLI_PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64 windows/amd64
+
+.PHONY: wpcli-release
+wpcli-release: | $(BIN_DIR) ## Build wp CLI for all release platforms
+	@for platform in $(WPCLI_PLATFORMS); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		ext=""; if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		echo "Building wp-$$os-$$arch$$ext ..."; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(LDFLAGS) \
+			-o $(BIN_DIR)/wp-$$os-$$arch$$ext \
+			./cmd/wpcli; \
+	done
+	@echo "Release binaries in $(BIN_DIR):"
+	@ls -1 $(BIN_DIR)/wp-*
+
 test: build ## Run all tests
 	go test -cover -race ./...
 
