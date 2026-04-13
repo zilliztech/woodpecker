@@ -33,8 +33,25 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
+// LogstoreCallbacks holds callbacks for logstore admin endpoints.
+type LogstoreCallbacks struct {
+	ListSegments func(logID *int64, writable *bool) []any
+	GetSegment   func(logID, segmentID int64) (any, error)
+	ForceFlush   func(logID, segmentID int64) error
+	ForceFence   func(logID, segmentID int64, reason string) error
+	ForceCompact func(logID, segmentID int64) error
+}
+
+// OpsCallbacks holds callbacks for ops admin endpoints.
+type OpsCallbacks struct {
+	List  func(params map[string]string) any
+	Get   func(opID string) any
+	Stats func() any
+}
+
 // AdminCallbacks holds callbacks for admin HTTP endpoints.
 type AdminCallbacks struct {
+	// Phase 1 callbacks
 	GetMemberlistStatus     func() string
 	GetMemberlistJSON       func() []byte
 	GetNodeStatus           func() any
@@ -42,6 +59,10 @@ type AdminCallbacks struct {
 	GetDecommissionProgress func() any
 	CancelDecommission      func() error
 	GetConfig               func() any
+
+	// Phase 2 callbacks
+	Logstore LogstoreCallbacks
+	Ops      OpsCallbacks
 }
 
 const (
