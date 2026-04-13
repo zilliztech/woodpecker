@@ -47,7 +47,9 @@ func newEnvDiffCommand() *cobra.Command {
 					fmt.Fprintf(w, "%s: identical\n", m.ID)
 				} else {
 					anyDrift = true
-					fmt.Fprintf(w, "%s: DIFFERS from %s\n", m.ID, refID)
+					diffs := jsonDiff(reference, envs[m.ID])
+					fmt.Fprintf(w, "%s: DIFFERS (%d fields)\n", m.ID, len(diffs))
+					fmt.Fprint(w, renderDiffEntries(diffs, refID, m.ID))
 				}
 			}
 			if anyDrift {

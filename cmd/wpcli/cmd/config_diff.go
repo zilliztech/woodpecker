@@ -73,7 +73,9 @@ func newConfigDiffCommand() *cobra.Command {
 					fmt.Fprintf(w, "%s: identical\n", t.ID)
 				} else {
 					anyDrift = true
-					fmt.Fprintf(w, "%s: DRIFT vs %s\n", t.ID, refID)
+					diffs := jsonDiff(refBytes, configs[t.ID])
+					fmt.Fprintf(w, "%s: DRIFT (%d fields differ)\n", t.ID, len(diffs))
+					fmt.Fprint(w, renderDiffEntries(diffs, refID, t.ID))
 				}
 			}
 			if anyDrift {
