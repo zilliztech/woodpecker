@@ -489,9 +489,9 @@ ls -la /tmp/wp-heap.pb.gz
 ./bin/wp k8s status --wp-cluster wp-test -n woodpecker
 ```
 
-- [ ] Expected: 3 kubectl commands printed (get, describe, get pods)
-- [ ] Contains `app.kubernetes.io/instance=wp-test` label selector
-- [ ] Contains "add -x to execute" hint
+- [X] Expected: 3 kubectl commands printed (get, describe, get pods)
+- [X] Contains `app.kubernetes.io/instance=wp-test` label selector
+- [X] Contains "add -x to execute" hint
 
 #### J.2 k8s scale — print mode
 
@@ -499,7 +499,7 @@ ls -la /tmp/wp-heap.pb.gz
 ./bin/wp k8s scale --replicas 5 --wp-cluster wp-test -n woodpecker
 ```
 
-- [ ] Expected: kubectl patch command printed with `{"spec":{"replicas":5}}`
+- [X] Expected: kubectl patch command printed with `{"spec":{"replicas":5}}`
 
 #### J.3 k8s logs — print mode + pod name resolution
 
@@ -508,14 +508,14 @@ ls -la /tmp/wp-heap.pb.gz
 ./bin/wp k8s logs 0 --wp-cluster wp-test -n woodpecker
 ```
 
-- [ ] Expected: `kubectl ... logs wp-test-server-0`
+- [X] Expected: `kubectl ... logs wp-test-server-0`
 
 ```bash
 # Full flag passthrough
 ./bin/wp k8s logs wp-test-server-2 --wp-cluster wp-test -f --tail 50 --since 1h
 ```
 
-- [ ] Expected: includes `-f`, `--tail 50`, `--since 1h` flags
+- [X] Expected: includes `-f`, `--tail 50`, `--since 1h` flags
 
 #### J.4 k8s doctor — stub
 
@@ -523,7 +523,7 @@ ls -la /tmp/wp-heap.pb.gz
 ./bin/wp k8s doctor; echo "exit=$?"
 ```
 
-- [ ] Expected: "not implemented" message, exit code 10
+- [X] Expected: "not implemented" message, exit code 10
 
 #### J.5 kubectl not found fallback
 
@@ -531,7 +531,7 @@ ls -la /tmp/wp-heap.pb.gz
 ./bin/wp k8s status --wp-cluster wp-test --kubectl /nonexistent/kubectl -x
 ```
 
-- [ ] Expected: "kubectl not found, falling back to print mode" + commands printed
+- [X] Expected: "kubectl not found, falling back to print mode" + commands printed
 
 ### K. Minikube Setup + Operator Deploy
 
@@ -541,7 +541,15 @@ ls -la /tmp/wp-heap.pb.gz
 minikube start --cpus=4 --memory=4096
 ```
 
-- [ ] Expected: minikube cluster running
+- [X] Expected: minikube cluster running
+
+```bash
+# Pre-load images to avoid slow pulls inside minikube
+minikube image load quay.io/coreos/etcd:v3.5.25
+minikube image load minio/minio:RELEASE.2024-12-18T13-15-44Z
+```
+
+- [ ] Expected: images loaded (check with `minikube image ls | grep -E "etcd|minio"`)
 
 #### K.2 Deploy dependencies (etcd + MinIO)
 
@@ -564,6 +572,7 @@ spec:
       containers:
       - name: etcd
         image: quay.io/coreos/etcd:v3.5.25
+        imagePullPolicy: IfNotPresent
         command: ["etcd"]
         args:
         - --advertise-client-urls=http://etcd.default.svc:2379
@@ -598,6 +607,7 @@ spec:
       containers:
       - name: minio
         image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        imagePullPolicy: IfNotPresent
         args: ["server", "/data"]
         env:
         - { name: MINIO_ROOT_USER, value: minioadmin }
@@ -621,7 +631,7 @@ kubectl wait --for=condition=ready pod -l app=etcd --timeout=60s
 kubectl wait --for=condition=ready pod -l app=minio --timeout=60s
 ```
 
-- [ ] Expected: etcd and minio pods running
+- [X] Expected: etcd and minio pods running
 
 #### K.3 Install CRD + Operator
 
@@ -828,16 +838,16 @@ ls -la bin/wp-*
 
 ## Exit Code Summary Verification
 
-| Command | Expected Exit Code | Meaning |
-|---------|-------------------|---------|
-| `wp cluster health` (healthy) | 0 | Success |
-| `wp cluster health` (degraded) | 8 or 9 | Yellow/Red finding |
-| `wp node restart <node>` | 10 | Not implemented |
-| `wp k8s doctor` | 10 | Not implemented |
-| `wp ops show <node> --op-id nonexistent` | 11 | Resource not found |
-| `wp logging set-level <node>` (no --level) | 2 | Usage error |
-| `wp logstore force-flush <node>` | 4 | State conflict (not yet supported) |
-| `wp metrics report --scenario stuck-flush` (finding) | 9 | Red finding |
+| Command                                                | Expected Exit Code | Meaning                            |
+| ------------------------------------------------------ | ------------------ | ---------------------------------- |
+| `wp cluster health` (healthy)                        | 0                  | Success                            |
+| `wp cluster health` (degraded)                       | 8 or 9             | Yellow/Red finding                 |
+| `wp node restart <node>`                             | 10                 | Not implemented                    |
+| `wp k8s doctor`                                      | 10                 | Not implemented                    |
+| `wp ops show <node> --op-id nonexistent`             | 11                 | Resource not found                 |
+| `wp logging set-level <node>` (no --level)           | 2                  | Usage error                        |
+| `wp logstore force-flush <node>`                     | 4                  | State conflict (not yet supported) |
+| `wp metrics report --scenario stuck-flush` (finding) | 9                  | Red finding                        |
 
 ---
 
@@ -888,18 +898,18 @@ rm -f /tmp/wp-heap.pb.gz
 
 ## Results Summary
 
-| Category | Total Checks | Passed | Failed | Notes |
-|----------|-------------|--------|--------|-------|
-| Prerequisites | 4 | | | |
-| Phase 1 — Foundation | 25 | | | |
-| Phase 2 — Observability | 27 | | | |
-| Phase 3 J — Print Mode | 7 | | | |
-| Phase 3 K — Minikube Setup | 7 | | | |
-| Phase 3 L — K8s Execute Mode | 13 | | | |
-| Phase 3 M/N — Release & Flags | 3 | | | |
-| Exit Codes | 8 | | | |
-| Known Limitations | 5 | | | |
-| **Total** | **94** | | | |
+| Category                       | Total Checks | Passed | Failed | Notes |
+| ------------------------------ | ------------ | ------ | ------ | ----- |
+| Prerequisites                  | 4            |        |        |       |
+| Phase 1 — Foundation          | 25           |        |        |       |
+| Phase 2 — Observability       | 27           |        |        |       |
+| Phase 3 J — Print Mode        | 7            |        |        |       |
+| Phase 3 K — Minikube Setup    | 7            |        |        |       |
+| Phase 3 L — K8s Execute Mode  | 13           |        |        |       |
+| Phase 3 M/N — Release & Flags | 3            |        |        |       |
+| Exit Codes                     | 8            |        |        |       |
+| Known Limitations              | 5            |        |        |       |
+| **Total**                | **94** |        |        |       |
 
 **Tester:** _______________
 **Date:** _______________
