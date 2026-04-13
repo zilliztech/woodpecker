@@ -125,9 +125,9 @@ func Ctx(ctx context.Context) *zap.Logger {
 	if ctx == nil {
 		return debugLogger()
 	}
-	logger := ctx.Value(CtxLogKey)
-	if logger != nil {
-		return logger.(*zap.Logger)
+	ctxLogger := ctx.Value(CtxLogKey)
+	if ctxLogger != nil {
+		return ctxLogger.(*zap.Logger)
 	}
 	level := ctx.Value(CtxLogLevelKey)
 	if level != nil {

@@ -25,8 +25,9 @@ func TestLogLevelHandler_Get(t *testing.T) {
 
 func TestLogLevelHandler_Post(t *testing.T) {
 	handler := NewLogLevelHandler()
-	original := logger.GetLevel()
-	defer func() { _ = logger.SetLevel(original) }()
+	// Note: SetLevel modifies global state. We restore to warn level
+	// which is the fallback used when _globalLogger is uninitialized.
+	defer func() { _ = logger.SetLevel("warn") }()
 
 	body := strings.NewReader(`{"level":"debug"}`)
 	req := httptest.NewRequest(http.MethodPost, "/log/level", body)
