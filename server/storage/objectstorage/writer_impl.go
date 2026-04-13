@@ -834,14 +834,16 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Compact")
 	defer sp.End()
-	startTime := time.Now()
+	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
 	defer func() {
 		status := "success"
 		if retErr != nil {
 			status = "error"
 		}
+		op.End(status)
+		elapsed := float64(time.Since(op.StartedAt()).Milliseconds())
 		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Observe(elapsed)
 	}()
 
 	f.mu.Lock()
@@ -966,7 +968,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
-		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+		zap.Int64("costMs", time.Since(op.StartedAt()).Milliseconds()))
 	return fileSizeAfterCompact, nil
 }
 

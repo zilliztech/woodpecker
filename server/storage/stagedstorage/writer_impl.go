@@ -470,7 +470,7 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
-	startTime := time.Now()
+	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
 	w.flushMu.Lock()
 	defer w.flushMu.Unlock()
 
@@ -627,8 +627,9 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
 	// update metrics
+	op.End("success")
 	metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
-	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
+	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
 	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
 
 	// Notify success - notify each entry channel with success
