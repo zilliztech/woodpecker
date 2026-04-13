@@ -37,10 +37,12 @@ type contextKey string
 var (
 	_globalLevelLogger sync.Map
 	_globalLogger      atomic.Value
+	_currentLevel      atomic.Value // stores string: "debug", "info", "warn", "error"
 	initLogOnce        sync.Once
 	customEncoder      = "_WpCustomTextEncoder_"
 	CtxLogKey          = contextKey("_WpLogger_")
 	CtxLogLevelKey     = contextKey("_WpLoggerLevel_")
+	validLevels        = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 )
 
 func init() {
@@ -71,7 +73,32 @@ func InitLogger(cfg *config.Configuration) {
 		}
 		v, _ := _globalLevelLogger.Load(logLevel)
 		_globalLogger.Store(v)
+		_currentLevel.Store(logLevel)
 	})
+}
+
+// GetLevel returns the current global log level.
+func GetLevel() string {
+	v := _currentLevel.Load()
+	if v == nil {
+		return "info"
+	}
+	return v.(string)
+}
+
+// SetLevel changes the global log level at runtime.
+// Valid levels: "debug", "info", "warn", "error".
+func SetLevel(level string) error {
+	if !validLevels[level] {
+		return fmt.Errorf("invalid log level %q: must be one of debug, info, warn, error", level)
+	}
+	v, ok := _globalLevelLogger.Load(level)
+	if !ok {
+		return fmt.Errorf("logger for level %q not initialized", level)
+	}
+	_globalLogger.Store(v)
+	_currentLevel.Store(level)
+	return nil
 }
 
 func debugLogger() *zap.Logger {
