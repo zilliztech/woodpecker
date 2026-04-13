@@ -30,6 +30,8 @@ type Registry struct {
 
 	// onEvict is called when an entry is evicted (called under lock — must be fast).
 	onEvict func(age time.Duration, isOld bool)
+	// onPoolChange is called when pool size changes (for Prometheus gauge).
+	onPoolChange func(size int)
 }
 
 type entry struct {
@@ -76,6 +78,7 @@ func (r *Registry) Register(rec OpRecord) uint64 {
 	r.index[rec.OpID] = len(r.pool)
 	r.handleMap[handle] = rec.OpID
 	r.pool = append(r.pool, e)
+	r.notifyPoolChangeLocked()
 
 	return handle
 }
@@ -99,6 +102,7 @@ func (r *Registry) Deregister(handle uint64) time.Duration {
 	elapsed := r.clock.Since(r.pool[idx].record.StartedAt)
 	r.removeAtLocked(idx)
 	delete(r.handleMap, handle)
+	r.notifyPoolChangeLocked()
 
 	return elapsed
 }
@@ -164,6 +168,13 @@ func (r *Registry) SetOnEvict(fn func(age time.Duration, isOld bool)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onEvict = fn
+}
+
+// notifyPoolChangeLocked calls the pool change callback if set. Caller must hold mu.
+func (r *Registry) notifyPoolChangeLocked() {
+	if r.onPoolChange != nil {
+		r.onPoolChange(len(r.pool))
+	}
 }
 
 // evictOldestLocked removes pool[0] and signals young/old. Caller must hold mu.

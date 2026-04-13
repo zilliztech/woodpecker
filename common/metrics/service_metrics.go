@@ -21,6 +21,8 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
 )
 
 const (
@@ -260,5 +262,7 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		// Op registry metrics
+		opregistry.RegisterMetrics(registerer)
 	})
 }
