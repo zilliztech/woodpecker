@@ -43,6 +43,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newLogstoreCommand())
 	root.AddCommand(newOpsCommand())
 	root.AddCommand(newMetricsCommand())
+	root.AddCommand(newK8sCommand())
 
 	return root
 }
