@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 |---|---|
-| **状态** | 🚧 WIP — 设计稿，未开始实现 |
+| **状态** | ✅ Implemented — Phase 1/2/3 complete |
 | **分支** | `introduce_wp_cli` |
 | **关联 issue** | [zilliztech/woodpecker#128](https://github.com/zilliztech/woodpecker/issues/128) |
-| **最后更新** | 2026-04-09 |
+| **最后更新** | 2026-04-13 |
 | **作者** | (待填) |
 | **Reviewers** | (待填) |
 
