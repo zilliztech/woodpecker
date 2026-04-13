@@ -22,13 +22,27 @@ type Op struct {
 	handles []uint64 // one per observer
 }
 
+// OpOption configures an Op at creation time.
+type OpOption func(*Op)
+
+// WithLogSegment sets the log and segment IDs for the op.
+func WithLogSegment(logID, segmentID int64) OpOption {
+	return func(op *Op) {
+		op.LogID = logID
+		op.SegmentID = segmentID
+	}
+}
+
 // StartOp begins tracking an operation. The histogram observer is optional (may be nil).
-func StartOp(opType string, hist prometheus.Observer, labels prometheus.Labels) *Op {
+func StartOp(opType string, hist prometheus.Observer, labels prometheus.Labels, opts ...OpOption) *Op {
 	op := &Op{
 		OpType: opType,
 		Labels: labels,
 		histo:  hist,
 		start:  time.Now(),
+	}
+	for _, opt := range opts {
+		opt(op)
 	}
 	if len(observers) > 0 {
 		op.handles = make([]uint64, len(observers))
