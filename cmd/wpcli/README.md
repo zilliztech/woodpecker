@@ -5,8 +5,13 @@ See [`docs/wpcli-design.md`](../../docs/wpcli-design.md) for the full design.
 
 ## Build
 
-    make wpcli
+    make wpcli          # current platform
+    make wpcli-release  # linux/amd64, linux/arm64, darwin/arm64, windows/amd64
     ./bin/wp version
+
+## Quick start
+
+See [`docs/wpcli/quickstart.md`](../../docs/wpcli/quickstart.md) for a 15-minute onboarding guide.
 
 ## Minimum config
 
@@ -21,7 +26,9 @@ contexts:
     admin_port: 9091
 ```
 
-## Phase 1 commands
+See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the full reference.
+
+## Commands
 
 ### Node lifecycle
 - `wp node list` — list all server nodes
@@ -45,6 +52,37 @@ contexts:
 ### Diagnostics
 - `wp profile <node> --type cpu --seconds 30` — download pprof profile
 
+### Logstore runtime
+- `wp logstore segments <node>` — list active segments
+- `wp logstore segment-show <node> --log X --seg Y` — detailed segment view
+- `wp logstore buffer <node>` — buffer bytes summary
+- `wp logstore flush-queue <node>` — flush queue depth summary
+- `wp logstore force-flush <node>` — force sync
+- `wp logstore fence <node> --log X --seg Y --reason "..." -y` — force fence
+- `wp logstore compact <node> --log X --seg Y` — force compaction
+
+### Metrics analysis
+- `wp metrics list <node>` — list all metric series
+- `wp metrics snapshot [<node>|--all]` — point-in-time snapshot
+- `wp metrics top --by <metric>` — cross-node top-N
+- `wp metrics watch <metric> <node>` — real-time trend stream
+- `wp metrics report --scenario <name>` — scenario-based analysis (12 built-in)
+
+### Ops registry
+- `wp ops list <node>` — in-flight operations
+- `wp ops show <node> --op-id <id>` — single op detail
+- `wp ops stats <node>` — registry utilization + eviction analysis
+
+### Dynamic logging
+- `wp logging get-level [<node>|--all]` — read current log level
+- `wp logging set-level <node> --level <level>` — change log level
+
+### Kubernetes
+- `wp k8s status` — cluster status (print kubectl commands, `-x` to execute)
+- `wp k8s scale --replicas N` — scale cluster
+- `wp k8s logs <node-or-pod>` — tail pod logs
+- `wp k8s doctor` — not yet implemented
+
 ### CLI contexts
 - `wp ctx list` — list configured contexts
 - `wp ctx use <name>` — switch active context
@@ -52,10 +90,23 @@ contexts:
 
 ## Exit codes
 
-See [`docs/wpcli-design.md` §3.5](../../docs/wpcli-design.md#35-退出码总表).
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Network/connection error |
+| 2 | Usage error |
+| 3 | Target not found |
+| 4 | State conflict |
+| 5 | Wait/Watch timeout |
+| 6 | Strict mode partial failure |
+| 7 | User abort |
+| 8 | Yellow finding |
+| 9 | Red finding |
+| 10 | Intentionally not implemented |
+| 11 | Resource not found |
+| 12 | Configuration error |
+| 100+ | K8s execute passthrough (100 + kubectl exit code) |
 
-## Phase 1 NOT yet implemented
+## Incident response cookbook
 
-The following command families are planned for Phase 2 and Phase 3:
-- `wp logstore *`, `wp metrics *`, `wp ops *`, `wp logging *` — Phase 2
-- `wp k8s *` — Phase 3
+See [`docs/wpcli/cookbook.md`](../../docs/wpcli/cookbook.md) for 10 common recipes.
