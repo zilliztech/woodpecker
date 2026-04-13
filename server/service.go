@@ -56,11 +56,18 @@ type Server struct {
 	decommOnce   sync.Once      // ensures monitor starts at most once
 	grpcErrChan  chan error
 	startupErrCh chan error // Channel to propagate async startup errors
-	grpcServer   *grpc.Server
-	listener     net.Listener
+	grpcServer            *grpc.Server
+	listener              net.Listener
+	grpcExtraInterceptors []grpc.UnaryServerInterceptor
 
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// SetGRPCExtraInterceptors sets additional gRPC unary interceptors to be
+// chained after the built-in ones (shutdown, otel). Call before Init().
+func (s *Server) SetGRPCExtraInterceptors(interceptors ...grpc.UnaryServerInterceptor) {
+	s.grpcExtraInterceptors = interceptors
 }
 
 // NodeStatus represents the current status of this node for external management systems.
@@ -170,13 +177,15 @@ func (s *Server) init() error {
 // start grpc server loop
 func (s *Server) startGrpcLoop() {
 	defer s.grpcWG.Done()
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		s.shutdownUnaryInterceptor(),
+		otelgrpc.UnaryServerInterceptor(),
+	}
+	unaryInterceptors = append(unaryInterceptors, s.grpcExtraInterceptors...)
 	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize()),
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
-		grpc.ChainUnaryInterceptor(
-			s.shutdownUnaryInterceptor(),
-			otelgrpc.UnaryServerInterceptor(),
-		),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			s.shutdownStreamInterceptor(),
 			otelgrpc.StreamServerInterceptor(),

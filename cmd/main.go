@@ -36,6 +36,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
 )
@@ -185,6 +186,15 @@ func main() {
 	if err := srv.Prepare(); err != nil {
 		log.Fatalf("Failed to prepare server: %v", err)
 	}
+
+	// Instantiate op registry for in-flight operation tracking.
+	opReg := opregistry.New(
+		cfg.Woodpecker.Runtime.OpRegistry.Capacity,
+		time.Duration(cfg.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())*time.Second,
+	)
+	metrics.RegisterOpObserver(opReg)
+	opregistry.WirePrometheusCallbacks(opReg)
+	srv.SetGRPCExtraInterceptors(opregistry.UnaryInterceptor())
 
 	// Start HTTP server for metrics, health check, and pprof
 	if err := commonhttp.Start(cfg, commonhttp.AdminCallbacks{
