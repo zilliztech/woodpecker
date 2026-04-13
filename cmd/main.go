@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -243,7 +244,31 @@ func main() {
 		},
 		Ops: commonhttp.OpsCallbacks{
 			List: func(params map[string]string) any {
-				return opReg.List(opregistry.Filter{})
+				f := opregistry.Filter{}
+				if v, ok := params["type"]; ok && v != "" {
+					f.Types = []opregistry.OpType{opregistry.OpType(v)}
+				}
+				if v, ok := params["log_id"]; ok {
+					if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.LogID = &id
+					}
+				}
+				if v, ok := params["segment_id"]; ok {
+					if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.SegmentID = &id
+					}
+				}
+				if v, ok := params["longer_than_ms"]; ok {
+					if ms, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.LongerThan = time.Duration(ms) * time.Millisecond
+					}
+				}
+				if v, ok := params["limit"]; ok {
+					if lim, err := strconv.Atoi(v); err == nil {
+						f.Limit = lim
+					}
+				}
+				return opReg.List(f)
 			},
 			Get: func(opID string) any {
 				return opReg.Get(opID)

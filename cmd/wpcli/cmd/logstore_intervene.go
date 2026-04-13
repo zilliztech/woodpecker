@@ -92,7 +92,8 @@ func logstorePost(cmd *cobra.Command, node, path string, payload map[string]any,
 	peerURL := res.Client.PeerAdminURL(target)
 
 	body, _ := json.Marshal(payload)
-	resp, err := http.Post(peerURL+path, "application/json", bytes.NewReader(body))
+	client := &http.Client{Timeout: Globals.Timeout}
+	resp, err := client.Post(peerURL+path, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return wperrors.NewNetworkError(fmt.Sprintf("POST %s: %v", path, err))
 	}

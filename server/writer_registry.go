@@ -49,10 +49,11 @@ func (l *logStore) GetWriterSnapshotDetailed(_ context.Context, logID, segmentID
 }
 
 // ForceFlush forces a sync on the specified writer (or all if logID=0, segmentID=0).
-func (l *logStore) ForceFlush(ctx context.Context, logID, segmentID int64) error {
-	// SegmentProcessor doesn't expose Sync — we currently support only per-segment fence/compact.
-	// ForceFlush is a future enhancement; return nil for now.
-	return nil
+// Note: SegmentProcessor does not currently expose a Sync method, so this
+// operation is accepted but has no effect. A future enhancement will wire
+// this to the underlying Writer.Sync().
+func (l *logStore) ForceFlush(_ context.Context, _, _ int64) error {
+	return fmt.Errorf("force-flush is not yet supported (operation accepted but no-op)")
 }
 
 // ForceFence forces a fence on the specified writer.

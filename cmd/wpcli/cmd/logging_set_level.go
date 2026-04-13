@@ -32,7 +32,8 @@ func newLoggingSetLevelCommand() *cobra.Command {
 
 			setLevel := func(peerURL, nodeID string) (string, error) {
 				body, _ := json.Marshal(map[string]string{"level": level})
-				resp, err := http.Post(peerURL+"/log/level", "application/json", bytes.NewReader(body))
+				client := &http.Client{Timeout: Globals.Timeout}
+				resp, err := client.Post(peerURL+"/log/level", "application/json", bytes.NewReader(body))
 				if err != nil {
 					return "", wperrors.NewNetworkError(fmt.Sprintf("failed to reach %s: %v", nodeID, err))
 				}

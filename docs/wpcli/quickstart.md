@@ -75,7 +75,7 @@ wp cluster info          # now targeting staging cluster
 
 ### Decommission a node
 ```bash
-wp node decommission node-3 --wait     # blocks until safe to terminate
+wp node decommission node-3             # blocks until safe to terminate (default)
 wp node drain-status node-3 -w         # watch progress in real time
 ```
 

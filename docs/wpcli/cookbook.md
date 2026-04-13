@@ -8,7 +8,7 @@
 
 ```bash
 # Initiate graceful decommission (blocks until safe)
-wp node decommission node-3 --wait
+wp node decommission node-3
 
 # Or watch progress separately
 wp node decommission node-3

@@ -105,6 +105,7 @@ See [`docs/wpcli/configuration.md`](../../docs/wpcli/configuration.md) for the f
 | 10 | Intentionally not implemented |
 | 11 | Resource not found |
 | 12 | Configuration error |
+| 13 | Prerequisite missing |
 | 100+ | K8s execute passthrough (100 + kubectl exit code) |
 
 ## Incident response cookbook

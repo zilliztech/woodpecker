@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -35,7 +36,7 @@ func newMetricsListCommand() *cobra.Command {
 			if filter != "" {
 				var filtered []prom.MetricInfo
 				for _, m := range list {
-					if containsSubstring(m.Name, filter) {
+					if strings.Contains(m.Name, filter) {
 						filtered = append(filtered, m)
 					}
 				}
@@ -62,15 +63,3 @@ func newMetricsListCommand() *cobra.Command {
 	return cmd
 }
 
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (substr == "" || findSubstring(s, substr))
-}
-
-func findSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}

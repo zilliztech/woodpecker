@@ -200,17 +200,19 @@ func (r *Registry) evictOldestLocked() {
 	r.removeAtLocked(0)
 }
 
-// removeAtLocked removes the entry at idx and rebuilds the index. Caller must hold mu.
+// removeAtLocked removes the entry at idx preserving insertion order (FIFO).
+// Caller must hold mu. Uses copy+shift to maintain oldest-first ordering
+// which is required for correct drop-oldest eviction.
 func (r *Registry) removeAtLocked(idx int) {
 	opID := r.pool[idx].record.OpID
 	delete(r.index, opID)
 
-	// Swap with last to avoid shifting.
-	last := len(r.pool) - 1
-	if idx != last {
-		r.pool[idx] = r.pool[last]
-		r.index[r.pool[idx].record.OpID] = idx
+	copy(r.pool[idx:], r.pool[idx+1:])
+	r.pool[len(r.pool)-1] = nil
+	r.pool = r.pool[:len(r.pool)-1]
+
+	// Rebuild index for shifted entries.
+	for i := idx; i < len(r.pool); i++ {
+		r.index[r.pool[i].record.OpID] = i
 	}
-	r.pool[last] = nil
-	r.pool = r.pool[:last]
 }

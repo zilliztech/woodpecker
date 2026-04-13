@@ -15,7 +15,8 @@ import (
 // fetchAdminJSON fetches a JSON endpoint from a peer and returns the raw bytes.
 // Shared by config show/diff and env show/diff.
 func fetchAdminJSON(peerURL, path string) ([]byte, error) {
-	resp, err := http.Get(peerURL + path)
+	client := &http.Client{Timeout: Globals.Timeout}
+	resp, err := client.Get(peerURL + path)
 	if err != nil {
 		return nil, wperrors.NewNetworkError(fmt.Sprintf("GET %s: %v", path, err))
 	}

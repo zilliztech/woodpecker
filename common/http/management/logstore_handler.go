@@ -68,7 +68,9 @@ func NewLogstoreSegmentShowHandler(get func(logID, segmentID int64) (any, error)
 
 		seg, err := get(logID, segID)
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
