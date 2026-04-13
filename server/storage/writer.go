@@ -53,4 +53,10 @@ type Writer interface {
 
 	// Compact small blocks into larger blocks, return size after compacted
 	Compact(ctx context.Context) (int64, error)
+
+	// Snapshot returns a lightweight state summary of this writer.
+	Snapshot() WriterSnapshot
+
+	// SnapshotDetailed returns full state including buffer and flush queue info.
+	SnapshotDetailed() WriterSnapshotDetailed
 }
