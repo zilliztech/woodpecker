@@ -657,39 +657,62 @@ kubectl explain woodpeckercluster.spec | head -20
 
 - [X] Expected: spec fields (image, replicas, resources, storageSize, etc.) displayed
 
-#### K.4 Build and run operator locally
+#### K.4 Build and deploy operator to the cluster
 
-> **Note:** `make run` starts the operator as a local process (outside the cluster).
-> We disable webhooks via `ENABLE_WEBHOOKS=false` to avoid needing TLS certs locally.
-> For production, use `make docker-build && make deploy` instead.
+> **Note:** We deploy operator **inside** the K8s cluster (recommended for
+> real testing). `make run` locally also works for basic CRUD, but the
+> operator needs to HTTP-call Pod admin ports (e.g. for decommission
+> during scale-down), which is blocked when operator is on the host
+> (Pod IPs are internal to minikube's CNI network).
 
 ```bash
-# Start operator in a separate terminal (or background)
+# 1. Build operator image inside minikube's docker (avoids load step)
 cd deployments/operator
-ENABLE_WEBHOOKS=false make run 2>&1 | tee /tmp/operator.log &
-OPERATOR_PID=$!
+eval $(minikube docker-env)
+make docker-build IMG=woodpecker-operator:latest
+eval $(minikube docker-env -u)
+```
+
+- [ ] Expected: image `woodpecker-operator:latest` built in minikube's docker daemon
+
+```bash
+# 2. Deploy operator (creates Deployment, RBAC, Service in woodpecker-operator-system ns)
+make deploy IMG=woodpecker-operator:latest
 cd ../..
 ```
 
-- [X] Expected: log output shows:
-  - `Starting manager`
+- [ ] Expected: namespace and operator resources created
+
+```bash
+# 3. Wait for operator pod ready
+kubectl wait --for=condition=ready pod -l control-plane=controller-manager \
+  -n woodpecker-operator-system --timeout=60s
+```
+
+- [ ] Expected: operator pod Ready
+
+```bash
+# 4. Verify operator is running and watching
+kubectl get pods -n woodpecker-operator-system
+kubectl logs -n woodpecker-operator-system -l control-plane=controller-manager -c manager --tail 30
+```
+
+- [ ] Expected log lines:
   - `Starting Controller {"controller": "woodpeckercluster", ...}`
-  - `Starting workers {"controller": "woodpeckercluster", ... "worker count": 1}`
-- [X] No TLS/cert errors
+  - `Starting workers`
+  - No TLS cert errors (webhooks handled by cert-manager or disabled in default config)
 
-```bash
-# Sanity check: operator process running
-ps -p $OPERATOR_PID
-```
-
-- [X] Expected: process running
-
-```bash
-# Check operator leader election (should NOT be leader in local mode — leader-elect is false)
-grep -E "Starting workers|controller-runtime.source" /tmp/operator.log | head -10
-```
-
-- [X] Expected: "Starting workers" line present, no persistent informer sync errors
+> **Alternative (local run — convenient for dev, limited for e2e):**
+>
+> ```bash
+> cd deployments/operator
+> ENABLE_WEBHOOKS=false make run 2>&1 | tee /tmp/operator.log &
+> OPERATOR_PID=$!
+> cd ../..
+> ```
+>
+> This skips the image build but operator will fail to decommission Pods
+> during scale-down (Pod IPs unreachable from host).
 
 #### K.5 Create WoodpeckerCluster CR
 
@@ -737,7 +760,8 @@ kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample -o wide
 
 ```bash
 # Check operator reconciliation logs
-grep -E "Reconciling|StatefulSet reconciled" /tmp/operator.log | tail -5
+kubectl logs -n woodpecker-operator-system -l control-plane=controller-manager -c manager --tail 100 | \
+  grep -E "Reconciling|StatefulSet reconciled" | tail -5
 ```
 
 - [X] Expected: multiple reconciliation events, no errors
@@ -894,7 +918,8 @@ kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
 
 ```bash
 # 3. Watch the operator perform graceful decommission (takes ~30-60s)
-grep -E "Scale-down detected|Decommissioning|safe to terminate|Cleaning up orphaned PVC" /tmp/operator.log | tail -20
+kubectl logs -n woodpecker-operator-system -l control-plane=controller-manager -c manager --tail 100 | \
+  grep -E "Scale-down detected|Decommissioning|safe to terminate|Cleaning up orphaned PVC" | tail -20
 ```
 
 - [ ] Expected: log shows:
@@ -1027,8 +1052,14 @@ Check these are documented and behave as expected:
 kubectl delete -f deployments/operator/config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml
 
 # Stop operator (if running locally)
+# If operator was deployed to cluster
+cd deployments/operator
+make undeploy ignore-not-found=true
+make uninstall ignore-not-found=true
+cd ../..
+
+# If operator was run locally (make run)
 kill $OPERATOR_PID 2>/dev/null || true
-cd deployments/operator && make uninstall && cd ../..
 
 # Delete dependencies
 kubectl delete deployment minio
