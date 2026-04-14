@@ -57,7 +57,7 @@ var _ = Describe("cleanupOrphanedPVCs", func() {
 		ctx := context.Background()
 
 		// Create PVCs 0, 1, 2 (simulate prior replicas=3 state)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			Expect(k8sClient.Create(ctx, newPVC(clusterName, i))).To(Succeed())
 		}
 

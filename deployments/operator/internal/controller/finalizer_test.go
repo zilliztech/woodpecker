@@ -53,9 +53,9 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return inner.RoundTrip(newReq)
 }
 
-func newRunningPod(name, ip string) *corev1.Pod {
+func newRunningPod(ip string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "wp-0", Namespace: "default"},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 			PodIP: ip,
@@ -77,7 +77,7 @@ func TestDecommissionPod_Safe(t *testing.T) {
 	setupTestHTTPClient(t, srv)
 
 	r := &WoodpeckerClusterReconciler{}
-	safe, err := r.decommissionPod(context.Background(), newRunningPod("wp-0", "1.2.3.4"), 9091)
+	safe, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
 	require.NoError(t, err)
 	assert.True(t, safe)
 }
@@ -95,7 +95,7 @@ func TestDecommissionPod_NotSafe(t *testing.T) {
 	setupTestHTTPClient(t, srv)
 
 	r := &WoodpeckerClusterReconciler{}
-	safe, err := r.decommissionPod(context.Background(), newRunningPod("wp-0", "1.2.3.4"), 9091)
+	safe, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
 	require.NoError(t, err)
 	assert.False(t, safe)
 }
@@ -113,7 +113,7 @@ func TestDecommissionPod_ProgressNon200(t *testing.T) {
 	setupTestHTTPClient(t, srv)
 
 	r := &WoodpeckerClusterReconciler{}
-	safe, err := r.decommissionPod(context.Background(), newRunningPod("wp-0", "1.2.3.4"), 9091)
+	safe, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
 	require.NoError(t, err)
 	assert.False(t, safe)
 }
@@ -121,7 +121,7 @@ func TestDecommissionPod_ProgressNon200(t *testing.T) {
 func TestDecommissionPod_EmptyPodIP(t *testing.T) {
 	// No PodIP yet — should return (false, nil) without making HTTP calls.
 	r := &WoodpeckerClusterReconciler{}
-	safe, err := r.decommissionPod(context.Background(), newRunningPod("wp-0", ""), 9091)
+	safe, err := r.decommissionPod(context.Background(), newRunningPod(""), 9091)
 	require.NoError(t, err)
 	assert.False(t, safe)
 }
@@ -133,6 +133,6 @@ func TestDecommissionPod_DecommissionEndpointError(t *testing.T) {
 	setupTestHTTPClient(t, srv)
 
 	r := &WoodpeckerClusterReconciler{}
-	_, err := r.decommissionPod(context.Background(), newRunningPod("wp-0", "1.2.3.4"), 9091)
+	_, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
 	require.Error(t, err)
 }
