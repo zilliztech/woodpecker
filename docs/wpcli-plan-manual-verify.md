@@ -633,48 +633,114 @@ kubectl wait --for=condition=ready pod -l app=minio --timeout=60s
 
 - [X] Expected: etcd and minio pods running
 
-#### K.3 Install CRD + Operator
+#### K.3 Install CRD
 
 ```bash
 cd deployments/operator
-make install    # Install CRD
-make run &      # Run operator locally (or deploy to cluster)
+make install
+```
+
+- [ ] Expected: `customresourcedefinition.apiextensions.k8s.io/woodpeckerclusters.woodpecker.zilliz.io created`
+
+```bash
+# Verify CRD is registered
+kubectl get crd woodpeckerclusters.woodpecker.zilliz.io
+kubectl api-resources | grep woodpecker
+```
+
+- [ ] Expected: CRD listed, shows `woodpeckerclusters` as a namespaced resource
+
+```bash
+# Verify CRD schema is valid
+kubectl explain woodpeckercluster.spec | head -20
+```
+
+- [ ] Expected: spec fields (image, replicas, resources, storageSize, etc.) displayed
+
+#### K.4 Build and run operator locally
+
+> **Note:** `make run` starts the operator as a local process (outside the cluster).
+> We disable webhooks via `ENABLE_WEBHOOKS=false` to avoid needing TLS certs locally.
+> For production, use `make docker-build && make deploy` instead.
+
+```bash
+# Start operator in a separate terminal (or background)
+cd deployments/operator
+ENABLE_WEBHOOKS=false make run 2>&1 | tee /tmp/operator.log &
+OPERATOR_PID=$!
 cd ../..
 ```
 
-- [ ] Expected: CRD `woodpeckerclusters.woodpecker.zilliz.io` registered
-- [ ] Operator running (logs show "Starting workers")
+- [ ] Expected: log output shows:
+  - `Starting manager`
+  - `Starting Controller {"controller": "woodpeckercluster", ...}`
+  - `Starting workers {"controller": "woodpeckercluster", ... "worker count": 1}`
+- [ ] No TLS/cert errors
 
 ```bash
-kubectl get crd woodpeckerclusters.woodpecker.zilliz.io
+# Sanity check: operator process running
+ps -p $OPERATOR_PID
 ```
 
-- [ ] Expected: CRD listed
-
-#### K.4 Create WoodpeckerCluster
+- [ ] Expected: process running
 
 ```bash
-kubectl apply -f deployments/operator/config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml
+# Check operator leader election (should NOT be leader in local mode — leader-elect is false)
+grep -E "Starting workers|controller-runtime.source" /tmp/operator.log | head -10
 ```
+
+- [ ] Expected: "Starting workers" line present, no persistent informer sync errors
+
+#### K.5 Create WoodpeckerCluster CR
 
 ```bash
-# Wait for pods to be ready
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=120s
+# First, pre-load the woodpecker image so the pods start quickly
+minikube image load woodpecker:latest
+
+# Patch the sample to use our local image and 2 replicas for faster testing
+cat deployments/operator/config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml | \
+  sed 's|zilliztech/woodpecker:v0.1.26|woodpecker:latest|' | \
+  sed 's|replicas: 3|replicas: 2|' | \
+  kubectl apply -f -
 ```
 
-- [ ] Expected: 3 pods running (`woodpecker-sample-server-{0,1,2}`)
+- [ ] Expected: `configmap/woodpecker-config created` and `woodpeckercluster.woodpecker.zilliz.io/woodpecker-sample created`
+
+```bash
+# Also patch the StatefulSet to use IfNotPresent so it uses the loaded image
+# (may take a few seconds for operator to create the STS first)
+sleep 10
+kubectl patch statefulset woodpecker-sample-server -p \
+  '{"spec":{"template":{"spec":{"containers":[{"name":"woodpecker","imagePullPolicy":"IfNotPresent"}]}}}}'
+```
+
+- [ ] Expected: statefulset patched
+
+```bash
+# Wait for pods (up to 3 min — StatefulSet starts pods one at a time)
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=180s
+```
+
+- [ ] Expected: 2 pods ready
 
 ```bash
 kubectl get woodpeckerclusters
 ```
 
-- [ ] Expected: shows `woodpecker-sample` with Ready=3, Replicas=3
+- [ ] Expected: shows `woodpecker-sample` with Phase=Running, Ready=2, Replicas=2
 
 ```bash
 kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample -o wide
 ```
 
-- [ ] Expected: 3 pods with STATUS=Running
+- [ ] Expected: 2 pods (`woodpecker-sample-server-0`, `woodpecker-sample-server-1`) with STATUS=Running
+
+```bash
+# Check operator reconciliation logs
+grep -E "Reconciling|StatefulSet reconciled" /tmp/operator.log | tail -5
+```
+
+- [ ] Expected: multiple reconciliation events, no errors
 
 ### L. K8s Execute Mode — Real Cluster
 
@@ -870,7 +936,8 @@ Check these are documented and behave as expected:
 kubectl delete -f deployments/operator/config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml
 
 # Stop operator (if running locally)
-# Ctrl+C the 'make run' process
+kill $OPERATOR_PID 2>/dev/null || true
+cd deployments/operator && make uninstall && cd ../..
 
 # Delete dependencies
 kubectl delete deployment minio
@@ -904,12 +971,12 @@ rm -f /tmp/wp-heap.pb.gz
 | Phase 1 — Foundation          | 25           |        |        |       |
 | Phase 2 — Observability       | 27           |        |        |       |
 | Phase 3 J — Print Mode        | 7            |        |        |       |
-| Phase 3 K — Minikube Setup    | 7            |        |        |       |
+| Phase 3 K — Minikube Setup    | 13           |        |        |       |
 | Phase 3 L — K8s Execute Mode  | 13           |        |        |       |
 | Phase 3 M/N — Release & Flags | 3            |        |        |       |
 | Exit Codes                     | 8            |        |        |       |
 | Known Limitations              | 5            |        |        |       |
-| **Total**                | **94** |        |        |       |
+| **Total**                | **100** |        |        |       |
 
 **Tester:** _______________
 **Date:** _______________
