@@ -62,4 +62,3 @@ func newMetricsListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&filter, "filter", "", "Substring filter on metric name")
 	return cmd
 }
-

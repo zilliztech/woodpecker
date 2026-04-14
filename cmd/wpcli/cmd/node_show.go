@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
+	"github.com/zilliztech/woodpecker/cmd/wpcli/output"
 )
 
 // nodeStatusDTO mirrors server.NodeStatus JSON on the wire.

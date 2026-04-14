@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zilliztech/woodpecker/cmd/wpcli/internal/k8s"
 	wperrors "github.com/zilliztech/woodpecker/cmd/wpcli/internal/errors"
+	"github.com/zilliztech/woodpecker/cmd/wpcli/internal/k8s"
 )
 
 func newK8sScaleCommand() *cobra.Command {

@@ -18,10 +18,10 @@ import (
 // Built-in scenario definitions (embedded as Go structs for Phase 2).
 // A future enhancement could load these from YAML files.
 type scenarioDef struct {
-	Name        string     `json:"name" yaml:"name"`
-	Description string     `json:"description" yaml:"description"`
-	Metrics     []string   `json:"metrics" yaml:"metrics"`
-	Rules       []ruleDef  `json:"rules" yaml:"rules"`
+	Name        string    `json:"name" yaml:"name"`
+	Description string    `json:"description" yaml:"description"`
+	Metrics     []string  `json:"metrics" yaml:"metrics"`
+	Rules       []ruleDef `json:"rules" yaml:"rules"`
 }
 
 type ruleDef struct {
@@ -44,98 +44,124 @@ var builtinScenarios = map[string]scenarioDef{
 		Description: "Detect flush-path stalls and buildup",
 		Metrics:     []string{"woodpecker_server_file_flush_latency", "woodpecker_server_op_registry_evicted_total"},
 		Rules: []ruleDef{
-			{ID: "flush_latency_high", Severity: "yellow", Condition: "flush_latency_sum > 10000",
-				Hints: []string{"wp ops list {node} --type file.flush --longer-than 30000", "wp logstore flush-queue {node}"}},
-			{ID: "old_evictions", Severity: "red", Condition: "evicted_old > 0",
-				Hints: []string{"wp ops stats {node}", "wp logstore segment-show {node} --log {log} --seg {seg}"}},
+			{
+				ID: "flush_latency_high", Severity: "yellow", Condition: "flush_latency_sum > 10000",
+				Hints: []string{"wp ops list {node} --type file.flush --longer-than 30000", "wp logstore flush-queue {node}"},
+			},
+			{
+				ID: "old_evictions", Severity: "red", Condition: "evicted_old > 0",
+				Hints: []string{"wp ops stats {node}", "wp logstore segment-show {node} --log {log} --seg {seg}"},
+			},
 		},
 	},
 	"hot-write": {
 		Name: "hot-write", Description: "Cross-node append rate severely imbalanced",
 		Metrics: []string{"woodpecker_server_logstore_operations_total"},
 		Rules: []ruleDef{
-			{ID: "write_imbalance", Severity: "yellow", Condition: "max_rate / min_rate > 10",
-				Hints: []string{"wp metrics top --by woodpecker_server_logstore_operations_total"}},
+			{
+				ID: "write_imbalance", Severity: "yellow", Condition: "max_rate / min_rate > 10",
+				Hints: []string{"wp metrics top --by woodpecker_server_logstore_operations_total"},
+			},
 		},
 	},
 	"slow-write": {
 		Name: "slow-write", Description: "Append p99 deviates from baseline",
 		Metrics: []string{"woodpecker_server_logstore_operation_latency"},
 		Rules: []ruleDef{
-			{ID: "write_latency_high", Severity: "yellow", Condition: "p99 > baseline * 2",
-				Hints: []string{"wp ops list {node} --type logstore.add_entry --longer-than 5000"}},
+			{
+				ID: "write_latency_high", Severity: "yellow", Condition: "p99 > baseline * 2",
+				Hints: []string{"wp ops list {node} --type logstore.add_entry --longer-than 5000"},
+			},
 		},
 	},
 	"stuck-write": {
 		Name: "stuck-write", Description: "Append throughput near zero with pending ops",
 		Metrics: []string{"woodpecker_server_logstore_operations_total"},
 		Rules: []ruleDef{
-			{ID: "write_stall", Severity: "red", Condition: "rate == 0 && pending > 0",
-				Hints: []string{"wp ops list {node} --type logstore.add_entry"}},
+			{
+				ID: "write_stall", Severity: "red", Condition: "rate == 0 && pending > 0",
+				Hints: []string{"wp ops list {node} --type logstore.add_entry"},
+			},
 		},
 	},
 	"slow-compact": {
 		Name: "slow-compact", Description: "Compact p99 deviates and errors growing",
 		Metrics: []string{"woodpecker_server_file_compaction_latency"},
 		Rules: []ruleDef{
-			{ID: "compact_slow", Severity: "yellow", Condition: "compact_p99 > baseline * 3",
-				Hints: []string{"wp logstore segments {node} --writable false"}},
+			{
+				ID: "compact_slow", Severity: "yellow", Condition: "compact_p99 > baseline * 3",
+				Hints: []string{"wp logstore segments {node} --writable false"},
+			},
 		},
 	},
 	"fencing": {
 		Name: "fencing", Description: "Fence events exceed threshold in window",
 		Metrics: []string{"woodpecker_server_logstore_operations_total"},
 		Rules: []ruleDef{
-			{ID: "fence_burst", Severity: "yellow", Condition: "fence_count > 5 in window",
-				Hints: []string{"wp ops list {node} --type logstore.fence"}},
+			{
+				ID: "fence_burst", Severity: "yellow", Condition: "fence_count > 5 in window",
+				Hints: []string{"wp ops list {node} --type logstore.fence"},
+			},
 		},
 	},
 	"slow-read": {
 		Name: "slow-read", Description: "Read p99 deviates and read queue growing",
 		Metrics: []string{"woodpecker_server_read_batch_latency"},
 		Rules: []ruleDef{
-			{ID: "read_slow", Severity: "yellow", Condition: "read_p99 > baseline * 2",
-				Hints: []string{"wp metrics snapshot {node} --metric woodpecker_server_read_batch_latency"}},
+			{
+				ID: "read_slow", Severity: "yellow", Condition: "read_p99 > baseline * 2",
+				Hints: []string{"wp metrics snapshot {node} --metric woodpecker_server_read_batch_latency"},
+			},
 		},
 	},
 	"stuck-read": {
 		Name: "stuck-read", Description: "Read throughput near zero but pending ops exist",
 		Metrics: []string{"woodpecker_server_logstore_operations_total"},
 		Rules: []ruleDef{
-			{ID: "read_stall", Severity: "red", Condition: "read_rate == 0 && pending > 0",
-				Hints: []string{"wp ops list {node} --type logstore.get_batch_entries"}},
+			{
+				ID: "read_stall", Severity: "red", Condition: "read_rate == 0 && pending > 0",
+				Hints: []string{"wp ops list {node} --type logstore.get_batch_entries"},
+			},
 		},
 	},
 	"read-amplification": {
 		Name: "read-amplification", Description: "Block reads / entry reads ratio anomalous",
 		Metrics: []string{"woodpecker_server_read_batch_latency"},
 		Rules: []ruleDef{
-			{ID: "read_amp_high", Severity: "yellow", Condition: "block_reads / entry_reads > 10",
-				Hints: []string{"wp logstore segments {node}"}},
+			{
+				ID: "read_amp_high", Severity: "yellow", Condition: "block_reads / entry_reads > 10",
+				Hints: []string{"wp logstore segments {node}"},
+			},
 		},
 	},
 	"quorum-degraded": {
 		Name: "quorum-degraded", Description: "Some log active replicas < ensemble size",
 		Metrics: []string{"woodpecker_server_logstore_active_segments"},
 		Rules: []ruleDef{
-			{ID: "quorum_low", Severity: "red", Condition: "active_replicas < ensemble",
-				Hints: []string{"wp cluster health"}},
+			{
+				ID: "quorum_low", Severity: "red", Condition: "active_replicas < ensemble",
+				Hints: []string{"wp cluster health"},
+			},
 		},
 	},
 	"under-replication": {
 		Name: "under-replication", Description: "Sustained under-replication in window",
 		Metrics: []string{"woodpecker_server_logstore_active_segments"},
 		Rules: []ruleDef{
-			{ID: "under_rep", Severity: "red", Condition: "under_replicated sustained > 50% window",
-				Hints: []string{"wp cluster health", "wp node list"}},
+			{
+				ID: "under_rep", Severity: "red", Condition: "under_replicated sustained > 50% window",
+				Hints: []string{"wp cluster health", "wp node list"},
+			},
 		},
 	},
 	"slow-slot": {
 		Name: "slow-slot", Description: "Quorum ensemble member drags overall latency",
 		Metrics: []string{"woodpecker_server_logstore_operation_latency"},
 		Rules: []ruleDef{
-			{ID: "slot_drag", Severity: "yellow", Condition: "max_node_p99 / median_p99 > 5",
-				Hints: []string{"wp metrics top --by woodpecker_server_logstore_operation_latency"}},
+			{
+				ID: "slot_drag", Severity: "yellow", Condition: "max_node_p99 / median_p99 > 5",
+				Hints: []string{"wp metrics top --by woodpecker_server_logstore_operation_latency"},
+			},
 		},
 	},
 }
@@ -393,4 +419,3 @@ func evaluateRule(rule ruleDef, sc scenarioDef, families map[string]*prom.Metric
 
 	return nil
 }
-

@@ -47,14 +47,18 @@ const AdminConfigPath = "/admin/config"
 const AdminEnvPath = "/admin/env"
 
 // C family — logstore runtime
-const AdminLogstoreSegmentsPath = "/admin/logstore/segments"
-const AdminLogstoreFlushPath = "/admin/logstore/flush"
-const AdminLogstoreFencePath = "/admin/logstore/fence"
-const AdminLogstoreCompactPath = "/admin/logstore/compact"
+const (
+	AdminLogstoreSegmentsPath = "/admin/logstore/segments"
+	AdminLogstoreFlushPath    = "/admin/logstore/flush"
+	AdminLogstoreFencePath    = "/admin/logstore/fence"
+	AdminLogstoreCompactPath  = "/admin/logstore/compact"
+)
 
 // G family — ops registry
-const AdminRuntimeOpsPath = "/admin/runtime/ops"
-const AdminRuntimeOpsStatsPath = "/admin/runtime/ops/stats"
+const (
+	AdminRuntimeOpsPath      = "/admin/runtime/ops"
+	AdminRuntimeOpsStatsPath = "/admin/runtime/ops/stats"
+)
 
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:

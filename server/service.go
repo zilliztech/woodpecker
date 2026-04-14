@@ -43,20 +43,20 @@ import (
 )
 
 type Server struct {
-	cfg          *config.Configuration
-	serverNodeMu sync.RWMutex
-	serverNode   *membership.ServerNode
-	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
-	gossipSeeds  []string                 // Seeds for cluster joining
-	logStore     LogStore
-	lifecycle    *NodeLifecycleManager
-	startedAtMS  atomic.Int64 // unix ms, when this process came up
-	grpcWG       sync.WaitGroup
-	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
-	decommWG     sync.WaitGroup // tracks decommission monitor goroutine
-	decommOnce   sync.Once      // ensures monitor starts at most once
-	grpcErrChan  chan error
-	startupErrCh chan error // Channel to propagate async startup errors
+	cfg                   *config.Configuration
+	serverNodeMu          sync.RWMutex
+	serverNode            *membership.ServerNode
+	serverConfig          *membership.ServerConfig // Configuration to be used for creating server node
+	gossipSeeds           []string                 // Seeds for cluster joining
+	logStore              LogStore
+	lifecycle             *NodeLifecycleManager
+	startedAtMS           atomic.Int64 // unix ms, when this process came up
+	grpcWG                sync.WaitGroup
+	gossipWG              sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
+	decommWG              sync.WaitGroup // tracks decommission monitor goroutine
+	decommOnce            sync.Once      // ensures monitor starts at most once
+	grpcErrChan           chan error
+	startupErrCh          chan error // Channel to propagate async startup errors
 	grpcServer            *grpc.Server
 	listener              net.Listener
 	grpcExtraInterceptors []grpc.UnaryServerInterceptor

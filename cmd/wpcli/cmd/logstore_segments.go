@@ -54,14 +54,14 @@ func newLogstoreSegmentsCommand() *cobra.Command {
 
 			var resp struct {
 				Segments []struct {
-					LogID     int64  `json:"log_id"`
-					SegmentID int64  `json:"segment_id"`
-					Backend   string `json:"backend"`
-					Writable  bool   `json:"writable"`
-					Fenced    bool   `json:"fenced"`
-					Finalized bool   `json:"finalized"`
-					EntryCount int64 `json:"entry_count"`
-					BlockCount int64 `json:"block_count"`
+					LogID      int64  `json:"log_id"`
+					SegmentID  int64  `json:"segment_id"`
+					Backend    string `json:"backend"`
+					Writable   bool   `json:"writable"`
+					Fenced     bool   `json:"fenced"`
+					Finalized  bool   `json:"finalized"`
+					EntryCount int64  `json:"entry_count"`
+					BlockCount int64  `json:"block_count"`
 				} `json:"segments"`
 			}
 			if err := json.Unmarshal(body, &resp); err != nil {

@@ -174,7 +174,7 @@ func main() {
 		AdvertiseServicePort: advertiseServicePort,    // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
-		ClusterName: os.Getenv("CLUSTER_NAME"),
+		ClusterName:          os.Getenv("CLUSTER_NAME"),
 		Tags: map[string]string{
 			"role":       "logstore",
 			"admin_port": os.Getenv("METRICS_PORT"),

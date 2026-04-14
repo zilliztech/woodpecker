@@ -181,9 +181,9 @@ func TestRegistry_ListSortedByElapsedDesc(t *testing.T) {
 
 	ops := reg.List(Filter{})
 	require.Len(t, ops, 3)
-	assert.Equal(t, "oldest", ops[0].OpID)  // longest elapsed
-	assert.Equal(t, "newest", ops[1].OpID)  // 2s
-	assert.Equal(t, "middle", ops[2].OpID)  // 1s (swap-remove doesn't preserve order)
+	assert.Equal(t, "oldest", ops[0].OpID) // longest elapsed
+	assert.Equal(t, "newest", ops[1].OpID) // 2s
+	assert.Equal(t, "middle", ops[2].OpID) // 1s (swap-remove doesn't preserve order)
 }
 
 func TestRegistry_ListLimit(t *testing.T) {
