@@ -640,7 +640,7 @@ cd deployments/operator
 make install
 ```
 
-- [ ] Expected: `customresourcedefinition.apiextensions.k8s.io/woodpeckerclusters.woodpecker.zilliz.io created`
+- [X] Expected: `customresourcedefinition.apiextensions.k8s.io/woodpeckerclusters.woodpecker.zilliz.io created`
 
 ```bash
 # Verify CRD is registered
@@ -648,14 +648,14 @@ kubectl get crd woodpeckerclusters.woodpecker.zilliz.io
 kubectl api-resources | grep woodpecker
 ```
 
-- [ ] Expected: CRD listed, shows `woodpeckerclusters` as a namespaced resource
+- [X] Expected: CRD listed, shows `woodpeckerclusters` as a namespaced resource
 
 ```bash
 # Verify CRD schema is valid
 kubectl explain woodpeckercluster.spec | head -20
 ```
 
-- [ ] Expected: spec fields (image, replicas, resources, storageSize, etc.) displayed
+- [X] Expected: spec fields (image, replicas, resources, storageSize, etc.) displayed
 
 #### K.4 Build and run operator locally
 
@@ -671,25 +671,25 @@ OPERATOR_PID=$!
 cd ../..
 ```
 
-- [ ] Expected: log output shows:
+- [X] Expected: log output shows:
   - `Starting manager`
   - `Starting Controller {"controller": "woodpeckercluster", ...}`
   - `Starting workers {"controller": "woodpeckercluster", ... "worker count": 1}`
-- [ ] No TLS/cert errors
+- [X] No TLS/cert errors
 
 ```bash
 # Sanity check: operator process running
 ps -p $OPERATOR_PID
 ```
 
-- [ ] Expected: process running
+- [X] Expected: process running
 
 ```bash
 # Check operator leader election (should NOT be leader in local mode — leader-elect is false)
 grep -E "Starting workers|controller-runtime.source" /tmp/operator.log | head -10
 ```
 
-- [ ] Expected: "Starting workers" line present, no persistent informer sync errors
+- [X] Expected: "Starting workers" line present, no persistent informer sync errors
 
 #### K.5 Create WoodpeckerCluster CR
 
@@ -704,7 +704,7 @@ cat deployments/operator/config/samples/woodpecker_v1alpha1_woodpeckercluster.ya
   kubectl apply -f -
 ```
 
-- [ ] Expected: `configmap/woodpecker-config created` and `woodpeckercluster.woodpecker.zilliz.io/woodpecker-sample created`
+- [X] Expected: `configmap/woodpecker-config created` and `woodpeckercluster.woodpecker.zilliz.io/woodpecker-sample created`
 
 ```bash
 # Also patch the StatefulSet to use IfNotPresent so it uses the loaded image
@@ -714,33 +714,33 @@ kubectl patch statefulset woodpecker-sample-server -p \
   '{"spec":{"template":{"spec":{"containers":[{"name":"woodpecker","imagePullPolicy":"IfNotPresent"}]}}}}'
 ```
 
-- [ ] Expected: statefulset patched
+- [X] Expected: statefulset patched
 
 ```bash
 # Wait for pods (up to 3 min — StatefulSet starts pods one at a time)
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=180s
 ```
 
-- [ ] Expected: 2 pods ready
+- [X] Expected: 2 pods ready
 
 ```bash
 kubectl get woodpeckerclusters
 ```
 
-- [ ] Expected: shows `woodpecker-sample` with Phase=Running, Ready=2, Replicas=2
+- [X] Expected: shows `woodpecker-sample` with Phase=Running, Ready=2, Replicas=2
 
 ```bash
 kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample -o wide
 ```
 
-- [ ] Expected: 2 pods (`woodpecker-sample-server-0`, `woodpecker-sample-server-1`) with STATUS=Running
+- [X] Expected: 2 pods (`woodpecker-sample-server-0`, `woodpecker-sample-server-1`) with STATUS=Running
 
 ```bash
 # Check operator reconciliation logs
 grep -E "Reconciling|StatefulSet reconciled" /tmp/operator.log | tail -5
 ```
 
-- [ ] Expected: multiple reconciliation events, no errors
+- [X] Expected: multiple reconciliation events, no errors
 
 ### L. K8s Execute Mode — Real Cluster
 
@@ -768,7 +768,7 @@ EOF
 ./bin/wp k8s status -x
 ```
 
-- [ ] Expected: runs 3 kubectl commands, shows real output:
+- [X] Expected: runs 3 kubectl commands, shows real output:
   - `kubectl get woodpeckercluster woodpecker-sample -o wide` → shows phase, replicas
   - `kubectl describe woodpeckercluster woodpecker-sample` → full CR details
   - `kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample -o wide` → 3 pods
@@ -780,21 +780,21 @@ EOF
 ./bin/wp k8s logs 0 --tail 20 -x
 ```
 
-- [ ] Expected: shows last 20 log lines from `woodpecker-sample-server-0`
+- [X] Expected: shows last 20 log lines from `woodpecker-sample-server-0`
 
 ```bash
 # By explicit pod name
 ./bin/wp k8s logs woodpecker-sample-server-1 --tail 10 -x
 ```
 
-- [ ] Expected: shows logs from pod 1
+- [X] Expected: shows logs from pod 1
 
 ```bash
 # Streaming mode (Ctrl+C after a few lines)
 ./bin/wp k8s logs 0 -f -x
 ```
 
-- [ ] Expected: live log stream, Ctrl+C exits cleanly
+- [X] Expected: live log stream, Ctrl+C exits cleanly
 
 #### L.4 k8s scale — execute mode
 
@@ -803,28 +803,28 @@ EOF
 ./bin/wp k8s scale --replicas 2 -x
 ```
 
-- [ ] Expected: kubectl patch executed, returns success
+- [X] Expected: kubectl patch executed, returns success
 
 ```bash
 # Verify
 kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
 ```
 
-- [ ] Expected: 2 pods running (1 terminating or gone)
+- [X] Expected: 2 pods running (1 terminating or gone)
 
 ```bash
 # Scale back to 3
 ./bin/wp k8s scale --replicas 3 -x
 ```
 
-- [ ] Expected: kubectl patch success
+- [X] Expected: kubectl patch success
 
 ```bash
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=60s
 kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
 ```
 
-- [ ] Expected: 3 pods running again
+- [X] Expected: 3 pods running again
 
 #### L.5 k8s status — verify after scale
 
@@ -832,7 +832,7 @@ kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
 ./bin/wp k8s status -x
 ```
 
-- [ ] Expected: `get woodpeckercluster` shows Replicas=3, Ready=3
+- [X] Expected: `get woodpeckercluster` shows Replicas=3, Ready=3
 
 #### L.6 k8s commands with explicit flags (override cli.yaml)
 
@@ -844,7 +844,7 @@ kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
 ./bin/wp k8s status --kubectl $(which kubectl) -x
 ```
 
-- [ ] Expected: same results as L.2
+- [X] Expected: same results as L.2
 
 #### L.7 wp admin commands via port-forward (optional)
 
@@ -864,8 +864,99 @@ PF_PID=$!
 kill $PF_PID
 ```
 
-- [ ] Expected: all admin commands work through port-forward
-- [ ] cluster info shows the K8s-deployed nodes
+- [X] Expected: all admin commands work through port-forward
+- [X] cluster info shows the K8s-deployed nodes
+
+#### L.8 Graceful scale-down (operator-managed decommission)
+
+> **What this tests:** When you scale down via `wp k8s scale`, the operator
+> intercepts the change, triggers `wp node decommission` on the highest-ordinal
+> pod, waits for `safe_to_terminate`, and only then removes the pod and cleans
+> up its PVC. Node IDs are stable: ordinals are recycled on scale-up but the
+> PVC is fresh (empty data dir).
+>
+> **Pre-check:** You're currently at 3 replicas (server-0/1/2).
+
+```bash
+# 1. Current state
+kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
+kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
+```
+
+- [ ] Expected: 3 pods (server-0, server-1, server-2), 3 PVCs (data-woodpecker-sample-server-0/1/2)
+
+```bash
+# 2. Trigger scale-down from 3 to 2
+./bin/wp k8s scale --replicas 2 -x
+```
+
+- [ ] Expected: kubectl patch returns success (CR spec.replicas now = 2)
+
+```bash
+# 3. Watch the operator perform graceful decommission (takes ~30-60s)
+grep -E "Scale-down detected|Decommissioning|safe to terminate|Cleaning up orphaned PVC" /tmp/operator.log | tail -20
+```
+
+- [ ] Expected: log shows:
+  - `Scale-down detected {"current":3, "desired":2}`
+  - `Pod not yet safe to terminate` (may appear several times)
+  - Eventually: `All target pods decommissioned, safe to scale down`
+  - `Cleaning up orphaned PVC` (for server-2's PVC)
+
+```bash
+# 4. Verify final state
+kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
+kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
+kubectl get woodpeckercluster
+```
+
+- [ ] Expected: 2 pods (server-0, server-1), server-2 gone
+- [ ] Expected: 2 PVCs (server-2's PVC deleted by operator)
+- [ ] Expected: WoodpeckerCluster status Ready=2, Replicas=2
+
+```bash
+# 5. Verify via wp CLI (ordinal 2 should be gone)
+kubectl port-forward woodpecker-sample-server-0 9091:9091 &
+PF_PID=$!
+sleep 2
+./bin/wp --endpoint http://localhost:9091 node list
+./bin/wp --endpoint http://localhost:9091 cluster info
+kill $PF_PID 2>/dev/null
+```
+
+- [ ] Expected: only 2 nodes in memberlist (server-0, server-1)
+
+#### L.9 Scale-up (ordinal recycling with fresh data)
+
+```bash
+# 1. Scale back to 3
+./bin/wp k8s scale --replicas 3 -x
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=90s
+```
+
+- [ ] Expected: new `woodpecker-sample-server-2` pod created and ready
+
+```bash
+# 2. Verify the new pod has a fresh PVC (empty data)
+kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
+kubectl exec woodpecker-sample-server-2 -c woodpecker -- ls -la /woodpecker/data/ 2>&1 | head -10
+```
+
+- [ ] Expected: new `data-woodpecker-sample-server-2` PVC created
+- [ ] Expected: /woodpecker/data is empty or only has `.keep` / no segment files
+  (the pod reuses the ordinal name, but gets a brand new volume)
+
+```bash
+# 3. Verify cluster is back to 3 healthy members
+kubectl port-forward woodpecker-sample-server-0 9091:9091 &
+PF_PID=$!
+sleep 2
+./bin/wp --endpoint http://localhost:9091 cluster info
+./bin/wp --endpoint http://localhost:9091 cluster health
+kill $PF_PID 2>/dev/null
+```
+
+- [ ] Expected: 3 active nodes, cluster healthy (GREEN)
 
 ### M. Release Build
 
@@ -965,18 +1056,18 @@ rm -f /tmp/wp-heap.pb.gz
 
 ## Results Summary
 
-| Category                       | Total Checks | Passed | Failed | Notes |
-| ------------------------------ | ------------ | ------ | ------ | ----- |
-| Prerequisites                  | 4            |        |        |       |
-| Phase 1 — Foundation          | 25           |        |        |       |
-| Phase 2 — Observability       | 27           |        |        |       |
-| Phase 3 J — Print Mode        | 7            |        |        |       |
-| Phase 3 K — Minikube Setup    | 13           |        |        |       |
-| Phase 3 L — K8s Execute Mode  | 13           |        |        |       |
-| Phase 3 M/N — Release & Flags | 3            |        |        |       |
-| Exit Codes                     | 8            |        |        |       |
-| Known Limitations              | 5            |        |        |       |
-| **Total**                | **100** |        |        |       |
+| Category                       | Total Checks  | Passed | Failed | Notes |
+| ------------------------------ | ------------- | ------ | ------ | ----- |
+| Prerequisites                  | 4             |        |        |       |
+| Phase 1 — Foundation          | 25            |        |        |       |
+| Phase 2 — Observability       | 27            |        |        |       |
+| Phase 3 J — Print Mode        | 7             |        |        |       |
+| Phase 3 K — Minikube Setup    | 13            |        |        |       |
+| Phase 3 L — K8s Execute Mode  | 23            |        |        |       |
+| Phase 3 M/N — Release & Flags | 3             |        |        |       |
+| Exit Codes                     | 8             |        |        |       |
+| Known Limitations              | 5             |        |        |       |
+| **Total**                | **110** |        |        |       |
 
 **Tester:** _______________
 **Date:** _______________
