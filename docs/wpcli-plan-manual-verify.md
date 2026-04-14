@@ -907,14 +907,14 @@ kubectl get pods -l app.kubernetes.io/instance=woodpecker-sample
 kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
 ```
 
-- [ ] Expected: 3 pods (server-0, server-1, server-2), 3 PVCs (data-woodpecker-sample-server-0/1/2)
+- [X] Expected: 3 pods (server-0, server-1, server-2), 3 PVCs (data-woodpecker-sample-server-0/1/2)
 
 ```bash
 # 2. Trigger scale-down from 3 to 2
 ./bin/wp k8s scale --replicas 2 -x
 ```
 
-- [ ] Expected: kubectl patch returns success (CR spec.replicas now = 2)
+- [X] Expected: kubectl patch returns success (CR spec.replicas now = 2)
 
 ```bash
 # 3. Watch the operator perform graceful decommission (takes ~30-60s)
@@ -922,7 +922,7 @@ kubectl logs -n woodpecker-operator-system -l control-plane=controller-manager -
   grep -E "Scale-down detected|Decommissioning|safe to terminate|Cleaning up orphaned PVC" | tail -20
 ```
 
-- [ ] Expected: log shows:
+- [X] Expected: log shows:
   - `Scale-down detected {"current":3, "desired":2}`
   - `Pod not yet safe to terminate` (may appear several times)
   - Eventually: `All target pods decommissioned, safe to scale down`
@@ -935,9 +935,9 @@ kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
 kubectl get woodpeckercluster
 ```
 
-- [ ] Expected: 2 pods (server-0, server-1), server-2 gone
-- [ ] Expected: 2 PVCs (server-2's PVC deleted by operator)
-- [ ] Expected: WoodpeckerCluster status Ready=2, Replicas=2
+- [X] Expected: 2 pods (server-0, server-1), server-2 gone
+- [X] Expected: 2 PVCs (server-2's PVC deleted by operator)
+- [X] Expected: WoodpeckerCluster status Ready=2, Replicas=2
 
 ```bash
 # 5. Verify via wp CLI (ordinal 2 should be gone)
@@ -949,7 +949,7 @@ sleep 2
 kill $PF_PID 2>/dev/null
 ```
 
-- [ ] Expected: only 2 nodes in memberlist (server-0, server-1)
+- [X] Expected: only 2 nodes in memberlist (server-0, server-1)
 
 #### L.9 Scale-up (ordinal recycling with fresh data)
 
@@ -959,7 +959,7 @@ kill $PF_PID 2>/dev/null
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=woodpecker-sample --timeout=90s
 ```
 
-- [ ] Expected: new `woodpecker-sample-server-2` pod created and ready
+- [X] Expected: new `woodpecker-sample-server-2` pod created and ready
 
 ```bash
 # 2. Verify the new pod has a fresh PVC (empty data)
@@ -967,8 +967,8 @@ kubectl get pvc -l app.kubernetes.io/instance=woodpecker-sample
 kubectl exec woodpecker-sample-server-2 -c woodpecker -- ls -la /woodpecker/data/ 2>&1 | head -10
 ```
 
-- [ ] Expected: new `data-woodpecker-sample-server-2` PVC created
-- [ ] Expected: /woodpecker/data is empty or only has `.keep` / no segment files
+- [X] Expected: new `data-woodpecker-sample-server-2` PVC created
+- [X] Expected: /woodpecker/data is empty or only has `.keep` / no segment files
   (the pod reuses the ordinal name, but gets a brand new volume)
 
 ```bash
@@ -981,7 +981,7 @@ sleep 2
 kill $PF_PID 2>/dev/null
 ```
 
-- [ ] Expected: 3 active nodes, cluster healthy (GREEN)
+- [X] Expected: 3 active nodes, cluster healthy (GREEN)
 
 ### M. Release Build
 
@@ -990,7 +990,7 @@ make wpcli-release
 ls -la bin/wp-*
 ```
 
-- [ ] Expected: 4 binaries created:
+- [X] Expected: 4 binaries created:
   - `bin/wp-linux-amd64`
   - `bin/wp-linux-arm64`
   - `bin/wp-darwin-arm64`
@@ -1006,7 +1006,7 @@ ls -la bin/wp-*
 ./bin/wp node list -o table
 ```
 
-- [ ] Expected: same data in 3 different formats
+- [X] Expected: same data in 3 different formats
 
 #### N.2 Timeout
 
@@ -1014,7 +1014,7 @@ ls -la bin/wp-*
 ./bin/wp --timeout 1ms cluster info; echo "exit=$?"
 ```
 
-- [ ] Expected: timeout error, exit code 1
+- [X] Expected: timeout error, exit code 1
 
 ---
 

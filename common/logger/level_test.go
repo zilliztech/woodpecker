@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestGetLevel_ReturnsValidLevel(t *testing.T) {
@@ -13,14 +14,8 @@ func TestGetLevel_ReturnsValidLevel(t *testing.T) {
 }
 
 func TestSetLevel_Valid(t *testing.T) {
-	// We must restore _globalLogger after SetLevel modifies it.
-	// In test context, _globalLogger may be nil (InitLogger never called).
-	// atomic.Value can't store nil, so we store warnLogger() as the safe fallback
-	// matching the original Ctx() behavior when _globalLogger is nil.
-	defer func() {
-		_globalLogger.Store(warnLogger())
-		_currentLevel.Store("warn")
-	}()
+	prev := GetLevel()
+	defer func() { _ = SetLevel(prev) }()
 
 	require.NoError(t, SetLevel("debug"))
 	assert.Equal(t, "debug", GetLevel())
@@ -41,12 +36,16 @@ func TestSetLevel_Invalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid log level")
 }
 
-func TestSetLevel_DoesNotAffectCtxLoggers(t *testing.T) {
-	defer func() {
-		_globalLogger.Store(warnLogger())
-		_currentLevel.Store("warn")
-	}()
+// TestSetLevel_AffectsGlobalLogger verifies that SetLevel flips the
+// enabled level of the global logger instance without replacing it.
+func TestSetLevel_AffectsGlobalLogger(t *testing.T) {
+	prev := GetLevel()
+	defer func() { _ = SetLevel(prev) }()
 
 	require.NoError(t, SetLevel("debug"))
-	assert.NotNil(t, debugLogger())
+	assert.True(t, globalLogger().Core().Enabled(zap.DebugLevel))
+
+	require.NoError(t, SetLevel("error"))
+	assert.False(t, globalLogger().Core().Enabled(zap.DebugLevel))
+	assert.True(t, globalLogger().Core().Enabled(zap.ErrorLevel))
 }
