@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +33,10 @@ import (
 
 	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
+
+// httpClient is overridable in tests so we can replace calls with an
+// httptest.Server. Default is http.DefaultClient with a 30s timeout.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 const finalizerName = "woodpecker.zilliz.io/finalizer"
 
@@ -101,7 +106,7 @@ func (r *WoodpeckerClusterReconciler) decommissionPod(ctx context.Context, pod *
 	baseURL := fmt.Sprintf("http://%s:%d", podIP, metricsPort)
 
 	// Trigger decommission (idempotent)
-	resp, err := http.Post(baseURL+"/admin/node/decommission", "", nil)
+	resp, err := httpClient.Post(baseURL+"/admin/node/decommission", "", nil)
 	if err != nil {
 		return false, fmt.Errorf("calling decommission on %s: %w", pod.Name, err)
 	}
@@ -109,7 +114,7 @@ func (r *WoodpeckerClusterReconciler) decommissionPod(ctx context.Context, pod *
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	// Check progress
-	progressResp, err := http.Get(baseURL + "/admin/node/decommission/progress")
+	progressResp, err := httpClient.Get(baseURL + "/admin/node/decommission/progress")
 	if err != nil {
 		return false, fmt.Errorf("checking decommission progress on %s: %w", pod.Name, err)
 	}
@@ -118,21 +123,8 @@ func (r *WoodpeckerClusterReconciler) decommissionPod(ctx context.Context, pod *
 
 	// The response contains "safe_to_terminate":true when ready
 	safe := progressResp.StatusCode == http.StatusOK &&
-		contains(string(body), "\"safe_to_terminate\":true")
+		strings.Contains(string(body), "\"safe_to_terminate\":true")
 
 	logger.Info("Decommission progress", "pod", pod.Name, "safeToTerminate", safe)
 	return safe, nil
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
