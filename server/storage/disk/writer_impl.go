@@ -455,14 +455,25 @@ func (w *LocalFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Context
 func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
-	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
-	w.flushMu.Lock()
-	defer w.flushMu.Unlock()
 
-	// Add nil check for safety
+	// Nil task is a sentinel termination signal — not a real flush, skip metrics.
 	if task == nil {
 		return
 	}
+
+	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
+	status := "error"
+	var actualDataSize int64
+	defer func() {
+		op.End(status)
+		if status == "success" {
+			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+		}
+	}()
+
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -583,7 +594,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		zap.Int64("lastEntryId", task.lastEntryId))
 
 	// Create index record for this block
-	actualDataSize := w.writtenBytes - blockStartOffset
+	actualDataSize = w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
 		BlockNumber:  task.blockNumber,
 		StartOffset:  blockStartOffset,
@@ -612,10 +623,7 @@ func (w *LocalFileWriter) processFlushTask(ctx context.Context, task *blockFlush
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
-	// update metrics
-	op.End("success")
-	metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
-	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+	status = "success"
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(ctx, task.entries)

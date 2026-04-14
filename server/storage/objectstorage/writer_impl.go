@@ -1157,11 +1157,20 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 
 		// try to submit flush task
 		resultFuture := f.pool.Submit(func() (*blockUploadResult, error) {
-			flushTaskStart := time.Now()
+			op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
+			status := "error"
+			var actualDataSize int64
+			defer func() {
+				op.End(status)
+				metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+				if status == "success" {
+					metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
+				}
+			}()
 			logger.Ctx(ctx).Debug("start flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
 			blockKey := getBlockKey(f.segmentFileKey, blockId)
 			blockRawData := f.serialize(blockId, blockDataBuff)
-			actualDataSize := int64(len(blockRawData))
+			actualDataSize = int64(len(blockRawData))
 			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
 				func() error {
@@ -1197,9 +1206,8 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				err: flushErr,
 			}
 			logger.Ctx(ctx).Debug("complete flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
-			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(flushTaskStart).Milliseconds()))
 			if flushErr == nil {
-				metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
+				status = "success"
 			}
 			return result, flushErr
 		})
