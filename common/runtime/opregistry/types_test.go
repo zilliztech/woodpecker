@@ -105,6 +105,10 @@ func TestStats_Fields(t *testing.T) {
 		EvictedOld:   5,
 	}
 	assert.Equal(t, 1024, s.Capacity)
+	assert.Equal(t, 500, s.InUse)
+	assert.Equal(t, int64(30000), s.WarnAgeMS)
+	assert.Equal(t, int64(100), s.EvictedTotal)
+	assert.Equal(t, int64(95), s.EvictedYoung)
 	assert.Equal(t, int64(5), s.EvictedOld)
 }
 

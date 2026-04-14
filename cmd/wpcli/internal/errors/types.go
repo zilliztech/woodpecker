@@ -20,7 +20,7 @@ const (
 	TypeResourceNotFound   Type = "ResourceNotFound"
 	TypeConfig             Type = "Config"
 	TypePrerequisite       Type = "Prerequisite"
-	TypeKubectlPassthrough Type = "KubectlPassthrough"
+	TypeKubectlPassthrough Type = "KubectlPassthrough" //nolint:gosec // not a credential
 )
 
 // CLIError is the structured error type wp commands return.

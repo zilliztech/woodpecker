@@ -62,6 +62,8 @@ func (e *Executor) BuildCommand(cmdArgs ...string) string {
 // Returns the exit code.
 func (e *Executor) Run(stdout, stderr io.Writer, cmdArgs ...string) (int, error) {
 	all := append(e.globalArgs(), cmdArgs...)
+	// #nosec G204 — by design this executes kubectl with user-provided args
+	// (the whole purpose of this wrapper is safe exec of kubectl).
 	cmd := exec.Command(e.opts.Kubectl, all...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
