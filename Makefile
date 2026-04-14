@@ -170,10 +170,12 @@ docker-multiarch: ## Build multi-architecture Docker image
 # Build binary for Linux (basic build commands)
 build-linux: ## Build Linux binary (AMD64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Build binary for Linux ARM64
 build-linux-arm64: ## Build Linux binary (ARM64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Auto-detect architecture build (using new build system)
 build-auto: ## Build binary (auto-detect architecture)
