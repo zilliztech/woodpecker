@@ -122,6 +122,49 @@ For each `WoodpeckerCluster` CR, the operator creates:
 | ServiceAccount | `{name}-server` | Pod identity |
 | PDB | `{name}-server-pdb` | Availability during disruptions |
 
+## Topology-aware scheduling
+
+The operator schedules Woodpecker pods across availability zones by default and
+exposes each pod's physical location to the Woodpecker process.
+
+### Spread across zones by default
+
+Every `WoodpeckerCluster` gets a default `TopologySpreadConstraint` on
+`topology.kubernetes.io/zone` with `maxSkew: 1` and
+`whenUnsatisfiable: DoNotSchedule`. In single-AZ clusters this is a no-op
+(Kubernetes computes skew only over existing zones). In multi-AZ clusters pods
+are pinned to distinct zones.
+
+To customize zone behavior, set your own constraint on the same `topologyKey`:
+
+```yaml
+spec:
+  topologySpreadConstraints:
+    - maxSkew: 2
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/instance: my-cluster
+```
+
+The operator detects your constraint on the zone key and does not add its default.
+
+### Node-label environment variables
+
+Each pod's Woodpecker process receives two env vars sourced from the node it is
+running on:
+
+| Env var | Source node label | Fallback |
+|---|---|---|
+| `AVAILABILITY_ZONE` | `topology.kubernetes.io/zone` | `default-az` |
+| `CLUSTER_NAME` | `topology.kubernetes.io/region` | `default-cluster` |
+
+An init container reads the node via the K8s API at pod startup using the
+pod's ServiceAccount token. The operator creates a per-cluster `ClusterRole`
+and `ClusterRoleBinding` granting `get` on `nodes`. These are cleaned up when
+the `WoodpeckerCluster` CR is deleted.
+
 ## Operations
 
 ### Scale
