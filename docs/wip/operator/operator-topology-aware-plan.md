@@ -1207,14 +1207,14 @@ tear down the cluster (you'll want the state for debugging).
 Run each step in order, ticking the boxes as you go. All commands can be
 copy-pasted directly.
 
-- [ ] **Step 1: Start a 3-node minikube cluster**
+- [X] **Step 1: Start a 3-node minikube cluster**
 
 ```
 minikube start --nodes=3 --driver=docker -p wp-topo
 kubectl config use-context wp-topo
 ```
 
-- [ ] **Step 2: Label nodes with zone + region**
+- [X] **Step 2: Label nodes with zone + region**
 
 ```
 kubectl label node wp-topo     topology.kubernetes.io/zone=zone-a topology.kubernetes.io/region=region-x --overwrite
@@ -1222,7 +1222,7 @@ kubectl label node wp-topo-m02 topology.kubernetes.io/zone=zone-b topology.kuber
 kubectl label node wp-topo-m03 topology.kubernetes.io/zone=zone-c topology.kubernetes.io/region=region-x --overwrite
 ```
 
-- [ ] **Step 3: Build the operator image (host-compile, fast path)**
+- [X] **Step 3: Build the operator image (host-compile, fast path)**
 
 We deliberately avoid `make docker-build` because it pulls `golang:1.25`
 (~1.3 GB from Docker Hub). The host-compile path uses your local Go and
@@ -1258,7 +1258,7 @@ docker build -f Dockerfile.local -t woodpecker-operator:topo-test .
 minikube -p wp-topo image load woodpecker-operator:topo-test
 ```
 
-- [ ] **Step 4: Deploy the operator**
+- [X] **Step 4: Deploy the operator**
 
 `make deploy` applies `config/default` which includes the CRD, the manager
 RBAC, and the operator Deployment. CRDs and webhooks are NOT separate steps.
@@ -1300,20 +1300,13 @@ spec:
       containers:
       - name: minio
         image: minio/minio:RELEASE.2024-12-18T13-15-44Z
-        args: ["server", "/data", "--console-address", ":9001"]
+        imagePullPolicy: IfNotPresent
+        args: ["server", "/data"]
         env:
         - { name: MINIO_ROOT_USER,     value: minioadmin }
         - { name: MINIO_ROOT_PASSWORD, value: minioadmin }
         ports:
-        - { name: s3,      containerPort: 9000 }
-        - { name: console, containerPort: 9001 }
-        readinessProbe:
-          httpGet: { path: /minio/health/live, port: 9000 }
-          initialDelaySeconds: 5
-        volumeMounts:
-        - { name: data, mountPath: /data }
-      volumes:
-      - { name: data, emptyDir: {} }
+        - containerPort: 9000
 ---
 apiVersion: v1
 kind: Service
@@ -1321,8 +1314,7 @@ metadata: { name: minio, namespace: default }
 spec:
   selector: { app: minio }
   ports:
-  - { name: s3,      port: 9000, targetPort: 9000 }
-  - { name: console, port: 9001, targetPort: 9001 }
+  - { name: s3, port: 9000, targetPort: 9000 }
 ---
 apiVersion: batch/v1
 kind: Job
@@ -1345,6 +1337,8 @@ spec:
           mc mb -p local/woodpecker || true
           mc ls local/
 EOF
+minikube -p wp-topo image load minio/mc:RELEASE.2024-11-21T17-21-54Z
+minikube -p wp-topo image load minio/minio:RELEASE.2024-12-18T13-15-44Z
 kubectl apply -f /tmp/minio.yaml
 
 # Wait until minio is ready and the bucket exists
