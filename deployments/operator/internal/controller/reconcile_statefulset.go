@@ -280,3 +280,34 @@ func (r *WoodpeckerClusterReconciler) buildVolumeClaimTemplates(cluster *woodpec
 		},
 	}
 }
+
+// defaultZoneTopologySpreadConstraint returns the operator's default
+// TopologySpreadConstraint on the well-known zone label. It enforces
+// at-most-1 skew across zones and blocks scheduling if the constraint
+// cannot be satisfied.
+func defaultZoneTopologySpreadConstraint(cluster *woodpeckerv1alpha1.WoodpeckerCluster) corev1.TopologySpreadConstraint {
+	return corev1.TopologySpreadConstraint{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: commonLabels(cluster),
+		},
+	}
+}
+
+// mergeTopologySpreadConstraints returns the user-supplied constraints plus
+// the operator's default zone constraint, unless the user already specified
+// a constraint on the zone topologyKey — in which case the user's wins.
+func mergeTopologySpreadConstraints(
+	cluster *woodpeckerv1alpha1.WoodpeckerCluster,
+	user []corev1.TopologySpreadConstraint,
+) []corev1.TopologySpreadConstraint {
+	result := append([]corev1.TopologySpreadConstraint{}, user...)
+	for _, c := range user {
+		if c.TopologyKey == "topology.kubernetes.io/zone" {
+			return result
+		}
+	}
+	return append(result, defaultZoneTopologySpreadConstraint(cluster))
+}
