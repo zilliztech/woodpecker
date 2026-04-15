@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,8 +37,10 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 	"github.com/zilliztech/woodpecker/common/membership"
 	"github.com/zilliztech/woodpecker/common/metrics"
+	"github.com/zilliztech/woodpecker/common/runtime/opregistry"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/server"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 // parseAdvertiseAddr parses address:port format and returns address and port
@@ -171,7 +174,11 @@ func main() {
 		AdvertiseServicePort: advertiseServicePort,    // Service advertise port
 		ResourceGroup:        *resourceGroup,
 		AZ:                   *availabilityZone,
-		Tags:                 map[string]string{"role": "logstore"},
+		ClusterName:          os.Getenv("CLUSTER_NAME"),
+		Tags: map[string]string{
+			"role":       "logstore",
+			"admin_port": os.Getenv("METRICS_PORT"),
+		},
 	}
 
 	// Create server
@@ -186,9 +193,19 @@ func main() {
 		log.Fatalf("Failed to prepare server: %v", err)
 	}
 
+	// Instantiate op registry for in-flight operation tracking.
+	opReg := opregistry.New(
+		cfg.Woodpecker.Runtime.OpRegistry.Capacity,
+		time.Duration(cfg.Woodpecker.Runtime.OpRegistry.WarnAge.Seconds())*time.Second,
+	)
+	metrics.RegisterOpObserver(opReg)
+	opregistry.WirePrometheusCallbacks(opReg)
+	srv.SetGRPCExtraInterceptors(opregistry.UnaryInterceptor())
+
 	// Start HTTP server for metrics, health check, and pprof
 	if err := commonhttp.Start(cfg, commonhttp.AdminCallbacks{
 		GetMemberlistStatus: srv.GetServerNodeMemberlistStatus,
+		GetMemberlistJSON:   srv.GetServerNodeMemberlistJSON,
 		GetNodeStatus: func() any {
 			return srv.GetNodeStatus()
 		},
@@ -198,6 +215,72 @@ func main() {
 		GetDecommissionProgress: func() any {
 			return srv.GetDecommissionProgress()
 		},
+		CancelDecommission: func() error {
+			return srv.CancelDecommission()
+		},
+		GetConfig: func() any {
+			return cfg
+		},
+		Logstore: commonhttp.LogstoreCallbacks{
+			ListSegments: func(logID *int64, writable *bool) []any {
+				reg := srv.GetWriterRegistry()
+				filter := storage.WriterFilter{LogID: logID, Writable: writable}
+				snaps := reg.ListWriterSnapshots(context.Background(), filter)
+				result := make([]any, len(snaps))
+				for i := range snaps {
+					result[i] = snaps[i]
+				}
+				return result
+			},
+			GetSegment: func(logID, segmentID int64) (any, error) {
+				reg := srv.GetWriterRegistry()
+				return reg.GetWriterSnapshotDetailed(context.Background(), logID, segmentID)
+			},
+			ForceFlush: func(logID, segmentID int64) error {
+				return srv.GetWriterRegistry().ForceFlush(context.Background(), logID, segmentID)
+			},
+			ForceFence: func(logID, segmentID int64, reason string) error {
+				return srv.GetWriterRegistry().ForceFence(context.Background(), logID, segmentID, reason)
+			},
+			ForceCompact: func(logID, segmentID int64) error {
+				return srv.GetWriterRegistry().ForceCompact(context.Background(), logID, segmentID)
+			},
+		},
+		Ops: commonhttp.OpsCallbacks{
+			List: func(params map[string]string) any {
+				f := opregistry.Filter{}
+				if v, ok := params["type"]; ok && v != "" {
+					f.Types = []opregistry.OpType{opregistry.OpType(v)}
+				}
+				if v, ok := params["log_id"]; ok {
+					if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.LogID = &id
+					}
+				}
+				if v, ok := params["segment_id"]; ok {
+					if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.SegmentID = &id
+					}
+				}
+				if v, ok := params["longer_than_ms"]; ok {
+					if ms, err := strconv.ParseInt(v, 10, 64); err == nil {
+						f.LongerThan = time.Duration(ms) * time.Millisecond
+					}
+				}
+				if v, ok := params["limit"]; ok {
+					if lim, err := strconv.Atoi(v); err == nil {
+						f.Limit = lim
+					}
+				}
+				return opReg.List(f)
+			},
+			Get: func(opID string) any {
+				return opReg.Get(opID)
+			},
+			Stats: func() any {
+				return opReg.Stats()
+			},
+		},
 	}); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
@@ -206,6 +289,7 @@ func main() {
 	// Set node identity and namespace for metrics, then register all metrics
 	metrics.RegisterServerMetricsWithRegisterer(prometheus.DefaultRegisterer)
 	metrics.RegisterSystemMetrics(prometheus.DefaultRegisterer)
+	opregistry.RegisterMetrics(prometheus.DefaultRegisterer)
 
 	// Start system metrics collector
 	metrics.StartSystemMetricsCollector(ctx, cfg.Woodpecker.Storage.RootPath, 15*time.Second)

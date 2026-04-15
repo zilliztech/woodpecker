@@ -56,6 +56,9 @@ RUN useradd -r -u 1000 -g root -s /bin/bash -d /woodpecker woodpecker && \
 # Copy Woodpecker binary
 COPY --chown=woodpecker:root --chmod=755 ./bin/woodpecker /woodpecker/bin/woodpecker
 
+# Copy wp CLI binary (optional — built via `make wpcli`)
+COPY --chown=woodpecker:root --chmod=755 ./bin/wp /woodpecker/bin/wp
+
 # Copy startup and health check scripts
 COPY --chown=woodpecker:root --chmod=755 ./build/docker/scripts/start-woodpecker.sh /woodpecker/bin/start-woodpecker.sh
 COPY --chown=woodpecker:root --chmod=755 ./build/docker/scripts/health-check.sh /woodpecker/bin/health-check.sh

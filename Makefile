@@ -3,6 +3,17 @@ PROTOC_GEN_GO_VERSION := v1.36.2
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 PROTOC_GEN_GO_VTPROTO_VERSION := v0.6.0
 
+# Version info injected via -ldflags at build time.
+# Consumed by github.com/zilliztech/woodpecker/common/version.
+VERSION_PKG := github.com/zilliztech/woodpecker/common/version
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS     := -ldflags "-s -w \
+                -X '$(VERSION_PKG).Version=$(VERSION)' \
+                -X '$(VERSION_PKG).Commit=$(COMMIT)' \
+                -X '$(VERSION_PKG).BuildTime=$(BUILD_TIME)'"
+
 # Default target - show help
 .DEFAULT_GOAL := help
 
@@ -64,6 +75,26 @@ proto_clean:
 .PHONY: build
 build: ## Build binary for current platform
 	go build -v -o bin/woodpecker ./cmd
+
+.PHONY: wpcli
+wpcli: | $(BIN_DIR) ## Build wp CLI binary (outputs bin/wp)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BIN_DIR)/wp ./cmd/wpcli
+	@echo "Built $(BIN_DIR)/wp"
+
+WPCLI_PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64 windows/amd64
+
+.PHONY: wpcli-release
+wpcli-release: | $(BIN_DIR) ## Build wp CLI for all release platforms
+	@for platform in $(WPCLI_PLATFORMS); do \
+		os=$${platform%%/*}; arch=$${platform##*/}; \
+		ext=""; if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		echo "Building wp-$$os-$$arch$$ext ..."; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(LDFLAGS) \
+			-o $(BIN_DIR)/wp-$$os-$$arch$$ext \
+			./cmd/wpcli; \
+	done
+	@echo "Release binaries in $(BIN_DIR):"
+	@ls -1 $(BIN_DIR)/wp-*
 
 test: build ## Run all tests
 	go test -cover -race ./...
@@ -139,10 +170,12 @@ docker-multiarch: ## Build multi-architecture Docker image
 # Build binary for Linux (basic build commands)
 build-linux: ## Build Linux binary (AMD64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Build binary for Linux ARM64
 build-linux-arm64: ## Build Linux binary (ARM64)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -o bin/woodpecker ./cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/wp ./cmd/wpcli
 
 # Auto-detect architecture build (using new build system)
 build-auto: ## Build binary (auto-detect architecture)

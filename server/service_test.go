@@ -1509,6 +1509,25 @@ func TestShutdownInterceptor_CancelsStreamContext(t *testing.T) {
 	}
 }
 
+func TestGetNodeStatus_AugmentedFields(t *testing.T) {
+	ctx := context.Background()
+	serverConfig := &membership.ServerConfig{
+		NodeID:        "test-augmented",
+		BindPort:      0,
+		ServicePort:   0,
+		ResourceGroup: "default",
+		AZ:            "default",
+		Tags:          map[string]string{"role": "logstore"},
+	}
+	srv := createTestServer(ctx, serverConfig)
+	srv.startedAtMS.Store(time.Now().UnixMilli())
+
+	status := srv.GetNodeStatus()
+	require.NotZero(t, status.StartedAt, "StartedAt must be set")
+	require.NotEmpty(t, status.Version, "Version must be set (ldflags or 'dev')")
+	require.NotZero(t, status.LastHealthCheck, "LastHealthCheck must be set")
+}
+
 func TestServer_NodeLifecycle(t *testing.T) {
 	ctx := context.Background()
 	serverConfig := &membership.ServerConfig{

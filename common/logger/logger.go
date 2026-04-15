@@ -29,18 +29,26 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/zilliztech/woodpecker/common/config"
-	"github.com/zilliztech/woodpecker/common/werr"
 )
 
 type contextKey string
 
 var (
-	_globalLevelLogger sync.Map
-	_globalLogger      atomic.Value
+	// _globalAtomicLevel is the shared level controller. All loggers — including
+	// those cloned into contexts via WithFields — reference this atomic level,
+	// so SetLevel takes effect immediately for every outstanding logger.
+	_globalAtomicLevel = zap.NewAtomicLevelAt(zap.InfoLevel)
+	_globalLogger      atomic.Value // stores *zap.Logger
+	_currentLevel      atomic.Value // stores string: "debug", "info", "warn", "error"
 	initLogOnce        sync.Once
 	customEncoder      = "_WpCustomTextEncoder_"
 	CtxLogKey          = contextKey("_WpLogger_")
-	CtxLogLevelKey     = contextKey("_WpLoggerLevel_")
+	validLevels        = map[string]zapcore.Level{
+		"debug": zap.DebugLevel,
+		"info":  zap.InfoLevel,
+		"warn":  zap.WarnLevel,
+		"error": zap.ErrorLevel,
+	}
 )
 
 func init() {
@@ -51,16 +59,12 @@ func init() {
 	if registerErr != nil {
 		panic(registerErr)
 	}
-	levels := []string{
-		"debug", "info", "warn", "error",
+	l, err := newLogger(encodeFormat)
+	if err != nil {
+		panic(err)
 	}
-	for _, level := range levels {
-		levelLogger, err := newLogger(encodeFormat, level)
-		if err != nil {
-			continue
-		}
-		_globalLevelLogger.Store(level, levelLogger)
-	}
+	_globalLogger.Store(l)
+	_currentLevel.Store("info")
 }
 
 func InitLogger(cfg *config.Configuration) {
@@ -69,69 +73,57 @@ func InitLogger(cfg *config.Configuration) {
 		if len(logLevel) == 0 {
 			logLevel = "info"
 		}
-		v, _ := _globalLevelLogger.Load(logLevel)
-		_globalLogger.Store(v)
+		if lvl, ok := validLevels[logLevel]; ok {
+			_globalAtomicLevel.SetLevel(lvl)
+			_currentLevel.Store(logLevel)
+		}
 	})
 }
 
-func debugLogger() *zap.Logger {
-	v, _ := _globalLevelLogger.Load("debug")
-	return v.(*zap.Logger)
+// GetLevel returns the current global log level.
+func GetLevel() string {
+	v := _currentLevel.Load()
+	if v == nil {
+		return "info"
+	}
+	return v.(string)
 }
 
-func infoLogger() *zap.Logger {
-	v, _ := _globalLevelLogger.Load("info")
-	return v.(*zap.Logger)
+// SetLevel changes the global log level at runtime.
+// Valid levels: "debug", "info", "warn", "error".
+// The change applies to every logger derived from the global logger,
+// including ones previously stored in a context via WithFields.
+func SetLevel(level string) error {
+	lvl, ok := validLevels[level]
+	if !ok {
+		return fmt.Errorf("invalid log level %q: must be one of debug, info, warn, error", level)
+	}
+	_globalAtomicLevel.SetLevel(lvl)
+	_currentLevel.Store(level)
+	return nil
 }
 
-func warnLogger() *zap.Logger {
-	v, _ := _globalLevelLogger.Load("warn")
-	return v.(*zap.Logger)
-}
-
-func errorLogger() *zap.Logger {
-	v, _ := _globalLevelLogger.Load("error")
-	return v.(*zap.Logger)
+func globalLogger() *zap.Logger {
+	return _globalLogger.Load().(*zap.Logger)
 }
 
 func Ctx(ctx context.Context) *zap.Logger {
 	if ctx == nil {
-		return debugLogger()
+		return globalLogger()
 	}
-	logger := ctx.Value(CtxLogKey)
-	if logger != nil {
-		return logger.(*zap.Logger)
+	if ctxLogger, ok := ctx.Value(CtxLogKey).(*zap.Logger); ok {
+		return ctxLogger
 	}
-	level := ctx.Value(CtxLogLevelKey)
-	if level != nil {
-		if l, ok := _globalLevelLogger.Load(level); ok {
-			return l.(*zap.Logger)
-		}
-	}
-	l := _globalLogger.Load()
-	if l != nil {
-		return l.(*zap.Logger)
-	}
-	return warnLogger()
+	return globalLogger()
 }
 
-// NewLogger creates a new logger with the specified log level
-func newLogger(format string, level string) (*zap.Logger, error) {
+// newLogger builds the single global logger whose level is driven by
+// _globalAtomicLevel. Runtime level changes go through that atomic, not
+// through constructing a new logger.
+func newLogger(format string) (*zap.Logger, error) {
 	// Use development config for all levels to get console-friendly output
 	config := zap.NewDevelopmentConfig()
-
-	switch level {
-	case "debug":
-		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "info":
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "warn":
-		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "error":
-		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	default:
-		return nil, werr.ErrConfigError.WithCauseErrMsg(fmt.Sprintf("invalid log level: %s", level))
-	}
+	config.Level = _globalAtomicLevel
 
 	if format == "json" {
 		config.Encoding = "json"
