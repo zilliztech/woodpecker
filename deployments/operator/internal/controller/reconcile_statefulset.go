@@ -186,9 +186,10 @@ func (r *WoodpeckerClusterReconciler) buildEnvVars(cluster *woodpeckerv1alpha1.W
 }
 
 // buildInitContainers creates an init container that:
-// 1. Computes gossip seeds from pod ordinal and headless service DNS
-// 2. Queries the K8s API using the pod's ServiceAccount token to read the
-//    node's topology labels (zone, region) and writes them to a shared env file.
+//  1. Computes gossip seeds from pod ordinal and headless service DNS
+//  2. Queries the K8s API using the pod's ServiceAccount token to read the
+//     node's topology labels (zone, region) and writes them to a shared env file.
+//
 // On any lookup failure the container still writes fallback values and exits 0,
 // so a transient API-server hiccup will not block pod startup.
 func (r *WoodpeckerClusterReconciler) buildInitContainers(cluster *woodpeckerv1alpha1.WoodpeckerCluster) []corev1.Container {
