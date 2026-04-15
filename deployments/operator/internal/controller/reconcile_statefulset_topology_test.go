@@ -19,14 +19,14 @@ import (
 	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
 
-func newTestCluster(name string) *woodpeckerv1alpha1.WoodpeckerCluster {
+func newTestCluster() *woodpeckerv1alpha1.WoodpeckerCluster {
 	return &woodpeckerv1alpha1.WoodpeckerCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
 	}
 }
 
 func TestDefaultZoneTopologySpreadConstraint(t *testing.T) {
-	c := defaultZoneTopologySpreadConstraint(newTestCluster("wp"))
+	c := defaultZoneTopologySpreadConstraint(newTestCluster())
 
 	assert.Equal(t, int32(1), c.MaxSkew)
 	assert.Equal(t, "topology.kubernetes.io/zone", c.TopologyKey)
@@ -37,7 +37,7 @@ func TestDefaultZoneTopologySpreadConstraint(t *testing.T) {
 }
 
 func TestMergeTopologySpreadConstraints_EmptyUser_AddsDefault(t *testing.T) {
-	cluster := newTestCluster("wp")
+	cluster := newTestCluster()
 
 	result := mergeTopologySpreadConstraints(cluster, nil)
 
@@ -46,7 +46,7 @@ func TestMergeTopologySpreadConstraints_EmptyUser_AddsDefault(t *testing.T) {
 }
 
 func TestMergeTopologySpreadConstraints_UserOnlyHostname_AddsDefault(t *testing.T) {
-	cluster := newTestCluster("wp")
+	cluster := newTestCluster()
 	userC := []corev1.TopologySpreadConstraint{{
 		MaxSkew:           1,
 		TopologyKey:       "kubernetes.io/hostname",
@@ -61,7 +61,7 @@ func TestMergeTopologySpreadConstraints_UserOnlyHostname_AddsDefault(t *testing.
 }
 
 func TestMergeTopologySpreadConstraints_UserHasZone_DefaultNotAdded(t *testing.T) {
-	cluster := newTestCluster("wp")
+	cluster := newTestCluster()
 	userC := []corev1.TopologySpreadConstraint{{
 		MaxSkew:           3,
 		TopologyKey:       "topology.kubernetes.io/zone",
