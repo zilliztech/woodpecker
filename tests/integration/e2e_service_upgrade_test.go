@@ -414,11 +414,20 @@ func TestServiceUpgrade_DecommissionCompleteAfterDataCleanup(t *testing.T) {
 	}
 	t.Logf("Wrote %d additional messages after decommission to trigger segment rolling", extraMsgs)
 
+	// Write one final message to push data into a new segment beyond the decommissioned
+	// node's data. The auditor skips the truncation-point segment (segId >= truncatedSegmentId),
+	// so we need the truncation point to be in a segment AFTER all segments on the
+	// decommissioned node. This extra write ensures the last segment containing node3's
+	// data becomes eligible for cleanup.
+	finalPayload := make([]byte, msgSize)
+	finalResult := logWriter.Write(ctx, &log.WriteMessage{Payload: finalPayload})
+	require.NoError(t, finalResult.Err, "final post-decommission write failed")
+
 	// Truncate all data — mark everything as truncatable
-	lastWrittenId := writtenIds[len(writtenIds)-1]
+	truncateAt := finalResult.LogMessageId
 	t.Logf("Truncating at last entry: segmentId=%d, entryId=%d",
-		lastWrittenId.SegmentId, lastWrittenId.EntryId)
-	err = logHandle.Truncate(ctx, lastWrittenId)
+		truncateAt.SegmentId, truncateAt.EntryId)
+	err = logHandle.Truncate(ctx, truncateAt)
 	require.NoError(t, err)
 
 	// Wait for: retention (2s) + auditor cycles (2s each) + cleanup execution
