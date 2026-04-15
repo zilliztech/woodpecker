@@ -1277,7 +1277,7 @@ is listed. Tail the operator logs in another terminal during the next steps:
 kubectl -n woodpecker-operator-system logs deploy/woodpecker-operator-controller-manager -f
 ```
 
-- [ ] **Step 5: Deploy a single-pod minio for object storage**
+- [X] **Step 5: Deploy a single-pod minio for object storage**
 
 Apply this manifest (Deployment + Service + a one-shot Job that creates the
 `woodpecker` bucket on first start):
@@ -1349,7 +1349,7 @@ kubectl logs job/minio-bucket-init | tail -5
 
 Pass signal: the bucket-init job log shows `[2025-...]  0B woodpecker/`.
 
-- [ ] **Step 6: Pre-pull the woodpecker server image (handles slow Docker Hub)**
+- [X] **Step 6: Pre-pull the woodpecker server image (handles slow Docker Hub)**
 
 Adjust the tag to whatever release exists at the time of testing — `v0.1.25`
 is the most recent published tag as of writing. If `v0.1.26` (the operator's
@@ -1358,9 +1358,9 @@ default) hasn't been published yet, use `v0.1.25` and override the CR's
 
 ```
 # Try direct Docker Hub first
-docker pull zilliztech/woodpecker:v0.1.25 || \
-  docker pull docker.m.daocloud.io/zilliztech/woodpecker:v0.1.25 && \
-  docker tag docker.m.daocloud.io/zilliztech/woodpecker:v0.1.25 zilliztech/woodpecker:v0.1.25
+docker pull zilliztech/woodpecker:latest || \
+  docker pull docker.m.daocloud.io/zilliztech/woodpecker:latest && \
+  docker tag docker.m.daocloud.io/zilliztech/woodpecker:latest zilliztech/woodpecker:latest
 
 # Same for the curl init image (small, usually fast)
 docker pull curlimages/curl:8.7.1 || \
@@ -1368,14 +1368,14 @@ docker pull curlimages/curl:8.7.1 || \
   docker tag docker.m.daocloud.io/curlimages/curl:8.7.1 curlimages/curl:8.7.1
 
 # Load both into minikube
-minikube -p wp-topo image load zilliztech/woodpecker:v0.1.25
+minikube -p wp-topo image load woodpecker:latest
 minikube -p wp-topo image load curlimages/curl:8.7.1
 ```
 
 If the daocloud mirror is also down, try `docker.mirrors.ustc.edu.cn`,
 `dockerproxy.com`, or `docker.1ms.run`.
 
-- [ ] **Step 7: Create a `woodpecker.yaml` ConfigMap pointing at minio**
+- [X] **Step 7: Create a `woodpecker.yaml` ConfigMap pointing at minio**
 
 The operator's auto-generated default ConfigMap is intentionally minimal and
 won't pass the woodpecker server's config validation (no buffer-pool seeds,
@@ -1438,7 +1438,7 @@ metadata:
   namespace: default
 spec:
   replicas: 3
-  image: zilliztech/woodpecker:v0.1.25      # match the tag you pulled in Step 6
+  image: woodpecker:latest      # match the tag you pulled in Step 6
   storageSize: 1Gi
   configRef:
     name: wp-topo-config
@@ -1446,7 +1446,7 @@ EOF
 kubectl apply -f /tmp/wp-topo.yaml
 ```
 
-- [ ] **Step 9: Wait for all 3 pods to reach Running**
+- [X] **Step 9: Wait for all 3 pods to reach Running**
 
 ```
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=topo --timeout=180s
@@ -1463,7 +1463,7 @@ kubectl logs topo-server-0 -c woodpecker --tail=40
 Common cause: missing field in the ConfigMap from Step 7. Add the field and
 re-apply.
 
-- [ ] **Step 10: Verify pod-to-zone distribution**
+- [X] **Step 10: Verify pod-to-zone distribution**
 
 ```
 kubectl get pods -l app.kubernetes.io/instance=topo \
@@ -1473,23 +1473,51 @@ kubectl get pods -l app.kubernetes.io/instance=topo \
 Pass: the three pods land on the three different nodes (`wp-topo`, `wp-topo-m02`,
 `wp-topo-m03`).
 
-- [ ] **Step 11: Verify env vars inside each pod**
+- [ ] **Step 11: Verify env vars are injected into the woodpecker process**
+
+> **Why NOT `kubectl exec ... -- sh -c 'echo $AVAILABILITY_ZONE'`?** That
+> command spawns a **new** shell inside the container; that shell inherits
+> only what's in the PodSpec's `env` field, not what the entrypoint script
+> `export`-ed before running `exec /tini -- .../woodpecker`. The vars ARE in
+> the woodpecker process's environment — you just have to read them from the
+> right place.
+
+Two equivalent ways to check. Pick one (or both):
+
+**A. Read the `topology.env` file the init container wrote:**
 
 ```
 for i in 0 1 2; do
   echo "=== topo-server-$i ==="
-  kubectl exec topo-server-$i -c woodpecker -- sh -c 'echo AZ=$AVAILABILITY_ZONE CLUSTER_NAME=$CLUSTER_NAME'
+  kubectl exec topo-server-$i -c woodpecker -- cat /etc/woodpecker/topology.env \
+    | grep -E "AVAILABILITY_ZONE|CLUSTER_NAME"
 done
 ```
 
-Pass: each pod's `AZ` matches the zone of its host node (zone-a/b/c). All three
-`CLUSTER_NAME` values equal `region-x`.
+**B. Read PID 1's environ directly (the woodpecker / tini process):**
 
-(Backup check that doesn't need the main container: `kubectl logs topo-server-0
--c init-topology` should end with
-`Init complete: pod=topo-server-0 node=wp-topo az=zone-a cluster=region-x`.)
+```
+for i in 0 1 2; do
+  echo "=== topo-server-$i ==="
+  kubectl exec topo-server-$i -c woodpecker -- sh -c \
+    'tr "\0" "\n" < /proc/1/environ | grep -E "AVAILABILITY_ZONE|CLUSTER_NAME|RESOURCE_GROUP"'
+done
+```
 
-- [ ] **Step 12: Scale up to 5**
+Pass: each pod's `AVAILABILITY_ZONE` matches the zone of its host node
+(one of `zone-a`, `zone-b`, `zone-c`). All three `CLUSTER_NAME` values equal
+`region-x`. `RESOURCE_GROUP` is `default` (hardcoded, reserved for future use).
+
+**Backup check (doesn't need the main container running):**
+
+```
+kubectl logs topo-server-0 -c init-topology
+```
+
+Should end with something like
+`Init complete: pod=topo-server-0 node=wp-topo az=zone-a cluster=region-x`.
+
+- [X] **Step 12: Scale up to 5**
 
 ```
 kubectl patch woodpeckercluster topo --type=merge -p '{"spec":{"replicas":5}}'
@@ -1501,7 +1529,7 @@ kubectl get pods -l app.kubernetes.io/instance=topo \
 Pass: 5 pods, distributed across the 3 zones in some 2+2+1 pattern. None stuck
 `Pending`. Skew across zones is at most 1.
 
-- [ ] **Step 13: Scale down to 2**
+- [X] **Step 13: Scale down to 2**
 
 ```
 kubectl patch woodpeckercluster topo --type=merge -p '{"spec":{"replicas":2}}'
