@@ -70,7 +70,8 @@ func TestReconcileRBAC_CreatesRoleAndBinding(t *testing.T) {
 	assert.Equal(t, "ServiceAccount", crb.Subjects[0].Kind)
 	assert.Equal(t, serverName(cluster), crb.Subjects[0].Name)
 	assert.Equal(t, cluster.Namespace, crb.Subjects[0].Namespace)
-	assert.Equal(t, "ns1/wp", crb.Labels["woodpecker.zilliz.io/owned-by"])
+	assert.Equal(t, "ns1", crb.Labels["woodpecker.zilliz.io/owned-by-namespace"])
+	assert.Equal(t, "wp", crb.Labels["woodpecker.zilliz.io/owned-by-name"])
 }
 
 func TestReconcileRBAC_Idempotent(t *testing.T) {
@@ -83,7 +84,10 @@ func TestReconcileRBAC_Idempotent(t *testing.T) {
 	require.NoError(t, r.reconcileRBAC(context.Background(), cluster))
 
 	list := &rbacv1.ClusterRoleList{}
-	require.NoError(t, cl.List(context.Background(), list, client.MatchingLabels{"woodpecker.zilliz.io/owned-by": "ns1/wp"}))
+	require.NoError(t, cl.List(context.Background(), list, client.MatchingLabels{
+		"woodpecker.zilliz.io/owned-by-namespace": "ns1",
+		"woodpecker.zilliz.io/owned-by-name":      "wp",
+	}))
 	assert.Len(t, list.Items, 1)
 }
 

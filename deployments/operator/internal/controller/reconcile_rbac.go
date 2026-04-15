@@ -19,7 +19,10 @@ import (
 	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
 
-const ownedByLabel = "woodpecker.zilliz.io/owned-by"
+const (
+	ownedByNamespaceLabel = "woodpecker.zilliz.io/owned-by-namespace"
+	ownedByNameLabel      = "woodpecker.zilliz.io/owned-by-name"
+)
 
 func clusterRoleName(cluster *woodpeckerv1alpha1.WoodpeckerCluster) string {
 	return fmt.Sprintf("woodpecker-node-reader-%s-%s", cluster.Namespace, cluster.Name)
@@ -31,7 +34,11 @@ func clusterRoleBindingName(cluster *woodpeckerv1alpha1.WoodpeckerCluster) strin
 
 func rbacLabels(cluster *woodpeckerv1alpha1.WoodpeckerCluster) map[string]string {
 	l := commonLabels(cluster)
-	l[ownedByLabel] = fmt.Sprintf("%s/%s", cluster.Namespace, cluster.Name)
+	// Label values cannot contain '/', so we split the owner reference into two
+	// separate labels. Both are needed to select cluster-scoped objects belonging
+	// to a specific cluster (see finalizer cleanup).
+	l[ownedByNamespaceLabel] = cluster.Namespace
+	l[ownedByNameLabel] = cluster.Name
 	return l
 }
 
