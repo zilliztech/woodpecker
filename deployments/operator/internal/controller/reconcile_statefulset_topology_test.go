@@ -152,3 +152,20 @@ func TestBuildInitContainers_ScriptCallsK8sAPI(t *testing.T) {
 	assert.Contains(t, script, "default-cluster")
 	assert.Contains(t, script, "CLUSTER_NAME=")
 }
+
+func TestBuildContainers_ExportsClusterName(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			Image:       "zilliztech/woodpecker:v0.1.26",
+			ServicePort: 18080,
+			GossipPort:  17946,
+			MetricsPort: 9091,
+		},
+	}
+	cs := r.buildContainers(cluster)
+	require.Len(t, cs, 1)
+	require.Len(t, cs[0].Args, 1)
+	assert.Contains(t, cs[0].Args[0], "export SEEDS AVAILABILITY_ZONE CLUSTER_NAME RESOURCE_GROUP")
+}

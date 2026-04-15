@@ -121,7 +121,7 @@ func (r *WoodpeckerClusterReconciler) buildContainers(cluster *woodpeckerv1alpha
 			ImagePullPolicy: cluster.Spec.ImagePullPolicy,
 			// Use wrapper to source topology.env (SEEDS from init container) then exec original entrypoint via tini
 			Command: []string{"/bin/sh", "-c"},
-			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS AVAILABILITY_ZONE RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
+			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS AVAILABILITY_ZONE CLUSTER_NAME RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
 			Ports: []corev1.ContainerPort{
 				{Name: "grpc", ContainerPort: cluster.Spec.ServicePort, Protocol: corev1.ProtocolTCP},
 				{Name: "gossip-tcp", ContainerPort: cluster.Spec.GossipPort, Protocol: corev1.ProtocolTCP},
