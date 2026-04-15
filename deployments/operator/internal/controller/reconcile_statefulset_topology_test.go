@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
@@ -88,4 +89,66 @@ func TestBuildPodSpec_InjectsDefaultZoneConstraint(t *testing.T) {
 
 	require.Len(t, spec.TopologySpreadConstraints, 1)
 	assert.Equal(t, "topology.kubernetes.io/zone", spec.TopologySpreadConstraints[0].TopologyKey)
+}
+
+func TestBuildInitContainers_UsesCurlImage(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			GossipPort: 17946,
+			Replicas:   ptr.To(int32(3)),
+		},
+	}
+
+	initCs := r.buildInitContainers(cluster)
+	require.Len(t, initCs, 1)
+	assert.Equal(t, "init-topology", initCs[0].Name)
+	assert.Contains(t, initCs[0].Image, "curlimages/curl")
+}
+
+func TestBuildInitContainers_HasHostNodeNameFromSpecNodeName(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			GossipPort: 17946,
+			Replicas:   ptr.To(int32(1)),
+		},
+	}
+	initCs := r.buildInitContainers(cluster)
+	require.Len(t, initCs, 1)
+
+	var hostNodeName *corev1.EnvVar
+	for i := range initCs[0].Env {
+		if initCs[0].Env[i].Name == "HOST_NODE_NAME" {
+			hostNodeName = &initCs[0].Env[i]
+			break
+		}
+	}
+	require.NotNil(t, hostNodeName, "expected HOST_NODE_NAME env var")
+	require.NotNil(t, hostNodeName.ValueFrom)
+	require.NotNil(t, hostNodeName.ValueFrom.FieldRef)
+	assert.Equal(t, "spec.nodeName", hostNodeName.ValueFrom.FieldRef.FieldPath)
+}
+
+func TestBuildInitContainers_ScriptCallsK8sAPI(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			GossipPort: 17946,
+			Replicas:   ptr.To(int32(1)),
+		},
+	}
+	initCs := r.buildInitContainers(cluster)
+	require.Len(t, initCs, 1)
+	require.Len(t, initCs[0].Command, 3)
+	script := initCs[0].Command[2]
+	assert.Contains(t, script, "kubernetes.default.svc")
+	assert.Contains(t, script, "topology.kubernetes.io/zone")
+	assert.Contains(t, script, "topology.kubernetes.io/region")
+	assert.Contains(t, script, "default-az")
+	assert.Contains(t, script, "default-cluster")
+	assert.Contains(t, script, "CLUSTER_NAME=")
 }
