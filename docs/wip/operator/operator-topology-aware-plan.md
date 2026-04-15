@@ -1427,7 +1427,7 @@ kubectl apply -f /tmp/wp-config.yaml
 > required fields when pods start, copy more fields from `config/woodpecker.yaml`
 > in the repo root into this ConfigMap.
 
-- [ ] **Step 8: Apply the WoodpeckerCluster CR (with `configRef` and image override)**
+- [X] **Step 8: Apply the WoodpeckerCluster CR (with `configRef` and image override)**
 
 ```yaml
 cat > /tmp/wp-topo.yaml <<'EOF'
@@ -1473,7 +1473,7 @@ kubectl get pods -l app.kubernetes.io/instance=topo \
 Pass: the three pods land on the three different nodes (`wp-topo`, `wp-topo-m02`,
 `wp-topo-m03`).
 
-- [ ] **Step 11: Verify env vars are injected into the woodpecker process**
+- [X] **Step 11: Verify env vars are injected into the woodpecker process**
 
 > **Why NOT `kubectl exec ... -- sh -c 'echo $AVAILABILITY_ZONE'`?** That
 > command spawns a **new** shell inside the container; that shell inherits
@@ -1543,7 +1543,7 @@ Pass: exactly 2 pods remain, on 2 distinct zones. (If pods are stuck because
 decommission isn't completing, check operator logs — but with healthy pods this
 should succeed within ~30 seconds.)
 
-- [ ] **Step 14: Delete the CR and verify cluster-scoped RBAC cleanup**
+- [X] **Step 14: Delete the CR and verify cluster-scoped RBAC cleanup**
 
 ```
 echo "=== BEFORE delete ==="
@@ -1558,20 +1558,20 @@ kubectl get clusterrole,clusterrolebinding 2>/dev/null | grep woodpecker-node-re
 Pass: BEFORE shows the per-cluster ClusterRole + ClusterRoleBinding; AFTER
 prints `clean ✓` (i.e. no matching objects).
 
-- [ ] **Step 15: Clean up minio + wp-config ConfigMap**
+- [X] **Step 15: Clean up minio + wp-config ConfigMap**
 
 ```
 kubectl delete -f /tmp/wp-config.yaml
 kubectl delete -f /tmp/minio.yaml
 ```
 
-- [ ] **Step 16: Tear down minikube**
+- [X] **Step 16: Tear down minikube**
 
 ```
 minikube delete -p wp-topo
 ```
 
-- [ ] **Step 17: Record the result**
+- [X] **Step 17: Record the result**
 
 If Steps 9–14 all pass, note it in the PR description, e.g.:
 
