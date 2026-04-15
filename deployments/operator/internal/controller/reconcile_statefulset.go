@@ -109,7 +109,7 @@ func (r *WoodpeckerClusterReconciler) buildPodSpec(cluster *woodpeckerv1alpha1.W
 		Affinity:                      cluster.Spec.Affinity,
 		Tolerations:                   cluster.Spec.Tolerations,
 		NodeSelector:                  cluster.Spec.NodeSelector,
-		TopologySpreadConstraints:     cluster.Spec.TopologySpreadConstraints,
+		TopologySpreadConstraints:     mergeTopologySpreadConstraints(cluster, cluster.Spec.TopologySpreadConstraints),
 	}
 }
 

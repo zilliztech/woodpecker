@@ -73,3 +73,19 @@ func TestMergeTopologySpreadConstraints_UserHasZone_DefaultNotAdded(t *testing.T
 	assert.Equal(t, int32(3), result[0].MaxSkew)
 	assert.Equal(t, corev1.ScheduleAnyway, result[0].WhenUnsatisfiable)
 }
+
+func TestBuildPodSpec_InjectsDefaultZoneConstraint(t *testing.T) {
+	r := &WoodpeckerClusterReconciler{}
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "default"},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{
+			ServicePort: 18080,
+			GossipPort:  17946,
+		},
+	}
+
+	spec := r.buildPodSpec(cluster)
+
+	require.Len(t, spec.TopologySpreadConstraints, 1)
+	assert.Equal(t, "topology.kubernetes.io/zone", spec.TopologySpreadConstraints[0].TopologyKey)
+}
