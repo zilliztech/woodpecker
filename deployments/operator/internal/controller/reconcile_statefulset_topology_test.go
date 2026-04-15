@@ -151,6 +151,10 @@ func TestBuildInitContainers_ScriptCallsK8sAPI(t *testing.T) {
 	assert.Contains(t, script, "default-az")
 	assert.Contains(t, script, "default-cluster")
 	assert.Contains(t, script, "CLUSTER_NAME=")
+	// Regex must allow optional whitespace after the colon — K8s API returns
+	// pretty-printed JSON with `"key": "value"` (note the space).
+	assert.Contains(t, script, `"topology.kubernetes.io/zone": *"[^"]*"`)
+	assert.Contains(t, script, `"topology.kubernetes.io/region": *"[^"]*"`)
 }
 
 func TestBuildContainers_ExportsClusterName(t *testing.T) {

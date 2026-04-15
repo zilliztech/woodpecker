@@ -223,10 +223,10 @@ if [ -r "$TOKEN_FILE" ] && [ -r "$CA_FILE" ] && [ -n "$HOST_NODE_NAME" ]; then
 fi
 
 AZ=$(printf '%%s' "$NODE_JSON" \
-    | grep -o '"topology.kubernetes.io/zone":"[^"]*"' \
+    | grep -o '"topology.kubernetes.io/zone": *"[^"]*"' \
     | head -n1 | cut -d'"' -f4)
 REGION=$(printf '%%s' "$NODE_JSON" \
-    | grep -o '"topology.kubernetes.io/region":"[^"]*"' \
+    | grep -o '"topology.kubernetes.io/region": *"[^"]*"' \
     | head -n1 | cut -d'"' -f4)
 
 : "${AZ:=default-az}"
