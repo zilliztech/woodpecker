@@ -32,8 +32,9 @@ import (
 )
 
 const (
-	ObjectStorageScopeName = "ObjectStorage"
-	FencedObjectMetaKey    = "Fenced"
+	ObjectStorageScopeName       = "ObjectStorage"
+	FencedObjectMetaKey          = "Fenced"
+	FencedObjectMetaKeyLowercase = "fenced"
 )
 
 //go:generate mockery --dir=./common/minio --name=MinioClientAPI --structname=MinioClientAPI --output=mocks/mocks_minio_client --filename=mock_minio_client_api.go --with-expecter=true --outpkg=mocks_minio_client

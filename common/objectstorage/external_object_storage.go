@@ -205,7 +205,7 @@ func (g *ExternalObjectStorage) PutObjectIfNoneMatch(ctx context.Context, bucket
 	}
 
 	// Write file without metadata
-	err = external.WriteFile(path, data, map[string]string{
+	err = external.WriteFileIfNotExists(path, data, map[string]string{
 		minioHandler.FencedObjectMetaKey: "false",
 	})
 	if err != nil && g.IsPreconditionFailedError(err) {
@@ -244,7 +244,7 @@ func (g *ExternalObjectStorage) PutFencedObject(ctx context.Context, bucketName,
 	start := time.Now()
 	path := g.buildPath(bucketName, objectName)
 	// Create a fenced object
-	putErr := external.WriteFile(path, []byte{'F'}, map[string]string{
+	putErr := external.WriteFileIfNotExists(path, []byte{'F'}, map[string]string{
 		minioHandler.FencedObjectMetaKey: "true",
 	})
 
@@ -298,6 +298,9 @@ func (g *ExternalObjectStorage) StatObject(ctx context.Context, bucketName, obje
 	isFenced := false
 	if stats.Metadata != nil {
 		if val, ok := stats.Metadata[minioHandler.FencedObjectMetaKey]; ok && val == "true" {
+			isFenced = true
+		}
+		if val, ok := stats.Metadata[minioHandler.FencedObjectMetaKeyLowercase]; ok && val == "true" {
 			isFenced = true
 		}
 	}

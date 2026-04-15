@@ -192,6 +192,67 @@ func WriteFile(path string, data []byte, metadata map[string]string) error {
 	return HandleLoonFFIResult(&result, "WriteFile failed")
 }
 
+func WriteFileIfNotExists(path string, data []byte, metadata map[string]string) error {
+	handle, err := GetFileSystemSingletonHandle()
+	if err != nil {
+		return err
+	}
+
+	cPath := C.CString(path)
+	pathLen := C.uint32_t(len(path))
+	defer C.free(unsafe.Pointer(cPath))
+
+	var cData *C.uint8_t
+	var dataSize C.uint64_t
+
+	if len(data) > 0 {
+		cData = (*C.uint8_t)(unsafe.Pointer(&data[0]))
+		dataSize = C.uint64_t(len(data))
+	}
+
+	// Prepare metadata if provided
+	var metaArray *C.LoonFileSystemMeta
+	var metaCount C.uint32_t
+
+	if len(metadata) > 0 {
+		metaCount = C.uint32_t(len(metadata))
+
+		// Allocate array of LoonFileSystemMeta
+		metaArray = (*C.LoonFileSystemMeta)(C.malloc(C.size_t(metaCount) * C.size_t(unsafe.Sizeof(C.LoonFileSystemMeta{}))))
+		metaSlice := unsafe.Slice(metaArray, int(metaCount))
+
+		i := 0
+		for k, v := range metadata {
+			metaSlice[i].key = C.CString(k)
+			metaSlice[i].value = C.CString(v)
+			i++
+		}
+
+		defer func() {
+			for i := 0; i < len(metadata); i++ {
+				C.free(unsafe.Pointer(metaSlice[i].key))
+				C.free(unsafe.Pointer(metaSlice[i].value))
+			}
+			C.free(unsafe.Pointer(metaArray))
+		}()
+	}
+
+	var writerHandle C.FileSystemHandle
+	openResult := C.loon_filesystem_open_writer(handle, cPath, pathLen, metaArray, metaCount, C.bool(true), &writerHandle)
+	if openWriterHandlerErr := HandleLoonFFIResult(&openResult, "openWriterHandler failed"); openWriterHandlerErr != nil {
+		return openWriterHandlerErr
+	}
+	defer C.loon_filesystem_writer_destroy(writerHandle)
+
+	writeResult := C.loon_filesystem_writer_write(writerHandle, cData, dataSize)
+	if err := HandleLoonFFIResult(&writeResult, "writer_write failed"); err != nil {
+		return err
+	}
+
+	closeResult := C.loon_filesystem_writer_close(writerHandle)
+	return HandleLoonFFIResult(&closeResult, "writer_close failed")
+}
+
 // DeleteFile deletes a file
 func DeleteFile(path string) error {
 	handle, err := GetFileSystemSingletonHandle()
