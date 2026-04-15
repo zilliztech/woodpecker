@@ -1,11 +1,14 @@
 package http
 
 import (
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 )
@@ -151,4 +154,35 @@ func TestStartAndStop_WithLifecycleEndpoints(t *testing.T) {
 
 	err = Stop()
 	assert.NoError(t, err)
+}
+
+func TestMemberlistHandler_ContentNegotiation(t *testing.T) {
+	callbacks := AdminCallbacks{
+		GetMemberlistStatus: func() string { return "Total Members: 1\n" },
+		GetMemberlistJSON:   func() []byte { return []byte(`{"members":[{"id":"node-1"}]}`) },
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(AdminMemberlistPath, newMemberlistHandler(callbacks))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Default (no Accept header) → text
+	resp, err := http.Get(srv.URL + AdminMemberlistPath)
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.Contains(t, string(body), "Total Members")
+	require.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+
+	// Accept: application/json → JSON
+	req, _ := http.NewRequest("GET", srv.URL+AdminMemberlistPath, nil)
+	req.Header.Set("Accept", "application/json")
+	resp2, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	require.Contains(t, string(body2), `"members"`)
+	require.Equal(t, "application/json", resp2.Header.Get("Content-Type"))
 }

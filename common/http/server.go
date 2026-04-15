@@ -33,12 +33,36 @@ import (
 	"github.com/zilliztech/woodpecker/common/logger"
 )
 
+// LogstoreCallbacks holds callbacks for logstore admin endpoints.
+type LogstoreCallbacks struct {
+	ListSegments func(logID *int64, writable *bool) []any
+	GetSegment   func(logID, segmentID int64) (any, error)
+	ForceFlush   func(logID, segmentID int64) error
+	ForceFence   func(logID, segmentID int64, reason string) error
+	ForceCompact func(logID, segmentID int64) error
+}
+
+// OpsCallbacks holds callbacks for ops admin endpoints.
+type OpsCallbacks struct {
+	List  func(params map[string]string) any
+	Get   func(opID string) any
+	Stats func() any
+}
+
 // AdminCallbacks holds callbacks for admin HTTP endpoints.
 type AdminCallbacks struct {
+	// Phase 1 callbacks
 	GetMemberlistStatus     func() string
+	GetMemberlistJSON       func() []byte
 	GetNodeStatus           func() any
 	Decommission            func() error
 	GetDecommissionProgress func() any
+	CancelDecommission      func() error
+	GetConfig               func() any
+
+	// Phase 2 callbacks
+	Logstore LogstoreCallbacks
+	Ops      OpsCallbacks
 }
 
 const (
@@ -102,12 +126,26 @@ func registerDefaults(cfg *config.Configuration) {
 
 	// Register log level endpoint
 	Register(&Handler{
-		Path: LogLevelRouterPath,
-		HandlerFunc: func(w http.ResponseWriter, req *http.Request) {
-			// TODO: implement log level change at runtime
-			fmt.Fprintf(w, "Log level change endpoint - TODO\n")
-		},
+		Path:        LogLevelRouterPath,
+		HandlerFunc: management.NewLogLevelHandler(),
 	})
+}
+
+// newMemberlistHandler serves /admin/memberlist with content negotiation.
+// Returns JSON when Accept: application/json, plain text otherwise.
+func newMemberlistHandler(callbacks AdminCallbacks) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accept := r.Header.Get("Accept")
+		if accept == "application/json" && callbacks.GetMemberlistJSON != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(callbacks.GetMemberlistJSON())
+			return
+		}
+		if callbacks.GetMemberlistStatus != nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte(callbacks.GetMemberlistStatus()))
+		}
+	}
 }
 
 // Start initializes and starts the HTTP server
@@ -115,12 +153,10 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 	// Register default handlers
 	registerDefaults(cfg)
 
-	// Register admin handler for memberlist status
+	// Register admin handler for memberlist status (with content negotiation)
 	Register(&Handler{
-		Path: AdminMemberlistPath,
-		HandlerFunc: func(writer http.ResponseWriter, request *http.Request) {
-			fmt.Fprint(writer, callbacks.GetMemberlistStatus())
-		},
+		Path:        AdminMemberlistPath,
+		HandlerFunc: newMemberlistHandler(callbacks),
 	})
 
 	// Register node lifecycle admin handlers (if callbacks provided)
@@ -140,6 +176,77 @@ func Start(cfg *config.Configuration, callbacks AdminCallbacks) error {
 		Register(&Handler{
 			Path:        AdminNodeDecommissionProgressPath,
 			HandlerFunc: management.NewNodeDecommissionProgressHandler(callbacks.GetDecommissionProgress),
+		})
+	}
+	if callbacks.CancelDecommission != nil {
+		Register(&Handler{
+			Path:        AdminNodeDecommissionCancelPath,
+			HandlerFunc: management.NewNodeCancelDecommissionHandler(callbacks.CancelDecommission),
+		})
+	}
+	if callbacks.GetConfig != nil {
+		Register(&Handler{
+			Path:        AdminConfigPath,
+			HandlerFunc: management.NewConfigHandler(callbacks.GetConfig),
+		})
+	}
+
+	// /admin/env is self-contained — no callback needed.
+	Register(&Handler{
+		Path:        AdminEnvPath,
+		HandlerFunc: management.NewEnvHandler(),
+	})
+
+	// Register logstore admin handlers (Phase 2)
+	if callbacks.Logstore.ListSegments != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreSegmentsPath,
+			HandlerFunc: management.NewLogstoreSegmentsHandler(callbacks.Logstore.ListSegments),
+		})
+	}
+	if callbacks.Logstore.GetSegment != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreSegmentsPath + "/detail",
+			HandlerFunc: management.NewLogstoreSegmentShowHandler(callbacks.Logstore.GetSegment),
+		})
+	}
+	if callbacks.Logstore.ForceFlush != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreFlushPath,
+			HandlerFunc: management.NewLogstoreFlushHandler(callbacks.Logstore.ForceFlush),
+		})
+	}
+	if callbacks.Logstore.ForceFence != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreFencePath,
+			HandlerFunc: management.NewLogstoreFenceHandler(callbacks.Logstore.ForceFence),
+		})
+	}
+	if callbacks.Logstore.ForceCompact != nil {
+		Register(&Handler{
+			Path:        AdminLogstoreCompactPath,
+			HandlerFunc: management.NewLogstoreCompactHandler(callbacks.Logstore.ForceCompact),
+		})
+	}
+
+	// Register ops admin handlers (Phase 2)
+	if callbacks.Ops.List != nil {
+		Register(&Handler{
+			Path:        AdminRuntimeOpsPath,
+			HandlerFunc: management.NewOpsListHandler(callbacks.Ops.List),
+		})
+	}
+	if callbacks.Ops.Get != nil {
+		// ops get uses a separate path with query param
+		Register(&Handler{
+			Path:        AdminRuntimeOpsPath + "/get",
+			HandlerFunc: management.NewOpsGetHandler(callbacks.Ops.Get),
+		})
+	}
+	if callbacks.Ops.Stats != nil {
+		Register(&Handler{
+			Path:        AdminRuntimeOpsStatsPath,
+			HandlerFunc: management.NewOpsStatsHandler(callbacks.Ops.Stats),
 		})
 	}
 

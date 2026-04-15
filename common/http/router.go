@@ -37,6 +37,29 @@ const AdminNodeDecommissionPath = "/admin/node/decommission"
 // AdminNodeDecommissionProgressPath is path for node decommission progress API.
 const AdminNodeDecommissionProgressPath = "/admin/node/decommission/progress"
 
+// AdminNodeDecommissionCancelPath is path for POST /admin/node/decommission/cancel.
+const AdminNodeDecommissionCancelPath = "/admin/node/decommission/cancel"
+
+// AdminConfigPath is path for GET /admin/config.
+const AdminConfigPath = "/admin/config"
+
+// AdminEnvPath is path for GET /admin/env.
+const AdminEnvPath = "/admin/env"
+
+// C family — logstore runtime
+const (
+	AdminLogstoreSegmentsPath = "/admin/logstore/segments"
+	AdminLogstoreFlushPath    = "/admin/logstore/flush"
+	AdminLogstoreFencePath    = "/admin/logstore/fence"
+	AdminLogstoreCompactPath  = "/admin/logstore/compact"
+)
+
+// G family — ops registry
+const (
+	AdminRuntimeOpsPath      = "/admin/runtime/ops"
+	AdminRuntimeOpsStatsPath = "/admin/runtime/ops/stats"
+)
+
 // Pprof paths are automatically registered by importing net/http/pprof
 // Available paths:
 // - /debug/pprof/

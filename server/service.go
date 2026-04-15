@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -35,29 +36,39 @@ import (
 	"github.com/zilliztech/woodpecker/common/membership"
 	wpNet "github.com/zilliztech/woodpecker/common/net"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/version"
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage"
 )
 
 type Server struct {
-	cfg          *config.Configuration
-	serverNodeMu sync.RWMutex
-	serverNode   *membership.ServerNode
-	serverConfig *membership.ServerConfig // Configuration to be used for creating server node
-	gossipSeeds  []string                 // Seeds for cluster joining
-	logStore     LogStore
-	lifecycle    *NodeLifecycleManager
-	grpcWG       sync.WaitGroup
-	gossipWG     sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
-	decommWG     sync.WaitGroup // tracks decommission monitor goroutine
-	decommOnce   sync.Once      // ensures monitor starts at most once
-	grpcErrChan  chan error
-	startupErrCh chan error // Channel to propagate async startup errors
-	grpcServer   *grpc.Server
-	listener     net.Listener
+	cfg                   *config.Configuration
+	serverNodeMu          sync.RWMutex
+	serverNode            *membership.ServerNode
+	serverConfig          *membership.ServerConfig // Configuration to be used for creating server node
+	gossipSeeds           []string                 // Seeds for cluster joining
+	logStore              LogStore
+	lifecycle             *NodeLifecycleManager
+	startedAtMS           atomic.Int64 // unix ms, when this process came up
+	grpcWG                sync.WaitGroup
+	gossipWG              sync.WaitGroup // tracks asyncStartAndJoinSeeds goroutine
+	decommWG              sync.WaitGroup // tracks decommission monitor goroutine
+	decommOnce            sync.Once      // ensures monitor starts at most once
+	grpcErrChan           chan error
+	startupErrCh          chan error // Channel to propagate async startup errors
+	grpcServer            *grpc.Server
+	listener              net.Listener
+	grpcExtraInterceptors []grpc.UnaryServerInterceptor
 
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// SetGRPCExtraInterceptors sets additional gRPC unary interceptors to be
+// chained after the built-in ones (shutdown, otel). Call before Init().
+func (s *Server) SetGRPCExtraInterceptors(interceptors ...grpc.UnaryServerInterceptor) {
+	s.grpcExtraInterceptors = interceptors
 }
 
 // NodeStatus represents the current status of this node for external management systems.
@@ -70,6 +81,9 @@ type NodeStatus struct {
 	ResourceGroup     string            `json:"resource_group"`
 	AZ                string            `json:"az"`
 	Tags              map[string]string `json:"tags"`
+	StartedAt         int64             `json:"started_at_ms"`
+	Version           string            `json:"version"`
+	LastHealthCheck   int64             `json:"last_health_check_ms"`
 }
 
 // NewServer creates a new server instance with same bind/advertise ip/port
@@ -111,6 +125,7 @@ func NewServerWithConfig(ctx context.Context, configuration *config.Configuratio
 		startupErrCh: make(chan error, 1), // Buffered channel to avoid blocking
 		lifecycle:    lifecycle,
 	}
+	s.startedAtMS.Store(time.Now().UnixMilli())
 	s.logStore = NewLogStore(ctx, configuration, storageCli)
 	// Store the server config and seeds for later use in Prepare()
 	s.serverConfig = serverConfig
@@ -163,13 +178,15 @@ func (s *Server) init() error {
 // start grpc server loop
 func (s *Server) startGrpcLoop() {
 	defer s.grpcWG.Done()
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		s.shutdownUnaryInterceptor(),
+		otelgrpc.UnaryServerInterceptor(),
+	}
+	unaryInterceptors = append(unaryInterceptors, s.grpcExtraInterceptors...)
 	grpcOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize()),
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
-		grpc.ChainUnaryInterceptor(
-			s.shutdownUnaryInterceptor(),
-			otelgrpc.UnaryServerInterceptor(),
-		),
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			s.shutdownStreamInterceptor(),
 			otelgrpc.StreamServerInterceptor(),
@@ -547,6 +564,17 @@ func (s *Server) GetServerNodeMemberlistStatus() string {
 	return "member not ready yet"
 }
 
+// GetServerNodeMemberlistJSON returns the memberlist as JSON for the admin endpoint.
+func (s *Server) GetServerNodeMemberlistJSON() []byte {
+	s.serverNodeMu.RLock()
+	node := s.serverNode
+	s.serverNodeMu.RUnlock()
+	if node != nil {
+		return node.GetMemberlistJSON()
+	}
+	return []byte(`{"members":[]}`)
+}
+
 // GetMemberCount returns the number of members known to this server's memberlist.
 // Returns 0 if the server node is not yet initialized.
 func (s *Server) GetMemberCount() int {
@@ -570,7 +598,15 @@ func (s *Server) GetNodeStatus() NodeStatus {
 		ResourceGroup:     s.serverConfig.ResourceGroup,
 		AZ:                s.serverConfig.AZ,
 		Tags:              s.serverConfig.Tags,
+		StartedAt:         s.startedAtMS.Load(),
+		Version:           version.Info().Version,
+		LastHealthCheck:   time.Now().UnixMilli(),
 	}
+}
+
+// CancelDecommission cancels an in-progress decommission and returns the node to active.
+func (s *Server) CancelDecommission() error {
+	return s.lifecycle.CancelDecommission()
 }
 
 // Decommission marks the node for retirement. It stops accepting new writes
@@ -600,6 +636,11 @@ func (s *Server) Decommission() error {
 	// Start background monitor to auto-mark decommissioned when drained
 	s.startDecommissionMonitor()
 	return nil
+}
+
+// GetWriterRegistry returns the logStore as a WriterRegistry for admin inspection.
+func (s *Server) GetWriterRegistry() storage.WriterRegistry {
+	return s.logStore.(*logStore)
 }
 
 // GetDecommissionProgress returns the current decommission progress.

@@ -470,14 +470,26 @@ func (w *StagedFileWriter) rollBufferAndSubmitFlushTaskUnsafe(ctx context.Contex
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
-	startTime := time.Now()
-	w.flushMu.Lock()
-	defer w.flushMu.Unlock()
 
-	// Add nil check for safety
+	// Nil task is a sentinel termination signal — not a real flush, skip metrics.
 	if task == nil {
 		return
 	}
+
+	op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
+	status := "error"
+	var actualDataSize int64
+	defer func() {
+		op.End(status)
+		if status == "success" {
+			metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+			metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+		}
+	}()
+
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 
 	if w.finalized.Load() {
 		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized", zap.Int64("logId", w.logId), zap.Int64("segId", w.segmentId), zap.Int32("blockID", task.blockNumber), zap.Int64("firstEntryId", task.firstEntryId), zap.Int64("lastEntryId", task.lastEntryId))
@@ -598,7 +610,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int64("lastEntryId", task.lastEntryId))
 
 	// Create index record for this block
-	actualDataSize := w.writtenBytes - blockStartOffset
+	actualDataSize = w.writtenBytes - blockStartOffset
 	indexRecord := &codec.IndexRecord{
 		BlockNumber:  task.blockNumber,
 		StartOffset:  blockStartOffset,
@@ -626,10 +638,7 @@ func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlus
 		zap.Int64("blockStartOffset", blockStartOffset),
 		zap.Int("totalBlockIndexes", len(w.blockIndexes)))
 
-	// update metrics
-	metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
-	metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Observe(float64(time.Since(startTime).Milliseconds()))
-	metrics.WpFileStoredBytes.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr).Add(float64(actualDataSize))
+	status = "success"
 
 	// Notify success - notify each entry channel with success
 	w.notifyFlushSuccess(task.entries)
@@ -1049,14 +1058,16 @@ func (w *StagedFileWriter) Fence(ctx context.Context) (_ int64, retErr error) {
 func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Compact")
 	defer sp.End()
-	startTime := time.Now()
+	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(w.logId, w.segmentId))
 	defer func() {
 		status := "success"
 		if retErr != nil {
 			status = "error"
 		}
+		op.End(status)
+		elapsed := float64(time.Since(op.StartedAt()).Milliseconds())
 		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", status).Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", status).Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "compact", status).Observe(elapsed)
 	}()
 
 	w.mu.Lock()
@@ -1147,7 +1158,7 @@ func (w *StagedFileWriter) Compact(ctx context.Context) (_ int64, retErr error) 
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("totalSizeAfterCompact", totalSize),
 		zap.Int64("maxCompactedBlockSize", maxCompactedBlockSize),
-		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+		zap.Int64("costMs", time.Since(op.StartedAt()).Milliseconds()))
 
 	return totalSize, nil
 }
