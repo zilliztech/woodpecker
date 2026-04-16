@@ -109,7 +109,7 @@ func (r *WoodpeckerClusterReconciler) buildPodSpec(cluster *woodpeckerv1alpha1.W
 		Affinity:                      cluster.Spec.Affinity,
 		Tolerations:                   cluster.Spec.Tolerations,
 		NodeSelector:                  cluster.Spec.NodeSelector,
-		TopologySpreadConstraints:     cluster.Spec.TopologySpreadConstraints,
+		TopologySpreadConstraints:     mergeTopologySpreadConstraints(cluster, cluster.Spec.TopologySpreadConstraints),
 	}
 }
 
@@ -121,7 +121,7 @@ func (r *WoodpeckerClusterReconciler) buildContainers(cluster *woodpeckerv1alpha
 			ImagePullPolicy: cluster.Spec.ImagePullPolicy,
 			// Use wrapper to source topology.env (SEEDS from init container) then exec original entrypoint via tini
 			Command: []string{"/bin/sh", "-c"},
-			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS AVAILABILITY_ZONE RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
+			Args:    []string{". /etc/woodpecker/topology.env && export SEEDS AVAILABILITY_ZONE CLUSTER_NAME RESOURCE_GROUP && exec /tini -- /woodpecker/bin/start-woodpecker.sh"},
 			Ports: []corev1.ContainerPort{
 				{Name: "grpc", ContainerPort: cluster.Spec.ServicePort, Protocol: corev1.ProtocolTCP},
 				{Name: "gossip-tcp", ContainerPort: cluster.Spec.GossipPort, Protocol: corev1.ProtocolTCP},
@@ -186,17 +186,17 @@ func (r *WoodpeckerClusterReconciler) buildEnvVars(cluster *woodpeckerv1alpha1.W
 }
 
 // buildInitContainers creates an init container that:
-// 1. Computes gossip seeds from pod ordinal and headless service DNS
-// 2. Reads node topology labels (AZ/Region) and writes them to a shared env file
+//  1. Computes gossip seeds from pod ordinal and headless service DNS
+//  2. Queries the K8s API using the pod's ServiceAccount token to read the
+//     node's topology labels (zone, region) and writes them to a shared env file.
+//
+// On any lookup failure the container still writes fallback values and exits 0,
+// so a transient API-server hiccup will not block pod startup.
 func (r *WoodpeckerClusterReconciler) buildInitContainers(cluster *woodpeckerv1alpha1.WoodpeckerCluster) []corev1.Container {
-	// All pods use the same seed list (server-0, server-1, server-2).
-	// Gossip library ignores the seed pointing to itself.
 	maxSeeds := int32(3)
 	if cluster.Spec.Replicas != nil && *cluster.Spec.Replicas < maxSeeds {
 		maxSeeds = *cluster.Spec.Replicas
 	}
-	// Build seed pattern using shell variables $HEADLESS_SVC and $GOSSIP_PORT
-	// which are set as env vars on the init container
 	var seedPatterns []string
 	for i := int32(0); i < maxSeeds; i++ {
 		seedPatterns = append(seedPatterns, fmt.Sprintf(
@@ -211,29 +211,50 @@ set -e
 # All nodes get the same seeds — gossip ignores the seed pointing to self
 SEEDS="%s"
 
-# Write env file for main container to source
+# Query the node's topology labels via K8s API. Fail-soft: any error → fallback.
+APISERVER=https://kubernetes.default.svc
+TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+CA_FILE=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+NODE_JSON=""
+if [ -r "$TOKEN_FILE" ] && [ -r "$CA_FILE" ] && [ -n "$HOST_NODE_NAME" ]; then
+    NODE_JSON=$(curl -sf --max-time 10 --cacert "$CA_FILE" \
+        -H "Authorization: Bearer $(cat $TOKEN_FILE)" \
+        "$APISERVER/api/v1/nodes/$HOST_NODE_NAME" || true)
+fi
+
+AZ=$(printf '%%s' "$NODE_JSON" \
+    | grep -o '"topology.kubernetes.io/zone": *"[^"]*"' \
+    | head -n1 | cut -d'"' -f4)
+REGION=$(printf '%%s' "$NODE_JSON" \
+    | grep -o '"topology.kubernetes.io/region": *"[^"]*"' \
+    | head -n1 | cut -d'"' -f4)
+
+: "${AZ:=default-az}"
+: "${REGION:=default-cluster}"
+
 cat > /etc/woodpecker/topology.env << EOF
 SEEDS=${SEEDS}
-AVAILABILITY_ZONE=${AVAILABILITY_ZONE:-default}
-RESOURCE_GROUP=${RESOURCE_GROUP:-default}
+AVAILABILITY_ZONE=${AZ}
+CLUSTER_NAME=${REGION}
+RESOURCE_GROUP=default
 EOF
 
-echo "Init complete: pod=$POD_NAME seeds=$SEEDS"
+echo "Init complete: pod=$POD_NAME node=$HOST_NODE_NAME az=$AZ cluster=$REGION"
 `, seedsExpr)
 
 	return []corev1.Container{
 		{
 			Name:    "init-topology",
-			Image:   "busybox:1.36",
+			Image:   "curlimages/curl:8.7.1",
 			Command: []string{"/bin/sh", "-c", script},
 			Env: []corev1.EnvVar{
 				{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
-				// POD_NAMESPACE must be defined before HEADLESS_SVC for $(POD_NAMESPACE) expansion
 				{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+				// HOST_NODE_NAME is the K8s node this pod landed on (spec.nodeName),
+				// distinct from POD_NAME which is the pod's own name.
+				{Name: "HOST_NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 				{Name: "HEADLESS_SVC", Value: fmt.Sprintf("%s.$(POD_NAMESPACE).svc.cluster.local", headlessServiceName(cluster))},
 				{Name: "GOSSIP_PORT", Value: fmt.Sprintf("%d", cluster.Spec.GossipPort)},
-				{Name: "AVAILABILITY_ZONE", Value: "default"},
-				{Name: "RESOURCE_GROUP", Value: "default"},
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "topology", MountPath: "/etc/woodpecker"},
@@ -279,4 +300,35 @@ func (r *WoodpeckerClusterReconciler) buildVolumeClaimTemplates(cluster *woodpec
 			},
 		},
 	}
+}
+
+// defaultZoneTopologySpreadConstraint returns the operator's default
+// TopologySpreadConstraint on the well-known zone label. It enforces
+// at-most-1 skew across zones and blocks scheduling if the constraint
+// cannot be satisfied.
+func defaultZoneTopologySpreadConstraint(cluster *woodpeckerv1alpha1.WoodpeckerCluster) corev1.TopologySpreadConstraint {
+	return corev1.TopologySpreadConstraint{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: commonLabels(cluster),
+		},
+	}
+}
+
+// mergeTopologySpreadConstraints returns the user-supplied constraints plus
+// the operator's default zone constraint, unless the user already specified
+// a constraint on the zone topologyKey — in which case the user's wins.
+func mergeTopologySpreadConstraints(
+	cluster *woodpeckerv1alpha1.WoodpeckerCluster,
+	user []corev1.TopologySpreadConstraint,
+) []corev1.TopologySpreadConstraint {
+	result := append([]corev1.TopologySpreadConstraint{}, user...)
+	for _, c := range user {
+		if c.TopologyKey == "topology.kubernetes.io/zone" {
+			return result
+		}
+	}
+	return append(result, defaultZoneTopologySpreadConstraint(cluster))
 }

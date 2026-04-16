@@ -25,6 +25,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -84,6 +87,12 @@ func (r *WoodpeckerClusterReconciler) reconcileDelete(ctx context.Context, clust
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	// Clean up cluster-scoped RBAC before removing the finalizer. These objects
+	// do not have namespace-scoped owner refs, so K8s GC will not cascade.
+	if err := r.deleteClusterScopedRBAC(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// All pods safe — remove finalizer
 	logger.Info("All pods decommissioned, removing finalizer")
 	controllerutil.RemoveFinalizer(cluster, finalizerName)
@@ -127,4 +136,22 @@ func (r *WoodpeckerClusterReconciler) decommissionPod(ctx context.Context, pod *
 
 	logger.Info("Decommission progress", "pod", pod.Name, "safeToTerminate", safe)
 	return safe, nil
+}
+
+func (r *WoodpeckerClusterReconciler) deleteClusterScopedRBAC(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster) error {
+	logger := log.FromContext(ctx)
+
+	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterRoleBindingName(cluster)}}
+	if err := r.Delete(ctx, crb); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting ClusterRoleBinding: %w", err)
+	}
+	logger.Info("ClusterRoleBinding deleted", "name", crb.Name)
+
+	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName(cluster)}}
+	if err := r.Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting ClusterRole: %w", err)
+	}
+	logger.Info("ClusterRole deleted", "name", cr.Name)
+
+	return nil
 }

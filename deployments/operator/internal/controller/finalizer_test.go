@@ -20,7 +20,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	woodpeckerv1alpha1 "github.com/zilliztech/woodpecker/deployments/operator/api/v1alpha1"
 )
 
 // setupTestHTTPClient replaces the package-level httpClient with one that
@@ -135,4 +142,61 @@ func TestDecommissionPod_DecommissionEndpointError(t *testing.T) {
 	r := &WoodpeckerClusterReconciler{}
 	_, err := r.decommissionPod(context.Background(), newRunningPod("1.2.3.4"), 9091)
 	require.Error(t, err)
+}
+
+func TestReconcileDelete_RemovesClusterScopedRBAC(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, woodpeckerv1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, rbacv1.AddToScheme(s))
+
+	now := metav1.Now()
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "wp",
+			Namespace:         "default",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{MetricsPort: 9091},
+	}
+	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "woodpecker-node-reader-default-wp"}}
+	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "woodpecker-node-reader-default-wp"}}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cluster, cr, crb).Build()
+	r := &WoodpeckerClusterReconciler{Client: cl, Scheme: s}
+
+	_, err := r.reconcileDelete(context.Background(), cluster)
+	require.NoError(t, err)
+
+	gotCR := &rbacv1.ClusterRole{}
+	err = cl.Get(context.Background(), types.NamespacedName{Name: "woodpecker-node-reader-default-wp"}, gotCR)
+	assert.True(t, apierrors.IsNotFound(err), "ClusterRole should be deleted, got err=%v", err)
+
+	gotCRB := &rbacv1.ClusterRoleBinding{}
+	err = cl.Get(context.Background(), types.NamespacedName{Name: "woodpecker-node-reader-default-wp"}, gotCRB)
+	assert.True(t, apierrors.IsNotFound(err), "ClusterRoleBinding should be deleted, got err=%v", err)
+}
+
+func TestReconcileDelete_RBACCleanupIgnoresNotFound(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, woodpeckerv1alpha1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
+	require.NoError(t, rbacv1.AddToScheme(s))
+
+	now := metav1.Now()
+	cluster := &woodpeckerv1alpha1.WoodpeckerCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "wp",
+			Namespace:         "default",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: woodpeckerv1alpha1.WoodpeckerClusterSpec{MetricsPort: 9091},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cluster).Build()
+	r := &WoodpeckerClusterReconciler{Client: cl, Scheme: s}
+
+	_, err := r.reconcileDelete(context.Background(), cluster)
+	require.NoError(t, err, "missing RBAC objects must not cause finalizer error")
 }
