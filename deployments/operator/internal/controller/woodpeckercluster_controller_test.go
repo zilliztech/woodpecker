@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,6 +132,33 @@ var _ = Describe("WoodpeckerCluster Controller", func() {
 
 			By("Checking config-hash annotation on pod template")
 			Expect(sts.Spec.Template.Annotations).To(HaveKey("woodpecker.zilliz.io/config-hash"))
+
+			By("creating a per-cluster ClusterRole for node reads")
+			cr := &rbacv1.ClusterRole{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "woodpecker-node-reader-default-" + resourceName}, cr)).To(Succeed())
+			Expect(cr.Rules).To(HaveLen(1))
+			Expect(cr.Rules[0].Resources).To(ConsistOf("nodes"))
+			Expect(cr.Rules[0].Verbs).To(ConsistOf("get"))
+
+			By("creating a matching ClusterRoleBinding bound to the server ServiceAccount")
+			crb := &rbacv1.ClusterRoleBinding{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "woodpecker-node-reader-default-" + resourceName}, crb)).To(Succeed())
+			Expect(crb.Subjects).To(HaveLen(1))
+			Expect(crb.Subjects[0].Name).To(Equal(resourceName + "-server"))
+
+			By("injecting the default zone TopologySpreadConstraint in the StatefulSet")
+			sts2 := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-server", Namespace: "default"}, sts2)).To(Succeed())
+			Expect(sts2.Spec.Template.Spec.TopologySpreadConstraints).ToNot(BeEmpty())
+			foundZone := false
+			for _, c := range sts2.Spec.Template.Spec.TopologySpreadConstraints {
+				if c.TopologyKey == "topology.kubernetes.io/zone" {
+					foundZone = true
+					Expect(c.MaxSkew).To(Equal(int32(1)))
+					Expect(c.WhenUnsatisfiable).To(Equal(corev1.DoNotSchedule))
+				}
+			}
+			Expect(foundZone).To(BeTrue(), "expected zone topology spread constraint")
 		})
 
 		It("should add finalizer to the CR", func() {
