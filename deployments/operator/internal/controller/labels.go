@@ -34,6 +34,15 @@ func serverName(cluster *woodpeckerv1alpha1.WoodpeckerCluster) string {
 	return cluster.Name + "-server"
 }
 
+// resolveServiceAccountName returns the ServiceAccount name to use for server pods.
+// If the user specified an external SA, use that; otherwise use the operator-managed default.
+func resolveServiceAccountName(cluster *woodpeckerv1alpha1.WoodpeckerCluster) string {
+	if cluster.Spec.ServiceAccountName != "" {
+		return cluster.Spec.ServiceAccountName
+	}
+	return serverName(cluster)
+}
+
 func headlessServiceName(cluster *woodpeckerv1alpha1.WoodpeckerCluster) string {
 	return cluster.Name + "-server-headless"
 }

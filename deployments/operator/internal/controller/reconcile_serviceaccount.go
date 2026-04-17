@@ -31,6 +31,11 @@ import (
 func (r *WoodpeckerClusterReconciler) reconcileServiceAccount(ctx context.Context, cluster *woodpeckerv1alpha1.WoodpeckerCluster) error {
 	logger := log.FromContext(ctx)
 
+	if cluster.Spec.ServiceAccountName != "" {
+		logger.Info("Using external ServiceAccount, skipping creation", "name", cluster.Spec.ServiceAccountName)
+		return nil
+	}
+
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serverName(cluster),

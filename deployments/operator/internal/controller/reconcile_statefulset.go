@@ -101,7 +101,7 @@ func (r *WoodpeckerClusterReconciler) buildStatefulSet(cluster *woodpeckerv1alph
 
 func (r *WoodpeckerClusterReconciler) buildPodSpec(cluster *woodpeckerv1alpha1.WoodpeckerCluster) corev1.PodSpec {
 	return corev1.PodSpec{
-		ServiceAccountName:            serverName(cluster),
+		ServiceAccountName:            resolveServiceAccountName(cluster),
 		TerminationGracePeriodSeconds: ptr.To(int64(300)),
 		InitContainers:                r.buildInitContainers(cluster),
 		Containers:                    r.buildContainers(cluster),
