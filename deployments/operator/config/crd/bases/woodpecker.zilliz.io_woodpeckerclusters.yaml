@@ -1102,6 +1102,13 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              serviceAccountName:
+                description: |-
+                  serviceAccountName references a pre-existing ServiceAccount for server pods.
+                  If set, operator skips SA creation and uses this one directly.
+                  The SA must exist in the same namespace as the WoodpeckerCluster.
+                  Typically used for cloud IAM integration (IRSA, GKE Workload Identity, etc.).
+                type: string
               servicePort:
                 default: 18080
                 description: servicePort is the gRPC service port.

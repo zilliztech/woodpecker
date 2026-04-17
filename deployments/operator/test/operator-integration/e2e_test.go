@@ -344,15 +344,105 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should create a WoodpeckerCluster with default SA (operator-managed)", func() {
+			const crNamespace = "default"
+
+			By("applying the default sample CR")
+			cmd := exec.Command("kubectl", "apply", "-f",
+				"config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml", "-n", crNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply default sample CR")
+
+			By("verifying the operator-managed ServiceAccount is created")
+			verifySA := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "sa", "woodpecker-sample-server",
+					"-n", crNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("woodpecker-sample-server"))
+			}
+			Eventually(verifySA, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the StatefulSet references the operator-managed SA")
+			verifySTS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", "woodpecker-sample-server",
+					"-n", crNamespace, "-o", "jsonpath={.spec.template.spec.serviceAccountName}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("woodpecker-sample-server"))
+			}
+			Eventually(verifySTS, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the ClusterRoleBinding targets the operator-managed SA")
+			verifyCRB := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "clusterrolebinding",
+					"woodpecker-node-reader-default-woodpecker-sample",
+					"-o", "jsonpath={.subjects[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("woodpecker-sample-server"))
+			}
+			Eventually(verifyCRB, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("cleaning up the default sample CR")
+			cmd = exec.Command("kubectl", "delete", "-f",
+				"config/samples/woodpecker_v1alpha1_woodpeckercluster.yaml", "-n", crNamespace,
+				"--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should create a WoodpeckerCluster with external SA", func() {
+			const crNamespace = "default"
+			const externalSAName = "wp-external-sa-test"
+
+			By("creating the external ServiceAccount")
+			cmd := exec.Command("kubectl", "create", "sa", externalSAName, "-n", crNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create external SA")
+
+			By("applying the external SA sample CR")
+			cmd = exec.Command("kubectl", "apply", "-f",
+				"config/samples/woodpeckercluster_external_sa.yaml", "-n", crNamespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply external SA sample CR")
+
+			By("verifying the operator did NOT create a default SA")
+			time.Sleep(5 * time.Second)
+			cmd = exec.Command("kubectl", "get", "sa", "woodpecker-sample-server",
+				"-n", crNamespace, "-o", "jsonpath={.metadata.name}")
+			_, err = utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Operator-managed SA should NOT exist when external SA is specified")
+
+			By("verifying the StatefulSet references the external SA")
+			verifySTS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", "woodpecker-sample-server",
+					"-n", crNamespace, "-o", "jsonpath={.spec.template.spec.serviceAccountName}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("woodpecker-sa"))
+			}
+			Eventually(verifySTS, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the ClusterRoleBinding targets the external SA")
+			verifyCRB := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "clusterrolebinding",
+					"woodpecker-node-reader-default-woodpecker-sample",
+					"-o", "jsonpath={.subjects[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("woodpecker-sa"))
+			}
+			Eventually(verifyCRB, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("cleaning up")
+			cmd = exec.Command("kubectl", "delete", "-f",
+				"config/samples/woodpeckercluster_external_sa.yaml", "-n", crNamespace,
+				"--ignore-not-found")
+			_, _ = utils.Run(cmd)
+			cmd = exec.Command("kubectl", "delete", "sa", externalSAName, "-n", crNamespace,
+				"--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
 	})
 })
 
