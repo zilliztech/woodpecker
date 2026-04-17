@@ -74,7 +74,7 @@ func (r *WoodpeckerClusterReconciler) reconcileRBAC(ctx context.Context, cluster
 		}
 		crb.Subjects = []rbacv1.Subject{{
 			Kind:      "ServiceAccount",
-			Name:      serverName(cluster),
+			Name:      resolveServiceAccountName(cluster),
 			Namespace: cluster.Namespace,
 		}}
 		return nil

@@ -40,6 +40,13 @@ type WoodpeckerClusterSpec struct {
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	// serviceAccountName references a pre-existing ServiceAccount for server pods.
+	// If set, operator skips SA creation and uses this one directly.
+	// The SA must exist in the same namespace as the WoodpeckerCluster.
+	// Typically used for cloud IAM integration (IRSA, GKE Workload Identity, etc.).
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+
 	// replicas is the number of Woodpecker server nodes.
 	// +kubebuilder:default=3
 	// +kubebuilder:validation:Minimum=1

@@ -1,0 +1,81 @@
+# Deploy a WoodpeckerCluster with GCS as object storage using GKE Workload Identity.
+#
+# Prerequisites:
+#   1. GKE cluster with Workload Identity enabled
+#   2. GCP service account with Storage Object Admin role on the bucket
+#   3. IAM binding: gcloud iam service-accounts add-iam-policy-binding \
+#        <GCP_SA>@<PROJECT>.iam.gserviceaccount.com \
+#        --role roles/iam.workloadIdentityUser \
+#        --member "serviceAccount:<PROJECT>.svc.id.goog[<K8S_NAMESPACE>/woodpecker-sa]"
+#   4. Replace all <parameters> below with your actual values
+#
+# If you already have a ServiceAccount with the Workload Identity annotation,
+# skip the ServiceAccount resource and set serviceAccountName in the CR directly.
+
+# Resource 1: ConfigMap with Woodpecker configuration (GCS backend)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: woodpecker-config
+data:
+  woodpecker.yaml: |
+    woodpecker:
+      meta:
+        type: etcd
+      client:
+        quorum:
+          replicaCount: 3
+      storage:
+        type: service
+        rootPath: /woodpecker/data
+      logstore:
+        segmentSyncPolicy:
+          syncInterval: 1000
+          syncMaxBytes: 4194304
+    log:
+      level: info
+      format: json
+      stdout: true
+    etcd:
+      endpoints:
+        - <etcd-endpoint>:2379
+      rootPath: by-dev
+    minio:
+      cloudProvider: gcp
+      address: storage.googleapis.com
+      port: 443
+      useSSL: true
+      useIAM: true
+      bucketName: <my-bucket-name>
+      rootPath: woodpecker
+---
+# Resource 2: ServiceAccount with GKE Workload Identity annotation
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: woodpecker-sa
+  annotations:
+    iam.gke.io/gcp-service-account: <GCP_SA_NAME>@<PROJECT_ID>.iam.gserviceaccount.com
+---
+# Resource 3: WoodpeckerCluster referencing the SA
+apiVersion: woodpecker.zilliz.io/v1alpha1
+kind: WoodpeckerCluster
+metadata:
+  name: woodpecker-sample
+spec:
+  image: zilliztech/woodpecker:v0.1.26
+  replicas: 3
+  serviceAccountName: woodpecker-sa
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  storageSize: 10Gi
+  servicePort: 18080
+  gossipPort: 17946
+  metricsPort: 9091
+  configRef:
+    name: woodpecker-config
