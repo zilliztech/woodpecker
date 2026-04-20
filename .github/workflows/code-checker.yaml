@@ -28,14 +28,20 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --config .golangci.yml --timeout=10m
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/main/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+          "$(go env GOPATH)/bin/golangci-lint" --version
+
+      - name: Run golangci-lint
+        run: |
+          "$(go env GOPATH)/bin/golangci-lint" run \
+            --config .golangci.yml \
+            --timeout=10m
 
       - name: Handle failure
         if: failure()
@@ -79,7 +85,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
 
       - name: Check go mod tidy
