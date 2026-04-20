@@ -33,16 +33,15 @@ jobs:
 
       - name: Install golangci-lint
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v1.64.8
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/main/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
           "$(go env GOPATH)/bin/golangci-lint" --version
 
       - name: Run golangci-lint
         run: |
           "$(go env GOPATH)/bin/golangci-lint" run \
             --config .golangci.yml \
-            --timeout=10m \
-            -v
+            --timeout=10m
 
       - name: Handle failure
         if: failure()
