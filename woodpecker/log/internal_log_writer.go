@@ -111,6 +111,12 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 	callback := func(segmentId int64, entryId int64, err error) {
 		logger.Ctx(ctx).Debug("write log entry callback",
 			zap.String("logName", l.logHandle.GetName()), zap.Int64("logId", l.logHandle.GetId()), zap.Int64("segId", segmentId), zap.Int64("entryId", entryId), zap.Error(err))
+		// Invalidate the writer BEFORE delivering the result so that the next synchronous
+		// Write observes isWriterValid=false and fails fast. Channel send happens-after
+		// onWriterInvalidated, so the receiver is guaranteed to see the invalidation.
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
+		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -119,10 +125,6 @@ func (l *internalLogWriterImpl) Write(ctx context.Context, msg *WriteMessage) *W
 			Err: err,
 		}
 		close(ch)
-		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && werr.IsSegmentNotWritableErr(err) {
-			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
-		}
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
 	if err != nil {
@@ -197,6 +199,11 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 		} else {
 			metrics.WpLogWriterOperationLatency.WithLabelValues(l.metricsNamespace, l.logIdStr, "write_async", "error").Observe(float64(time.Since(start).Milliseconds()))
 		}
+		// Invalidate the writer BEFORE delivering the result so that subsequent Writes
+		// observe isWriterValid=false and fail fast.
+		if err != nil && werr.IsSegmentNotWritableErr(err) {
+			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
+		}
 		ch <- &WriteResult{
 			LogMessageId: &LogMessageId{
 				SegmentId: segmentId,
@@ -205,10 +212,6 @@ func (l *internalLogWriterImpl) WriteAsync(ctx context.Context, msg *WriteMessag
 			Err: err,
 		}
 		close(ch)
-		// trigger writer expired to make this writer not writable, application should reopen a new writer to write
-		if err != nil && werr.IsSegmentNotWritableErr(err) {
-			l.onWriterInvalidated(ctx, fmt.Sprintf("err:%s on:%d%d", err.Error(), segmentId, entryId))
-		}
 	}
 	writableSegmentHandle, err := l.logHandle.GetOrCreateWritableSegmentHandle(ctx, l.onWriterInvalidated)
 	if err != nil {

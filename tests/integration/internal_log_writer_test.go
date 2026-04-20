@@ -19,10 +19,13 @@ package integration
 import (
 	"context"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -206,6 +209,143 @@ func TestInternalLogWriter_PreemptionByNewOpen(t *testing.T) {
 			// shutdown embed server
 			err = woodpecker.StopEmbedLogStore()
 			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestInternalLogWriter_PreemptionByNewOpen_Concurrent verifies that after a new
+// writer preempts w1, many concurrent w1.Write calls all fail cleanly — none
+// leaks past preemption to create a "ghost" entry on a newly-rolled segment.
+//
+// Regression guard: with the callback-ordering bug, concurrent callers racing
+// the invalidation goroutine could slip past the isWriterValid check, trigger
+// segment rolling, and commit entries that the reader would see interleaved
+// with the new writer's data.
+func TestInternalLogWriter_PreemptionByNewOpen_Concurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootPath := filepath.Join(tmpDir, "TestInternalLogWriter_PreemptionByNewOpen_Concurrent")
+	testCases := []struct {
+		name        string
+		storageType string
+		rootPath    string
+	}{
+		{name: "LocalFsStorage", storageType: "local", rootPath: rootPath},
+		{name: "ObjectStorage", storageType: "", rootPath: ""},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg, err := config.NewConfiguration("../../config/woodpecker.yaml")
+			require.NoError(t, err)
+			if tc.storageType != "" {
+				cfg.Woodpecker.Storage.Type = tc.storageType
+			}
+			if tc.rootPath != "" {
+				cfg.Woodpecker.Storage.RootPath = tc.rootPath
+			}
+			cfg.Woodpecker.Logstore.FencePolicy.ConditionWrite = "enable"
+
+			client, err := woodpecker.NewEmbedClientFromConfig(ctx, cfg)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = client.Close(ctx) })
+
+			logName := "test-internal-writer-preempt-concurrent-" + tc.name + time.Now().Format("20060102150405")
+			err = client.CreateLog(ctx, logName)
+			if err != nil && !werr.ErrMetadataCreateLogAlreadyExists.Is(err) {
+				require.NoError(t, err)
+			}
+
+			lh, err := client.OpenLog(ctx, logName)
+			require.NoError(t, err)
+
+			w1, err := lh.OpenLogWriter(ctx)
+			require.NoError(t, err)
+
+			// Seed a known baseline entry from w1.
+			seed := w1.Write(ctx, &log.WriteMessage{Payload: []byte("seed")})
+			require.NoError(t, seed.Err)
+
+			// Preempt w1 by opening a new writer.
+			lh2, err := client.OpenLog(ctx, logName)
+			require.NoError(t, err)
+			w2, err := lh2.OpenLogWriter(ctx)
+			require.NoError(t, err)
+			defer w2.Close(ctx)
+
+			// The new writer must be able to write first so we have a distinctive tail.
+			newRes := w2.Write(ctx, &log.WriteMessage{Payload: []byte("new-tail")})
+			require.NoError(t, newRes.Err)
+
+			// Now hammer w1 with concurrent writes. All must fail.
+			const goroutines = 8
+			const writesPer = 25
+			var (
+				wg           sync.WaitGroup
+				okCount      atomic.Int32
+				badErrCount  atomic.Int32
+				lockLostCnt  atomic.Int32
+				notWriteCnt  atomic.Int32
+				lockLostFast atomic.Int32 // fast-fail lock-lost (no LogMessageId)
+			)
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for j := 0; j < writesPer; j++ {
+						r := w1.Write(ctx, &log.WriteMessage{Payload: []byte("old-should-fail")})
+						if r.Err == nil {
+							okCount.Add(1)
+							continue
+						}
+						switch {
+						case werr.ErrLogWriterLockLost.Is(r.Err):
+							lockLostCnt.Add(1)
+							if r.LogMessageId == nil {
+								lockLostFast.Add(1)
+							}
+						case werr.ErrSegmentFenced.Is(r.Err),
+							werr.ErrStorageNotWritable.Is(r.Err),
+							werr.ErrFileWriterFinalized.Is(r.Err),
+							werr.ErrSegmentHandleSegmentClosed.Is(r.Err),
+							werr.ErrSegmentHandleSegmentRolling.Is(r.Err):
+							notWriteCnt.Add(1)
+						default:
+							badErrCount.Add(1)
+							t.Logf("unexpected error kind: %v", r.Err)
+						}
+					}
+				}()
+			}
+			wg.Wait()
+
+			// Contract:
+			//   - NO old-writer write succeeds after preemption.
+			//   - All errors are preemption-related (lock-lost or not-writable).
+			//   - After the first failure observed, the vast majority of remaining
+			//     Writes should short-circuit via the lock-lost fast path.
+			assert.Equal(t, int32(0), okCount.Load(), "preempted writer must not succeed")
+			assert.Equal(t, int32(0), badErrCount.Load(), "all errors must be preemption-related")
+			total := lockLostCnt.Load() + notWriteCnt.Load()
+			assert.Equal(t, int32(goroutines*writesPer), total, "all writes must have failed with a preemption error")
+			assert.Greater(t, lockLostFast.Load(), int32(0), "fast-fail lock-lost path must be exercised")
+
+			// Close of the preempted writer may legitimately return errors because its
+			// session is gone; what matters is that nothing committed post-preemption.
+			_ = w1.Close(ctx)
+
+			flushInterval := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxInterval.Milliseconds()
+			time.Sleep(time.Duration(1000 + flushInterval*int(time.Millisecond)))
+
+			// Verify that w2's entry reads back correctly at the exact id it was
+			// written to — nothing from w1 has displaced or interleaved it.
+			r, err := lh2.OpenLogReader(ctx, &log.LogMessageId{SegmentId: newRes.LogMessageId.SegmentId, EntryId: newRes.LogMessageId.EntryId}, "preempt-concurrent")
+			require.NoError(t, err)
+			defer r.Close(ctx)
+			m, err := r.ReadNext(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, "new-tail", string(m.Payload), "w2's entry must read back unchanged; old writer must not have displaced it")
+
+			require.NoError(t, woodpecker.StopEmbedLogStore())
 		})
 	}
 }

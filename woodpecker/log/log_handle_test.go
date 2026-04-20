@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -371,7 +372,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(65 * 1024 * 1024)) // 65MB > 64MB threshold
 	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(500))       // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -414,7 +415,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024))       // Small size
 	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(100)) // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -455,7 +456,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_ForceRolling(t *testing.T) {
 	// Mock old segment behavior - force rolling is ready
 	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(true) // Force rolling
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -2259,4 +2260,47 @@ func TestLogHandle_CreateNewSegmentMeta_StoreError(t *testing.T) {
 
 	_, err := logHandle.createNewSegmentMeta(ctx)
 	assert.Error(t, err)
+}
+
+// TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_AbortsCreation
+// covers the preemption defense-in-depth: when the current writable segment is rolled
+// but the completion write fails with ErrMetadataRevisionInvalid (another writer has
+// bumped the segment meta), GetOrCreateWritableSegmentHandle MUST return
+// ErrLogWriterLockLost and MUST NOT create a new segment.
+//
+// Bug: prior behavior was to log a warning and proceed to createAndCacheWritableSegmentHandle,
+// allowing a preempted writer to claim a fresh segment and keep writing.
+func TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_AbortsCreation(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockOldSegment := mocks_segment_handle.NewSegmentHandle(t)
+
+	logHandle.SegmentHandles[1] = mockOldSegment
+	logHandle.WritableSegmentId = 1
+
+	// Force the rolling path (force rolling ready == true).
+	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(true)
+	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+
+	// SetRollingReady reports that segment completion hit ErrMetadataRevisionInvalid —
+	// the canonical "someone else has taken over" signal.
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(werr.ErrMetadataRevisionInvalid).Once()
+
+	// Critical: StoreSegmentMetadata for a new segment must NOT be called.
+	// (no mockMeta.EXPECT().StoreSegmentMetadata ... here)
+
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, nil)
+
+	require.Error(t, err)
+	assert.Nil(t, newHandle)
+	assert.True(t, werr.ErrLogWriterLockLost.Is(err), "expected ErrLogWriterLockLost, got: %v", err)
+
+	// Writable segment id must NOT advance; no new handle was cached.
+	assert.Equal(t, int64(1), logHandle.WritableSegmentId)
+	_, created := logHandle.SegmentHandles[2]
+	assert.False(t, created, "no new segment should be created when the log has been taken over")
+
+	mockOldSegment.AssertExpectations(t)
+	mockMeta.AssertExpectations(t)
 }

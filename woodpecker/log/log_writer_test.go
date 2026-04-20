@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1287,6 +1288,286 @@ func TestInternalLogWriter_WriteAsync_SegmentNotWritable_TriggersInvalidation(t 
 	assert.Error(t, result.Err)
 	assert.True(t, invalidated.Load(), "Writer should be invalidated on segment not writable error")
 	assert.False(t, w.isWriterValid.Load(), "Writer should be marked as invalid")
+}
+
+// === Preemption callback-ordering tests (regression for writer-finalized race) ===
+//
+// These tests cover the contract: when a Write's append callback fires with a
+// "segment not writable" error (segment fenced / writer finalized / storage not
+// writable), the writer MUST be invalidated before Write returns the result to
+// the caller. Otherwise a follow-up synchronous Write can observe a stale
+// isWriterValid=true, slip past the fail-fast check, call GetOrCreateWritableSegmentHandle
+// and actually succeed on a newly-rolled segment — violating preemption semantics
+// (see TestInternalLogWriter_PreemptionByNewOpen/ObjectStorage).
+
+// TestInternalLogWriter_Write_InvalidationHappensBeforeResultDelivered verifies the
+// ordering contract for the synchronous Write path.
+func TestInternalLogWriter_Write_InvalidationHappensBeforeResultDelivered(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+
+	// Inject a sleep inside onWriterInvalidated so the ordering of two events is
+	// distinguishable regardless of scheduler decisions:
+	//   A) onWriterInvalidated completes
+	//   B) Write returns to caller
+	// The fix requires A < B.
+	var order int32
+	var invalidatedOrder, writeReturnedOrder int32
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		time.Sleep(50 * time.Millisecond)
+		atomic.StoreInt32(&invalidatedOrder, atomic.AddInt32(&order, 1))
+		w.isWriterValid.Store(false)
+	}
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+
+	// Fire callback on a separate goroutine to faithfully mimic the real AppendAsync
+	// (which runs the callback on the segment's executor goroutine).
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(ctx context.Context, bytes []byte, cb func(int64, int64, error)) {
+			go cb(-1, -1, werr.ErrSegmentFenced)
+		}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{Payload: []byte("test"), Properties: map[string]string{"k": "v"}}
+	result := w.Write(ctx, msg)
+	atomic.StoreInt32(&writeReturnedOrder, atomic.AddInt32(&order, 1))
+
+	require.Error(t, result.Err)
+	require.True(t, werr.ErrSegmentFenced.Is(result.Err))
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&invalidatedOrder), "onWriterInvalidated must complete before Write returns")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&writeReturnedOrder), "Write must return after onWriterInvalidated")
+	assert.False(t, w.isWriterValid.Load(), "writer must be marked invalid before Write returns")
+}
+
+// TestInternalLogWriter_WriteAsync_InvalidationHappensBeforeResultDelivered covers WriteAsync.
+func TestInternalLogWriter_WriteAsync_InvalidationHappensBeforeResultDelivered(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+
+	var order int32
+	var invalidatedOrder, resultReceivedOrder int32
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		time.Sleep(50 * time.Millisecond)
+		atomic.StoreInt32(&invalidatedOrder, atomic.AddInt32(&order, 1))
+		w.isWriterValid.Store(false)
+	}
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(ctx context.Context, bytes []byte, cb func(int64, int64, error)) {
+			go cb(-1, -1, werr.ErrSegmentFenced)
+		}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{Payload: []byte("test"), Properties: map[string]string{"k": "v"}}
+	ch := w.WriteAsync(ctx, msg)
+	result := <-ch
+	atomic.StoreInt32(&resultReceivedOrder, atomic.AddInt32(&order, 1))
+
+	require.Error(t, result.Err)
+	require.True(t, werr.ErrSegmentFenced.Is(result.Err))
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&invalidatedOrder), "onWriterInvalidated must complete before result is delivered")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&resultReceivedOrder), "result must be delivered after onWriterInvalidated")
+	assert.False(t, w.isWriterValid.Load(), "writer must be marked invalid before result is delivered")
+}
+
+// TestInternalLogWriter_Write_SecondCallFailsFastAfterNotWritable verifies that after
+// a Write returns a NotWritable error, the immediately-following Write fails fast
+// with ErrLogWriterLockLost and does NOT reach AppendAsync.
+func TestInternalLogWriter_Write_SecondCallFailsFastAfterNotWritable(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		// Simulate a small real-world delay between "callback fires" and "Store(false)".
+		time.Sleep(50 * time.Millisecond)
+		w.isWriterValid.Store(false)
+	}
+
+	// GetOrCreateWritableSegmentHandle must be called exactly once — the second Write
+	// should be rejected by the isWriterValid fail-fast check.
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).
+		Return(mockSegHandle, nil).Once()
+
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(ctx context.Context, bytes []byte, cb func(int64, int64, error)) {
+			go cb(-1, -1, werr.ErrSegmentFenced)
+		}).Return().Once()
+
+	ctx := context.Background()
+
+	r1 := w.Write(ctx, &WriteMessage{Payload: []byte("a1"), Properties: map[string]string{"k": "v"}})
+	require.Error(t, r1.Err)
+	require.True(t, werr.ErrSegmentFenced.Is(r1.Err))
+
+	r2 := w.Write(ctx, &WriteMessage{Payload: []byte("a2"), Properties: map[string]string{"k": "v"}})
+	require.Error(t, r2.Err)
+	assert.True(t, werr.ErrLogWriterLockLost.Is(r2.Err), "second Write must fail with ErrLogWriterLockLost; got: %v", r2.Err)
+
+	mockLogHandle.AssertExpectations(t)
+}
+
+// TestInternalLogWriter_ConcurrentWrites_AllFailFastAfterPreemption exercises the
+// full preemption contract under concurrent callers: once a single AppendAsync
+// callback delivers a SegmentNotWritable error, every subsequent Write issued by
+// any goroutine MUST fail with ErrLogWriterLockLost — even if those Writes were
+// dispatched before invalidation was observed.
+//
+// Before the ordering fix, concurrent callers could race the invalidation goroutine
+// and still reach AppendAsync after the first NotWritable error — exactly the
+// condition that let the integration test see "a3-should-fail-fast" persisted to a
+// newly-rolled segment.
+func TestInternalLogWriter_ConcurrentWrites_AllFailFastAfterPreemption(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	// Widen the race window so the ordering bug would be exposed deterministically
+	// on the unfixed code: if invalidation happened after the channel send, concurrent
+	// callers would have 30ms to slip past the isWriterValid check.
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		time.Sleep(30 * time.Millisecond)
+		w.isWriterValid.Store(false)
+	}
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+
+	// The very first AppendAsync call triggers preemption. After that, no further
+	// AppendAsync should be issued — every subsequent Write must fail fast.
+	var appendCount atomic.Int32
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(ctx context.Context, bytes []byte, cb func(int64, int64, error)) {
+			n := appendCount.Add(1)
+			// Only the first AppendAsync completes with a NotWritable error; if the
+			// fix regresses, later concurrent calls would arrive here and we surface
+			// that as a test failure.
+			if n == 1 {
+				go cb(-1, -1, werr.ErrSegmentFenced)
+				return
+			}
+			// Any subsequent AppendAsync is a regression — respond with an error so
+			// the test fails instead of hanging, and record the violation.
+			t.Errorf("unexpected AppendAsync call #%d after preemption: fail-fast contract violated", n)
+			go cb(-1, -1, werr.ErrSegmentFenced)
+		}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{Payload: []byte("x"), Properties: map[string]string{"k": "v"}}
+
+	// First synchronous Write seeds preemption.
+	r0 := w.Write(ctx, msg)
+	require.Error(t, r0.Err)
+	require.True(t, werr.ErrSegmentFenced.Is(r0.Err))
+	// Contract guarantee: the writer is invalidated before Write returns.
+	require.False(t, w.isWriterValid.Load(), "writer must be invalidated before first Write returns")
+
+	// Spawn concurrent followers. All must observe the invalidation via the channel
+	// happens-before relationship and fail with ErrLogWriterLockLost.
+	const followers = 16
+	var wg sync.WaitGroup
+	lockLostCount := atomic.Int32{}
+	otherErrCount := atomic.Int32{}
+	for i := 0; i < followers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := w.Write(ctx, msg)
+			if r.Err == nil {
+				t.Errorf("follower Write unexpectedly succeeded")
+				return
+			}
+			if werr.ErrLogWriterLockLost.Is(r.Err) {
+				lockLostCount.Add(1)
+			} else {
+				otherErrCount.Add(1)
+				t.Errorf("follower Write got unexpected error: %v", r.Err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(followers), lockLostCount.Load(), "all followers must fail with ErrLogWriterLockLost")
+	assert.Equal(t, int32(0), otherErrCount.Load())
+	assert.Equal(t, int32(1), appendCount.Load(), "AppendAsync must only be called once — no Write after preemption should reach the storage layer")
+}
+
+// TestInternalLogWriter_ConcurrentWriteAsync_AllFailFastAfterPreemption is the
+// WriteAsync counterpart of the concurrent preemption test above.
+func TestInternalLogWriter_ConcurrentWriteAsync_AllFailFastAfterPreemption(t *testing.T) {
+	mockLogHandle := &testLogHandleMock{}
+	mockLogHandle.Test(t)
+	mockLogHandle.On("GetName").Return("test-log").Maybe()
+	mockLogHandle.On("GetId").Return(int64(1)).Maybe()
+	mockSegHandle := mocks_segment_handle.NewSegmentHandle(t)
+
+	w := createTestInternalWriter(t, mockLogHandle, nil)
+	w.onWriterInvalidated = func(ctx context.Context, reason string) {
+		time.Sleep(30 * time.Millisecond)
+		w.isWriterValid.Store(false)
+	}
+
+	mockLogHandle.On("GetOrCreateWritableSegmentHandle", mock.Anything, mock.Anything).Return(mockSegHandle, nil)
+
+	var appendCount atomic.Int32
+	mockSegHandle.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(ctx context.Context, bytes []byte, cb func(int64, int64, error)) {
+			n := appendCount.Add(1)
+			if n == 1 {
+				go cb(-1, -1, werr.ErrSegmentFenced)
+				return
+			}
+			t.Errorf("unexpected AppendAsync call #%d after preemption", n)
+			go cb(-1, -1, werr.ErrSegmentFenced)
+		}).Return()
+
+	ctx := context.Background()
+	msg := &WriteMessage{Payload: []byte("x"), Properties: map[string]string{"k": "v"}}
+
+	// First async write triggers preemption; wait for it to complete.
+	r0 := <-w.WriteAsync(ctx, msg)
+	require.Error(t, r0.Err)
+	require.True(t, werr.ErrSegmentFenced.Is(r0.Err))
+	require.False(t, w.isWriterValid.Load())
+
+	const followers = 16
+	var wg sync.WaitGroup
+	lockLostCount := atomic.Int32{}
+	for i := 0; i < followers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := <-w.WriteAsync(ctx, msg)
+			if r.Err != nil && werr.ErrLogWriterLockLost.Is(r.Err) {
+				lockLostCount.Add(1)
+			} else {
+				t.Errorf("unexpected follower result: err=%v", r.Err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(followers), lockLostCount.Load())
+	assert.Equal(t, int32(1), appendCount.Load(), "AppendAsync must only be called once — fail-fast contract")
 }
 
 // === runAuditor tests ===
