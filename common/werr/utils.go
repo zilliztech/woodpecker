@@ -139,3 +139,85 @@ func IsTimeoutError(err error) bool {
 		strings.Contains(errMsg, "DeadlineExceeded") ||
 		strings.Contains(errMsg, "context canceled")
 }
+
+// ---------------------------------------------
+// Transport related error
+// ---------------------------------------------
+
+// IsTransportError reports whether err indicates that the underlying gRPC
+// transport to the peer is broken (connection refused, peer unreachable,
+// dropped connection, etc.). When true, callers should drop the cached
+// connection so that the next call re-resolves DNS and rebuilds the
+// subchannel, instead of retrying forever against a stale address.
+//
+// Rationale: grpc-go's pick_first balancer pins the first resolved address
+// to a subchannel and only re-resolves when the balancer calls ResolveNow,
+// rate-limited by MinResolutionInterval (30s by default). When a peer pod
+// is recreated with a new IP, the cached ClientConn can keep dialing the
+// old IP for a long time. Dropping the connection on transport errors
+// forces a fresh grpc.NewClient on the next GetLogStoreClient and recovers
+// in seconds instead of tens of minutes.
+func IsTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Part 1: canonical gRPC status code.
+	//
+	// Every transport-layer failure in grpc-go converges to codes.Unavailable
+	// via toRPCErr (rpc_util.go):
+	//
+	//     case transport.ConnectionError:
+	//         return status.Error(codes.Unavailable, e.Desc)
+	//
+	// transport.ConnectionError is produced in three places we care about:
+	//   1. dial failure — http2_client.go wraps any net.Dial error as
+	//      `connectionErrorf(true, err, "transport: Error while dialing: %v", err)`
+	//   2. already-open transport closing — transport.go defines
+	//      `ErrConnClosing = connectionErrorf(true, nil, "transport is closing")`
+	//   3. server GOAWAY / draining — http2_client.go & transport.go emit
+	//      codes.Unavailable directly via status.Newf/status.Error.
+	//
+	// So checking codes.Unavailable catches all "the peer is unreachable"
+	// cases as long as the status survives to reach us.
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable:
+			return true
+		}
+	}
+
+	// Part 2: defensive string fallback.
+	//
+	// Used when the gRPC Status has been stripped along the way — typically
+	// by an intermediate `fmt.Errorf("...: %v", err)` (note: %v not %w) that
+	// flattens the error into a plain string. Each pattern below corresponds
+	// to a real producer, not a guess:
+	//
+	//   "Error while dialing"       — grpc http2_client.go connectionErrorf
+	//                                 template when net.Dial returns an error.
+	//   "transport is closing"      — grpc transport.go ErrConnClosing, emitted
+	//                                 when an established transport is torn down.
+	//   "connection refused"        — Go stdlib: syscall.ECONNREFUSED.Error().
+	//                                 Happens when the TCP SYN reaches a host
+	//                                 that has nothing listening on that port
+	//                                 (exactly our "pod was killed" scenario).
+	//   "connection reset by peer"  — Go stdlib: syscall.ECONNRESET.Error().
+	//                                 Peer process died mid-connection or sent
+	//                                 RST.
+	//   "no such host"              — Go stdlib: *net.DNSError.Error() when
+	//                                 the hostname does not resolve (e.g. pod
+	//                                 FQDN not yet published by k8s DNS).
+	//
+	// None of these substrings appear in legitimate application errors, so
+	// false positives are negligible; the cost of a false positive is at
+	// most one avoidable connection rebuild, which is cheap. The cost of a
+	// false negative is another 30-minute stall, so we err on the side of
+	// dropping the connection.
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "connection refused") ||
+		strings.Contains(errMsg, "no such host") ||
+		strings.Contains(errMsg, "connection reset by peer") ||
+		strings.Contains(errMsg, "transport is closing") ||
+		strings.Contains(errMsg, "Error while dialing")
+}

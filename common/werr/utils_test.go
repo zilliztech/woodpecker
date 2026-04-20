@@ -184,3 +184,45 @@ func TestUtils_Success(t *testing.T) {
 		t.Errorf("Expected reason '%s', got '%s'", expected, status.Reason)
 	}
 }
+
+func TestUtils_IsTransportError(t *testing.T) {
+	assert.False(t, IsTransportError(nil), "nil is not a transport error")
+
+	// gRPC Unavailable is the canonical transport error: the server was not
+	// reachable. It's what we observe when a pod has been killed.
+	unavailable := status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing: dial tcp 10.0.0.1:18080: connect: connection refused"`)
+	assert.True(t, IsTransportError(unavailable))
+
+	// Wrapped gRPC Unavailable must still be recognized.
+	wrapped := errors.Wrap(unavailable, "failed to fence segment 3")
+	assert.True(t, IsTransportError(wrapped))
+
+	// DeadlineExceeded is a timeout, not a transport error: the caller's
+	// own deadline elapsed and the connection may still be healthy. Do NOT
+	// drop it, or we'd cause thrash under slow-peer load.
+	deadline := status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	assert.False(t, IsTransportError(deadline))
+
+	// Canceled is caller-initiated, not a transport failure.
+	canceled := status.Error(codes.Canceled, "canceled")
+	assert.False(t, IsTransportError(canceled))
+
+	// Application-level errors must not trigger connection teardown.
+	notFound := status.Error(codes.NotFound, "missing")
+	assert.False(t, IsTransportError(notFound))
+	invalid := status.Error(codes.InvalidArgument, "bad request")
+	assert.False(t, IsTransportError(invalid))
+
+	// Non-status errors with known transport markers fall back to string
+	// matching. This catches errors that reach us after losing their
+	// gRPC status through wrapping layers.
+	assert.True(t, IsTransportError(errors.New("dial tcp 10.0.0.1:18080: connect: connection refused")))
+	assert.True(t, IsTransportError(errors.New("lookup foo.bar: no such host")))
+	assert.True(t, IsTransportError(errors.New("read tcp 10.0.0.1->10.0.0.2: connection reset by peer")))
+	assert.True(t, IsTransportError(errors.New("rpc error: transport is closing")))
+
+	// Regular application errors remain non-transport.
+	assert.False(t, IsTransportError(errors.New("invalid argument")))
+	assert.False(t, IsTransportError(ErrSegmentFenced))
+}
