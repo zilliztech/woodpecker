@@ -33,14 +33,44 @@ var _ LogStoreClient = (*logStoreClientRemote)(nil)
 
 // logStoreClientRemote is a remote implementation of LogStoreClient,
 // which will interact with a remote LogStoreClient instance using gRPC.
+//
+// Transport-failure handling is encapsulated here. Every RPC method installs
+// a deferred maybeDropCachedConn(err) on its returned error so that, when the
+// peer is unreachable (pod killed, new IP after restart, etc.), the cached
+// gRPC connection is evicted from the pool and the next caller gets a fresh
+// ClientConn that re-resolves DNS. Callers of LogStoreClient therefore do
+// NOT need to know about the connection pool — adding a new RPC method only
+// requires the same defer pattern, nothing else.
 type logStoreClientRemote struct {
 	innerClient proto.LogStoreClient
+	// Back-reference to the pool and the target this client serves. Used by
+	// maybeDropCachedConn to evict ourselves on transport failure. Both may
+	// be zero values in unit tests that construct logStoreClientRemote
+	// directly; the helper is a no-op in that case.
+	pool   LogStoreClientPool
+	target string
 	// per-log subscription and pending routing
 	mu     sync.RWMutex
 	closed bool
 }
 
-func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (int64, error) {
+// maybeDropCachedConn evicts this client's entry from the pool when err
+// indicates a broken gRPC transport (see werr.IsTransportError). It is
+// intended to be called via `defer` at the top of each RPC method on a named
+// error return, so that every code path that returns an error is covered
+// without callers having to remember. App-level errors don't match
+// IsTransportError and are ignored.
+func (l *logStoreClientRemote) maybeDropCachedConn(err error) {
+	if err == nil || l.pool == nil || l.target == "" {
+		return
+	}
+	if werr.IsTransportError(err) {
+		l.pool.Clear(context.Background(), l.target)
+	}
+}
+
+func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (lastEntryId int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.CompleteSegment(ctx, &proto.CompleteSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
 	if err != nil {
 		return -1, err
@@ -52,7 +82,8 @@ func (l *logStoreClientRemote) CompleteSegment(ctx context.Context, bucketName s
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (int64, error) {
+func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName string, rootPath string, logId int64, entry *proto.LogEntry, syncedResultCh channel.ResultChannel) (entryId int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	logger.Ctx(ctx).Debug("logStoreClientRemote: append entry", zap.Int64("logId", logId), zap.Int64("segId", entry.SegId), zap.Int64("entryId", entry.EntryId))
 	l.mu.RLock()
 	if l.closed {
@@ -113,7 +144,8 @@ func (l *logStoreClientRemote) AppendEntry(ctx context.Context, bucketName strin
 	return addEntryFirstResponse.GetEntryId(), statusErr
 }
 
-func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (*proto.BatchReadResult, error) {
+func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, fromEntryId int64, maxEntries int64, lastReadState *proto.LastReadState) (result *proto.BatchReadResult, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.GetBatchEntriesAdv(ctx, &proto.GetBatchEntriesAdvRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, FromEntryId: fromEntryId, MaxEntries: maxEntries, LastReadState: lastReadState})
 	if err != nil {
 		return nil, err
@@ -125,7 +157,8 @@ func (l *logStoreClientRemote) ReadEntriesBatchAdv(ctx context.Context, bucketNa
 	return resp.GetResult(), nil
 }
 
-func (l *logStoreClientRemote) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+func (l *logStoreClientRemote) FenceSegment(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (lastEntryId int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.FenceSegment(ctx, &proto.FenceSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
@@ -137,7 +170,8 @@ func (l *logStoreClientRemote) FenceSegment(ctx context.Context, bucketName stri
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (lastEntryId int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.GetSegmentLastAddConfirmed(ctx, &proto.GetSegmentLastAddConfirmedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
@@ -149,7 +183,8 @@ func (l *logStoreClientRemote) GetLastAddConfirmed(ctx context.Context, bucketNa
 	return resp.GetLastEntryId(), nil
 }
 
-func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (int64, error) {
+func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (blockCount int64, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.GetSegmentBlockCount(ctx, &proto.GetSegmentBlockCountRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return -1, err
@@ -161,7 +196,8 @@ func (l *logStoreClientRemote) GetBlockCount(ctx context.Context, bucketName str
 	return resp.GetBlockCount(), nil
 }
 
-func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (*proto.SegmentMetadata, error) {
+func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64) (metadata *proto.SegmentMetadata, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.CompactSegment(ctx, &proto.CompactSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId})
 	if err != nil {
 		return nil, err
@@ -173,7 +209,8 @@ func (l *logStoreClientRemote) SegmentCompact(ctx context.Context, bucketName st
 	return resp.GetMetadata(), nil
 }
 
-func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) error {
+func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, flag int) (err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.CleanSegment(ctx, &proto.CleanSegmentRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, Flag: int32(flag)})
 	if err != nil {
 		return err
@@ -185,7 +222,8 @@ func (l *logStoreClientRemote) SegmentClean(ctx context.Context, bucketName stri
 	return nil
 }
 
-func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) error {
+func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucketName string, rootPath string, logId int64, segmentId int64, lac int64) (err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.UpdateLastAddConfirmed(ctx, &proto.UpdateLastAddConfirmedRequest{BucketName: bucketName, RootPath: rootPath, LogId: logId, SegmentId: segmentId, LastAddConfirmed: lac})
 	if err != nil {
 		return err
@@ -197,7 +235,8 @@ func (l *logStoreClientRemote) UpdateLastAddConfirmed(ctx context.Context, bucke
 	return nil
 }
 
-func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) ([]*proto.NodeMeta, error) {
+func (l *logStoreClientRemote) SelectNodes(ctx context.Context, strategyType proto.StrategyType, affinityMode proto.AffinityMode, filters []*proto.NodeFilter) (nodes []*proto.NodeMeta, err error) {
+	defer func() { l.maybeDropCachedConn(err) }()
 	resp, err := l.innerClient.SelectNodes(ctx, &proto.SelectNodesRequest{
 		Strategy:     strategyType,
 		AffinityMode: affinityMode,
