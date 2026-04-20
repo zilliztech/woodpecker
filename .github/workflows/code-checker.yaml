@@ -35,7 +35,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          args: --config .golangci.yml --timeout=10m
+          args: --config .golangci.yml --timeout=10m --concurrency=2
 
       - name: Handle failure
         if: failure()
