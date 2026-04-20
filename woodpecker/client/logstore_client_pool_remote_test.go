@@ -25,9 +25,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/zilliztech/woodpecker/common/werr"
+	"github.com/zilliztech/woodpecker/proto"
 )
 
 func TestRemotePool_NewLogStoreClientPool(t *testing.T) {
@@ -349,3 +352,142 @@ func TestRemotePool_ClearForcesRebuild(t *testing.T) {
 		"after Clear, the pool must build a fresh gRPC connection so the next "+
 			"dial re-resolves DNS")
 }
+
+// TestIsConnectionBroken covers the small state-classification helper. The
+// nil branch is easy to miss in higher-level tests because nil conns never
+// appear in the real pool path; testing it here guards against a nil
+// dereference if a future refactor changes the caller.
+func TestIsConnectionBroken(t *testing.T) {
+	// nil is NOT broken — a missing cache entry is handled by the caller
+	// (builds a fresh conn), not by this helper.
+	assert.False(t, isConnectionBroken(nil), "nil *grpc.ClientConn must not be classified as broken")
+
+	// A freshly-built ClientConn starts in IDLE state; the state-based
+	// guard is deliberately conservative and must not drop IDLE conns,
+	// otherwise we'd thrash on cache hits between RPCs.
+	cnx, err := grpc.NewClient("127.0.0.1:1",
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer func() { _ = cnx.Close() }()
+	assert.False(t, isConnectionBroken(cnx), "a fresh IDLE conn must not be classified as broken")
+
+	// Close() drives the conn to SHUTDOWN, which IS broken.
+	require.NoError(t, cnx.Close())
+	require.Eventually(t, func() bool {
+		return cnx.GetState() == connectivity.Shutdown
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.True(t, isConnectionBroken(cnx), "SHUTDOWN conn must be classified as broken")
+}
+
+// TestRemotePool_GetLogStoreClient_DropsBrokenCacheHit covers the safety-net
+// path in GetLogStoreClient: when a cache hit returns a conn whose state is
+// TRANSIENT_FAILURE, the pool must evict it and build a fresh one.
+//
+// This exercises the `if ok { p.Clear(ctx, target) }` branch that the
+// primary integration test misses: in the common flow, logStoreClientRemote
+// self-evicts on a transport-level RPC error BEFORE anyone observes the
+// broken conn from the pool, so the cached-but-broken case only matters
+// as a belt-and-suspenders for RPC methods that skip the defer (or for
+// errors produced outside a tracked RPC).
+//
+// We simulate "skipped self-eviction" by seeding the pool with a client
+// whose pool back-ref is nil — that client's maybeDropCachedConn is a
+// no-op, leaving the broken conn in the pool for GetLogStoreClient to
+// find on the next call.
+func TestRemotePool_GetLogStoreClient_DropsBrokenCacheHit(t *testing.T) {
+	// Reserve then release a port so the dial is guaranteed to fail.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	target := lis.Addr().String()
+	require.NoError(t, lis.Close())
+
+	poolIface := NewLogStoreClientPool(4*1024*1024, 4*1024*1024)
+	pool := poolIface.(*logStoreClientPool)
+	defer func() { _ = pool.Close(context.Background()) }()
+
+	// Build a ClientConn aimed at the dead target and pre-populate the pool
+	// maps with a client that does NOT have pool/target back-refs, so its
+	// maybeDropCachedConn is a no-op and the broken entry stays cached.
+	cnx, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	noSelfEvict := &logStoreClientRemote{
+		innerClient: proto.NewLogStoreClient(cnx),
+		// pool and target intentionally zero → self-eviction disabled.
+	}
+	pool.Lock()
+	pool.clients[target] = noSelfEvict
+	pool.connections[target] = cnx
+	pool.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Drive the conn into TRANSIENT_FAILURE via a failed RPC. Because the
+	// seeded client has no pool back-ref, this failure does NOT evict it;
+	// the broken conn survives in the pool.
+	callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+	_, _ = noSelfEvict.FenceSegment(callCtx, "bucket", "root", 1, 1)
+	callCancel()
+
+	require.Eventually(t, func() bool {
+		pool.RLock()
+		cached := pool.connections[target]
+		pool.RUnlock()
+		return cached != nil && cached.GetState() == connectivity.TransientFailure
+	}, 10*time.Second, 20*time.Millisecond,
+		"seeded ClientConn should move into TRANSIENT_FAILURE after the failed dial")
+
+	// GetLogStoreClient must detect the broken cached conn and hand out a
+	// fresh client backed by a new *grpc.ClientConn.
+	fresh, err := pool.GetLogStoreClient(ctx, target)
+	require.NoError(t, err)
+	require.NotNil(t, fresh)
+	assert.NotSame(t, noSelfEvict, fresh,
+		"pool must drop the broken cached client and build a fresh one")
+
+	pool.RLock()
+	cnxAfter := pool.connections[target]
+	pool.RUnlock()
+	require.NotNil(t, cnxAfter)
+	assert.NotSame(t, cnx, cnxAfter,
+		"the replacement must use a brand-new *grpc.ClientConn (not the TRANSIENT_FAILURE one)")
+}
+
+// Note on remaining uncovered branches in GetLogStoreClient (~20%):
+//
+// The double-check pattern inside the write lock:
+//
+//	p.Lock()
+//	defer p.Unlock()
+//	if p.clientClosed.Load() { ... }               // closed-race window
+//	if existing, ok := p.clients[target]; ok {     // cache-race window
+//	    if !isConnectionBroken(p.connections[target]) {
+//	        return existing, nil
+//	    }
+//	    p.clearUnsafe(target)
+//	}
+//
+// only fires when a DIFFERENT goroutine wins the p.Lock() race between
+// our p.RUnlock() and our p.Lock(). Covering it requires both goroutines
+// to be simultaneously past RUnlock and before Lock — a window of a few
+// Go source lines that cannot be widened without modifying production
+// code (the sync.RWMutex contract forbids holding Lock while letting a
+// concurrent RLocker proceed).
+//
+// Attempts to exercise this window via (a) a test goroutine holding
+// Lock while a worker tries to enter, or (b) N-way concurrent racing
+// via TestRemotePool_ConcurrentGetLogStoreClient_SameTarget, both end
+// up with the worker either blocked at RLock (case a) or seeing the
+// cache entry already populated at RLock and returning early (case b).
+// Coverage counts confirm this: the if-body at line 98.43+ is never
+// entered, even under 10-way concurrent contention.
+//
+// Reaching this branch deterministically would require adding a test
+// hook in production code (e.g. a func var called between Clear and
+// Lock that a test can use to grab the write lock first). That's a
+// common pattern but not worth the production pollution here — the
+// branch is pure defense-in-depth: if it ever misfires, the worst
+// outcome is an extra connection build, which is what the surrounding
+// code already does on the non-race path. We accept these ~20% as
+// defensive code that is not practically reachable from tests.
