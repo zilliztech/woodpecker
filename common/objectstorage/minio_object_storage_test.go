@@ -230,7 +230,7 @@ func TestMinioObjectStorage_StatObject_Error(t *testing.T) {
 
 	size, isFenced, err := storage.StatObject(ctx, "bucket", "missing-key", "ns", "log1")
 	assert.Error(t, err)
-	assert.Equal(t, int64(-1), size)
+	assert.Equal(t, int64(0), size)
 	assert.False(t, isFenced)
 }
 

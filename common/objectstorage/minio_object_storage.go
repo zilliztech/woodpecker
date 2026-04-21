@@ -82,7 +82,7 @@ func (minioObjectStorage *MinioObjectStorage) PutFencedObject(ctx context.Contex
 func (minioObjectStorage *MinioObjectStorage) StatObject(ctx context.Context, bucketName, objectName string, operatingNamespace string, operatingLogId string) (int64, bool, error) {
 	info, err := minioObjectStorage.minioHandler.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{}, operatingNamespace, operatingLogId)
 	if err != nil {
-		return -1, false, err
+		return 0, false, err
 	}
 	isFencedObject := minioHandler.IsFencedObject(info)
 	return info.Size, isFencedObject, err

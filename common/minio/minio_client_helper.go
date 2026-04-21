@@ -250,7 +250,10 @@ func ReadObjectFull(ctx context.Context, objectReader FileReader, initReadBufSiz
 	_, sp := logger.NewIntentCtxWithParent(ctx, ObjectStorageScopeName, "ReadObjectFull")
 	defer sp.End()
 	start := time.Now()
-	// Initial buffer size - 1MB is a reasonable starting point
+	// Initial buffer size - validate to prevent panic from negative values
+	if initReadBufSize <= 0 {
+		initReadBufSize = 1024 * 1024 // fallback to 1MB default
+	}
 	buf := make([]byte, 0, initReadBufSize)
 
 	// Temporary read buffer

@@ -2059,13 +2059,12 @@ func TestNewMinioFileWriterWithMode_RecoveryMode_RecoverError(t *testing.T) {
 		Return(int64(0), false, statErr).Once()
 	mockClient.EXPECT().IsObjectNotExistsError(statErr).Return(false).Once()
 
-	// recoverFromFooter: GetObject fails (stat succeeded but returned error was not "not found")
-	mockClient.EXPECT().GetObject(mock.Anything, "test-bucket", "test-base/1/0/footer.blk", int64(0), int64(0), mock.Anything, mock.Anything).
-		Return(nil, errors.New("get failed")).Once()
-
+	// After the fix, recoverFromStorageUnsafe propagates the StatObject error
+	// immediately without falling through to recoverFromFooter/GetObject.
 	writer, err := NewMinioFileWriterWithMode(ctx, "test-bucket", "test-base", 1, 0, mockClient, cfg, true)
 	assert.Error(t, err)
 	assert.Nil(t, writer)
+	assert.Contains(t, err.Error(), "stat failed")
 }
 
 // ===== parseBlockIdFromBlockKey tests =====
