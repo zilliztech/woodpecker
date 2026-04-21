@@ -988,8 +988,21 @@ func (_c *SegmentHandle_SendAppendSuccessCallbacks_Call) RunAndReturn(run func(c
 }
 
 // SetRollingReady provides a mock function with given fields: ctx
-func (_m *SegmentHandle) SetRollingReady(ctx context.Context) {
-	_m.Called(ctx)
+func (_m *SegmentHandle) SetRollingReady(ctx context.Context) error {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetRollingReady")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = rf(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
 }
 
 // SegmentHandle_SetRollingReady_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetRollingReady'
@@ -1010,13 +1023,13 @@ func (_c *SegmentHandle_SetRollingReady_Call) Run(run func(ctx context.Context))
 	return _c
 }
 
-func (_c *SegmentHandle_SetRollingReady_Call) Return() *SegmentHandle_SetRollingReady_Call {
-	_c.Call.Return()
+func (_c *SegmentHandle_SetRollingReady_Call) Return(_a0 error) *SegmentHandle_SetRollingReady_Call {
+	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *SegmentHandle_SetRollingReady_Call) RunAndReturn(run func(context.Context)) *SegmentHandle_SetRollingReady_Call {
-	_c.Run(run)
+func (_c *SegmentHandle_SetRollingReady_Call) RunAndReturn(run func(context.Context) error) *SegmentHandle_SetRollingReady_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

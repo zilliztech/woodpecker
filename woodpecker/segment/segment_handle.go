@@ -78,8 +78,8 @@ type SegmentHandle interface {
 	Fence(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
 	Compact(ctx context.Context) error
-	// SetRollingReady set the segment as ready for rolling
-	SetRollingReady(ctx context.Context)
+	// SetRollingReady set the segment as ready for rolling and returns synchronous completion errors.
+	SetRollingReady(ctx context.Context) error
 	// IsForceRollingReady check if the segment is ready for rolling
 	IsForceRollingReady(ctx context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
@@ -1109,21 +1109,22 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 	return updateMetaErr
 }
 
-// SetRollingReady set the segment as ready for rolling
-func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
+// SetRollingReady set the segment as ready for rolling and returns synchronous completion errors.
+func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) error {
 	s.Lock()
 	defer s.Unlock()
 	logger.Ctx(ctx).Info("setting segment to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Int("queueSize", s.appendOpsQueue.Len()))
 	s.rollingState.Store(true)
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
-		return
+		return nil
 	}
 	// trigger immediately
 	err := s.doCompleteAndCloseUnsafe(ctx)
 	if err != nil {
 		logger.Ctx(ctx).Warn("Failed to complete segment after setting to rolling_ready state", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId), zap.Error(err))
 	}
+	return err
 }
 
 // IsForceRollingReady check if the segment is ready for rolling

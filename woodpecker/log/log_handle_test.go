@@ -365,7 +365,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(65 * 1024 * 1024)) // 65MB > 64MB threshold
 	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(500))       // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -408,7 +408,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().GetSize(mock.Anything).Return(int64(1024))       // Small size
 	mockOldSegment.EXPECT().GetBlocksCount(mock.Anything).Return(int64(100)) // Below blocks threshold
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -449,7 +449,7 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_ForceRolling(t *testing.T) {
 	// Mock old segment behavior - force rolling is ready
 	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(true) // Force rolling
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
-	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Once()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
 	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
@@ -1337,5 +1337,34 @@ func TestOpenLogWriter_MinioWithConditionWriteDisabled_ActiveSegments(t *testing
 	}
 
 	mockSegment1.AssertExpectations(t)
+	mockMeta.AssertExpectations(t)
+}
+
+func TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_AbortsCreation(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+	mockOldSegment := mocks_segment_handle.NewSegmentHandle(t)
+
+	logHandle.SegmentHandles[1] = mockOldSegment
+	logHandle.WritableSegmentId = 1
+
+	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(true)
+	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(werr.ErrMetadataRevisionInvalid).Once()
+
+	notified := false
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, func(context.Context, string) {
+		notified = true
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, newHandle)
+	assert.True(t, werr.ErrLogWriterLockLost.Is(err), "expected ErrLogWriterLockLost, got: %v", err)
+	assert.Equal(t, int64(1), logHandle.WritableSegmentId)
+	assert.True(t, notified)
+	_, created := logHandle.SegmentHandles[2]
+	assert.False(t, created)
+
+	mockOldSegment.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
 }
