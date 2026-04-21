@@ -135,6 +135,25 @@ func TestCompletionManager_AllRetriesExhausted(t *testing.T) {
 	assert.False(t, writable)
 }
 
+// TestSegmentHandle_SetRollingReady_PropagatesCompletionError verifies that when
+// the segment's synchronous rolling path hits a completion error (e.g. another
+// writer has taken over the segment metadata), SetRollingReady returns that
+// error so the LogHandle can abort segment creation instead of silently
+// proceeding. See also log_handle_test.go's
+// TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_AbortsCreation.
+func TestSegmentHandle_SetRollingReady_PropagatesCompletionError(t *testing.T) {
+	seg, mockClient := newTestSegmentForCompletion(t)
+
+	// Force all fence attempts to fail so WaitForCompletion returns an error.
+	mockClient.EXPECT().FenceSegment(mock.Anything, mock.Anything, mock.Anything, int64(1), int64(1)).
+		Return(int64(-1), assert.AnError)
+
+	// The append queue is empty, so SetRollingReady must drive completion inline
+	// and surface the error to the caller.
+	err := seg.SetRollingReady(context.Background())
+	assert.Error(t, err, "SetRollingReady must propagate completion errors")
+}
+
 // TestCompletionManager_MultipleTriggersCoalesce tests that multiple TriggerCompletion calls
 // result in only one execution.
 func TestCompletionManager_MultipleTriggersCoalesce(t *testing.T) {

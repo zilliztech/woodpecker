@@ -1,0 +1,65 @@
+name: Operator Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - dev
+    paths:
+      - "deployments/operator/**"
+      - ".github/workflows/operator-test.yaml"
+  pull_request:
+    branches:
+      - master
+      - dev
+    paths:
+      - "deployments/operator/**"
+      - ".github/workflows/operator-test.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  operator-test:
+    name: Operator Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: deployments/operator
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: deployments/operator/go.sum
+
+      - name: Run linter
+        run: |
+          make lint
+
+      - name: Run tests
+        run: |
+          make test
+
+      - name: Build operator binary
+        run: |
+          make build
+
+      - name: Build Docker image
+        run: |
+          make docker-build IMG=woodpecker-operator:test
+
+      - name: Handle failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          gh pr comment $PR --body "❌ **Operator Test** failed. Comment \`/rerun-operator\` to rerun, or \`/rerun\` to rerun all failed checks."

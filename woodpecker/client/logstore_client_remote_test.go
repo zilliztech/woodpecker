@@ -25,7 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/werr"
@@ -658,4 +660,123 @@ func TestRemoteClient_AppendEntry_Buffered_WithRemoteChannel(t *testing.T) {
 	entryId, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), entryId)
+}
+
+// =====================================================================
+// Tests for self-eviction on transport failure (maybeDropCachedConn).
+// =====================================================================
+//
+// logStoreClientRemote takes responsibility for clearing its own entry
+// from the connection pool on transport errors. Callers (fence / append /
+// discovery / ...) must NOT have to know about pool management. These
+// tests guard that contract: any RPC method that returns a transport-level
+// error must drop the client's cached entry; any RPC method that returns
+// an app-level error must NOT.
+
+// fakeSelfEvictingPool records Clear calls so tests can assert whether a
+// particular RPC method triggered self-eviction.
+type fakeSelfEvictingPool struct {
+	cleared []string
+}
+
+func (p *fakeSelfEvictingPool) GetLogStoreClient(ctx context.Context, target string) (LogStoreClient, error) {
+	panic("not used in these tests")
+}
+
+func (p *fakeSelfEvictingPool) Clear(ctx context.Context, target string) {
+	p.cleared = append(p.cleared, target)
+}
+
+func (p *fakeSelfEvictingPool) Close(ctx context.Context) error { return nil }
+
+// unavailableErr returns a gRPC Unavailable status mimicking what grpc-go
+// produces when the peer is unreachable (connection refused, etc.). This is
+// the exact error shape every transport failure converges to via toRPCErr
+// at rpc_util.go:1008 — see IsTransportError for the full trail.
+func unavailableErr() error {
+	return status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing: dial tcp 10.0.0.1:18080: connect: connection refused"`)
+}
+
+func TestRemoteClient_SelfEvictsOnTransportError_FenceSegment(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-0.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"pod-0.headless:18080"}, pool.cleared,
+		"FenceSegment must self-evict from the pool on a transport-level gRPC error")
+}
+
+func TestRemoteClient_SelfEvictsOnTransportError_AppendEntry(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-1.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("AddEntry", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	entry := &proto.LogEntry{SegId: 1, EntryId: 0, Values: []byte("x")}
+	resultCh := channel.NewLocalResultChannel("op-1")
+	_, err := client.AppendEntry(ctx, "bucket", "root", 1, entry, resultCh)
+	assert.Error(t, err)
+	assert.Equal(t, []string{"pod-1.headless:18080"}, pool.cleared,
+		"AppendEntry must self-evict on a transport-level gRPC error from the initial AddEntry call")
+}
+
+func TestRemoteClient_DoesNotEvictOnApplicationError(t *testing.T) {
+	// Application-level status errors (e.g. werr.ErrSegmentFenced, permission
+	// denied, not found) are NOT transport failures — the peer is healthy,
+	// it just rejected the request. Dropping the connection here would cause
+	// needless churn under legitimate high error rates.
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-2.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(&proto.FenceSegmentResponse{Status: werr.Status(werr.ErrSegmentFenced)}, nil)
+
+	_, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.Error(t, err)
+	assert.Empty(t, pool.cleared,
+		"application-level errors must not trigger self-eviction (would cause thrash under normal load)")
+}
+
+func TestRemoteClient_DoesNotEvictOnSuccess(t *testing.T) {
+	mockClient := &mockProtoLogStoreClient{}
+	pool := &fakeSelfEvictingPool{}
+	client := &logStoreClientRemote{innerClient: mockClient, pool: pool, target: "pod-3.headless:18080"}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(&proto.FenceSegmentResponse{Status: werr.Success(), LastEntryId: 42}, nil)
+
+	lastId, err := client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(42), lastId)
+	assert.Empty(t, pool.cleared, "successful RPCs must never evict the cached connection")
+}
+
+func TestRemoteClient_NilPool_IsNoOp(t *testing.T) {
+	// Unit tests across the codebase construct logStoreClientRemote directly
+	// without a pool/target (pool == nil). maybeDropCachedConn must be a
+	// graceful no-op in that case — otherwise every existing test that
+	// injects a gRPC error would panic.
+	mockClient := &mockProtoLogStoreClient{}
+	client := &logStoreClientRemote{innerClient: mockClient}
+	ctx := context.Background()
+
+	mockClient.On("FenceSegment", mock.Anything, mock.Anything).
+		Return(nil, unavailableErr())
+
+	assert.NotPanics(t, func() {
+		_, _ = client.FenceSegment(ctx, "bucket", "root", 1, 0)
+	})
 }

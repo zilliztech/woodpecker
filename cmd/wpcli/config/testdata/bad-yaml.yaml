@@ -1,0 +1,4 @@
+current-context: prod
+contexts:
+  prod:
+    endpoint: [not a string

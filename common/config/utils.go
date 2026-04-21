@@ -17,6 +17,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,6 +28,11 @@ import (
 
 // ByteSize represents a size value that can be parsed from YAML with units (KB, MB, GB, etc.)
 type ByteSize int64
+
+// MarshalJSON outputs the raw integer value (avoids scientific notation).
+func (b ByteSize) MarshalJSON() ([]byte, error) {
+	return json.Marshal(int64(b))
+}
 
 // UnmarshalYAML implements yaml.Unmarshaler for ByteSize
 func (b *ByteSize) UnmarshalYAML(value *yaml.Node) error {
@@ -100,6 +106,12 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	default:
 		return fmt.Errorf("invalid type for Duration: %T", v)
 	}
+}
+
+// MarshalJSON outputs the duration as a human-readable string (e.g. "30s", "500ms").
+// This prevents Duration from serializing as an empty object "{}".
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.duration.String())
 }
 
 // Milliseconds returns the duration in milliseconds

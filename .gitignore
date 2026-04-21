@@ -7,7 +7,8 @@
 *.dll
 *.so
 *.dylib
-bin/*
+bin/
+**/bin/
 
 **/.idea/*
 **/.vscode/*
@@ -28,3 +29,6 @@ go.work.sum
 
 # env file
 .env
+
+# operator bin
+deployments/operator/bin/*

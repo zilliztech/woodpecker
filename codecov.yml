@@ -20,6 +20,9 @@ ignore:
   - "**/*_test.go"
   - "**/*.pb.go"
   - "**/*_vtproto.pb.go"
+  - "**/zz_generated*.go"                      # controller-gen generated deepcopy
+  - "deployments/operator/cmd/main.go"         # operator entrypoint wires flags only
+  - "deployments/operator/test/**"             # operator test helpers
 
 comment:
   layout: "reach, diff, flags, components, files"

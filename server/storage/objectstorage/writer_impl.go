@@ -834,14 +834,16 @@ func (f *MinioFileWriter) waitIfFlushingBufferSizeExceededUnsafe(ctx context.Con
 func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, SegmentWriterScope, "Compact")
 	defer sp.End()
-	startTime := time.Now()
+	op := metrics.StartOp("file.compact", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
 	defer func() {
 		status := "success"
 		if retErr != nil {
 			status = "error"
 		}
+		op.End(status)
+		elapsed := float64(time.Since(op.StartedAt()).Milliseconds())
 		metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Inc()
-		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Observe(float64(time.Since(startTime).Milliseconds()))
+		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr, "compact", status).Observe(elapsed)
 	}()
 
 	f.mu.Lock()
@@ -966,7 +968,7 @@ func (f *MinioFileWriter) Compact(ctx context.Context) (_ int64, retErr error) {
 		zap.Int("originalBlockCount", originalBlockCount),
 		zap.Int("compactedBlockCount", len(newBlockIndexes)),
 		zap.Int64("fileSizeAfterCompact", fileSizeAfterCompact),
-		zap.Int64("costMs", time.Since(startTime).Milliseconds()))
+		zap.Int64("costMs", time.Since(op.StartedAt()).Milliseconds()))
 	return fileSizeAfterCompact, nil
 }
 
@@ -1155,11 +1157,20 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 
 		// try to submit flush task
 		resultFuture := f.pool.Submit(func() (*blockUploadResult, error) {
-			flushTaskStart := time.Now()
+			op := metrics.StartOp("file.flush", nil, nil, metrics.WithLogSegment(f.logId, f.segmentId))
+			status := "error"
+			var actualDataSize int64
+			defer func() {
+				op.End(status)
+				metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(op.StartedAt()).Milliseconds()))
+				if status == "success" {
+					metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
+				}
+			}()
 			logger.Ctx(ctx).Debug("start flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
 			blockKey := getBlockKey(f.segmentFileKey, blockId)
 			blockRawData := f.serialize(blockId, blockDataBuff)
-			actualDataSize := int64(len(blockRawData))
+			actualDataSize = int64(len(blockRawData))
 			logger.Ctx(ctx).Debug("serialized block data", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int64("originalBlockSize", blockSize), zap.Int64("actualDataSize", actualDataSize))
 			flushErr := retry.Do(ctx,
 				func() error {
@@ -1195,9 +1206,8 @@ func (f *MinioFileWriter) submitBlockFlushTaskUnsafe(ctx context.Context, curren
 				err: flushErr,
 			}
 			logger.Ctx(ctx).Debug("complete flush one block", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("blockId", blockId), zap.Int("count", len(blockDataBuff)), zap.Int64("blockSize", blockSize))
-			metrics.WpFileFlushLatency.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Observe(float64(time.Since(flushTaskStart).Milliseconds()))
 			if flushErr == nil {
-				metrics.WpFileFlushBytesWritten.WithLabelValues(metrics.NodeID, f.nsStr, f.logIdStr).Add(float64(actualDataSize))
+				status = "success"
 			}
 			return result, flushErr
 		})

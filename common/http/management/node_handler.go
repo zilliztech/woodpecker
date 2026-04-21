@@ -54,6 +54,25 @@ func NewNodeDecommissionHandler(decommission func() error) http.HandlerFunc {
 	}
 }
 
+// NewNodeCancelDecommissionHandler returns an http.HandlerFunc for POST /admin/node/decommission/cancel.
+// The cancel callback performs the strict decommissioning → active transition.
+func NewNodeCancelDecommissionHandler(cancel func() error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := cancel(); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "decommission cancelled"})
+	}
+}
+
 // NewNodeDecommissionProgressHandler returns an http.HandlerFunc for GET /admin/node/decommission/progress.
 // getProgress is a callback that returns the decommission progress as a JSON-serializable value.
 func NewNodeDecommissionProgressHandler(getProgress func() any) http.HandlerFunc {

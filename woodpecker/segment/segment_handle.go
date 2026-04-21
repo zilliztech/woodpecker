@@ -81,8 +81,11 @@ type SegmentHandle interface {
 	FenceAndComplete(ctx context.Context) (int64, error)
 	// Compact is a recovery or compaction operation
 	Compact(ctx context.Context) error
-	// SetRollingReady set the segment as ready for rolling
-	SetRollingReady(ctx context.Context)
+	// SetRollingReady set the segment as ready for rolling. If the segment's
+	// append queue is empty, this will synchronously drive completion and return
+	// any completion error (e.g. ErrMetadataRevisionInvalid when the segment
+	// metadata has been taken over by another writer).
+	SetRollingReady(ctx context.Context) error
 	// IsForceRollingReady check if the segment is ready for rolling
 	IsForceRollingReady(ctx context.Context) bool
 	// GetLastAccessTime get the last access time of the segment
@@ -1580,7 +1583,7 @@ func (s *segmentHandleImpl) Compact(ctx context.Context) error {
 }
 
 // SetRollingReady set the segment as ready for rolling
-func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
+func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) error {
 	waitForCompletion := false
 
 	s.Lock()
@@ -1589,7 +1592,7 @@ func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 	if s.appendOpsQueue.Len() > 0 {
 		logger.Ctx(ctx).Info("Segment is not empty, will rolling later", zap.Int64("logId", s.logId), zap.Int64("segmentId", s.segmentId))
 		s.Unlock()
-		return
+		return nil
 	}
 	if s.completionMgr != nil {
 		s.completionMgr.TriggerCompletion()
@@ -1598,7 +1601,9 @@ func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 	s.Unlock()
 
 	// Preserve historical behavior for empty queue: completion is finished
-	// before SetRollingReady returns.
+	// before SetRollingReady returns. Propagate the completion error so callers
+	// (e.g. LogHandle.GetOrCreateWritableSegmentHandle) can abort rolling when
+	// the log has been taken over by another writer.
 	if waitForCompletion {
 		err := s.completionMgr.WaitForCompletion()
 		if err != nil {
@@ -1606,8 +1611,10 @@ func (s *segmentHandleImpl) SetRollingReady(ctx context.Context) {
 				zap.Int64("logId", s.logId),
 				zap.Int64("segmentId", s.segmentId),
 				zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
 // IsForceRollingReady check if the segment is ready for rolling

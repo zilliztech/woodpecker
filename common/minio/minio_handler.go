@@ -189,6 +189,7 @@ func (m *minioHandlerImpl) PutObjectIfNoneMatch(ctx context.Context, bucketName,
 func (m *minioHandlerImpl) putObjectIfNoneMatchWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	info, err := m.PutObject(ctx, bucketName, objectName, reader, objectSize, minio.PutObjectOptions{}, operatingNamespace, operatingLogId)
 	if err != nil {
+		logger.Ctx(ctx).Info("failed to put object", zap.String("objectName", objectName), zap.Error(err))
 		// check if object exists, some backend not support overwrite originally
 		// if exists, but object is fence object, return ErrSegmentFenced
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
@@ -260,6 +261,7 @@ func (m *minioHandlerImpl) PutFencedObject(ctx context.Context, bucketName, obje
 func (m *minioHandlerImpl) putFencedObjectWhenConditionWriteDisabled(ctx context.Context, bucketName, objectName string, size int64, fencedObjectReader io.Reader, opts minio.PutObjectOptions, operatingNamespace string, operatingLogId string) (minio.UploadInfo, error) {
 	info, err := m.client.PutObject(ctx, bucketName, objectName, fencedObjectReader, size, opts)
 	if err != nil {
+		logger.Ctx(ctx).Info("failed to put fenced object", zap.String("objectName", objectName), zap.Error(err))
 		objInfo, stateErr := m.client.StatObject(ctx, bucketName, objectName, minio.StatObjectOptions{})
 		if stateErr != nil {
 			// return normal err

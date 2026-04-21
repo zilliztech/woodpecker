@@ -12,6 +12,7 @@
 package membership
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -46,6 +47,7 @@ type ServerNode struct {
 type ServerConfig struct {
 	// node info
 	NodeID        string
+	ClusterName   string // cluster/region name; auto-injected into Tags["cluster"]
 	ResourceGroup string
 	AZ            string
 	Tags          map[string]string
@@ -77,13 +79,22 @@ func NewServerNode(config *ServerConfig) (*ServerNode, error) {
 		endpointPort = config.AdvertiseServicePort
 	}
 
+	// Auto-inject ClusterName into tags if set.
+	tags := config.Tags
+	if tags == nil {
+		tags = make(map[string]string)
+	}
+	if config.ClusterName != "" {
+		tags["cluster"] = config.ClusterName
+	}
+
 	meta := &proto.NodeMeta{
 		NodeId:        config.NodeID,
 		ResourceGroup: config.ResourceGroup,
 		Az:            config.AZ,
 		Endpoint:      fmt.Sprintf("%s:%d", endpointAddr, endpointPort),
-		Tags:          config.Tags,
-		LastUpdate:    time.Now().UnixMilli(), // Convert to Unix timestamp in milliseconds
+		Tags:          tags,
+		LastUpdate:    time.Now().UnixMilli(),
 		Version:       NodeMetaVersion,
 	}
 	discovery := NewServiceDiscovery()
@@ -207,4 +218,48 @@ func (n *ServerNode) GetMemberlistStatus() string {
 		}
 	}
 	return result
+}
+
+// GetMemberlistJSON returns the memberlist as a JSON blob matching the
+// schema consumed by the wp CLI's client/memberlist.go. This is the
+// structured counterpart of GetMemberlistStatus (which returns text).
+func (n *ServerNode) GetMemberlistJSON() []byte {
+	type memberJSON struct {
+		ID          string            `json:"id"`
+		GossipAddr  string            `json:"gossip_addr"`
+		ServiceAddr string            `json:"service_addr"`
+		AZ          string            `json:"az"`
+		RG          string            `json:"rg"`
+		State       int               `json:"state"`
+		Incarnation uint32            `json:"incarnation"`
+		LastSeenMS  int64             `json:"last_seen_ms"`
+		Tags        map[string]string `json:"tags,omitempty"`
+	}
+	type listJSON struct {
+		Members []memberJSON `json:"members"`
+	}
+
+	members := n.memberlist.Members()
+	allMeta := n.discovery.GetAllServers()
+	out := listJSON{Members: make([]memberJSON, 0, len(members))}
+	for _, m := range members {
+		mj := memberJSON{
+			ID:         m.Name,
+			GossipAddr: fmt.Sprintf("%s:%d", m.Addr.String(), m.Port),
+			State:      int(m.State),
+			LastSeenMS: time.Now().UnixMilli(),
+		}
+		if meta, ok := allMeta[m.Name]; ok {
+			mj.AZ = meta.Az
+			mj.RG = meta.ResourceGroup
+			mj.ServiceAddr = meta.Endpoint
+			mj.Tags = meta.Tags
+		}
+		out.Members = append(out.Members, mj)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return []byte(`{"members":[]}`)
+	}
+	return b
 }

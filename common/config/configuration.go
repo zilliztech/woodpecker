@@ -343,12 +343,24 @@ func (s *StorageConfig) IsStorageService() bool {
 	return s.Type == "service"
 }
 
+// OpRegistryConfig controls the in-flight operation registry.
+type OpRegistryConfig struct {
+	Capacity int             `yaml:"capacity"` // Pool size; default 1024
+	WarnAge  DurationSeconds `yaml:"warnAge"`  // Young/old eviction boundary; default 30s
+}
+
+// RuntimeConfig holds runtime subsystem configuration.
+type RuntimeConfig struct {
+	OpRegistry OpRegistryConfig `yaml:"opRegistry"`
+}
+
 // WoodpeckerConfig stores the complete Woodpecker configuration.
 type WoodpeckerConfig struct {
 	Meta     MetaConfig     `yaml:"meta"`
 	Client   ClientConfig   `yaml:"client"`
 	Logstore LogstoreConfig `yaml:"logstore"`
 	Storage  StorageConfig  `yaml:"storage"`
+	Runtime  RuntimeConfig  `yaml:"runtime"`
 }
 
 type Configuration struct {
@@ -752,6 +764,12 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 		Storage: StorageConfig{
 			Type:     "default",
 			RootPath: "/tmp/woodpecker",
+		},
+		Runtime: RuntimeConfig{
+			OpRegistry: OpRegistryConfig{
+				Capacity: 1024,
+				WarnAge:  DurationSeconds{Duration: Duration{duration: 30 * time.Second}},
+			},
 		},
 	}
 }

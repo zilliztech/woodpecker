@@ -23,39 +23,46 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/zilliztech/woodpecker/common/config"
 	"github.com/zilliztech/woodpecker/common/tracer"
 	"github.com/zilliztech/woodpecker/common/werr"
 )
 
-// TestNewLogger tests the NewLogger function
-func TestNewLogger(t *testing.T) {
-	tests := []struct {
-		level    string
-		expected zap.AtomicLevel
-	}{
-		{"debug", zap.NewAtomicLevelAt(zap.DebugLevel)},
-		{"info", zap.NewAtomicLevelAt(zap.InfoLevel)},
-		{"warn", zap.NewAtomicLevelAt(zap.WarnLevel)},
-		{"error", zap.NewAtomicLevelAt(zap.ErrorLevel)},
-		{"invalid", zap.NewAtomicLevelAt(zap.WarnLevel)}, // By default, NewLogger returns WarnLevel
-	}
+// TestSetLevel_UpdatesCtxLogger verifies that SetLevel flips the enabled
+// level observed via Ctx(ctx) for every supported level.
+func TestSetLevel_UpdatesCtxLogger(t *testing.T) {
+	prev := GetLevel()
+	defer func() { _ = SetLevel(prev) }()
 
-	for _, test := range tests {
-		logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, test.level))
-		assert.True(t, logger.Core().Enabled(test.expected.Level()), fmt.Sprintf("level:%s should enable:%v", test.level, test.expected.Level()))
+	cases := []struct {
+		level    string
+		expected zapcore.Level
+	}{
+		{"debug", zap.DebugLevel},
+		{"info", zap.InfoLevel},
+		{"warn", zap.WarnLevel},
+		{"error", zap.ErrorLevel},
+	}
+	for _, c := range cases {
+		require.NoError(t, SetLevel(c.level))
+		l := Ctx(context.Background())
+		assert.True(t, l.Core().Enabled(c.expected), fmt.Sprintf("level=%s should enable %v", c.level, c.expected))
 	}
 }
 
-// TestLoggerMethods tests the Logger methods
+// TestLoggerMethods exercises the log APIs on the default logger.
 func TestLoggerMethods(t *testing.T) {
-	logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, "debug"))
+	prev := GetLevel()
+	defer func() { _ = SetLevel(prev) }()
+	require.NoError(t, SetLevel("debug"))
 
-	// Verify log recording using testify's assert
+	logger := Ctx(context.Background())
 	assert.NotPanics(t, func() {
 		logger.Debug("debug message", zap.String("key", "value"))
 		logger.Info("info message", zap.String("key", "value"))
@@ -64,20 +71,22 @@ func TestLoggerMethods(t *testing.T) {
 	})
 }
 
-func TestLoggerMethodsWithContext(t *testing.T) {
-	// Set the level explicitly
-	logger := Ctx(context.WithValue(context.Background(), CtxLogLevelKey, "info"))
-	assert.False(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.DebugLevel).Level()))
-	assert.True(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.InfoLevel).Level()))
-	assert.True(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.WarnLevel).Level()))
-	assert.True(t, logger.Core().Enabled(zap.NewAtomicLevelAt(zap.ErrorLevel).Level()))
+// TestSetLevel_AppliesToWithFieldsCtx is the regression test for the bug
+// where a ctx produced by WithFields before SetLevel kept logging at the
+// old level. With a shared atomic level, the change must take effect on
+// all outstanding derived loggers.
+func TestSetLevel_AppliesToWithFieldsCtx(t *testing.T) {
+	prev := GetLevel()
+	defer func() { _ = SetLevel(prev) }()
 
-	// default level is warn
-	defaultLogger := Ctx(context.Background())
-	assert.False(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.DebugLevel).Level()))
-	assert.False(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.InfoLevel).Level()))
-	assert.True(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.WarnLevel).Level()))
-	assert.True(t, defaultLogger.Core().Enabled(zap.NewAtomicLevelAt(zap.ErrorLevel).Level()))
+	require.NoError(t, SetLevel("info"))
+	ctx := WithFields(context.Background(), zap.String("k", "v"))
+	ctxLogger := Ctx(ctx)
+	assert.False(t, ctxLogger.Core().Enabled(zap.DebugLevel), "debug should be disabled at info level")
+
+	require.NoError(t, SetLevel("debug"))
+	assert.True(t, ctxLogger.Core().Enabled(zap.DebugLevel),
+		"previously-captured ctx logger must observe the new debug level")
 }
 
 func TestTraceLogger(t *testing.T) {
@@ -130,24 +139,6 @@ func TestTraceLoggerWithParentCtx(t *testing.T) {
 	span.End()
 }
 
-func TestDebugLogger(t *testing.T) {
-	l := debugLogger()
-	assert.NotNil(t, l)
-	assert.True(t, l.Core().Enabled(zap.DebugLevel))
-}
-
-func TestInfoLogger(t *testing.T) {
-	l := infoLogger()
-	assert.NotNil(t, l)
-	assert.True(t, l.Core().Enabled(zap.InfoLevel))
-}
-
-func TestErrorLogger(t *testing.T) {
-	l := errorLogger()
-	assert.NotNil(t, l)
-	assert.True(t, l.Core().Enabled(zap.ErrorLevel))
-}
-
 func TestCtx_NilContext(t *testing.T) {
 	l := Ctx(nil) //nolint:staticcheck // intentionally testing nil context handling
 	assert.NotNil(t, l)
@@ -190,20 +181,14 @@ func TestPropagate(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestNewLogger_InvalidLevel(t *testing.T) {
-	_, err := newLogger("text", "invalid_level")
-	assert.Error(t, err)
-	assert.True(t, werr.ErrConfigError.Is(err))
-}
-
 func TestNewLogger_JsonFormat(t *testing.T) {
-	l, err := newLogger("json", "info")
+	l, err := newLogger("json")
 	assert.NoError(t, err)
 	assert.NotNil(t, l)
 }
 
 func TestNewLogger_FallbackConsoleFormat(t *testing.T) {
-	l, err := newLogger("unknown_format", "info")
+	l, err := newLogger("unknown_format")
 	assert.NoError(t, err)
 	assert.NotNil(t, l)
 }
