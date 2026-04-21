@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -38,12 +39,13 @@ func TestClusterGossipDiff_Inconsistent(t *testing.T) {
 	// node-1's view has both nodes; node-2's view has only itself.
 	// Since the fanout resolves to the same httptest server we distinguish
 	// by request count: first call is the seed discovery, subsequent are fan-out.
-	var callCount int
+	// Fanout runs handlers in parallel goroutines, so the counter must be atomic.
+	var callCount atomic.Int64
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin/memberlist", func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		n := callCount.Add(1)
 		// First call (seed discovery) returns both members.
-		if callCount == 1 {
+		if n == 1 {
 			_, _ = fmt.Fprint(w, `{"members":[
 				{"id":"node-1","gossip_addr":"127.0.0.1:17946"},
 				{"id":"node-2","gossip_addr":"127.0.0.1:17946"}
@@ -51,7 +53,7 @@ func TestClusterGossipDiff_Inconsistent(t *testing.T) {
 			return
 		}
 		// Subsequent fanout calls alternate between two views.
-		if callCount%2 == 0 {
+		if n%2 == 0 {
 			_, _ = fmt.Fprint(w, `{"members":[{"id":"node-1","gossip_addr":"127.0.0.1:17946"}]}`)
 		} else {
 			_, _ = fmt.Fprint(w, `{"members":[
