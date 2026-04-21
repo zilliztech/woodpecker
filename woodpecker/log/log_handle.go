@@ -436,7 +436,20 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 		//  it will send complete request to logStores
 		//  and error out all pendingAppendOps with segmentCloseError
 		logger.Ctx(ctx).Debug("mark segment rolling", zap.String("logName", l.Name), zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)))
-		writeableSegmentHandle.SetRollingReady(ctx)
+		rollErr := writeableSegmentHandle.SetRollingReady(ctx)
+
+		// If completion hit ErrMetadataRevisionInvalid, another writer has taken over
+		// the log. Do NOT create a new segment — the current writer must be invalidated
+		// instead. Returning ErrLogWriterLockLost lets the caller propagate the
+		// preemption signal to the application.
+		if rollErr != nil && werr.ErrMetadataRevisionInvalid.Is(rollErr) {
+			logger.Ctx(ctx).Warn("aborting segment rolling: log has been taken over by another writer",
+				zap.String("logName", l.Name),
+				zap.Int64("logId", l.GetId()),
+				zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)),
+				zap.Error(rollErr))
+			return nil, werr.ErrLogWriterLockLost.WithCauseErr(rollErr)
+		}
 
 		// 2. create new segMeta(active)
 		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
