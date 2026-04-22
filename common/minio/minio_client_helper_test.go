@@ -18,6 +18,7 @@ package minio
 
 import (
 	"context"
+	"io"
 	"os"
 	"testing"
 
@@ -431,4 +432,47 @@ func TestCloudProviderConstants(t *testing.T) {
 	assert.Equal(t, "azure", CloudProviderAzure)
 	assert.Equal(t, "tencent", CloudProviderTencent)
 	assert.Equal(t, 20, CheckBucketRetryAttempts)
+}
+
+// === ReadObjectFull tests ===
+
+type mockBufReader struct {
+	data      []byte
+	readIndex int
+}
+
+func (m *mockBufReader) Read(p []byte) (n int, err error) {
+	if m.readIndex >= len(m.data) {
+		return 0, io.EOF
+	}
+	n = copy(p, m.data[m.readIndex:])
+	m.readIndex += n
+	return n, nil
+}
+
+func (m *mockBufReader) Close() error { return nil }
+func (m *mockBufReader) ReadAt(p []byte, off int64) (n int, err error) { return 0, nil }
+func (m *mockBufReader) Seek(offset int64, whence int) (int64, error) { return 0, nil }
+func (m *mockBufReader) Size() (int64, error) { return int64(len(m.data)), nil }
+
+func TestReadObjectFull_InitBufSizeValidation(t *testing.T) {
+	ctx := context.Background()
+	
+	// Test with negative initReadBufSize
+	reader1 := &mockBufReader{data: []byte("hello")}
+	data1, err1 := ReadObjectFull(ctx, reader1, -1, "ns", "log1")
+	assert.NoError(t, err1)
+	assert.Equal(t, []byte("hello"), data1)
+
+	// Test with zero initReadBufSize
+	reader2 := &mockBufReader{data: []byte("world")}
+	data2, err2 := ReadObjectFull(ctx, reader2, 0, "ns", "log1")
+	assert.NoError(t, err2)
+	assert.Equal(t, []byte("world"), data2)
+
+	// Test with positive initReadBufSize
+	reader3 := &mockBufReader{data: []byte("foo")}
+	data3, err3 := ReadObjectFull(ctx, reader3, 10, "ns", "log1")
+	assert.NoError(t, err3)
+	assert.Equal(t, []byte("foo"), data3)
 }
