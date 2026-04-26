@@ -432,5 +432,3 @@ func TestCloudProviderConstants(t *testing.T) {
 	assert.Equal(t, "tencent", CloudProviderTencent)
 	assert.Equal(t, 20, CheckBucketRetryAttempts)
 }
-
-
