@@ -202,8 +202,13 @@ func (f *MinioFileWriter) recoverFromStorageUnsafe(ctx context.Context) error {
 
 	footerBlockKey := getFooterBlockKey(f.segmentFileKey)
 	footerBlockSize, _, err := f.client.StatObject(ctx, f.bucket, footerBlockKey)
-	if err != nil && f.client.IsObjectNotExistsError(err) {
-		return f.recoverFromFullListing(ctx)
+	if err != nil {
+		if f.client.IsObjectNotExistsError(err) {
+			return f.recoverFromFullListing(ctx)
+		}
+		// Propagate all other errors (timeout, context canceled, permission denied, etc.)
+		// instead of silently proceeding with an invalid size (-1)
+		return fmt.Errorf("failed to stat footer block %s: %w", footerBlockKey, err)
 	}
 	return f.recoverFromFooter(ctx, footerBlockKey, footerBlockSize)
 }
