@@ -1676,6 +1676,7 @@ func testStoreSegmentMetaAlreadyExists(t *testing.T) {
 	seg2 := &SegmentMeta{Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}}
 	err = provider.StoreSegmentMetadata(context.Background(), logName, int64(1), seg2)
 	assert.Error(t, err)
+	assert.True(t, werr.ErrMetadataSegmentAlreadyExists.Is(err), "expected ErrMetadataSegmentAlreadyExists, got: %v", err)
 	assert.Contains(t, err.Error(), "segment metadata already exists")
 }
 
