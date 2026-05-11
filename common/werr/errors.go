@@ -164,6 +164,7 @@ var (
 	ErrMetadataRevisionInvalid        = newWoodpeckerError("metadata revision is invalid or outdated", 3011, false)
 	ErrMetadataKeyNotExists           = newWoodpeckerError("metadata key not exists", 3012, false)
 	ErrMetadataCreateLogAlreadyExists = newWoodpeckerError("log already exists in metadata", 3013, false)
+	ErrMetadataSegmentAlreadyExists   = newWoodpeckerError("segment already exists in metadata", 3014, false)
 
 	// ---------------------------------------------
 	// Service Layer Errors

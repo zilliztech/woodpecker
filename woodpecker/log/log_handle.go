@@ -279,6 +279,13 @@ func (l *logHandleImpl) fenceAllActiveSegments(ctx context.Context) error {
 			zap.Error(err))
 		return err
 	}
+	if err := l.advanceLastSegmentIdFromSegments(segments); err != nil {
+		logger.Ctx(ctx).Warn("failed to advance last segment id from metadata",
+			zap.String("logName", l.Name),
+			zap.Int64("logId", l.Id),
+			zap.Error(err))
+		return err
+	}
 
 	// Find all active segments
 	var activeSegmentIds []int64
@@ -420,6 +427,14 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 	if !writableExists {
 		handle, err := l.createAndCacheWritableSegmentHandle(ctx, writerInvalidationNotifier)
 		if err != nil {
+			if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
+				logger.Ctx(ctx).Warn("aborting segment creation: log has been taken over by another writer",
+					zap.String("logName", l.Name),
+					zap.Int64("logId", l.Id),
+					zap.Int64("expectedSegmentId", l.LastSegmentId.Load()+1),
+					zap.Error(err))
+				return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "segment creation conflict", err)
+			}
 			logger.Ctx(ctx).Warn("get or create writable segment handle failed", zap.String("logName", l.Name), zap.Int64("logId", l.Id), zap.Error(err))
 			return nil, err
 		}
@@ -448,13 +463,23 @@ func (l *logHandleImpl) GetOrCreateWritableSegmentHandle(ctx context.Context, wr
 				zap.Int64("logId", l.GetId()),
 				zap.Int64("segmentId", writeableSegmentHandle.GetId(ctx)),
 				zap.Error(rollErr))
-			return nil, werr.ErrLogWriterLockLost.WithCauseErr(rollErr)
+			return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "segment completion metadata revision invalid", rollErr)
 		}
 
 		// 2. create new segMeta(active)
-		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name))
-		newSegmentHandle, err := l.createAndCacheWritableSegmentHandle(ctx, writerInvalidationNotifier)
+		nextSegmentId := writeableSegmentHandle.GetId(ctx) + 1
+		logger.Ctx(ctx).Debug("create new segment handle", zap.String("logName", l.Name), zap.Int64("segmentId", nextSegmentId))
+		newSegmentHandle, err := l.createAndCacheWritableSegmentHandleWithID(ctx, nextSegmentId, writerInvalidationNotifier)
 		if err != nil {
+			if werr.ErrMetadataSegmentAlreadyExists.Is(err) {
+				logger.Ctx(ctx).Warn("aborting segment rolling: next segment has been claimed by another writer",
+					zap.String("logName", l.Name),
+					zap.Int64("logId", l.GetId()),
+					zap.Int64("oldSegmentId", writeableSegmentHandle.GetId(ctx)),
+					zap.Int64("expectedSegmentId", nextSegmentId),
+					zap.Error(err))
+				return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "next segment creation conflict", err)
+			}
 			return nil, err
 		}
 
@@ -531,9 +556,16 @@ func (l *logHandleImpl) GetExistsReadonlySegmentHandle(ctx context.Context, segm
 }
 
 func (l *logHandleImpl) createAndCacheWritableSegmentHandle(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
-	newSegMeta, err := l.createNewSegmentMeta(ctx)
+	return l.createAndCacheWritableSegmentHandleWithID(ctx, l.LastSegmentId.Load()+1, writerInvalidationNotifier)
+}
+
+func (l *logHandleImpl) createAndCacheWritableSegmentHandleWithID(ctx context.Context, segmentID int64, writerInvalidationNotifier func(ctx context.Context, reason string)) (segment.SegmentHandle, error) {
+	newSegMeta, err := l.createNewSegmentMetaWithID(ctx, segmentID)
 	if err != nil {
 		return nil, err
+	}
+	if err := l.advanceLastSegmentId(newSegMeta.Metadata.SegNo); err != nil {
+		return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "last segment id changed concurrently", err)
 	}
 	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
 	newSegHandle.SetWriterInvalidationNotifier(ctx, writerInvalidationNotifier)
@@ -557,17 +589,16 @@ func (l *logHandleImpl) shouldRollingCloseAndCreateWritableSegmentHandle(ctx con
 	return l.rollingPolicy.ShouldRollover(ctx, size, blocksCount, last)
 }
 
-func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.SegmentMeta, error) {
+func (l *logHandleImpl) createNewSegmentMetaWithID(ctx context.Context, segmentNo int64) (*meta.SegmentMeta, error) {
 	quorumInfo, selectQuorumErr := l.selectQuorumFunc(ctx)
 	if selectQuorumErr != nil {
 		return nil, selectQuorumErr
 	}
+	return l.storeNewSegmentMeta(ctx, segmentNo, quorumInfo)
+}
 
+func (l *logHandleImpl) storeNewSegmentMeta(ctx context.Context, segmentNo int64, quorumInfo *proto.QuorumInfo) (*meta.SegmentMeta, error) {
 	// construct new segment metadata
-	segmentNo, err := l.GetNextSegmentId(ctx)
-	if err != nil {
-		return nil, err
-	}
 	newSegmentMetadata := &proto.SegmentMetadata{
 		SegNo:       segmentNo,
 		CreateTime:  time.Now().UnixMilli(),
@@ -581,12 +612,46 @@ func (l *logHandleImpl) createNewSegmentMeta(ctx context.Context) (*meta.Segment
 		Revision: 0,
 	}
 	// create segment metadata
-	err = l.Metadata.StoreSegmentMetadata(ctx, l.Name, l.Id, segMeta)
+	err := l.Metadata.StoreSegmentMetadata(ctx, l.Name, l.Id, segMeta)
 	if err != nil {
 		return nil, err
 	}
 
 	return segMeta, nil
+}
+
+func (l *logHandleImpl) advanceLastSegmentIdFromSegments(segments map[int64]*meta.SegmentMeta) error {
+	maxSegmentID := int64(-1)
+	for _, segmentMeta := range segments {
+		if segmentMeta == nil || segmentMeta.Metadata == nil {
+			continue
+		}
+		if maxSegmentID < segmentMeta.Metadata.SegNo {
+			maxSegmentID = segmentMeta.Metadata.SegNo
+		}
+	}
+	return l.advanceLastSegmentId(maxSegmentID)
+}
+
+// advanceLastSegmentId advances the cached last segment id monotonically.
+func (l *logHandleImpl) advanceLastSegmentId(segmentID int64) error {
+	current := l.LastSegmentId.Load()
+	if segmentID <= current {
+		return nil
+	}
+	if !l.LastSegmentId.CompareAndSwap(current, segmentID) {
+		return werr.ErrInternalError.WithCauseErrMsg(
+			fmt.Sprintf("last segment id changed concurrently for logName:%s logId:%d expected:%d target:%d actual:%d",
+				l.Name, l.Id, current, segmentID, l.LastSegmentId.Load()))
+	}
+	return nil
+}
+
+func (l *logHandleImpl) invalidateWriterAndReturnLockLost(ctx context.Context, writerInvalidationNotifier func(ctx context.Context, reason string), reason string, cause error) error {
+	if writerInvalidationNotifier != nil {
+		writerInvalidationNotifier(ctx, reason)
+	}
+	return werr.ErrLogWriterLockLost.WithCauseErr(cause)
 }
 
 // TODO To be optimized, reduce meta access, maybe use a param to indicate whether to refresh lastSegmentId, most of the time, the lastSegmentId is not changed
