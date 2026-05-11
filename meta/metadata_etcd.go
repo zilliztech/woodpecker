@@ -700,7 +700,7 @@ func (e *metadataProviderEtcd) StoreSegmentMetadata(ctx context.Context, logName
 		metrics.WpEtcdMetaOperationsTotal.WithLabelValues("store_segment_metadata", "error").Inc()
 		metrics.WpEtcdMetaOperationLatency.WithLabelValues("store_segment_metadata", "error").Observe(float64(time.Since(startTime).Milliseconds()))
 		logger.Ctx(ctx).Warn("segment metadata already exists", zap.String("logName", logName), zap.Int64("segmentId", segmentMeta.Metadata.GetSegNo()))
-		return werr.ErrMetadataCreateSegment.WithCauseErrMsg(
+		return werr.ErrMetadataSegmentAlreadyExists.WithCauseErrMsg(
 			fmt.Sprintf("segment metadata already exists for logName:%s segmentId:%d", logName, segmentMeta.Metadata.GetSegNo()))
 	}
 	// update revision

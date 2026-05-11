@@ -347,6 +347,13 @@ func testStoreSegmentMeta(t *testing.T) {
 		assert.Equal(t, 1, len(segmentMetaList))
 		assert.Equal(t, segmentMeta.Metadata.SegNo, segmentMetaList[segmentMeta.Metadata.SegNo].Metadata.SegNo)
 	}
+
+	// test store exists segment meta fail
+	{
+		storeExistsErr := provider.StoreSegmentMetadata(context.Background(), logName, segmentMeta)
+		assert.Error(t, storeExistsErr)
+		assert.True(t, werr.ErrMetadataSegmentAlreadyExists.Is(storeExistsErr), "should return segment meta already exists")
+	}
 }
 
 // testUpdateSegmentMeta tests the UpdateSegmentMeta

@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
 	"github.com/zilliztech/woodpecker/common/config"
@@ -190,9 +191,6 @@ func TestCreateAndCacheNewSegmentHandle_SetsAccessTime(t *testing.T) {
 	logHandle, mockMeta := createMockLogHandle(t)
 	ctx := context.Background()
 
-	// Mock GetNextSegmentId
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
-
 	// Mock StoreSegmentMetadata
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(nil)
 
@@ -219,7 +217,6 @@ func TestGetOrCreateWritableSegmentHandle_ErrorHandling(t *testing.T) {
 	logHandle.WritableSegmentId = -1 // No writable segment exists
 
 	// Mock metadata operations for createNewSegmentMeta that will fail
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.Anything).Return(errors.New("storage error"))
 
 	// Call GetOrCreateWritableSegmentHandle and expect error
@@ -246,6 +243,7 @@ func TestFenceAllActiveSegments_NoActiveSegments(t *testing.T) {
 
 	err := logHandle.fenceAllActiveSegments(ctx)
 	assert.NoError(t, err)
+	assert.Equal(t, int64(2), logHandle.LastSegmentId.Load())
 
 	mockMeta.AssertExpectations(t)
 }
@@ -285,6 +283,7 @@ func TestFenceAllActiveSegments_SuccessfulFencing(t *testing.T) {
 
 	err := logHandle.fenceAllActiveSegments(ctx)
 	assert.NoError(t, err)
+	assert.Equal(t, int64(3), logHandle.LastSegmentId.Load())
 
 	// Verify all expectations
 	mockSegment1.AssertExpectations(t)
@@ -368,9 +367,6 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_SizeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
-		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
-	}, nil)
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
 		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
@@ -411,9 +407,6 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_TimeTriggeredRolling(t *test
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
-		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
-	}, nil)
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
 		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
@@ -452,9 +445,6 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_ForceRolling(t *testing.T) {
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
 
 	// Mock metadata operations for creating new segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{
-		1: {Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active}, Revision: 1},
-	}, nil)
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
 		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
@@ -513,7 +503,6 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_CreateFirstSegment(t *testin
 	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
 
 	// Mock metadata operations for creating first segment
-	mockMeta.EXPECT().GetAllSegmentMetadata(mock.Anything, "test-log").Return(map[int64]*meta.SegmentMeta{}, nil)
 	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
 		return meta.Metadata.SegNo == 0 && meta.Metadata.State == proto.SegmentState_Active
 	})).Return(nil)
@@ -528,6 +517,39 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_CreateFirstSegment(t *testin
 	assert.Contains(t, logHandle.SegmentHandles, int64(0)) // First segment should be cached
 
 	// Verify all expectations
+	mockMeta.AssertExpectations(t)
+}
+
+func TestLogHandle_GetOrCreateWritableSegmentHandle_FirstSegmentAlreadyExists_LockLost(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	logHandle.LastSegmentId.Store(0)
+
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 1 && meta.Metadata.State == proto.SegmentState_Active
+	})).Return(werr.ErrMetadataSegmentAlreadyExists).Once()
+
+	notified := false
+	notifier := func(ctx context.Context, reason string) {
+		notified = true
+		assert.Contains(t, reason, "creation conflict")
+	}
+
+	handle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, notifier)
+
+	require.Error(t, err)
+	assert.Nil(t, handle)
+	assert.True(t, werr.ErrLogWriterLockLost.Is(err), "expected ErrLogWriterLockLost, got: %v", err)
+	assert.True(t, notified, "writer invalidation notifier must be called on first segment conflict")
+
+	assert.Equal(t, int64(-1), logHandle.WritableSegmentId)
+	assert.Equal(t, int64(0), logHandle.LastSegmentId.Load())
+	_, createdExpected := logHandle.SegmentHandles[1]
+	assert.False(t, createdExpected, "claimed segment must not be cached")
+	_, skipped := logHandle.SegmentHandles[2]
+	assert.False(t, skipped, "writer must not skip to a later segment")
+
 	mockMeta.AssertExpectations(t)
 }
 
@@ -1352,18 +1374,72 @@ func TestLogHandle_GetOrCreateWritableSegmentHandle_RollingMetaRevisionInvalid_A
 	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
 	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(werr.ErrMetadataRevisionInvalid).Once()
 
+	// Critical: StoreSegmentMetadata for a new segment must NOT be called.
+	// (no mockMeta.EXPECT().StoreSegmentMetadata ... here)
 	notified := false
-	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, func(context.Context, string) {
+	notifier := func(ctx context.Context, reason string) {
 		notified = true
-	})
+		assert.Contains(t, reason, "revision invalid")
+	}
 
-	assert.Error(t, err)
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, notifier)
+
+	require.Error(t, err)
 	assert.Nil(t, newHandle)
 	assert.True(t, werr.ErrLogWriterLockLost.Is(err), "expected ErrLogWriterLockLost, got: %v", err)
+	assert.True(t, notified, "writer invalidation notifier must be called on lock lost")
+
+	// Writable segment id must NOT advance; no new handle was cached.
 	assert.Equal(t, int64(1), logHandle.WritableSegmentId)
 	assert.True(t, notified)
 	_, created := logHandle.SegmentHandles[2]
 	assert.False(t, created)
+
+	mockOldSegment.AssertExpectations(t)
+	mockMeta.AssertExpectations(t)
+}
+
+// TestLogHandle_GetOrCreateWritableSegmentHandle_RollingNextSegmentAlreadyExists_LockLost
+// verifies that a preempted writer does not skip over a segment claimed by the
+// new writer. It must try current+1 only; if that exact segment exists, the old
+// writer has lost ownership.
+func TestLogHandle_GetOrCreateWritableSegmentHandle_RollingNextSegmentAlreadyExists_LockLost(t *testing.T) {
+	logHandle, mockMeta := createMockLogHandle(t)
+	ctx := context.Background()
+
+	mockOldSegment := mocks_segment_handle.NewSegmentHandle(t)
+
+	logHandle.SegmentHandles[1] = mockOldSegment
+	logHandle.WritableSegmentId = 1
+	logHandle.LastSegmentId.Store(1)
+
+	mockOldSegment.EXPECT().IsForceRollingReady(mock.Anything).Return(true)
+	mockOldSegment.EXPECT().GetId(mock.Anything).Return(int64(1)).Maybe()
+	mockOldSegment.EXPECT().SetRollingReady(mock.Anything).Return(nil).Once()
+
+	mockMeta.EXPECT().StoreSegmentMetadata(mock.Anything, "test-log", mock.MatchedBy(func(meta *meta.SegmentMeta) bool {
+		return meta.Metadata.SegNo == 2 && meta.Metadata.State == proto.SegmentState_Active
+	})).Return(werr.ErrMetadataSegmentAlreadyExists).Once()
+
+	notified := false
+	notifier := func(ctx context.Context, reason string) {
+		notified = true
+		assert.Contains(t, reason, "creation conflict")
+	}
+
+	newHandle, err := logHandle.GetOrCreateWritableSegmentHandle(ctx, notifier)
+
+	require.Error(t, err)
+	assert.Nil(t, newHandle)
+	assert.True(t, werr.ErrLogWriterLockLost.Is(err), "expected ErrLogWriterLockLost, got: %v", err)
+	assert.True(t, notified, "writer invalidation notifier must be called on next segment conflict")
+
+	assert.Equal(t, int64(1), logHandle.WritableSegmentId)
+	assert.Equal(t, int64(1), logHandle.LastSegmentId.Load())
+	_, createdNext := logHandle.SegmentHandles[2]
+	assert.False(t, createdNext, "claimed segment must not be cached by the old writer")
+	_, skipped := logHandle.SegmentHandles[3]
+	assert.False(t, skipped, "old writer must not skip to a later segment")
 
 	mockOldSegment.AssertExpectations(t)
 	mockMeta.AssertExpectations(t)
