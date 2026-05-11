@@ -565,7 +565,7 @@ func (l *logHandleImpl) createAndCacheWritableSegmentHandleWithID(ctx context.Co
 		return nil, err
 	}
 	if err := l.advanceLastSegmentId(newSegMeta.Metadata.SegNo); err != nil {
-		return nil, err
+		return nil, l.invalidateWriterAndReturnLockLost(ctx, writerInvalidationNotifier, "last segment id changed concurrently", err)
 	}
 	newSegHandle := segment.NewSegmentHandle(ctx, l.Id, l.Name, newSegMeta, l.Metadata, l.ClientPool, l.cfg, true)
 	newSegHandle.SetWriterInvalidationNotifier(ctx, writerInvalidationNotifier)
@@ -633,6 +633,7 @@ func (l *logHandleImpl) advanceLastSegmentIdFromSegments(segments map[int64]*met
 	return l.advanceLastSegmentId(maxSegmentID)
 }
 
+// advanceLastSegmentId advances the cached last segment id monotonically.
 func (l *logHandleImpl) advanceLastSegmentId(segmentID int64) error {
 	current := l.LastSegmentId.Load()
 	if segmentID <= current {
