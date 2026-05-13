@@ -333,13 +333,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_buffer_wait_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Buffer P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_buffer_wait_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Buffer P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_buffer_wait_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Buffer P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_buffer_wait_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Buffer P99",
               "refId": "B"
             }
           ],
@@ -389,8 +389,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_file_operations_total{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (operation, status)",
-              "legendFormat": "op={{operation}} status={{status}}",
+              "expr": "sum(rate(woodpecker_server_file_operations_total{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
+              "legendFormat": "{{node_id}} op={{operation}} status={{status}}",
               "refId": "A"
             }
           ],
@@ -440,13 +440,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
           ],
@@ -496,13 +496,13 @@
           },
           "targets": [
             {
-              "expr": "sum(woodpecker_server_file_writer{namespace=~\"$namespace\", log_id=~\"$log_id\"}) by (log_id)",
-              "legendFormat": "logID={{log_id}} writer",
+              "expr": "sum(woodpecker_server_file_writer{namespace=~\"$namespace\", log_id=~\"$log_id\"}) by (node_id, log_id)",
+              "legendFormat": "{{node_id}} logID={{log_id}} writer",
               "refId": "A"
             },
             {
-              "expr": "sum(woodpecker_server_file_reader{namespace=~\"$namespace\", log_id=~\"$log_id\"}) by (log_id)",
-              "legendFormat": "logID={{log_id}} reader",
+              "expr": "sum(woodpecker_server_file_reader{namespace=~\"$namespace\", log_id=~\"$log_id\"}) by (node_id, log_id)",
+              "legendFormat": "{{node_id}} logID={{log_id}} reader",
               "refId": "B"
             }
           ],
@@ -552,13 +552,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_flush_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Flush P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_flush_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Flush P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_flush_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Flush P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_flush_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Flush P99",
               "refId": "B"
             }
           ],
@@ -608,13 +608,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_read_batch_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "ReadBatch P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_read_batch_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} ReadBatch P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_read_batch_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "ReadBatch P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_read_batch_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} ReadBatch P99",
               "refId": "B"
             }
           ],
@@ -664,13 +664,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_compaction_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Compact P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_file_compaction_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Compact P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_compaction_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (le))",
-              "legendFormat": "Compact P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_file_compaction_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, le))",
+              "legendFormat": "{{node_id}} Compact P99",
               "refId": "B"
             }
           ],
@@ -720,13 +720,13 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_flush_bytes_written{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m]))",
-              "legendFormat": "flush",
+              "expr": "sum(rate(woodpecker_server_flush_bytes_written{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id)",
+              "legendFormat": "{{node_id}} flush",
               "refId": "A"
             },
             {
-              "expr": "sum(rate(woodpecker_server_compact_bytes_written{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m]))",
-              "legendFormat": "compact",
+              "expr": "sum(rate(woodpecker_server_compact_bytes_written{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id)",
+              "legendFormat": "{{node_id}} compact",
               "refId": "B"
             }
           ],
@@ -790,8 +790,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_object_storage_operations_total{namespace=~\"$namespace\"}[1m])) by (operation, status)",
-              "legendFormat": "op={{operation}} status={{status}}",
+              "expr": "sum(rate(woodpecker_server_object_storage_operations_total{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, status)",
+              "legendFormat": "{{node_id}} op={{operation}} status={{status}}",
               "refId": "A"
             }
           ],
@@ -841,13 +841,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{namespace=~\"$namespace\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{namespace=~\"$namespace\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_operation_latency_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
           ],
@@ -897,13 +897,13 @@
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{namespace=~\"$namespace\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P50",
+              "expr": "histogram_quantile(0.5, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P50",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{namespace=~\"$namespace\"}[1m])) by (operation, le))",
-              "legendFormat": "op={{operation}} P99",
+              "expr": "histogram_quantile(0.99, sum(rate(woodpecker_server_object_storage_request_bytes_bucket{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation, le))",
+              "legendFormat": "{{node_id}} op={{operation}} P99",
               "refId": "B"
             }
           ],
@@ -953,8 +953,8 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(woodpecker_server_object_storage_bytes_transferred{namespace=~\"$namespace\"}[1m])) by (operation)",
-              "legendFormat": "op={{operation}}",
+              "expr": "sum(rate(woodpecker_server_object_storage_bytes_transferred{namespace=~\"$namespace\", log_id=~\"$log_id\"}[1m])) by (node_id, operation)",
+              "legendFormat": "{{node_id}} op={{operation}}",
               "refId": "A"
             }
           ],
