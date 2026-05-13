@@ -2771,8 +2771,9 @@
         "includeAll": true,
         "multi": true,
         "name": "namespace",
-        "query": "label_values(woodpecker_server_logstore_operations_total, namespace)",
+        "query": "query_result(sum by (namespace) (count_over_time({__name__=~\"woodpecker_server_(logstore_operations_total|file_operations_total|object_storage_operations_total|file_stored_bytes|file_stored_count|object_storage_stored_bytes|object_storage_stored_objects|flush_bytes_written|compact_bytes_written|read_batch_bytes_total)\", namespace=~\".+\", log_id=~\".+\"}[$__range])))",
         "refresh": 2,
+        "regex": "/namespace=\"([^\"]+)\"/",
         "type": "query"
       },
       {
@@ -2788,8 +2789,9 @@
         "includeAll": true,
         "multi": true,
         "name": "log_id",
-        "query": "label_values(woodpecker_server_logstore_operations_total{namespace=~\"$namespace\"}, log_id)",
+        "query": "query_result(sum by (log_id) (count_over_time({__name__=~\"woodpecker_server_(logstore_operations_total|file_operations_total|object_storage_operations_total|file_stored_bytes|file_stored_count|object_storage_stored_bytes|object_storage_stored_objects|flush_bytes_written|compact_bytes_written|read_batch_bytes_total)\", namespace=~\"$namespace\", log_id=~\".+\"}[$__range])))",
         "refresh": 2,
+        "regex": "/log_id=\"([^\"]+)\"/",
         "type": "query"
       },
       {
