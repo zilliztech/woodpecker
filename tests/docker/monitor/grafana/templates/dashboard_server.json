@@ -1506,12 +1506,12 @@
           },
           "targets": [
             {
-              "expr": "sum(rate(process_cpu_seconds_total{job=~\"$server_job\"}[1m]))",
-              "legendFormat": "cpu",
+              "expr": "sum(rate(process_cpu_seconds_total{job=~\"$server_job\"}[1m])) by (pod, instance)",
+              "legendFormat": "{{pod}} {{instance}} cpu",
               "refId": "A"
             }
           ],
-          "title": "Process CPU Total",
+          "title": "Process CPU Total by Pod",
           "type": "timeseries"
         },
         {
@@ -1557,12 +1557,12 @@
           },
           "targets": [
             {
-              "expr": "sum(process_resident_memory_bytes{job=~\"$server_job\"})",
-              "legendFormat": "memory",
+              "expr": "sum(process_resident_memory_bytes{job=~\"$server_job\"}) by (pod, instance)",
+              "legendFormat": "{{pod}} {{instance}} memory",
               "refId": "A"
             }
           ],
-          "title": "Process Memory Total",
+          "title": "Process Memory Total by Pod",
           "type": "timeseries"
         },
         {
@@ -1608,12 +1608,12 @@
           },
           "targets": [
             {
-              "expr": "sum(go_goroutines{job=~\"$server_job\"})",
-              "legendFormat": "goroutines",
+              "expr": "sum(go_goroutines{job=~\"$server_job\"}) by (pod, instance)",
+              "legendFormat": "{{pod}} {{instance}} goroutines",
               "refId": "A"
             }
           ],
-          "title": "Goroutines Total",
+          "title": "Goroutines Total by Pod",
           "type": "timeseries"
         },
         {
