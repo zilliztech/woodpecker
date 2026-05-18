@@ -210,6 +210,83 @@ func TestStagedFileWriter_WriteDataAsync_InRecoveryMode(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrFileWriterInRecoveryMode)
 }
 
+func TestStagedFileWriter_WriteDataAsync_RechecksStateAfterLock(t *testing.T) {
+	tests := []struct {
+		name      string
+		setState  func(*StagedFileWriter)
+		reset     func(*StagedFileWriter)
+		wantError error
+	}{
+		{
+			name:      "closed",
+			setState:  func(writer *StagedFileWriter) { writer.closed.Store(true) },
+			reset:     func(writer *StagedFileWriter) { writer.closed.Store(false) },
+			wantError: werr.ErrFileWriterAlreadyClosed,
+		},
+		{
+			name:      "finalized",
+			setState:  func(writer *StagedFileWriter) { writer.finalized.Store(true) },
+			reset:     func(writer *StagedFileWriter) { writer.finalized.Store(false) },
+			wantError: werr.ErrFileWriterFinalized,
+		},
+		{
+			name:      "finalizing",
+			setState:  func(writer *StagedFileWriter) { writer.finalizing.Store(true) },
+			reset:     func(writer *StagedFileWriter) { writer.finalizing.Store(false) },
+			wantError: werr.ErrFileWriterFinalizing,
+		},
+		{
+			name:      "storage_not_writable",
+			setState:  func(writer *StagedFileWriter) { writer.storageWritable.Store(false) },
+			reset:     func(writer *StagedFileWriter) { writer.storageWritable.Store(true) },
+			wantError: werr.ErrStorageNotWritable,
+		},
+		{
+			name:      "in_recovery_mode",
+			setState:  func(writer *StagedFileWriter) { writer.inRecoveryMode.Store(true) },
+			reset:     func(writer *StagedFileWriter) { writer.inRecoveryMode.Store(false) },
+			wantError: werr.ErrFileWriterInRecoveryMode,
+		},
+		{
+			name:      "fenced",
+			setState:  func(writer *StagedFileWriter) { writer.fenced.Store(true) },
+			reset:     func(writer *StagedFileWriter) { writer.fenced.Store(false) },
+			wantError: werr.ErrSegmentFenced,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := newTestConfig(t)
+			writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+			require.NoError(t, err)
+			defer func() {
+				tt.reset(writer)
+				require.NoError(t, writer.Close(context.Background()))
+			}()
+
+			writer.mu.Lock()
+			errCh := make(chan error, 1)
+			go func() {
+				_, writeErr := writer.WriteDataAsync(context.Background(), 0, []byte("data"), nil)
+				errCh <- writeErr
+			}()
+
+			time.Sleep(20 * time.Millisecond)
+			tt.setState(writer)
+			writer.mu.Unlock()
+
+			select {
+			case err = <-errCh:
+				assert.ErrorIs(t, err, tt.wantError)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for WriteDataAsync")
+			}
+		})
+	}
+}
+
 func TestStagedFileWriter_WriteDataAsync_Success(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)
