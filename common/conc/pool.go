@@ -103,6 +103,11 @@ func (pool *Pool[T]) Running() int {
 	return pool.inner.Running()
 }
 
+// Waiting returns the number of goroutines blocked waiting for a worker.
+func (pool *Pool[T]) Waiting() int {
+	return pool.inner.Waiting()
+}
+
 // Free returns the number of free workers
 func (pool *Pool[T]) Free() int {
 	return pool.inner.Free()

@@ -46,12 +46,24 @@ func (w *StagedFileWriter) SnapshotDetailed() storage.WriterSnapshotDetailed {
 		lastSubmittedFlushingBlockID = -1
 	}
 
+	var syncPoolRunning, syncPoolWaiting, syncPoolCapacity int
+	if w.syncPool != nil {
+		syncPoolRunning = w.syncPool.Running()
+		syncPoolWaiting = w.syncPool.Waiting()
+		syncPoolCapacity = w.syncPool.Cap()
+	}
+	syncPoolSubmitted := syncPoolRunning + syncPoolWaiting
+
 	return storage.WriterSnapshotDetailed{
 		WriterSnapshot:               snap,
 		BufferBytes:                  bufBytes,
 		BufferEntries:                bufEntries,
-		FlushQueueDepth:              0,
-		FlushQueueCapacity:           0,
+		FlushQueueDepth:              syncPoolSubmitted,
+		FlushQueueCapacity:           syncPoolCapacity,
+		SyncPoolSubmitted:            syncPoolSubmitted,
+		SyncPoolRunning:              syncPoolRunning,
+		SyncPoolWaiting:              syncPoolWaiting,
+		SyncPoolCapacity:             syncPoolCapacity,
 		WrittenBytes:                 writtenBytes,
 		LastSubmittedFlushingEntryID: w.lastSubmittedFlushingEntryID.Load(),
 		LastSubmittedFlushingBlockID: lastSubmittedFlushingBlockID,
