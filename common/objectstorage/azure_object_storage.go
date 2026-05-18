@@ -216,8 +216,15 @@ func newAzureObjectStorageClient(ctx context.Context, c *config.Configuration) (
 				TokenFilePath: os.Getenv("AZURE_FEDERATED_TOKEN_FILE"),
 			})
 		} else {
+			clientID := os.Getenv("AZURE_CLIENT_ID")
+			managedIdentityID := azidentity.ClientID("") // Default to System Assigned
+
+			if clientID != "" {
+				managedIdentityID = azidentity.ClientID(clientID)
+			}
+
 			cred, credErr = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
-				ID: azidentity.ClientID(os.Getenv("AZURE_CLIENT_ID")),
+				ID: managedIdentityID,
 			})
 		}
 		if credErr != nil {
