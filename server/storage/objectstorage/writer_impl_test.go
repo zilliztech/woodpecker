@@ -101,6 +101,7 @@ func newTestMinioFileWriter() *MinioFileWriter {
 	w.allUploadingTaskDone.Store(false)
 	w.flushingBufferSize.Store(0)
 	w.finalized.Store(false)
+	w.finalizing.Store(false)
 	w.fenced.Store(false)
 	w.headerWritten.Store(false)
 	w.lastSyncTimestamp.Store(time.Now().UnixMilli())
@@ -312,6 +313,71 @@ func TestMinioFileWriter_WriteDataAsync_StorageNotWritable(t *testing.T) {
 	_, err := w.WriteDataAsync(ctx, 0, []byte("test data"), resultCh)
 	require.Error(t, err)
 	assert.True(t, werr.ErrStorageNotWritable.Is(err))
+}
+
+func TestMinioFileWriter_WriteDataAsync_RechecksStateAfterLock(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		setState  func(*MinioFileWriter)
+		reset     func(*MinioFileWriter)
+		wantError error
+	}{
+		{
+			name:      "closed",
+			setState:  func(writer *MinioFileWriter) { writer.closed.Store(true) },
+			reset:     func(writer *MinioFileWriter) { writer.closed.Store(false) },
+			wantError: werr.ErrFileWriterAlreadyClosed,
+		},
+		{
+			name:      "finalized",
+			setState:  func(writer *MinioFileWriter) { writer.finalized.Store(true) },
+			reset:     func(writer *MinioFileWriter) { writer.finalized.Store(false) },
+			wantError: werr.ErrFileWriterFinalized,
+		},
+		{
+			name:      "finalizing",
+			setState:  func(writer *MinioFileWriter) { writer.finalizing.Store(true) },
+			reset:     func(writer *MinioFileWriter) { writer.finalizing.Store(false) },
+			wantError: werr.ErrFileWriterFinalizing,
+		},
+		{
+			name:      "fenced",
+			setState:  func(writer *MinioFileWriter) { writer.fenced.Store(true) },
+			reset:     func(writer *MinioFileWriter) { writer.fenced.Store(false) },
+			wantError: werr.ErrSegmentFenced,
+		},
+		{
+			name:      "storage_not_writable",
+			setState:  func(writer *MinioFileWriter) { writer.storageWritable.Store(false) },
+			reset:     func(writer *MinioFileWriter) { writer.storageWritable.Store(true) },
+			wantError: werr.ErrStorageNotWritable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newTestMinioFileWriter()
+			w.mu.Lock()
+			errCh := make(chan error, 1)
+			go func() {
+				_, writeErr := w.WriteDataAsync(ctx, 0, []byte("data"), nil)
+				errCh <- writeErr
+			}()
+
+			time.Sleep(20 * time.Millisecond)
+			tt.setState(w)
+			w.mu.Unlock()
+
+			select {
+			case err := <-errCh:
+				assert.ErrorIs(t, err, tt.wantError)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for WriteDataAsync")
+			}
+			tt.reset(w)
+		})
+	}
 }
 
 func TestMinioFileWriter_WriteDataAsync_AlreadyWrittenEntry(t *testing.T) {

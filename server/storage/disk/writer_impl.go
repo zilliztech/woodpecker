@@ -86,6 +86,7 @@ type LocalFileWriter struct {
 	headerWritten atomic.Bool  // Ensures header is written before data
 	finalizeMu    sync.Mutex   // Ensures that the finalize operation is done in a single thread
 	finalized     atomic.Bool
+	finalizing    atomic.Bool
 	fenced        atomic.Bool
 	recovered     atomic.Bool
 	lockFile      *flock.Flock // Lock file handle
@@ -116,6 +117,9 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "NewLocalFileWriterWithMode")
 	defer sp.End()
 	blockSize := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize
+	if blockSize <= 0 {
+		blockSize = 2 * 1024 * 1024
+	}
 	maxBufferEntries := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries
 	maxBytes := cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxBytes
 	flushQueueSize := max(int(maxBytes/blockSize), 300)
@@ -169,6 +173,7 @@ func NewLocalFileWriterWithMode(ctx context.Context, baseDir string, logId int64
 	writer.currentBlockNumber.Store(0)
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
+	writer.finalizing.Store(false)
 	writer.fenced.Store(false)
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
@@ -696,25 +701,8 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		return -1, werr.ErrEmptyPayload
 	}
 
-	if w.closed.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
-		return entryId, werr.ErrFileWriterAlreadyClosed
-	}
-
-	if w.finalized.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
-		return entryId, werr.ErrFileWriterFinalized
-	}
-
-	if w.fenced.Load() {
-		// quick fail and return a fenced Err
-		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
-		return -1, werr.ErrSegmentFenced
-	}
-
-	if !w.storageWritable.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrStorageNotWritable
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		return id, err
 	}
 
 	// Validate empty payload
@@ -725,6 +713,10 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	// Check for duplicates
 	w.mu.Lock()
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		w.mu.Unlock()
+		return id, err
+	}
 	if entryId <= w.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to storage. Return immediately.
 		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil)
@@ -792,6 +784,30 @@ func (w *LocalFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	return entryId, nil
 }
 
+func (w *LocalFileWriter) checkWritableForWriteDataAsync(ctx context.Context, entryId int64, dataLen int) (int64, error) {
+	if w.closed.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
+		return entryId, werr.ErrFileWriterAlreadyClosed
+	}
+	if w.finalized.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
+		return entryId, werr.ErrFileWriterFinalized
+	}
+	if w.finalizing.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalizing")
+		return entryId, werr.ErrFileWriterFinalizing
+	}
+	if w.fenced.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrSegmentFenced
+	}
+	if !w.storageWritable.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
+		return entryId, werr.ErrStorageNotWritable
+	}
+	return entryId, nil
+}
+
 // writeHeader writes the header record
 func (w *LocalFileWriter) writeHeader(ctx context.Context) error {
 	header := &codec.HeaderRecord{
@@ -834,7 +850,7 @@ func (w *LocalFileWriter) writeRecord(ctx context.Context, record codec.Record) 
 }
 
 // Finalize finalizes the writer and writes the footer
-func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
+func (w *LocalFileWriter) Finalize(ctx context.Context) (_ int64, retErr error) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Finalize")
 	defer sp.End()
 	startTime := time.Now()
@@ -846,6 +862,18 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 		// if already finalized, return fast
 		return w.lastEntryID.Load(), nil
 	}
+
+	w.finalizing.Store(true)
+	flushDrained := false
+	defer func() {
+		if retErr != nil {
+			if flushDrained {
+				w.storageWritable.Store(false)
+			} else {
+				w.finalizing.Store(false)
+			}
+		}
+	}()
 
 	// Sync all pending data first
 	if err := w.Sync(ctx); err != nil {
@@ -860,6 +888,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
+	flushDrained = true
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -911,6 +940,7 @@ func (w *LocalFileWriter) Finalize(ctx context.Context) (int64, error) {
 	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "finalize", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 	logger.Ctx(ctx).Debug("finalized log file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.finalized.Store(true)
+	w.finalizing.Store(false)
 	return w.lastEntryID.Load(), nil
 }
 
@@ -937,6 +967,23 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 		logger.Ctx(ctx).Info("run: received close signal, but it already closed,skip", zap.String("inst", fmt.Sprintf("%p", w)))
 		return nil
 	}
+
+	// Ensure goroutine, file, channel, and lock cleanup always runs,
+	// even if awaitAllFlushTasks fails (e.g., timeout or context cancellation).
+	defer func() {
+		w.runCancel()
+		if w.file != nil {
+			w.file.Close()
+			w.file = nil
+		}
+		close(w.flushTaskChan)
+		if err := w.releaseSegmentLock(ctx); err != nil {
+			logger.Ctx(ctx).Warn("Failed to release segment lock during close",
+				zap.String("segmentFilePath", w.segmentFilePath),
+				zap.Error(err))
+		}
+	}()
+
 	logger.Ctx(ctx).Info("run: received close signal,trigger sync before close ", zap.String("inst", fmt.Sprintf("%p", w)))
 	err := w.Sync(context.Background()) // manual sync all pending append operation
 	if err != nil {
@@ -954,26 +1001,8 @@ func (w *LocalFileWriter) Close(ctx context.Context) error {
 		return waitErr
 	}
 
-	// Cancel async operations
-	w.runCancel()
-	// Close file
-	if w.file != nil {
-		w.file.Close()
-		w.file = nil
-	}
-
-	// Close channels
-	close(w.flushTaskChan)
-
-	// Release segment lock
-	if err := w.releaseSegmentLock(ctx); err != nil {
-		logger.Ctx(ctx).Warn("Failed to release segment lock during close",
-			zap.String("segmentFilePath", w.segmentFilePath),
-			zap.Error(err))
-	}
 	metrics.WpFileOperationsTotal.WithLabelValues(w.logIdStr, "close", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(w.logIdStr, "close", "success").Observe(float64(time.Since(startTime).Milliseconds()))
-
 	return nil
 }
 
