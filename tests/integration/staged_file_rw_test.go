@@ -148,6 +148,66 @@ func TestStagedFileWriter_BasicWriteAndSync(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestStagedFileWriter_FinalizeFlushesPendingDataWithoutExplicitSync(t *testing.T) {
+	rootDir := fmt.Sprintf("test-staged-finalize-pending-%d", time.Now().UnixNano())
+	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)
+	ctx := context.Background()
+
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(60_000)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxEntries = 10_000
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(16_000_000)
+
+	logId := int64(11)
+	segmentId := int64(1100)
+	defer cleanupStagedTestObjects(t, storageCli, rootDir)
+
+	writer, err := stagedstorage.NewStagedFileWriter(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
+	require.NoError(t, err)
+
+	testData := [][]byte{
+		[]byte("pending entry 0"),
+		[]byte("pending entry 1"),
+		[]byte("pending entry 2"),
+		[]byte("pending entry 3"),
+	}
+	for i, data := range testData {
+		_, err = writer.WriteDataAsync(ctx, int64(i), data, nil)
+		require.NoError(t, err)
+	}
+
+	lastEntryID := int64(len(testData) - 1)
+	finalizedLastEntryID, err := writer.Finalize(ctx, lastEntryID)
+	require.NoError(t, err)
+	require.Equal(t, lastEntryID, finalizedLastEntryID)
+	require.NoError(t, writer.Close(ctx))
+
+	recoveredWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+	require.NoError(t, err)
+	require.True(t, recoveredWriter.Snapshot().Finalized)
+	require.NotNil(t, recoveredWriter.GetRecoveredFooter())
+	require.Equal(t, lastEntryID, recoveredWriter.GetLastEntryId(ctx))
+	require.NoError(t, recoveredWriter.Close(ctx))
+
+	reader, err := stagedstorage.NewStagedFileReaderAdv(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg)
+	require.NoError(t, err)
+	defer reader.Close(ctx)
+
+	footerLastEntryID, err := reader.GetLastEntryID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, lastEntryID, footerLastEntryID)
+
+	result, err := reader.ReadNextBatchAdv(ctx, storage.ReaderOpt{
+		StartEntryID:    0,
+		MaxBatchEntries: int64(len(testData)) + 1,
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, result.Entries, len(testData))
+	for i, entry := range result.Entries {
+		require.Equal(t, int64(i), entry.EntryId)
+		require.Equal(t, testData[i], entry.Values)
+	}
+}
+
 func TestStagedFileWriter_CompactOperation(t *testing.T) {
 	rootDir := fmt.Sprintf("test-staged-compact-%d", time.Now().Unix())
 	storageCli, cfg, tempDir := setupStagedFileTest(t, rootDir)

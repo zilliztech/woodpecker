@@ -122,6 +122,9 @@ func TestIsSegmentNotWritableErr(t *testing.T) {
 	// file writer finalized error
 	assert.True(t, IsSegmentNotWritableErr(ErrFileWriterFinalized))
 
+	// file writer finalizing error
+	assert.True(t, IsSegmentNotWritableErr(ErrFileWriterFinalizing))
+
 	// client closed error
 	assert.True(t, IsSegmentNotWritableErr(ErrWoodpeckerClientClosed))
 

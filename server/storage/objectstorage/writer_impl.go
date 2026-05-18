@@ -104,6 +104,7 @@ type MinioFileWriter struct {
 	closed        atomic.Bool
 	finalizeMu    sync.Mutex // Ensures that the finalize operation is done in a single thread
 	finalized     atomic.Bool
+	finalizing    atomic.Bool
 	fenced        atomic.Bool // For fence state: true confirms it is fenced, while false requires verification by checking the storage for a fence flag object.
 	lockObjectKey string      // Segment lock object key
 }
@@ -153,6 +154,7 @@ func NewMinioFileWriterWithMode(ctx context.Context, bucket string, baseDir stri
 	segmentFileWriter.allUploadingTaskDone.Store(false)
 	segmentFileWriter.flushingBufferSize.Store(0)
 	segmentFileWriter.finalized.Store(false)
+	segmentFileWriter.finalizing.Store(false)
 	segmentFileWriter.fenced.Store(false)
 	segmentFileWriter.headerWritten.Store(false)
 	segmentFileWriter.lastSyncTimestamp.Store(time.Now().UnixMilli())
@@ -691,26 +693,8 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 		return -1, werr.ErrEmptyPayload
 	}
 
-	if f.closed.Load() {
-		// quick fail and return a close Err, which indicate than it is also not retriable
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment writer is closed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrFileWriterAlreadyClosed
-	}
-
-	if f.finalized.Load() {
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is finalized", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return entryId, werr.ErrFileWriterFinalized
-	}
-
-	if f.fenced.Load() {
-		// quick fail and return a fenced Err
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is fenced", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrSegmentFenced
-	}
-	if !f.storageWritable.Load() {
-		// quick fail and return a Storage Err, which indicate that it is also not retriable
-		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable due to flush errors, search keyword 'flush error encountered' for detail", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
-		return -1, werr.ErrStorageNotWritable
+	if id, err := f.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		return id, err
 	}
 
 	logger.Ctx(ctx).Debug("AppendAsync: attempting to write", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
@@ -735,6 +719,10 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 
 	f.mu.Lock()
 	sp.AddEvent("wait lock", trace.WithAttributes(attribute.Int64("elapsedTime", time.Since(startTime).Milliseconds())))
+	if id, err := f.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		f.mu.Unlock()
+		return id, err
+	}
 	if entryId <= f.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to object storage. Return immediately.
 		logger.Ctx(ctx).Debug("AppendAsync: skipping write, entryId is not greater than lastEntryID, already stored", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int64("lastEntryID", f.lastEntryID.Load()))
@@ -772,6 +760,30 @@ func (f *MinioFileWriter) WriteDataAsync(ctx context.Context, entryId int64, dat
 	}
 
 	return id, nil
+}
+
+func (f *MinioFileWriter) checkWritableForWriteDataAsync(ctx context.Context, entryId int64, dataLen int) (int64, error) {
+	if f.closed.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment writer is closed", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return -1, werr.ErrFileWriterAlreadyClosed
+	}
+	if f.finalized.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is finalized", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return entryId, werr.ErrFileWriterFinalized
+	}
+	if f.finalizing.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is finalizing", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return entryId, werr.ErrFileWriterFinalizing
+	}
+	if f.fenced.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment is fenced", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return -1, werr.ErrSegmentFenced
+	}
+	if !f.storageWritable.Load() {
+		logger.Ctx(ctx).Debug("AppendAsync: attempting to write rejected, segment storage not writable due to flush errors, search keyword 'flush error encountered' for detail", zap.String("segmentFileKey", f.segmentFileKey), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("SegmentImplInst", fmt.Sprintf("%p", f)))
+		return -1, werr.ErrStorageNotWritable
+	}
+	return entryId, nil
 }
 
 func (f *MinioFileWriter) GetFirstEntryId(ctx context.Context) int64 {
@@ -1354,6 +1366,18 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 		return f.lastEntryID.Load(), nil
 	}
 
+	f.finalizing.Store(true)
+	flushDrained := false
+	defer func() {
+		if retErr != nil {
+			if flushDrained {
+				f.storageWritable.Store(false)
+			} else {
+				f.finalizing.Store(false)
+			}
+		}
+	}()
+
 	err := f.Sync(ctx) // manual sync all pending append operation
 	if err != nil {
 		logger.Ctx(ctx).Warn("sync error before close",
@@ -1368,6 +1392,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
+	flushDrained = true
 
 	// finalize with footer.blk name
 	footerBlockKey := getFooterBlockKey(f.segmentFileKey)
@@ -1398,6 +1423,7 @@ func (f *MinioFileWriter) Finalize(ctx context.Context, lac int64 /*not used, ca
 		zap.String("segmentFileKey", f.segmentFileKey),
 		zap.String("footerBlockKey", footerBlockKey))
 	f.finalized.Store(true)
+	f.finalizing.Store(false)
 	return f.GetLastEntryId(ctx), nil
 }
 

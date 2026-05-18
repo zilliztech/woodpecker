@@ -155,6 +155,77 @@ func TestLocalFileWriter_WriteDataAsync_StorageNotWritable(t *testing.T) {
 	assert.ErrorIs(t, err, werr.ErrStorageNotWritable)
 }
 
+func TestLocalFileWriter_WriteDataAsync_RechecksStateAfterLock(t *testing.T) {
+	tests := []struct {
+		name      string
+		setState  func(*LocalFileWriter)
+		reset     func(*LocalFileWriter)
+		wantError error
+	}{
+		{
+			name:      "closed",
+			setState:  func(writer *LocalFileWriter) { writer.closed.Store(true) },
+			reset:     func(writer *LocalFileWriter) { writer.closed.Store(false) },
+			wantError: werr.ErrFileWriterAlreadyClosed,
+		},
+		{
+			name:      "finalized",
+			setState:  func(writer *LocalFileWriter) { writer.finalized.Store(true) },
+			reset:     func(writer *LocalFileWriter) { writer.finalized.Store(false) },
+			wantError: werr.ErrFileWriterFinalized,
+		},
+		{
+			name:      "finalizing",
+			setState:  func(writer *LocalFileWriter) { writer.finalizing.Store(true) },
+			reset:     func(writer *LocalFileWriter) { writer.finalizing.Store(false) },
+			wantError: werr.ErrFileWriterFinalizing,
+		},
+		{
+			name:      "fenced",
+			setState:  func(writer *LocalFileWriter) { writer.fenced.Store(true) },
+			reset:     func(writer *LocalFileWriter) { writer.fenced.Store(false) },
+			wantError: werr.ErrSegmentFenced,
+		},
+		{
+			name:      "storage_not_writable",
+			setState:  func(writer *LocalFileWriter) { writer.storageWritable.Store(false) },
+			reset:     func(writer *LocalFileWriter) { writer.storageWritable.Store(true) },
+			wantError: werr.ErrStorageNotWritable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := getTempDir(t)
+			cfg, _ := config.NewConfiguration()
+			writer, err := NewLocalFileWriter(context.Background(), dir, 1, 0, cfg)
+			require.NoError(t, err)
+			defer func() {
+				tt.reset(writer)
+				require.NoError(t, writer.Close(context.Background()))
+			}()
+
+			writer.mu.Lock()
+			errCh := make(chan error, 1)
+			go func() {
+				_, writeErr := writer.WriteDataAsync(context.Background(), 0, []byte("data"), nil)
+				errCh <- writeErr
+			}()
+
+			time.Sleep(20 * time.Millisecond)
+			tt.setState(writer)
+			writer.mu.Unlock()
+
+			select {
+			case err = <-errCh:
+				assert.ErrorIs(t, err, tt.wantError)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for WriteDataAsync")
+			}
+		})
+	}
+}
+
 func TestLocalFileWriter_WriteDataAsync_Success(t *testing.T) {
 	dir := getTempDir(t)
 	cfg, _ := config.NewConfiguration()

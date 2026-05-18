@@ -101,6 +101,7 @@ type StagedFileWriter struct {
 	lastEntryID    atomic.Int64 // The last entryId written to disk
 	headerWritten  atomic.Bool  // Ensures header is written before data
 	finalized      atomic.Bool
+	finalizing     atomic.Bool
 	fenced         atomic.Bool
 	inRecoveryMode atomic.Bool
 	recovered      atomic.Bool
@@ -114,10 +115,11 @@ type StagedFileWriter struct {
 	flushMu                      sync.Mutex // the mutex ensures sequential writing for each flush batch
 
 	// Close management
-	fileClose chan struct{} // Close signal
-	closed    atomic.Bool
-	runCtx    context.Context
-	runCancel context.CancelFunc
+	fileClose  chan struct{} // Close signal
+	closed     atomic.Bool
+	finalizeMu sync.Mutex
+	runCtx     context.Context
+	runCancel  context.CancelFunc
 }
 
 // NewStagedFileWriter creates a new staged file writer
@@ -190,6 +192,7 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.currentBlockNumber.Store(0)
 	writer.headerWritten.Store(false)
 	writer.finalized.Store(false)
+	writer.finalizing.Store(false)
 	writer.fenced.Store(false)
 	writer.closed.Store(false)
 	writer.recovered.Store(false)
@@ -726,29 +729,8 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 		zap.Int64("entryId", entryId),
 		zap.Int("dataLen", len(data)))
 
-	if w.closed.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
-		return entryId, werr.ErrFileWriterAlreadyClosed
-	}
-
-	if w.finalized.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
-		return entryId, werr.ErrFileWriterFinalized
-	}
-
-	if !w.storageWritable.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
-		return entryId, werr.ErrStorageNotWritable
-	}
-
-	if w.inRecoveryMode.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
-		return entryId, werr.ErrFileWriterInRecoveryMode
-	}
-
-	if w.fenced.Load() {
-		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", len(data)), zap.String("inst", fmt.Sprintf("%p", w)))
-		return -1, werr.ErrSegmentFenced
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		return id, err
 	}
 
 	// Validate empty payload
@@ -759,6 +741,10 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 
 	// Check for duplicates
 	w.mu.Lock()
+	if id, err := w.checkWritableForWriteDataAsync(ctx, entryId, len(data)); err != nil {
+		w.mu.Unlock()
+		return id, err
+	}
 	if entryId <= w.lastEntryID.Load() {
 		// If entryId is less than or equal to lastEntryID, it indicates that the entry has already been written to storage. Return immediately.
 		cache.NotifyPendingEntryDirectly(ctx, w.logId, w.segmentId, entryId, resultCh, entryId, nil, "", time.Time{})
@@ -826,6 +812,34 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 	return entryId, nil
 }
 
+func (w *StagedFileWriter) checkWritableForWriteDataAsync(ctx context.Context, entryId int64, dataLen int) (int64, error) {
+	if w.closed.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer closed")
+		return entryId, werr.ErrFileWriterAlreadyClosed
+	}
+	if w.finalized.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalized")
+		return entryId, werr.ErrFileWriterFinalized
+	}
+	if w.finalizing.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer finalizing")
+		return entryId, werr.ErrFileWriterFinalizing
+	}
+	if !w.storageWritable.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: storage not writable")
+		return entryId, werr.ErrStorageNotWritable
+	}
+	if w.inRecoveryMode.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: writer in recovery mode")
+		return entryId, werr.ErrFileWriterInRecoveryMode
+	}
+	if w.fenced.Load() {
+		logger.Ctx(ctx).Debug("WriteDataAsync: attempting to write rejected, segment is fenced", zap.String("segmentFilePath", w.segmentFilePath), zap.Int64("entryId", entryId), zap.Int("dataLength", dataLen), zap.String("inst", fmt.Sprintf("%p", w)))
+		return -1, werr.ErrSegmentFenced
+	}
+	return entryId, nil
+}
+
 // writeHeader writes the header record
 func (w *StagedFileWriter) writeHeader(ctx context.Context) error {
 	header := &codec.HeaderRecord{
@@ -881,10 +895,26 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 		metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "finalize", status).Observe(float64(time.Since(startTime).Milliseconds()))
 	}()
 
-	if !w.finalized.CompareAndSwap(false, true) {
+	w.finalizeMu.Lock()
+	defer w.finalizeMu.Unlock()
+
+	if w.finalized.Load() {
 		// if already finalized, return fast
+		logger.Ctx(ctx).Info("run: received finalize signal, but it already finalized,skip", zap.String("SegmentImplInst", fmt.Sprintf("%p", w)))
 		return w.lastEntryID.Load(), nil
 	}
+
+	w.finalizing.Store(true)
+	flushDrained := false
+	defer func() {
+		if retErr != nil {
+			if flushDrained {
+				w.storageWritable.Store(false)
+			} else {
+				w.finalizing.Store(false)
+			}
+		}
+	}()
 
 	// Sync all pending data first
 	if err := w.Sync(ctx); err != nil {
@@ -899,6 +929,7 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 			zap.Error(waitErr))
 		return -1, waitErr
 	}
+	flushDrained = true
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -950,6 +981,7 @@ func (w *StagedFileWriter) Finalize(ctx context.Context, lac int64) (_ int64, re
 	logger.Ctx(ctx).Debug("finalized staged file", zap.Int64("lastEntryId", w.lastEntryID.Load()), zap.String("file", w.segmentFilePath), zap.Int64("writtenBytes", w.writtenBytes))
 	w.recoveredFooter = footer
 	w.finalized.Store(true)
+	w.finalizing.Store(false)
 	return w.lastEntryID.Load(), nil
 }
 
