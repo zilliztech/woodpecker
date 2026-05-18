@@ -41,15 +41,20 @@ func (w *StagedFileWriter) SnapshotDetailed() storage.WriterSnapshotDetailed {
 	writtenBytes := w.writtenBytes
 	w.mu.Unlock()
 
+	lastSubmittedFlushingBlockID := w.currentBlockNumber.Load() - 1
+	if lastSubmittedFlushingBlockID < 0 {
+		lastSubmittedFlushingBlockID = -1
+	}
+
 	return storage.WriterSnapshotDetailed{
 		WriterSnapshot:               snap,
 		BufferBytes:                  bufBytes,
 		BufferEntries:                bufEntries,
-		FlushQueueDepth:              len(w.flushTaskChan),
-		FlushQueueCapacity:           cap(w.flushTaskChan),
+		FlushQueueDepth:              0,
+		FlushQueueCapacity:           0,
 		WrittenBytes:                 writtenBytes,
 		LastSubmittedFlushingEntryID: w.lastSubmittedFlushingEntryID.Load(),
-		LastSubmittedFlushingBlockID: w.lastSubmittedFlushingBlockID.Load(),
+		LastSubmittedFlushingBlockID: lastSubmittedFlushingBlockID,
 		LastModifiedMS:               lastModMS,
 		Recovered:                    w.recovered.Load(),
 	}

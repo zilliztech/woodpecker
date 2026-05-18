@@ -346,10 +346,8 @@ func (w *StagedFileWriter) Sync(ctx context.Context) error {
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "rollBuffer", "success").Observe(float64(time.Since(startTime).Milliseconds()))
 
-	// Phase 2: Write to disk (under flushMu)
-	w.flushMu.Lock()
+	// Phase 2: Write to disk.
 	w.processFlushTask(ctx, flushTask)
-	w.flushMu.Unlock()
 
 	metrics.WpFileOperationsTotal.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Inc()
 	metrics.WpFileOperationLatency.WithLabelValues(metrics.NodeID, w.nsStr, w.logIdStr, "sync", "success").Observe(float64(time.Since(startTime).Milliseconds()))
@@ -357,7 +355,7 @@ func (w *StagedFileWriter) Sync(ctx context.Context) error {
 	return nil
 }
 
-// processFlushTask processes a flush task by writing data to disk (must be called with flushMu held)
+// processFlushTask processes a flush task by writing data to disk.
 func (w *StagedFileWriter) processFlushTask(ctx context.Context, task *blockFlushTask) {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "processFlushTask")
 	defer sp.End()
