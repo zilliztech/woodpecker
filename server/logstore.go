@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ import (
 	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/proto"
 	"github.com/zilliztech/woodpecker/server/processor"
+	"github.com/zilliztech/woodpecker/server/storage/stagedstorage"
 )
 
 const (
@@ -73,6 +75,7 @@ type logStore struct {
 	cancel        context.CancelFunc
 	storageClient storageclient.ObjectStorage
 	address       string
+	syncScheduler *stagedstorage.SyncScheduler
 
 	spMu              sync.RWMutex
 	segmentProcessors map[string]map[int64]processor.SegmentProcessor // bucketName/rootPath/logId,segmentId -> segmentProcessor
@@ -91,6 +94,7 @@ func NewLogStore(ctx context.Context, cfg *config.Configuration, storageClient s
 		ctx:               ctx,
 		cancel:            cancel,
 		storageClient:     storageClient,
+		syncScheduler:     stagedstorage.NewSyncScheduler(runtime.NumCPU() * 2),
 		segmentProcessors: make(map[string]map[int64]processor.SegmentProcessor),
 		address:           net.GetIP(""),
 		cleanupDone:       make(chan struct{}),
@@ -146,6 +150,10 @@ func (l *logStore) Stop() error {
 			totalProcessors += 1
 			l.closeSegmentProcessor(shutdownCtx, logKey, segmentId, processor)
 		}
+	}
+
+	if l.syncScheduler != nil {
+		l.syncScheduler.Close()
 	}
 
 	// Clear the maps
@@ -246,7 +254,7 @@ func (l *logStore) getOrCreateSegmentProcessor(ctx context.Context, bucketName s
 		zap.Int64("segmentId", segmentId),
 		zap.Int("totalProcessors", l.getTotalProcessorCountUnsafe()))
 
-	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient)
+	s := processor.NewSegmentProcessor(ctx, l.cfg, bucketName, rootPath, logId, segmentId, l.storageClient, l.syncScheduler)
 
 	// Initialize log map if not exists
 	if _, exists := l.segmentProcessors[logKey]; !exists {
@@ -796,5 +804,12 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 		logger.Ctx(l.ctx).Info("cleaned up idle segment processor",
 			zap.String("logKey", item.logKey),
 			zap.Int64("segmentId", item.segmentId))
+	}
+
+	if l.syncScheduler != nil {
+		metrics.WpSyncSchedulerScheduled.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Scheduled()))
+		metrics.WpSyncSchedulerRunning.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Running()))
+		metrics.WpSyncSchedulerWaiting.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Waiting()))
+		metrics.WpSyncSchedulerCapacity.WithLabelValues(metrics.NodeID).Set(float64(l.syncScheduler.Capacity()))
 	}
 }
