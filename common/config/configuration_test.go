@@ -53,7 +53,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 3, config.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, config.Woodpecker.Client.SessionMonitor.MaxFailures)
 	// DirectRead config from yaml
-	assert.False(t, config.Woodpecker.Client.DirectRead.Enabled)
+	assert.True(t, config.Woodpecker.Client.DirectRead.Enabled)
 	assert.Equal(t, int64(16777216), config.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
 	assert.Equal(t, 4, config.Woodpecker.Client.DirectRead.MaxFetchThreads)
 	// Test the getter methods for backward compatibility
@@ -149,7 +149,7 @@ func TestNewConfiguration(t *testing.T) {
 	assert.Equal(t, 3, defaultConfig.Woodpecker.Client.SessionMonitor.CheckInterval.Seconds())
 	assert.Equal(t, 5, defaultConfig.Woodpecker.Client.SessionMonitor.MaxFailures)
 	// DirectRead default config
-	assert.False(t, defaultConfig.Woodpecker.Client.DirectRead.Enabled)
+	assert.True(t, defaultConfig.Woodpecker.Client.DirectRead.Enabled)
 	assert.Equal(t, int64(16*1024*1024), defaultConfig.Woodpecker.Client.DirectRead.MaxBatchSize.Int64())
 	assert.Equal(t, 4, defaultConfig.Woodpecker.Client.DirectRead.MaxFetchThreads)
 	// Test the getter methods for backward compatibility
@@ -1067,7 +1067,7 @@ func TestDirectReadConfig(t *testing.T) {
 		assert.NoError(t, err)
 
 		dr := cfg.Woodpecker.Client.DirectRead
-		assert.False(t, dr.Enabled)
+		assert.True(t, dr.Enabled)
 		assert.Equal(t, int64(16*1024*1024), dr.MaxBatchSize.Int64()) // 16MB
 		assert.Equal(t, 4, dr.MaxFetchThreads)
 	})

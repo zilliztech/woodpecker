@@ -742,7 +742,7 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				MaxFailures:   5,
 			},
 			DirectRead: DirectReadConfig{
-				Enabled:         false,
+				Enabled:         true,
 				MaxBatchSize:    ByteSize(16 * 1024 * 1024), // 16MB
 				MaxFetchThreads: 4,
 			},
