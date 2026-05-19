@@ -181,7 +181,7 @@ func TestStagedFileWriter_FinalizeFlushesPendingDataWithoutExplicitSync(t *testi
 	require.Equal(t, lastEntryID, finalizedLastEntryID)
 	require.NoError(t, writer.Close(ctx))
 
-	recoveredWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true)
+	recoveredWriter, err := stagedstorage.NewStagedFileWriterWithMode(ctx, StagedTestBucket, cfg.Minio.RootPath, tempDir, logId, segmentId, storageCli, cfg, true, nil)
 	require.NoError(t, err)
 	require.True(t, recoveredWriter.Snapshot().Finalized)
 	require.NotNil(t, recoveredWriter.GetRecoveredFooter())
