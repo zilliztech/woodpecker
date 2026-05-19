@@ -1067,13 +1067,6 @@ func (r *StagedFileReaderAdv) readDataBlocksUnsafe(ctx context.Context, opt stor
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
 			if r.isFooterExistsUnsafe(ctx) {
-				// Footer was just written (segment finalized). isFooterExistsUnsafe
-				// updated lastAddConfirmed from the footer's LAC. If the requested
-				// entry is now within LAC, return ErrEntryNotFound so the caller
-				// retries instead of incorrectly treating this as EOF.
-				if opt.StartEntryID <= r.lastAddConfirmed.Load() {
-					return nil, werr.ErrEntryNotFound.WithCauseErrMsg("footer discovered with LAC covering requested entry, retry with updated LAC")
-				}
 				return nil, werr.ErrFileReaderEndOfFile.WithCauseErrMsg("no more data")
 			}
 		}
@@ -1147,7 +1140,7 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 	}
 
 	// Try to parse footer with compatibility parsing
-	footerRecord, err := codec.ParseFooterFromBytes(footerData)
+	_, err = codec.ParseFooterFromBytes(footerData)
 	if err != nil {
 		logger.Ctx(ctx).Debug("failed to parse footer record, no footer exists yet",
 			zap.String("filePath", r.filePath),
@@ -1155,15 +1148,7 @@ func (r *StagedFileReaderAdv) isFooterExistsUnsafe(ctx context.Context) bool {
 		return false
 	}
 
-	// Footer exists — update lastAddConfirmed from footer LAC so that
-	// subsequent reads can see entries that were gated by stale LAC.
-	if footerRecord != nil && footerRecord.LAC > r.lastAddConfirmed.Load() {
-		r.lastAddConfirmed.Store(footerRecord.LAC)
-		logger.Ctx(ctx).Info("updated lastAddConfirmed from discovered footer",
-			zap.String("filePath", r.filePath),
-			zap.Int64("footerLAC", footerRecord.LAC))
-	}
-
+	// footer exists
 	return true
 }
 

@@ -2451,3 +2451,29 @@ func TestStagedFileWriter_Close_Idempotent_NoDoubleClose(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, writer.closed.Load())
 }
+
+func TestStagedFileWriter_SyncRequestCoalescesWhileTaskSubmitted(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxFlushSize = config.NewByteSize(1)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(100)
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	writer.syncTaskSubmitted.Store(true)
+	for i := 0; i < 5; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), int64(i), []byte("payload"), nil)
+		require.NoError(t, err)
+	}
+
+	assert.True(t, writer.syncScheduled.Load(), "busy sync should schedule exactly one delayed recheck")
+	assert.Equal(t, int64(-1), writer.GetLastEntryId(context.Background()), "data should remain buffered while submitted sync is busy")
+
+	writer.syncTaskSubmitted.Store(false)
+	require.Eventually(t, func() bool {
+		return writer.GetLastEntryId(context.Background()) == 4 && !writer.syncTaskSubmitted.Load()
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.False(t, writer.syncScheduled.Load())
+}

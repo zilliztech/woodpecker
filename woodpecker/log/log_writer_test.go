@@ -66,7 +66,6 @@ func createTestInternalWriter(t *testing.T, logHandle LogHandle, cleanupMgr segm
 		metricsNamespace:   "",
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
-		compactedSegments:  make(map[int64]bool),
 	}
 	w.isWriterValid.Store(true)
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {
@@ -625,7 +624,6 @@ func createTestSessionWriter(t *testing.T, logHandle LogHandle, cleanupMgr segme
 		writerClose:        make(chan struct{}, 1),
 		cleanupManager:     cleanupMgr,
 		sessionLock:        sessionLock,
-		compactedSegments:  make(map[int64]bool),
 	}
 	w.onWriterInvalidated = func(ctx context.Context, reason string) {
 		if sessionLock != nil {

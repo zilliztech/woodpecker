@@ -807,13 +807,6 @@ func (l *logStore) performBackgroundCleanup(maxIdleTime time.Duration) {
 			zap.Int64("segmentId", item.segmentId))
 	}
 
-	// Phase 3: Log cleanup summary and report accurate processor count
-	remainingProcessors := l.GetActiveProcessorCount()
-	logger.Ctx(l.ctx).Info("Background cleanup cycle completed",
-		zap.Int("totalProcessorsBefore", totalProcessors),
-		zap.Int("cleanedCount", len(idleProcessors)),
-		zap.Int("remainingProcessors", remainingProcessors))
-
 	// Report sync pool utilization metrics
 	if l.syncPool != nil {
 		metrics.WpSyncPoolRunning.WithLabelValues(metrics.NodeID).Set(float64(l.syncPool.Running()))

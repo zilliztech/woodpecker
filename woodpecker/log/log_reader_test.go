@@ -390,8 +390,6 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 		batch:                nil,
 		next:                 0,
 		lastRead:             time.Now().UnixMilli(),
-		// Simulate accumulated backoff from previous empty polls
-		currentPollInterval: 5 * time.Second,
 	}
 
 	// First call: GetNextSegmentId returns 2 (latest=1)
@@ -435,9 +433,6 @@ func TestLogReader_ReadNext_SegmentEOF_MovesToNextSegment(t *testing.T) {
 	assert.NotNil(t, msg)
 	assert.Equal(t, int64(1), msg.Id.SegmentId)
 	assert.Equal(t, int64(0), msg.Id.EntryId)
-	// Verify backoff was reset on segment EOF transition
-	assert.Equal(t, DefaultNoDataReadMinIntervalMs*time.Millisecond, reader.currentPollInterval,
-		"poll interval should be reset to minimum after segment EOF transition")
 }
 
 func TestLogReader_UnmarshalAndCreateLogMessage(t *testing.T) {
@@ -483,7 +478,6 @@ func TestLogReader_WaitWithContext(t *testing.T) {
 		readerName:           "test-reader",
 		pendingReadSegmentId: 0,
 		pendingReadEntryId:   0,
-		currentPollInterval:  DefaultNoDataReadMinIntervalMs * time.Millisecond,
 	}
 
 	t.Run("ContextCancelledDuringWait", func(t *testing.T) {
@@ -504,8 +498,8 @@ func TestLogReader_WaitWithContext(t *testing.T) {
 		err := reader.waitWithContext(ctx)
 		elapsed := time.Since(start)
 		assert.NoError(t, err)
-		// Should wait at least DefaultNoDataReadMinIntervalMs
-		assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(DefaultNoDataReadMinIntervalMs-50))
+		// Should wait at least NoDataReadWaitIntervalMs
+		assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(NoDataReadWaitIntervalMs-50))
 	})
 }
 

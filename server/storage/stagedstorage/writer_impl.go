@@ -107,7 +107,9 @@ type StagedFileWriter struct {
 
 	// Async flush management
 	syncPool                     *conc.Pool[struct{}]
-	syncScheduled                atomic.Bool
+	syncMu                       sync.Mutex
+	syncScheduled                atomic.Bool // true when a delayed sync check is pending
+	syncTaskSubmitted            atomic.Bool // true when a sync task is queued or running
 	syncInterval                 time.Duration
 	storageWritable              atomic.Bool // Indicates whether the segment is writable
 	lastSubmittedFlushingEntryID atomic.Int64
@@ -191,6 +193,8 @@ func NewStagedFileWriterWithMode(ctx context.Context, bucket string, rootPath st
 	writer.recovered.Store(false)
 	writer.storageWritable.Store(true)
 	writer.lastSubmittedFlushingEntryID.Store(-1)
+	writer.syncScheduled.Store(false)
+	writer.syncTaskSubmitted.Store(false)
 	writer.lastSyncTimestamp.Store(0) // Set to 0 so first write will trigger sync after interval
 
 	// Set default block size if not specified
@@ -289,6 +293,9 @@ func (w *StagedFileWriter) Sync(ctx context.Context) error {
 	ctx, sp := logger.NewIntentCtxWithParent(ctx, WriterScope, "Sync")
 	defer sp.End()
 	startTime := time.Now()
+
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
 
 	// Phase 1: Roll buffer (under mu)
 	w.mu.Lock()
@@ -628,36 +635,96 @@ func (w *StagedFileWriter) WriteDataAsync(ctx context.Context, entryId int64, da
 		logger.Ctx(ctx).Info("Triggering immediate sync from WriteDataAsync",
 			zap.Int64("bufferSize", bufferSize),
 			zap.Int64("entryCount", entryCount))
-		if w.syncPool != nil {
-			w.syncPool.Submit(func() (struct{}, error) {
-				w.Sync(context.Background())
-				return struct{}{}, nil
-			})
-		} else {
-			w.Sync(ctx)
-		}
+		w.requestSync(ctx)
 		return entryId, nil
 	}
 
 	// Periodic sync: register AfterFunc on first write in this window (CAS dedup)
-	if w.syncScheduled.CompareAndSwap(false, true) {
-		syncInterval := w.syncInterval
-		if w.syncPool != nil {
-			time.AfterFunc(syncInterval, func() {
-				w.syncScheduled.Store(false)
-				w.syncPool.Submit(func() (struct{}, error) {
-					w.Sync(context.Background())
-					return struct{}{}, nil
-				})
-			})
-		} else {
-			time.AfterFunc(syncInterval, func() {
-				w.syncScheduled.Store(false)
-				w.Sync(context.Background())
-			})
+	w.scheduleSyncCheck(w.syncInterval)
+	return entryId, nil
+}
+
+func (w *StagedFileWriter) requestSync(ctx context.Context) {
+	if !w.syncTaskSubmitted.CompareAndSwap(false, true) {
+		w.scheduleSyncCheck(w.syncInterval)
+		return
+	}
+	w.submitSyncTask(ctx)
+}
+
+func (w *StagedFileWriter) submitSyncTask(ctx context.Context) {
+	run := func() {
+		defer w.finishSubmittedSync()
+		if err := w.Sync(ctx); err != nil {
+			logger.Ctx(ctx).Warn("submitted sync task failed",
+				zap.String("segmentFilePath", w.segmentFilePath),
+				zap.Int64("logId", w.logId),
+				zap.Int64("segmentId", w.segmentId),
+				zap.Error(err))
 		}
 	}
-	return entryId, nil
+
+	if w.syncPool == nil || w.syncPool.IsClosed() {
+		run()
+		return
+	}
+
+	future := w.syncPool.Submit(func() (struct{}, error) {
+		run()
+		return struct{}{}, nil
+	})
+	select {
+	case <-future.Inner():
+		if err := future.Err(); err != nil {
+			logger.Ctx(ctx).Warn("submit sync task failed, running inline",
+				zap.String("segmentFilePath", w.segmentFilePath),
+				zap.Int64("logId", w.logId),
+				zap.Int64("segmentId", w.segmentId),
+				zap.Error(err))
+			run()
+		}
+	default:
+	}
+}
+
+func (w *StagedFileWriter) finishSubmittedSync() {
+	w.syncTaskSubmitted.Store(false)
+	if w.hasSyncableEntries() {
+		w.scheduleSyncCheck(w.syncInterval)
+	}
+}
+
+func (w *StagedFileWriter) scheduleSyncCheck(delay time.Duration) {
+	if delay <= 0 {
+		delay = time.Millisecond
+	}
+	if !w.syncScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		w.syncScheduled.Store(false)
+		if w.hasSyncableEntries() {
+			w.requestSync(context.Background())
+		}
+	})
+}
+
+func (w *StagedFileWriter) hasSyncableEntries() bool {
+	if w.closed.Load() || w.finalized.Load() || w.finalizing.Load() || !w.storageWritable.Load() {
+		return false
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file == nil {
+		return false
+	}
+	currentBuffer := w.buffer.Load()
+	if currentBuffer == nil {
+		return false
+	}
+	return currentBuffer.ExpectedNextEntryId.Load()-currentBuffer.FirstEntryId > 0
 }
 
 func (w *StagedFileWriter) checkWritableForWriteDataAsync(ctx context.Context, entryId int64, dataLen int) (int64, error) {

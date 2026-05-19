@@ -1733,11 +1733,8 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
-						// Use a generous timeout: readers race ahead of the writer,
-						// and on CI the writer can take 20+ seconds to finish all entries.
-						// With adaptive tail-read backoff (up to 2s) and LAC coalescing (50ms),
-						// readers may need multiple retry rounds under high concurrency.
-						readCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+						// Use a fixed timeout for each read
+						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
@@ -2132,11 +2129,8 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequently(t *testing.T) {
 
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
-						// Use a generous timeout: readers race ahead of the writer,
-						// and on CI the writer can take 20+ seconds to finish all entries.
-						// With adaptive tail-read backoff (up to 2s) and LAC coalescing (50ms),
-						// readers may need multiple retry rounds under high concurrency.
-						readCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+						// Use a fixed timeout for each read
+						readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 
@@ -2537,11 +2531,8 @@ func TestConcurrentWriteAndReadWithSegmentRollingFrequentlyAndFinalVerification(
 
 					// Simple loop to read the expected number of messages
 					for i := 0; i < expectedMessagesThisCycle; i++ {
-						// Use a generous timeout: readers race ahead of the writer,
-						// and on CI the writer can take 20+ seconds to finish all entries.
-						// With adaptive tail-read backoff (up to 2s) and LAC coalescing (50ms),
-						// readers may need multiple retry rounds under high concurrency.
-						readCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+						// Use a fixed timeout for each read
+						readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 						msg, err := reader.ReadNext(readCtx)
 						cancel()
 

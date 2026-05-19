@@ -160,8 +160,8 @@ func createTestLogStore(t *testing.T) (server.LogStore, *config.Configuration, s
 
 func TestScalability_IdleResources(t *testing.T) {
 	scenarios := []struct {
-		name     string
-		numLogs  int
+		name      string
+		numLogs   int
 		segPerLog int
 	}{
 		{"100_logs", 100, 1},

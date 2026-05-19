@@ -28,7 +28,6 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 
 	"github.com/zilliztech/woodpecker/common/channel"
 	"github.com/zilliztech/woodpecker/common/config"
@@ -140,14 +139,7 @@ func (s *Server) Prepare() error {
 	if err != nil {
 		return err
 	}
-	maxConns := s.cfg.Woodpecker.Logstore.GRPCConfig.GetMaxConnections()
-	if maxConns > 0 {
-		s.listener = NewLimitedListener(l, maxConns)
-		logger.Ctx(s.ctx).Info("gRPC listener connection limit enabled",
-			zap.Int("maxConnections", maxConns))
-	} else {
-		s.listener = l
-	}
+	s.listener = l
 	s.logStore.SetAddress(s.listener.Addr().String())
 
 	// Start async join if seeds are provided
@@ -192,18 +184,6 @@ func (s *Server) startGrpcLoop() {
 	}
 	unaryInterceptors = append(unaryInterceptors, s.grpcExtraInterceptors...)
 	grpcOpts := []grpc.ServerOption{
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionIdle:     5 * time.Minute,
-			MaxConnectionAge:      30 * time.Minute,
-			MaxConnectionAgeGrace: 10 * time.Second,
-			Time:                  30 * time.Second,
-			Timeout:               10 * time.Second,
-		}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             15 * time.Second,
-			PermitWithoutStream: false,
-		}),
-		grpc.MaxConcurrentStreams(200),
 		grpc.MaxRecvMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxRecvSize()),
 		grpc.MaxSendMsgSize(s.cfg.Woodpecker.Logstore.GRPCConfig.GetServerMaxSendSize()),
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),

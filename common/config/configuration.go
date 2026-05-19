@@ -117,7 +117,6 @@ type GRPCConfig struct {
 	ServerMaxRecvSize ByteSize `yaml:"serverMaxRecvSize"` // Maximum size of each RPC request that the server can receive
 	ClientMaxSendSize ByteSize `yaml:"clientMaxSendSize"` // Maximum size of each RPC request that the client can send
 	ClientMaxRecvSize ByteSize `yaml:"clientMaxRecvSize"` // Maximum size of each RPC request that the client can receive
-	MaxConnections    int      `yaml:"maxConnections"`    // Maximum concurrent gRPC connections (0 = unlimited)
 }
 
 // GetServerMaxSendSize returns the server max send size in bytes as int.
@@ -138,12 +137,6 @@ func (g *GRPCConfig) GetClientMaxSendSize() int {
 // GetClientMaxRecvSize returns the client max receive size in bytes as int.
 func (g *GRPCConfig) GetClientMaxRecvSize() int {
 	return int(g.ClientMaxRecvSize)
-}
-
-// GetMaxConnections returns the maximum number of concurrent gRPC connections.
-// A value of 0 means unlimited.
-func (g *GRPCConfig) GetMaxConnections() int {
-	return g.MaxConnections
 }
 
 // SegmentReadPolicyConfig stores the segment read policy configuration.
@@ -763,9 +756,9 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 				ClientMaxRecvSize: ByteSize(512 * 1024 * 1024), // 512 MB
 			},
 			ProcessorCleanupPolicy: ProcessorCleanupPolicyConfig{
-				CleanupInterval: DurationSeconds{Duration: Duration{duration: 30 * time.Second}}, // 30s - scan frequently for aggressive cleanup
-				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 60 * time.Second}}, // 1 min - aggressive idle cleanup for 100K scale
-				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}}, // 15s
+				CleanupInterval: DurationSeconds{Duration: Duration{duration: 60 * time.Second}},  // 1 min
+				MaxIdleTime:     DurationSeconds{Duration: Duration{duration: 300 * time.Second}}, // 5 min
+				ShutdownTimeout: DurationSeconds{Duration: Duration{duration: 15 * time.Second}},  // 15s
 			},
 		},
 		Storage: StorageConfig{
