@@ -2075,7 +2075,7 @@ func TestLogHandle_BackgroundCleanupLoop_StopsOnContextCancel(t *testing.T) {
 	segments := map[int64]*meta.SegmentMeta{}
 	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
 		return &proto.QuorumInfo{Id: -1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"127.0.0.1:59456"}}, nil
-	}).(*logHandleImpl)
+	}, nil).(*logHandleImpl)
 
 	// Stop the default cleanup
 	logHandle.stopBackgroundCleanup()
@@ -2194,7 +2194,7 @@ func TestLogHandle_CreateNewSegmentMeta_QuorumError(t *testing.T) {
 	segments := map[int64]*meta.SegmentMeta{}
 	logHandle := NewLogHandle("test-log", 1, segments, mockMeta, nil, cfg, func(ctx context.Context) (*proto.QuorumInfo, error) {
 		return nil, werr.ErrInternalError // Quorum selection fails
-	}).(*logHandleImpl)
+	}, nil).(*logHandleImpl)
 	defer logHandle.stopBackgroundCleanup()
 
 	ctx := context.Background()
@@ -2233,7 +2233,7 @@ func TestNewLogHandle_WithExistingSegments(t *testing.T) {
 			Es:    1,
 			Nodes: []string{"127.0.0.1:59456"},
 		}, nil
-	}).(*logHandleImpl)
+	}, nil).(*logHandleImpl)
 	defer logHandle.Close(context.Background())
 
 	// LastSegmentId should be the max SegNo from the provided segments map
