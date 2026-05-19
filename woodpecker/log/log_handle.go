@@ -116,7 +116,8 @@ type logHandleImpl struct {
 
 func NewLogHandle(name string, logId int64, segments map[int64]*meta.SegmentMeta, meta meta.MetadataProvider, clientPool client.LogStoreClientPool,
 	cfg *config.Configuration, selectQuorumFunc func(context.Context) (*proto.QuorumInfo, error),
-	objectStorageClient storageclient.ObjectStorage) LogHandle {
+	objectStorageClient storageclient.ObjectStorage,
+) LogHandle {
 	// default 10min or 64MB rollover segment
 	maxInterval := cfg.Woodpecker.Client.SegmentRollingPolicy.MaxInterval.Seconds()
 	defaultRollingPolicy := segment.NewDefaultRollingPolicy(int64(maxInterval*1000), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxSize.Int64(), cfg.Woodpecker.Client.SegmentRollingPolicy.MaxBlocks)
