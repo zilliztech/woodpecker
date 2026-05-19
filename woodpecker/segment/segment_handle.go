@@ -214,8 +214,7 @@ type segmentHandleImpl struct {
 	// Direct read from object storage for sealed segments
 	objectStorageClient storageclient.ObjectStorage
 	directReader        *objectstorage.MinioFileReaderAdv
-	directReaderOnce    sync.Once
-	directReaderErr     error
+	directReaderMu      sync.Mutex
 }
 
 func (s *segmentHandleImpl) GetLogName() string {
@@ -467,11 +466,20 @@ func (s *segmentHandleImpl) ReadBatchAdv(ctx context.Context, from int64, maxEnt
 		start := time.Now()
 		result, err := s.directReadBatch(ctx, from, maxEntries, lastReadState)
 		if err != nil {
-			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "error").Inc()
-			logger.Ctx(ctx).Warn("direct read batch failed",
-				zap.String("logName", s.logName), zap.Int64("logId", s.logId),
-				zap.Int64("segId", s.segmentId), zap.Int64("from", from),
-				zap.Error(err))
+			status := "error"
+			if werr.ErrFileReaderEndOfFile.Is(err) {
+				status = "eof"
+				logger.Ctx(ctx).Debug("direct read batch reached EOF",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+					zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+					zap.Error(err))
+			} else {
+				logger.Ctx(ctx).Warn("direct read batch failed",
+					zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+					zap.Int64("segId", s.segmentId), zap.Int64("from", from),
+					zap.Error(err))
+			}
+			metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, status).Inc()
 			return nil, err
 		}
 		metrics.WpClientDirectReadRequestsTotal.WithLabelValues(s.metricsNamespace, logIdStr, "success").Inc()
@@ -502,15 +510,24 @@ func (s *segmentHandleImpl) canDirectRead() bool {
 
 // getOrCreateDirectReader lazily creates and caches a MinioFileReaderAdv for direct reads.
 func (s *segmentHandleImpl) getOrCreateDirectReader(ctx context.Context) (*objectstorage.MinioFileReaderAdv, error) {
-	s.directReaderOnce.Do(func() {
-		maxBatchSize := s.cfg.Woodpecker.Client.DirectRead.MaxBatchSize.Int64()
-		maxFetchThreads := s.cfg.Woodpecker.Client.DirectRead.MaxFetchThreads
-		s.directReader, s.directReaderErr = objectstorage.NewMinioFileReaderAdv(
-			ctx, s.bucketName, s.rootPath, s.logId, s.segmentId,
-			s.objectStorageClient, maxBatchSize, maxFetchThreads,
-		)
-	})
-	return s.directReader, s.directReaderErr
+	s.directReaderMu.Lock()
+	defer s.directReaderMu.Unlock()
+
+	if s.directReader != nil {
+		return s.directReader, nil
+	}
+
+	maxBatchSize := s.cfg.Woodpecker.Client.DirectRead.MaxBatchSize.Int64()
+	maxFetchThreads := s.cfg.Woodpecker.Client.DirectRead.MaxFetchThreads
+	reader, err := objectstorage.NewMinioFileReaderAdv(
+		ctx, s.bucketName, s.rootPath, s.logId, s.segmentId,
+		s.objectStorageClient, maxBatchSize, maxFetchThreads,
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.directReader = reader
+	return reader, nil
 }
 
 // directReadBatch reads a batch of entries directly from object storage.
@@ -525,7 +542,15 @@ func (s *segmentHandleImpl) directReadBatch(ctx context.Context, from int64, max
 		MaxBatchEntries: maxEntries,
 	}
 
-	return reader.ReadNextBatchAdv(ctx, opt, lastReadState)
+	result, err := reader.ReadNextBatchAdv(ctx, opt, lastReadState)
+	if werr.ErrFileReaderEndOfFile.Is(err) {
+		if closeErr := s.closeDirectReader(ctx, reader); closeErr != nil {
+			logger.Ctx(ctx).Warn("failed to close direct reader after EOF",
+				zap.String("logName", s.logName), zap.Int64("logId", s.logId),
+				zap.Int64("segId", s.segmentId), zap.Error(closeErr))
+		}
+	}
+	return result, err
 }
 
 // quorumReadBatch reads a batch of entries from quorum nodes with intelligent node selection.
@@ -778,6 +803,19 @@ func (s *segmentHandleImpl) ForceCompleteAndClose(ctx context.Context) error {
 	}
 	s.completionMgr.TriggerCompletion()
 	return s.completionMgr.WaitForCompletion()
+}
+
+func (s *segmentHandleImpl) closeDirectReader(ctx context.Context, expectedReader *objectstorage.MinioFileReaderAdv) error {
+	s.directReaderMu.Lock()
+	reader := s.directReader
+	if reader == nil || reader != expectedReader {
+		s.directReaderMu.Unlock()
+		return nil
+	}
+	s.directReader = nil
+	s.directReaderMu.Unlock()
+
+	return reader.Close(ctx)
 }
 
 func (s *segmentHandleImpl) doCloseWritingAndUpdateMetaIfNecessaryUnsafe(ctx context.Context, lastFlushedEntryId int64) error {

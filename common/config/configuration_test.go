@@ -639,6 +639,20 @@ func TestValidateClientConfig_Errors(t *testing.T) {
 		cfg.Woodpecker.Client.Auditor.MaxInterval = NewDurationSecondsFromInt(0)
 		assert.ErrorContains(t, cfg.Validate(), "auditor max interval must be positive")
 	})
+
+	t.Run("DirectRead MaxBatchSize<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.DirectRead.Enabled = true
+		cfg.Woodpecker.Client.DirectRead.MaxBatchSize = 0
+		assert.ErrorContains(t, cfg.Validate(), "direct read max batch size must be positive")
+	})
+
+	t.Run("DirectRead MaxFetchThreads<=0", func(t *testing.T) {
+		cfg := newValidCfg()
+		cfg.Woodpecker.Client.DirectRead.Enabled = true
+		cfg.Woodpecker.Client.DirectRead.MaxFetchThreads = 0
+		assert.ErrorContains(t, cfg.Validate(), "direct read max fetch threads must be positive")
+	})
 }
 
 func TestValidateLogstoreConfig_Errors(t *testing.T) {

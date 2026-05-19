@@ -501,6 +501,16 @@ func (c *Configuration) validateClientConfig() error {
 		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
 	}
 
+	// Validate DirectRead configuration
+	if client.DirectRead.Enabled {
+		if client.DirectRead.MaxBatchSize <= 0 {
+			return fmt.Errorf("direct read max batch size must be positive, got %d", client.DirectRead.MaxBatchSize.Int64())
+		}
+		if client.DirectRead.MaxFetchThreads <= 0 {
+			return fmt.Errorf("direct read max fetch threads must be positive, got %d", client.DirectRead.MaxFetchThreads)
+		}
+	}
+
 	// Validate Quorum configuration only when storage type is "service"
 	if c.Woodpecker.Storage.IsStorageService() {
 		if err := c.validateQuorumConfig(); err != nil {

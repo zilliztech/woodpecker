@@ -17,17 +17,23 @@
 package segment
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/zilliztech/woodpecker/common/config"
+	minioHandler "github.com/zilliztech/woodpecker/common/minio"
 	storageclient "github.com/zilliztech/woodpecker/common/objectstorage"
+	"github.com/zilliztech/woodpecker/common/werr"
 	"github.com/zilliztech/woodpecker/meta"
 	"github.com/zilliztech/woodpecker/mocks/mocks_meta"
+	"github.com/zilliztech/woodpecker/mocks/mocks_objectstorage"
 	"github.com/zilliztech/woodpecker/mocks/mocks_woodpecker/mocks_logstore_client"
 	"github.com/zilliztech/woodpecker/proto"
+	"github.com/zilliztech/woodpecker/server/storage/codec"
 )
 
 // stubObjectStorage is a minimal stub implementing storageclient.ObjectStorage
@@ -35,6 +41,26 @@ import (
 // operations are not called in canDirectRead tests.
 type stubObjectStorage struct {
 	storageclient.ObjectStorage
+}
+
+type directReadTestFileReader struct {
+	data []byte
+	*bytes.Reader
+}
+
+func newDirectReadTestFileReader(data []byte) *directReadTestFileReader {
+	return &directReadTestFileReader{
+		data:   data,
+		Reader: bytes.NewReader(data),
+	}
+}
+
+func (r *directReadTestFileReader) Close() error {
+	return nil
+}
+
+func (r *directReadTestFileReader) Size() (int64, error) {
+	return int64(len(r.data)), nil
 }
 
 func newTestCfgWithDirectRead(enabled bool) *config.Configuration {
@@ -158,4 +184,65 @@ func TestNewSegmentHandleWithNilObjectStorageClient(t *testing.T) {
 
 	assert.Nil(t, impl.objectStorageClient, "objectStorageClient should be nil")
 	assert.False(t, impl.canDirectRead(), "should not allow direct read without client")
+}
+
+func TestDirectReadBatch_ClosesDirectReaderOnEOFAndReopens(t *testing.T) {
+	ctx := context.Background()
+	cfg := newTestCfgWithDirectRead(true)
+	cfg.Minio.BucketName = "bucket"
+	cfg.Minio.RootPath = "root"
+
+	mockMetadata := mocks_meta.NewMetadataProvider(t)
+	mockClientPool := mocks_logstore_client.NewLogStoreClientPool(t)
+	mockObjectStorage := mocks_objectstorage.NewObjectStorage(t)
+
+	indexData := codec.EncodeRecord(&codec.IndexRecord{
+		BlockNumber:  0,
+		StartOffset:  0,
+		BlockSize:    128,
+		FirstEntryID: 0,
+		LastEntryID:  1,
+	})
+	footer := &codec.FooterRecord{
+		TotalBlocks:  1,
+		TotalRecords: 2,
+		TotalSize:    128,
+		IndexOffset:  0,
+		IndexLength:  uint32(len(indexData)),
+		Version:      codec.FormatVersion,
+		LAC:          1,
+	}
+	footer.SetCompacted(true)
+	footerData := append(indexData, codec.EncodeRecord(footer)...)
+
+	mockObjectStorage.EXPECT().
+		StatObject(mock.Anything, "bucket", mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(len(footerData)), false, nil).
+		Times(2)
+	mockObjectStorage.EXPECT().
+		GetObject(mock.Anything, "bucket", mock.Anything, int64(0), int64(len(footerData)), mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, string, string, int64, int64, string, string) (minioHandler.FileReader, error) {
+			return newDirectReadTestFileReader(footerData), nil
+		}).
+		Times(2)
+
+	segMeta := &meta.SegmentMeta{
+		Metadata: &proto.SegmentMetadata{
+			SegNo: 1,
+			State: proto.SegmentState_Sealed,
+		},
+		Revision: 1,
+	}
+	handle := NewSegmentHandle(ctx, 1, "testLog", segMeta, mockMetadata, mockClientPool, cfg, false, mockObjectStorage)
+	impl := handle.(*segmentHandleImpl)
+
+	result, err := impl.directReadBatch(ctx, 2, 1, nil)
+	assert.Nil(t, result)
+	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+	assert.Nil(t, impl.directReader)
+
+	result, err = impl.directReadBatch(ctx, 2, 1, nil)
+	assert.Nil(t, result)
+	assert.True(t, werr.ErrFileReaderEndOfFile.Is(err))
+	assert.Nil(t, impl.directReader)
 }
