@@ -155,7 +155,7 @@ func TestOpenLogUnsafe_Success(t *testing.T) {
 		return &proto.QuorumInfo{Id: 1, Wq: 1, Aq: 1, Es: 1, Nodes: []string{"localhost:8888"}}, nil
 	}
 
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, handle)
 }
@@ -173,7 +173,7 @@ func TestOpenLogUnsafe_Error(t *testing.T) {
 		return nil, nil
 	}
 
-	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc)
+	handle, err := openLogUnsafe(ctx, mockMeta, "test-log", mockPool, cfg, selectFunc, nil)
 	assert.Error(t, err)
 	assert.Nil(t, handle)
 	assert.Equal(t, openErr, err)

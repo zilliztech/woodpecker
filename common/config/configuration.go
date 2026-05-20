@@ -43,6 +43,15 @@ type SegmentAppendConfig struct {
 	MaxRetries int `yaml:"maxRetries"`
 }
 
+// DirectReadConfig stores the direct read configuration for sealed segments.
+// When enabled in service mode, the client reads sealed segments directly from
+// object storage instead of going through quorum nodes via gRPC.
+type DirectReadConfig struct {
+	Enabled         bool     `yaml:"enabled"`         // default: false
+	MaxBatchSize    ByteSize `yaml:"maxBatchSize"`    // default: 16MB
+	MaxFetchThreads int      `yaml:"maxFetchThreads"` // default: 4
+}
+
 // ClientConfig stores the client configuration.
 type ClientConfig struct {
 	SegmentAppend        SegmentAppendConfig        `yaml:"segmentAppend"`
@@ -50,6 +59,7 @@ type ClientConfig struct {
 	Auditor              AuditorConfig              `yaml:"auditor"`
 	Quorum               QuorumConfig               `yaml:"quorum"`
 	SessionMonitor       SessionMonitorConfig       `yaml:"sessionMonitor"`
+	DirectRead           DirectReadConfig           `yaml:"directRead"`
 }
 
 type AuditorConfig struct {
@@ -491,6 +501,16 @@ func (c *Configuration) validateClientConfig() error {
 		return fmt.Errorf("auditor max interval must be positive, got %d", client.Auditor.MaxInterval.Seconds())
 	}
 
+	// Validate DirectRead configuration
+	if client.DirectRead.Enabled {
+		if client.DirectRead.MaxBatchSize <= 0 {
+			return fmt.Errorf("direct read max batch size must be positive, got %d", client.DirectRead.MaxBatchSize.Int64())
+		}
+		if client.DirectRead.MaxFetchThreads <= 0 {
+			return fmt.Errorf("direct read max fetch threads must be positive, got %d", client.DirectRead.MaxFetchThreads)
+		}
+	}
+
 	// Validate Quorum configuration only when storage type is "service"
 	if c.Woodpecker.Storage.IsStorageService() {
 		if err := c.validateQuorumConfig(); err != nil {
@@ -720,6 +740,11 @@ func getDefaultWoodpeckerConfig() WoodpeckerConfig {
 			SessionMonitor: SessionMonitorConfig{
 				CheckInterval: DurationSeconds{Duration: Duration{duration: 3 * time.Second}},
 				MaxFailures:   5,
+			},
+			DirectRead: DirectReadConfig{
+				Enabled:         true,
+				MaxBatchSize:    ByteSize(16 * 1024 * 1024), // 16MB
+				MaxFetchThreads: 4,
 			},
 		},
 		Logstore: LogstoreConfig{
