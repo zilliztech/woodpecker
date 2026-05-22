@@ -24,6 +24,10 @@ type WriterSnapshotDetailed struct {
 	BufferEntries                int64 `json:"buffer_entries"`
 	FlushQueueDepth              int   `json:"flush_queue_depth"`
 	FlushQueueCapacity           int   `json:"flush_queue_capacity"`
+	SyncSchedulerScheduled       int   `json:"sync_scheduler_scheduled,omitempty"`
+	SyncSchedulerRunning         int   `json:"sync_scheduler_running,omitempty"`
+	SyncSchedulerWaiting         int   `json:"sync_scheduler_waiting,omitempty"`
+	SyncSchedulerCapacity        int   `json:"sync_scheduler_capacity,omitempty"`
 	WrittenBytes                 int64 `json:"written_bytes"`
 	LastSubmittedFlushingEntryID int64 `json:"last_submitted_flushing_entry_id"`
 	LastSubmittedFlushingBlockID int64 `json:"last_submitted_flushing_block_id"`

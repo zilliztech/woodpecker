@@ -66,7 +66,7 @@ func newTestSegmentForCompletion(t *testing.T) (*segmentHandleImpl, *mocks_logst
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	return segmentHandle.(*segmentHandleImpl), mockClient
 }
 
@@ -245,7 +245,7 @@ func TestCompletionManager_ContextCancellation(t *testing.T) {
 
 	// Create segment handle manually without starting completionMgr via constructor
 	// so we can control the context.
-	seg := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true).(*segmentHandleImpl)
+	seg := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil).(*segmentHandleImpl)
 
 	// Stop the auto-started completionMgr and replace with one using a cancellable context
 	seg.completionMgr.Stop()
@@ -297,7 +297,7 @@ func TestCompletionManager_ForceCompleteOnReadonly(t *testing.T) {
 	}
 
 	// Create readonly segment (canWrite=false)
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	err := segmentHandle.ForceCompleteAndClose(context.Background())
 	assert.NoError(t, err)

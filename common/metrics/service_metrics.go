@@ -223,6 +223,31 @@ var (
 		Name:      "file_stored_count",
 		Help:      "Current number of local segment files",
 	}, []string{"node_id", "namespace", "log_id"})
+
+	WpSyncSchedulerScheduled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_scheduled",
+		Help:      "Number of delayed staged-writer sync checks scheduled",
+	}, []string{"node_id"})
+	WpSyncSchedulerRunning = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_running",
+		Help:      "Number of running staged-writer sync scheduler workers",
+	}, []string{"node_id"})
+	WpSyncSchedulerWaiting = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_waiting",
+		Help:      "Number of staged-writer sync scheduler jobs waiting",
+	}, []string{"node_id"})
+	WpSyncSchedulerCapacity = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: woodpeckerNamespace,
+		Subsystem: serverRole,
+		Name:      "sync_scheduler_capacity",
+		Help:      "Worker capacity of the staged-writer sync scheduler",
+	}, []string{"node_id"})
 )
 
 // RegisterServerMetricsWithRegisterer registers all server-side metrics and system metrics.
@@ -260,5 +285,9 @@ func RegisterServerMetricsWithRegisterer(registerer prometheus.Registerer) {
 		registerer.MustRegister(WpObjectStorageStoredObjects)
 		registerer.MustRegister(WpFileStoredBytes)
 		registerer.MustRegister(WpFileStoredCount)
+		registerer.MustRegister(WpSyncSchedulerScheduled)
+		registerer.MustRegister(WpSyncSchedulerRunning)
+		registerer.MustRegister(WpSyncSchedulerWaiting)
+		registerer.MustRegister(WpSyncSchedulerCapacity)
 	})
 }

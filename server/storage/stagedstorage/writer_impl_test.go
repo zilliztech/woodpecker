@@ -353,6 +353,122 @@ func TestStagedFileWriter_Sync(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestStagedFileWriter_ScheduledSyncFlushesBufferedEntry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	scheduler := NewSyncScheduler(1)
+	defer scheduler.Close()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, scheduler)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	resultCh := channel.NewLocalResultChannel("scheduled-sync")
+	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("test"), resultCh)
+	require.NoError(t, err)
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := resultCh.ReadResult(readCtx)
+	require.NoError(t, err)
+	require.NoError(t, result.Err)
+	assert.Equal(t, int64(0), result.SyncedId)
+	assert.Equal(t, int64(0), writer.GetLastEntryId(context.Background()))
+}
+
+func TestStagedFileWriter_ScheduledSyncWaitsForMissingFirstEntry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	scheduler := NewSyncScheduler(1)
+	defer scheduler.Close()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, scheduler)
+	require.NoError(t, err)
+	defer writer.Close(context.Background())
+
+	resultChans := make([]*channel.LocalResultChannel, 5)
+	for i := range resultChans {
+		resultChans[i] = channel.NewLocalResultChannel(fmt.Sprintf("missing-first-%d", i))
+	}
+
+	for i := int64(1); i < 5; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), resultChans[i])
+		require.NoError(t, err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int64(-1), writer.GetLastEntryId(context.Background()))
+	assert.Equal(t, 0, scheduler.Scheduled())
+	assert.Equal(t, 0, scheduler.Waiting())
+
+	noResultCtx, noResultCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	_, err = resultChans[1].ReadResult(noResultCtx)
+	noResultCancel()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("data-0"), resultChans[0])
+	require.NoError(t, err)
+
+	for i, resultCh := range resultChans {
+		readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := resultCh.ReadResult(readCtx)
+		cancel()
+		require.NoError(t, readErr)
+		require.NoError(t, result.Err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+	assert.Equal(t, int64(4), writer.GetLastEntryId(context.Background()))
+}
+
+func TestStagedFileWriter_ScheduledSyncReschedulesWhenJobAlreadySubmitted(t *testing.T) {
+	dir := t.TempDir()
+	cfg := newTestConfig(t)
+	cfg.Woodpecker.Logstore.SegmentSyncPolicy.MaxIntervalForLocalStorage = config.NewDurationMillisecondsFromInt(10)
+	scheduler := NewSyncScheduler(1)
+	defer scheduler.Close()
+
+	writer, err := NewStagedFileWriter(context.Background(), "test-bucket", "test-root", dir, 1, 0, nil, cfg, scheduler)
+	require.NoError(t, err)
+	defer func() {
+		writer.syncTaskSubmitted.Store(false)
+		require.NoError(t, writer.Close(context.Background()))
+	}()
+
+	resultChans := make([]*channel.LocalResultChannel, 5)
+	for i := range resultChans {
+		resultChans[i] = channel.NewLocalResultChannel(fmt.Sprintf("submitted-sync-%d", i))
+	}
+
+	for i := int64(1); i < 5; i++ {
+		_, err = writer.WriteDataAsync(context.Background(), i, []byte(fmt.Sprintf("data-%d", i)), resultChans[i])
+		require.NoError(t, err)
+	}
+
+	writer.syncTaskSubmitted.Store(true)
+	_, err = writer.WriteDataAsync(context.Background(), 0, []byte("data-0"), resultChans[0])
+	require.NoError(t, err)
+
+	noResultCtx, noResultCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	_, err = resultChans[0].ReadResult(noResultCtx)
+	noResultCancel()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, int64(-1), writer.GetLastEntryId(context.Background()))
+
+	writer.syncTaskSubmitted.Store(false)
+
+	for i, resultCh := range resultChans {
+		readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, readErr := resultCh.ReadResult(readCtx)
+		cancel()
+		require.NoError(t, readErr)
+		require.NoError(t, result.Err)
+		assert.Equal(t, int64(i), result.SyncedId)
+	}
+	assert.Equal(t, int64(4), writer.GetLastEntryId(context.Background()))
+}
+
 func TestStagedFileWriter_Sync_StorageNotWritable(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newTestConfig(t)

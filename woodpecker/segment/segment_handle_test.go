@@ -65,7 +65,7 @@ func TestNewSegmentHandle(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	assert.Equal(t, "testLog", segmentHandle.GetLogName())
 	assert.Equal(t, int64(1), segmentHandle.GetId(context.Background()))
 }
@@ -104,7 +104,7 @@ func TestAppendAsync_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	callbackDone := make(chan struct{}, 1)
 	callback := func(segmentId int64, entryId int64, err error) {
 		assert.Equal(t, int64(1), segmentId)
@@ -183,7 +183,7 @@ func TestMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	var mu sync.Mutex
 	callbackCalledNum := 0
@@ -311,7 +311,7 @@ func TestMultiAppendAsync_PartialSuccess(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	var mu sync.Mutex
 	failedAttempts := 0
@@ -460,7 +460,7 @@ func TestAppendAsync_TimeoutBug(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results
 	callbackResults := make(map[int64]error)
@@ -641,7 +641,7 @@ func TestMultiAppendAsync_PartialFailButAllSuccessAfterRetry(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	var mu sync.Mutex
 	callbackCalled := 0
@@ -750,7 +750,7 @@ func TestDisorderMultiAppendAsync_AllSuccess_InSequential(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	var mu sync.Mutex
 	callbackCalledNum := 0
@@ -888,7 +888,7 @@ func TestSegmentHandleFenceAndClosed(t *testing.T) {
 		Revision: 2,
 	}
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMetaAfterFenced, nil)
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	lastEntryId, fenceErr := segmentHandle.FenceAndComplete(context.Background())
 	assert.NoError(t, fenceErr)
 	assert.Equal(t, int64(0), lastEntryId)
@@ -1315,7 +1315,7 @@ func TestSegmentHandle_SetRollingReady_RejectNewAppends(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Mark segment as rolling
 	segmentHandle.SetRollingReady(context.Background())
@@ -1710,7 +1710,7 @@ func TestSegmentHandle_ForceCompleteAndClose_WithRollingState(t *testing.T) {
 	}
 
 	// Create a writable segment handle (canWrite=true is needed for ForceCompleteAndClose to work)
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Verify initial state
 	writable, err := segmentHandle.IsWritable(context.Background())
@@ -1771,7 +1771,7 @@ func TestSegmentHandle_Rolling_ConcurrentAppends(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// First mark segment as rolling
 	segmentHandle.SetRollingReady(context.Background())
@@ -1846,7 +1846,7 @@ func TestSegmentHandle_Rolling_StateTransitions(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Initial state
 	assert.False(t, segmentHandle.IsForceRollingReady(context.Background()))
@@ -1910,7 +1910,7 @@ func TestSegmentHandle_SetRollingReady_EmptyQueueCompletesSynchronously(t *testi
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	segmentHandle.SetRollingReady(context.Background())
 
@@ -1994,7 +1994,7 @@ func TestSegmentHandle_QuorumWrite_Case1_AllNodesSuccess(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2201,7 +2201,7 @@ func TestSegmentHandle_QuorumWrite_Case2_PartialNodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2429,7 +2429,7 @@ func TestSegmentHandle_QuorumWrite_Case3_QuorumFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2681,7 +2681,7 @@ func TestSegmentHandle_QuorumWrite_Case4_Op2NodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -2919,7 +2919,7 @@ func TestSegmentHandle_QuorumWrite_Case5_Op0NodeFailure(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	// Track callback results for all 3 entries
 	callbackResults := make(map[int64]error, 3)
@@ -3287,7 +3287,7 @@ func TestGetLogName(t *testing.T) {
 				},
 				Revision: 1,
 			}
-			segmentHandle := NewSegmentHandle(context.Background(), 1, tt.logName, segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			segmentHandle := NewSegmentHandle(context.Background(), 1, tt.logName, segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 			assert.Equal(t, tt.logName, segmentHandle.GetLogName())
 		})
 	}
@@ -3327,7 +3327,7 @@ func TestGetLastAddPushed(t *testing.T) {
 				},
 				Revision: 1,
 			}
-			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 			lastPushed, err := segmentHandle.GetLastAddPushed(context.Background())
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, lastPushed)
@@ -3359,7 +3359,7 @@ func TestGetMetadata(t *testing.T) {
 		},
 		Revision: 3,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result := segmentHandle.GetMetadata(context.Background())
 	assert.NotNil(t, result)
 	assert.Equal(t, int64(5), result.Metadata.SegNo)
@@ -3404,7 +3404,7 @@ func TestRefreshAndGetMetadata_Success(t *testing.T) {
 
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(updatedMeta, nil)
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	err := segmentHandle.RefreshAndGetMetadata(context.Background())
 	assert.NoError(t, err)
@@ -3442,7 +3442,7 @@ func TestRefreshAndGetMetadata_Error(t *testing.T) {
 
 	mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(nil, errors.New("etcd connection failed"))
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	err := segmentHandle.RefreshAndGetMetadata(context.Background())
 	assert.Error(t, err)
@@ -3490,7 +3490,7 @@ func TestGetSize(t *testing.T) {
 				},
 				Revision: 1,
 			}
-			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 			size := segmentHandle.GetSize(context.Background())
 			assert.Equal(t, tt.expectedSize, size)
 		})
@@ -3520,7 +3520,7 @@ func TestGetBlocksCount_CompletedSegment(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := segmentHandle.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(0), blocksCount)
 }
@@ -3555,7 +3555,7 @@ func TestGetBlocksCount_ActiveSegment_MultipleNodes(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := segmentHandle.GetBlocksCount(context.Background())
 	// Multi-node quorum returns 0 (blocks count not relevant for service mode)
 	assert.Equal(t, int64(0), blocksCount)
@@ -3594,7 +3594,7 @@ func TestGetBlocksCount_ActiveSegment_SingleNode(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := segmentHandle.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(7), blocksCount)
 }
@@ -3630,7 +3630,7 @@ func TestGetBlocksCount_ActiveSegment_ClientError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := segmentHandle.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(0), blocksCount)
 }
@@ -3668,7 +3668,7 @@ func TestGetBlocksCount_ActiveSegment_GetBlockCountError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := segmentHandle.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(0), blocksCount)
 }
@@ -3696,7 +3696,7 @@ func TestGetLastAddConfirmed_CompletedSegment(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(42), lac)
@@ -3735,7 +3735,7 @@ func TestGetLastAddConfirmed_ActiveSegment_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(99), lac)
@@ -3774,7 +3774,7 @@ func TestGetLastAddConfirmed_ActiveSegment_AllNodesFail(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), lac)
@@ -3823,7 +3823,7 @@ func TestReadBatchAdv_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -3865,7 +3865,7 @@ func TestReadBatchAdv_AllNodesFail(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -3912,7 +3912,7 @@ func TestReadBatchAdv_WithLastReadState(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lastReadState := &proto.LastReadState{Node: "node2"}
 	result, err := segmentHandle.ReadBatchAdv(context.Background(), 5, 10, lastReadState)
 	assert.NoError(t, err)
@@ -3944,7 +3944,7 @@ func TestGetLastAccessTime(t *testing.T) {
 	}
 
 	beforeCreate := time.Now().UnixMilli()
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	afterCreate := time.Now().UnixMilli()
 
 	lastAccess := segmentHandle.GetLastAccessTime()
@@ -3976,7 +3976,7 @@ func TestGetLastAccessTime_UpdatesOnAccess(t *testing.T) {
 		Revision: 1,
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	initialAccess := segmentHandle.GetLastAccessTime()
 
 	// Wait briefly to ensure time difference
@@ -4024,7 +4024,7 @@ func TestComplete_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lastEntryId, err := segmentHandle.Complete(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), lastEntryId)
@@ -4064,7 +4064,7 @@ func TestComplete_FenceFails(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lastEntryId, err := segmentHandle.Complete(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, int64(-1), lastEntryId)
@@ -4096,7 +4096,7 @@ func TestCompact_LocalStorage(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	err := segmentHandle.Compact(context.Background())
 	assert.NoError(t, err)
 }
@@ -4140,7 +4140,7 @@ func TestCompact_NotCompletedState(t *testing.T) {
 			// Mock GetSegmentMetadata to return the same state (RefreshAndGetMetadata calls it)
 			mockMetadata.EXPECT().GetSegmentMetadata(mock.Anything, "testLog", int64(1)).Return(segmentMeta, nil).Once()
 
-			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+			segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 			err := segmentHandle.Compact(context.Background())
 			assert.Error(t, err)
 			assert.True(t, werr.ErrSegmentHandleSegmentStateInvalid.Is(err))
@@ -4214,7 +4214,7 @@ func TestCompact_Success(t *testing.T) {
 		},
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	err := segmentHandle.Compact(context.Background())
 	assert.NoError(t, err)
 }
@@ -4288,7 +4288,7 @@ func TestCompact_SealedTimeFromCompactResponse(t *testing.T) {
 		},
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	err := segmentHandle.Compact(context.Background())
 	assert.NoError(t, err)
 }
@@ -4334,7 +4334,7 @@ func TestCompact_CompactionFails(t *testing.T) {
 		},
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	err := segmentHandle.Compact(context.Background())
 	assert.Error(t, err)
 }
@@ -4409,7 +4409,7 @@ func TestCompact_AlreadyCompacting(t *testing.T) {
 		},
 	}
 
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", completedMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	// Start first compact in background
 	var wg sync.WaitGroup
@@ -4452,7 +4452,7 @@ func TestSetWriterInvalidationNotifier(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	notified := false
 	var receivedReason string
@@ -4491,7 +4491,7 @@ func TestNotifyWriterInvalidation_NilNotifier(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	// Should not panic even without a notifier set
 	segImpl := segmentHandle.(*segmentHandleImpl)
@@ -4547,7 +4547,7 @@ func TestReadBatchAdv_FailoverToSecondNode(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := segmentHandle.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -4595,7 +4595,7 @@ func TestGetLastAddConfirmed_ActiveSegment_FailoverToSecondNode(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lac, err := segmentHandle.GetLastAddConfirmed(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(25), lac)
@@ -4619,7 +4619,7 @@ func TestGetQuorumInfo_CachedQuorum(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, Quorum: quorum},
 		Revision: 1,
 	}
-	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	segmentHandle := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	// Should return cached quorum without calling metadata
 	q, err := segmentHandle.GetQuorumInfo(context.Background())
@@ -4643,7 +4643,7 @@ func TestGetQuorumInfo_NilQuorum_ZeroId(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, Quorum: &proto.QuorumInfo{Id: 0}},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil // force nil to test the zero-id path
 
@@ -4671,7 +4671,7 @@ func TestGetQuorumInfo_PositiveQuorumId_FetchesFromMeta(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil // force nil to test metadata fetch path
 
@@ -4697,7 +4697,7 @@ func TestGetQuorumInfo_PositiveQuorumId_MetaError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil
 
@@ -4725,7 +4725,7 @@ func TestAppendAsync_Fenced(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.fencedState.Store(true)
 
@@ -4756,7 +4756,7 @@ func TestAppendAsync_Rolling(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.rollingState.Store(true)
 
@@ -4787,7 +4787,7 @@ func TestAppendAsync_NotActive(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 
 	done := make(chan struct{})
 	sh.AppendAsync(context.Background(), []byte("test"), func(segmentId int64, entryId int64, err error) {
@@ -4817,7 +4817,7 @@ func TestSyncLACToNode_GetClientError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	resultChan := make(chan nodeLACSyncResult, 1)
@@ -4845,7 +4845,7 @@ func TestCompleteSegmentOnNode_GetClientError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	resultChan := make(chan nodeCompleteResult, 1)
@@ -4873,7 +4873,7 @@ func TestFenceSegmentOnNode_GetClientError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	resultChan := make(chan nodeFenceResult, 1)
@@ -4907,7 +4907,7 @@ func TestCompleteSegmentQuorum_InsufficientResponses(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Aq: 2, Es: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
@@ -4936,7 +4936,7 @@ func TestCompleteSegmentQuorum_ContextCancel(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Aq: 1, Es: 1, Wq: 1, Nodes: []string{"node1"}}
@@ -4964,7 +4964,7 @@ func TestFenceAndComplete_AlreadyFenced(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.fencedState.Store(true)
 	impl.lastAddConfirmed.Store(10)
@@ -4991,7 +4991,7 @@ func TestFenceAndComplete_GetQuorumInfoError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil
 
@@ -5020,7 +5020,7 @@ func TestFenceAndComplete_FenceError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
 	assert.Error(t, err)
@@ -5051,7 +5051,7 @@ func TestFenceAndComplete_CompleteError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
 	assert.Error(t, err)
@@ -5084,7 +5084,7 @@ func TestFenceAndComplete_MetaUpdateError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	_, err := sh.FenceAndComplete(context.Background())
 	assert.Error(t, err)
@@ -5121,7 +5121,7 @@ func TestFenceAndComplete_Success(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 
 	lastEntry, err := sh.FenceAndComplete(context.Background())
 	assert.NoError(t, err)
@@ -5151,7 +5151,7 @@ func TestDoComplete_GetQuorumInfoError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil
 
@@ -5179,7 +5179,7 @@ func TestDoComplete_FenceError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	_, err := impl.doComplete(context.Background())
@@ -5210,7 +5210,7 @@ func TestCompactSegmentQuorum_AllNodesFail(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
@@ -5243,7 +5243,7 @@ func TestCompactSegmentQuorum_SecondNodeSucceeds(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Nodes: []string{"node1", "node2"}}
@@ -5272,7 +5272,7 @@ func TestDoCloseWriting_NotWritable(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// canWriteState is false, should return nil immediately
@@ -5301,7 +5301,7 @@ func TestDoCloseWriting_RevisionInvalid(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Set a writer invalidation notifier to capture the notification
@@ -5337,7 +5337,7 @@ func TestFenceSegmentQuorum_InsufficientResponses(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 2, Aq: 2, Wq: 2, Nodes: []string{"node1", "node2"}}
@@ -5364,7 +5364,7 @@ func TestSyncLACToQuorumAsync_GetQuorumInfoError(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1, QuorumId: 5},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.quorumInfo = nil
 
@@ -5392,7 +5392,7 @@ func TestSyncLACToQuorumAsync_NodeError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Should complete without panicking even with node error
@@ -5418,7 +5418,7 @@ func TestAppendAsync_FencedUnderLock(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Hold the lock, set fenced while locked, then release and let AppendAsync proceed
@@ -5461,7 +5461,7 @@ func TestAppendAsync_RollingUnderLock(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	done := make(chan struct{})
@@ -5501,7 +5501,7 @@ func TestAppendAsync_SubmitFails(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Stop the executor so Submit returns false
@@ -5625,7 +5625,7 @@ func TestReadBatchAdv_ClientError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -5654,7 +5654,7 @@ func TestReadBatchAdv_EntryNotFound(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -5683,7 +5683,7 @@ func TestReadBatchAdv_EOF(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -5719,7 +5719,7 @@ func TestReadBatchAdv_FailoverClientError_ThenSuccess(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	result, err := sh.ReadBatchAdv(context.Background(), 0, 10, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -5752,7 +5752,7 @@ func TestGetLastAddConfirmed_ActiveSegment_ClientError_Failover(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	lac, err := sh.GetLastAddConfirmed(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, int64(10), lac)
@@ -5778,7 +5778,7 @@ func TestGetBlocksCount_ActiveSegment_UnsupportedQuorum(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := sh.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(0), blocksCount) // returns 0 for unsupported quorum config
 }
@@ -5803,7 +5803,7 @@ func TestGetBlocksCount_ActiveSegment_QuorumInfoError(t *testing.T) {
 	}
 	// Mock metadata.GetQuorumInfo to return an error
 	mockMetadata.EXPECT().GetQuorumInfo(mock.Anything, int64(99)).Return(nil, errors.New("quorum not found"))
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	blocksCount := sh.GetBlocksCount(context.Background())
 	assert.Equal(t, int64(0), blocksCount) // returns 0 when GetQuorumInfo fails
 }
@@ -5837,7 +5837,7 @@ func TestSyncLACToQuorumAsync_ContextCancelled(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Cancel context quickly to trigger ctx.Done in the result collection loop
@@ -5867,7 +5867,7 @@ func TestDoCloseWriting_LastFlushedNegativeOne(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// lastFlushedEntryId == -1 should return nil without updating metadata
@@ -5896,7 +5896,7 @@ func TestDoCloseWriting_NonRevisionError(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	err := impl.doCloseWritingAndUpdateMetaIfNecessaryUnsafe(context.Background(), 5)
@@ -5921,7 +5921,7 @@ func TestDoCloseWriting_CompletedSegment(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	// Completed segment state should return nil without updating metadata
@@ -5948,7 +5948,7 @@ func TestForceCompleteAndClose_NilCompletionMgr(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 	impl.completionMgr = nil
 
@@ -5976,7 +5976,7 @@ func TestAppendAsync_FencedAfterPreCheck_DetectedUnderLock(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	done := make(chan struct{})
@@ -6021,7 +6021,7 @@ func TestAppendAsync_RollingAfterPreCheck_DetectedUnderLock(t *testing.T) {
 		},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, true, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	done := make(chan struct{})
@@ -6139,7 +6139,7 @@ func TestFenceSegmentQuorum_CtxTimeout(t *testing.T) {
 		Metadata: &proto.SegmentMetadata{SegNo: 1, State: proto.SegmentState_Active, LastEntryId: -1},
 		Revision: 1,
 	}
-	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false)
+	sh := NewSegmentHandle(context.Background(), 1, "testLog", segmentMeta, mockMetadata, mockClientPool, cfg, false, nil)
 	impl := sh.(*segmentHandleImpl)
 
 	quorum := &proto.QuorumInfo{Id: 1, Es: 3, Aq: 2, Wq: 3, Nodes: []string{"node1", "node2", "node3"}}
