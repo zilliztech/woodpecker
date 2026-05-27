@@ -103,6 +103,12 @@ type MetadataProvider interface {
 	// This ensures all nodes agree on the same condition write capability.
 	StoreOrGetConditionWriteResult(ctx context.Context, detected bool) (bool, error)
 
+	// StoreConditionWriteEnabled overwrites the cluster condition write result to enabled.
+	// This is used after strict enable-style capability verification succeeds: either explicit
+	// enable mode, or legacy auto mode with no persisted cluster decision. It is safe because
+	// callers verify support before writing, and the write is idempotent.
+	StoreConditionWriteEnabled(ctx context.Context) error
+
 	// GetConditionWriteResult retrieves the condition write detection result.
 	// Returns the stored value if the key exists.
 	// Returns an error if the key doesn't exist or if there's an etcd operation error.

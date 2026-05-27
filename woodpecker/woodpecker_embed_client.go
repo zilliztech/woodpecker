@@ -103,21 +103,17 @@ type woodpeckerEmbedClient struct {
 	closeState atomic.Bool
 }
 
-// detectAndStoreConditionWriteCapability detects condition write capability and stores result in etcd.
+// detectAndStoreConditionWriteCapability verifies condition write capability for embed mode.
 //
-// Detection Strategy:
-//   - "disable": Force disable condition write, skip detection entirely
-//   - "enable": Force enable condition write, detection must succeed within 10 retries or panic
-//   - "auto": Pessimistic disable, optimistic enable with cluster consensus
-//   - Attempts detection up to 30 times with exponential backoff
-//   - Any successful detection enables condition write for the entire cluster
-//   - Falls back to disable mode if all attempts fail
-//
-// Cluster Consensus:
-//   - All nodes share a single global result stored in etcd
-//   - First successful detection wins (CAS operation ensures atomic agreement)
-//   - All nodes follow the agreed cluster result regardless of their local detection
-//   - Once set, the result is used by all subsequent nodes without re-detection
+// Runtime modes:
+//   - disable: return false directly, without reading etcd, probing object storage, or writing metadata.
+//   - auto: if etcd already stores true/false, follow that stored legacy cluster decision;
+//     if no metadata exists, verify capability with strict enable semantics, write true on
+//     success, and return an error on failure. Never fall back and never persist false.
+//   - enable: if etcd already stores true, use it as a fast path; if etcd stores false or
+//     no metadata exists, ignore false and verify capability. On verification success,
+//     overwrite metadata to true with StoreConditionWriteEnabled. On failure, return an
+//     error. Never fall back and never persist false.
 func detectAndStoreConditionWriteCapability(ctx context.Context, cfg *config.Configuration, metadata meta.MetadataProvider, storageClient storageclient.ObjectStorage) (bool, error) {
 	log := logger.Ctx(ctx)
 	fencePolicy := cfg.Woodpecker.Logstore.FencePolicy
@@ -128,137 +124,116 @@ func detectAndStoreConditionWriteCapability(ctx context.Context, cfg *config.Con
 		return false, nil
 	}
 
-	// Check if result already exists in etcd
+	enableMode := fencePolicy.IsConditionWriteEnabled()
+	autoMode := !enableMode
+
+	// Check if result already exists in etcd.
 	existingResult, err := metadata.GetConditionWriteResult(ctx)
 	if err == nil {
-		log.Info("Found existing condition write detection result from etcd", zap.Bool("enabled", existingResult))
-		return existingResult, nil
-	}
-	if !errors.Is(err, werr.ErrMetadataKeyNotExists) {
-		// Unexpected error, log and continue with detection
-		log.Warn("Failed to get condition write result from etcd, will proceed with detection", zap.Error(err))
-	}
-
-	// Determine retry strategy based on configuration
-	var maxRetries uint
-	var panicOnFailure bool
-	if fencePolicy.IsConditionWriteEnabled() {
-		maxRetries = 10
-		panicOnFailure = true
-		log.Info("Condition write is explicitly enabled, must detect successfully within 10 retries")
-	} else { // auto mode
-		maxRetries = 30
-		panicOnFailure = false
-		log.Info("Condition write is in auto mode, will attempt detection up to 30 times")
+		if autoMode {
+			log.Info("Found existing condition write result from etcd in auto mode",
+				zap.Bool("enabled", existingResult))
+			return existingResult, nil
+		}
+		if existingResult {
+			log.Info("Found existing enabled condition write result from etcd in enable mode")
+			return true, nil
+		}
+		log.Warn("Ignoring persisted disabled condition write result because condition write is explicitly enabled")
+	} else if errors.Is(err, werr.ErrMetadataKeyNotExists) {
+		log.Info("No existing condition write result found, will verify capability",
+			zap.String("conditionWrite", fencePolicy.ConditionWrite))
+	} else {
+		return false, fmt.Errorf("failed to read condition write result from etcd in %s mode: %w", fencePolicy.ConditionWrite, err)
 	}
 
-	var localDetectionResult *bool // nil means not detected successfully, non-nil means detection succeeded
-	var fromEtcd bool              // true if result came from etcd (no need to store)
+	const maxRetries uint = 10
+	log.Info("Condition write verification is required",
+		zap.String("conditionWrite", fencePolicy.ConditionWrite),
+		zap.Uint("maxRetries", maxRetries))
+
+	var verified bool
+	var fromMetadata bool
 	var lastDetectErr error
 	attemptCount := uint(0)
 
-	// Phase 1: Retry detection up to maxRetries times (check etcd before each attempt)
 	retryErr := retry.Do(ctx, func() error {
 		attemptCount++
 
-		// Check etcd before each retry in case another node has already set the result
+		// Check etcd before each retry in case another node has already set the result.
 		if attemptCount > 1 {
 			result, checkErr := metadata.GetConditionWriteResult(ctx)
 			if checkErr == nil {
-				log.Info("Another node has already set condition write result",
-					zap.Bool("result", result),
-					zap.Uint("currentAttempt", attemptCount))
-				localDetectionResult = &result
-				fromEtcd = true
-				return nil // Success, use existing result from etcd
-			}
-			if !errors.Is(checkErr, werr.ErrMetadataKeyNotExists) {
-				log.Warn("Failed to check etcd for existing result, continuing with detection",
-					zap.Error(checkErr),
+				if autoMode {
+					log.Info("Another node has set condition write result in auto mode",
+						zap.Bool("result", result),
+						zap.Uint("currentAttempt", attemptCount))
+					verified = result
+					fromMetadata = true
+					return nil
+				}
+				if result {
+					log.Info("Another node has enabled condition write",
+						zap.Uint("currentAttempt", attemptCount))
+					verified = true
+					fromMetadata = true
+					return nil
+				}
+				log.Warn("Ignoring persisted disabled condition write result during enable-mode verification",
 					zap.Uint("attempt", attemptCount))
+			} else if !errors.Is(checkErr, werr.ErrMetadataKeyNotExists) {
+				lastDetectErr = checkErr
+				return retry.Unrecoverable(checkErr)
 			}
 		}
 
-		// Perform detection
 		supported, detectErr := storageclient.CheckIfConditionWriteSupport(ctx, storageClient, cfg.Minio.BucketName, cfg.Minio.RootPath)
 		if detectErr != nil {
 			lastDetectErr = detectErr
 			remainingRetries := maxRetries - attemptCount
-			log.Warn("Condition write detection failed",
+			log.Warn("Condition write verification failed",
 				zap.Error(detectErr),
 				zap.Uint("attempt", attemptCount),
 				zap.Uint("remainingRetries", remainingRetries),
-				zap.String("fallbackStrategy", "will use distributed lock if all retries fail"))
+				zap.String("failureAction", "startup will fail if all retries fail"))
 			return detectErr
 		}
+		if !supported {
+			lastDetectErr = fmt.Errorf("condition write verification reported unsupported without an error")
+			log.Warn("Condition write verification reported unsupported",
+				zap.Uint("attempt", attemptCount),
+				zap.String("failureAction", "startup will fail if all retries fail"))
+			return lastDetectErr
+		}
 
-		// Detection succeeded
-		localDetectionResult = &supported
-		log.Info("Condition write detection succeeded",
-			zap.Bool("supported", supported),
-			zap.Uint("attempt", attemptCount))
-		return nil // Success, detection completed
+		verified = true
+		log.Info("Condition write verification succeeded", zap.Uint("attempt", attemptCount))
+		return nil
 	}, retry.Attempts(maxRetries), retry.Sleep(100*time.Millisecond), retry.MaxSleepTime(2*time.Second))
 
-	// Phase 2: Handle detection result and store to etcd
-	if retryErr == nil && localDetectionResult != nil {
-		// If result came from etcd, no need to store again
-		if fromEtcd {
-			return *localDetectionResult, nil
+	if retryErr != nil {
+		if lastDetectErr == nil {
+			lastDetectErr = retryErr
 		}
-
-		// Detection succeeded, now store to etcd (with separate retry logic)
-		detected := *localDetectionResult
-
-		var agreedResult bool
-		var storeErr error
-
-		// Retry etcd store operation independently (not counted in detection retries)
-		storeRetryErr := retry.Do(ctx, func() error {
-			agreedResult, storeErr = metadata.StoreOrGetConditionWriteResult(ctx, detected)
-			if storeErr != nil {
-				log.Warn("Failed to store condition write result in etcd, will retry",
-					zap.Bool("detected", detected),
-					zap.Error(storeErr))
-				return storeErr
-			}
-
-			// Store succeeded
-			if agreedResult != detected {
-				log.Info("Using agreed condition write result from cluster",
-					zap.Bool("ourDetection", detected),
-					zap.Bool("agreedResult", agreedResult))
-			}
-			return nil
-		}, retry.Attempts(10), retry.Sleep(100*time.Millisecond), retry.MaxSleepTime(2*time.Second))
-
-		if storeRetryErr != nil {
-			// Etcd store failed after all retries
-			return false, fmt.Errorf("failed to store condition write result to etcd after retries: %w", storeErr)
-		}
-
-		// Return the agreed cluster result
-		return agreedResult, nil
+		return false, fmt.Errorf("condition write verification failed after %d attempts: %w", attemptCount, lastDetectErr)
 	}
 
-	// Detection failed after all retries
-	if fencePolicy.IsConditionWriteEnabled() && panicOnFailure {
-		panic(fmt.Sprintf("Condition write is required but detection failed after %d retries: %v", maxRetries, lastDetectErr))
+	if fromMetadata {
+		return verified, nil
 	}
 
-	// Auto mode: fallback to disable
-	log.Warn("Condition write detection failed after all retries, falling back to distributed lock mode",
-		zap.Uint("totalAttempts", attemptCount),
-		zap.Error(lastDetectErr))
+	if !verified {
+		return false, fmt.Errorf("condition write verification completed without a verified result")
+	}
 
-	// Store false result in etcd for auto mode
-	var agreedResult bool
 	var storeErr error
-
 	storeRetryErr := retry.Do(ctx, func() error {
-		agreedResult, storeErr = metadata.StoreOrGetConditionWriteResult(ctx, false)
+		// This path is reached only after strict enable-style verification succeeds.
+		// It is safe to overwrite false with true: explicit-enable nodes all verify support before
+		// writing, and auto mode only reaches this path when no stored cluster decision existed.
+		storeErr = metadata.StoreConditionWriteEnabled(ctx)
 		if storeErr != nil {
-			log.Warn("Failed to store false result to etcd, will retry",
+			log.Warn("Failed to store condition write enabled result in etcd, will retry",
 				zap.Error(storeErr))
 			return storeErr
 		}
@@ -266,11 +241,13 @@ func detectAndStoreConditionWriteCapability(ctx context.Context, cfg *config.Con
 	}, retry.Attempts(10), retry.Sleep(100*time.Millisecond), retry.MaxSleepTime(2*time.Second))
 
 	if storeRetryErr != nil {
-		// Etcd store failed after all retries
-		return false, fmt.Errorf("failed to store false result to etcd after retries: %w", storeErr)
+		if storeErr == nil {
+			storeErr = storeRetryErr
+		}
+		return false, fmt.Errorf("failed to store condition write enabled result to etcd after retries: %w", storeErr)
 	}
 
-	return agreedResult, nil
+	return true, nil
 }
 
 func NewEmbedClientFromConfig(ctx context.Context, config *config.Configuration) (Client, error) {
