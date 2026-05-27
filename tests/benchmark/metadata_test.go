@@ -139,7 +139,7 @@ func TestClear(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = cli.Delete(ctx, meta.ServicePrefix, clientv3.WithPrefix())
+	_, err = cli.Delete(ctx, meta.LegacyServicePrefix, clientv3.WithPrefix())
 	if err != nil {
 		t.Fatalf("fatal %v", err)
 	}

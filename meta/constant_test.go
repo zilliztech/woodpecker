@@ -67,29 +67,29 @@ func TestNewSessionLockForTest(t *testing.T) {
 
 func TestExtractLogName(t *testing.T) {
 	t.Run("valid_path", func(t *testing.T) {
-		name, err := extractLogName("woodpecker/logs/my-log")
+		name, err := extractLogNameWithKeyBuilder(NewKeyBuilder(LegacyServicePrefix), "woodpecker/logs/my-log")
 		assert.NoError(t, err)
 		assert.Equal(t, "my-log", name)
 	})
 
 	t.Run("valid_path_with_segments", func(t *testing.T) {
-		name, err := extractLogName("woodpecker/logs/my-log/segments/0")
+		name, err := extractLogNameWithKeyBuilder(NewKeyBuilder(LegacyServicePrefix), "woodpecker/logs/my-log/segments/0")
 		assert.NoError(t, err)
 		assert.Equal(t, "my-log", name)
 	})
 
 	t.Run("too_short_path", func(t *testing.T) {
-		_, err := extractLogName("a/b")
+		_, err := extractLogNameWithKeyBuilder(NewKeyBuilder(LegacyServicePrefix), "a/b")
 		assert.Error(t, err)
 	})
 
 	t.Run("single_element", func(t *testing.T) {
-		_, err := extractLogName("onlyone")
+		_, err := extractLogNameWithKeyBuilder(NewKeyBuilder(LegacyServicePrefix), "onlyone")
 		assert.Error(t, err)
 	})
 
 	t.Run("empty_string", func(t *testing.T) {
-		_, err := extractLogName("")
+		_, err := extractLogNameWithKeyBuilder(NewKeyBuilder(LegacyServicePrefix), "")
 		assert.Error(t, err)
 	})
 }
@@ -131,42 +131,35 @@ func TestAtoi(t *testing.T) {
 	})
 }
 
-// === Build Key Tests ===
+// === KeyBuilder Tests ===
 
-func TestBuildLogKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/logs/mylog", BuildLogKey("mylog"))
-	assert.Equal(t, "woodpecker/logs/", BuildLogKey(""))
+func TestKeyBuilderWithLegacyPrefix(t *testing.T) {
+	builder := NewKeyBuilder(LegacyServicePrefix)
+
+	assert.Equal(t, "woodpecker", builder.Prefix())
+	assert.Equal(t, "woodpecker/instance", builder.ServiceInstanceKey())
+	assert.Equal(t, "woodpecker/version", builder.VersionKey())
+	assert.Equal(t, "woodpecker/logidgen", builder.LogIdGeneratorKey())
+	assert.Equal(t, "woodpecker/quorumidgen", builder.QuorumIdGeneratorKey())
+	assert.Equal(t, "woodpecker/conditionwrite", builder.ConditionWriteKey())
+	assert.Equal(t, "woodpecker/logs/mylog", builder.BuildLogKey("mylog"))
+	assert.Equal(t, "woodpecker/logs/", builder.BuildLogKey(""))
+	assert.Equal(t, "woodpecker/logs/mylog/lock", builder.BuildLogLockKey("mylog"))
+	assert.Equal(t, "woodpecker/logs/mylog/segments/0", builder.BuildSegmentInstanceKey("mylog", "0"))
+	assert.Equal(t, "woodpecker/logs/mylog/segments/123", builder.BuildSegmentInstanceKey("mylog", "123"))
+	assert.Equal(t, "woodpecker/quorums/q1", builder.BuildQuorumInfoKey("q1"))
+	assert.Equal(t, "woodpecker/logstores/node1", builder.BuildNodeKey("node1"))
+	assert.Equal(t, "woodpecker/readers/1/reader-1", builder.BuildLogReaderTempInfoKey(1, "reader-1"))
+	assert.Equal(t, "woodpecker/readers/1/", builder.BuildLogAllReaderTempInfosKey(1))
+	assert.Equal(t, "woodpecker/cleaning/1", builder.BuildAllSegmentsCleanupStatusKey(1))
+	assert.Equal(t, "woodpecker/cleaning/1/2", builder.BuildSegmentCleanupStatusKey(1, 2))
 }
 
-func TestBuildLogLockKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/logs/mylog/lock", BuildLogLockKey("mylog"))
-}
+func TestKeyBuilderWithConfiguredPrefix(t *testing.T) {
+	builder := NewKeyBuilder("lakebase/wp")
 
-func TestBuildSegmentInstanceKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/logs/mylog/segments/0", BuildSegmentInstanceKey("mylog", "0"))
-	assert.Equal(t, "woodpecker/logs/mylog/segments/123", BuildSegmentInstanceKey("mylog", "123"))
-}
-
-func TestBuildQuorumInfoKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/quorums/q1", BuildQuorumInfoKey("q1"))
-}
-
-func TestBuildNodeKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/logstores/node1", BuildNodeKey("node1"))
-}
-
-func TestBuildLogReaderTempInfoKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/readers/1/reader-1", BuildLogReaderTempInfoKey(1, "reader-1"))
-}
-
-func TestBuildLogAllReaderTempInfosKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/readers/1/", BuildLogAllReaderTempInfosKey(1))
-}
-
-func TestBuildAllSegmentsCleanupStatusKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/cleaning/1", BuildAllSegmentsCleanupStatusKey(1))
-}
-
-func TestBuildSegmentCleanupStatusKey(t *testing.T) {
-	assert.Equal(t, "woodpecker/cleaning/1/2", BuildSegmentCleanupStatusKey(1, 2))
+	assert.Equal(t, "lakebase/wp", builder.Prefix())
+	assert.Equal(t, "lakebase/wp/instance", builder.ServiceInstanceKey())
+	assert.Equal(t, "lakebase/wp/logs/mylog", builder.BuildLogKey("mylog"))
+	assert.Equal(t, "lakebase/wp/cleaning/1/2", builder.BuildSegmentCleanupStatusKey(1, 2))
 }
