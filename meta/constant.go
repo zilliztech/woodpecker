@@ -19,73 +19,121 @@ package meta
 import "fmt"
 
 const (
-	// ServicePrefix is the prefix for this log service.
-	ServicePrefix = "woodpecker"
-	// ServiceInstanceKey is the key for service instance.
-	ServiceInstanceKey = ServicePrefix + "/instance"
+	// LegacyServicePrefix is the historical hardcoded prefix for metadata keys.
+	LegacyServicePrefix = "woodpecker"
 	// Major.Minor.Patch is the version of this log service.
 	VersionMajor, VersionMinor, VersionPatch = 1, 0, 0
-	// VersionKey is the key for version.
-	VersionKey = ServicePrefix + "/version"
-	// LogsPrefix is the prefix for logs.
-	LogsPrefix = ServicePrefix + "/logs"
-	// LogIdGeneratorKey is the key for log ID generator.
-	LogIdGeneratorKey = ServicePrefix + "/logidgen"
-	// QuorumsPrefix is the prefix for quorums.
-	QuorumsPrefix = ServicePrefix + "/quorums"
-	// QuorumIdGeneratorKey is the key for quorum ID generator.
-	QuorumIdGeneratorKey = ServicePrefix + "/quorumidgen"
-	// NodesPrefix is the prefix for logstore instances.
-	NodesPrefix = ServicePrefix + "/logstores"
-	// ReaderTempInfoPrefix is the prefix for reader temporary information.
-	ReaderTempInfoPrefix = ServicePrefix + "/readers"
-	// SegmentCleanupStatusPrefix is the prefix for segment cleanup status.
-	SegmentCleanupStatusPrefix = ServicePrefix + "/cleaning"
-	// ConditionWriteKey is the key for conditional write configuration
-	ConditionWriteKey = ServicePrefix + "/conditionwrite"
 )
 
+// KeyBuilder builds metadata keys scoped by a provider-specific root prefix.
+type KeyBuilder struct {
+	prefix string
+}
+
+// NewKeyBuilder creates a metadata key builder with the given root prefix.
+func NewKeyBuilder(prefix string) *KeyBuilder {
+	if prefix == "" || prefix == "." {
+		prefix = LegacyServicePrefix
+	}
+	return &KeyBuilder{prefix: prefix}
+}
+
+// Prefix returns the root prefix used by this builder.
+func (b *KeyBuilder) Prefix() string {
+	return b.prefix
+}
+
+// ServiceInstanceKey returns the key for service instance.
+func (b *KeyBuilder) ServiceInstanceKey() string {
+	return fmt.Sprintf("%s/instance", b.prefix)
+}
+
+// VersionKey returns the key for version.
+func (b *KeyBuilder) VersionKey() string {
+	return fmt.Sprintf("%s/version", b.prefix)
+}
+
+// LogsPrefix returns the prefix for logs.
+func (b *KeyBuilder) LogsPrefix() string {
+	return fmt.Sprintf("%s/logs", b.prefix)
+}
+
+// LogIdGeneratorKey returns the key for log ID generator.
+func (b *KeyBuilder) LogIdGeneratorKey() string {
+	return fmt.Sprintf("%s/logidgen", b.prefix)
+}
+
+// QuorumsPrefix returns the prefix for quorums.
+func (b *KeyBuilder) QuorumsPrefix() string {
+	return fmt.Sprintf("%s/quorums", b.prefix)
+}
+
+// QuorumIdGeneratorKey returns the key for quorum ID generator.
+func (b *KeyBuilder) QuorumIdGeneratorKey() string {
+	return fmt.Sprintf("%s/quorumidgen", b.prefix)
+}
+
+// NodesPrefix returns the prefix for logstore instances.
+func (b *KeyBuilder) NodesPrefix() string {
+	return fmt.Sprintf("%s/logstores", b.prefix)
+}
+
+// ReaderTempInfoPrefix returns the prefix for reader temporary information.
+func (b *KeyBuilder) ReaderTempInfoPrefix() string {
+	return fmt.Sprintf("%s/readers", b.prefix)
+}
+
+// SegmentCleanupStatusPrefix returns the prefix for segment cleanup status.
+func (b *KeyBuilder) SegmentCleanupStatusPrefix() string {
+	return fmt.Sprintf("%s/cleaning", b.prefix)
+}
+
+// ConditionWriteKey returns the key for conditional write configuration.
+func (b *KeyBuilder) ConditionWriteKey() string {
+	return fmt.Sprintf("%s/conditionwrite", b.prefix)
+}
+
 // BuildLogKey builds the key for a log.
-func BuildLogKey(logName string) string {
-	return fmt.Sprintf("%s/%s", LogsPrefix, logName)
+func (b *KeyBuilder) BuildLogKey(logName string) string {
+	return fmt.Sprintf("%s/%s", b.LogsPrefix(), logName)
 }
 
 // BuildLogLockKey builds the lock key for a log.
-func BuildLogLockKey(logName string) string {
-	return fmt.Sprintf("%s/%s/lock", LogsPrefix, logName)
+func (b *KeyBuilder) BuildLogLockKey(logName string) string {
+	return fmt.Sprintf("%s/%s/lock", b.LogsPrefix(), logName)
 }
 
 // BuildSegmentInstanceKey builds the key for a segment instance.
-func BuildSegmentInstanceKey(logName string, segmentId string) string {
-	return fmt.Sprintf("%s/%s/segments/%s", LogsPrefix, logName, segmentId)
+func (b *KeyBuilder) BuildSegmentInstanceKey(logName string, segmentId string) string {
+	return fmt.Sprintf("%s/%s/segments/%s", b.LogsPrefix(), logName, segmentId)
 }
 
 // BuildQuorumInfoKey builds the key for quorum information.
-func BuildQuorumInfoKey(quorumId string) string {
-	return fmt.Sprintf("%s/%s", QuorumsPrefix, quorumId)
+func (b *KeyBuilder) BuildQuorumInfoKey(quorumId string) string {
+	return fmt.Sprintf("%s/%s", b.QuorumsPrefix(), quorumId)
 }
 
 // BuildNodeKey builds the key for a node.
-func BuildNodeKey(nodeId string) string {
-	return fmt.Sprintf("%s/%s", NodesPrefix, nodeId)
+func (b *KeyBuilder) BuildNodeKey(nodeId string) string {
+	return fmt.Sprintf("%s/%s", b.NodesPrefix(), nodeId)
 }
 
 // BuildLogReaderTempInfoKey builds the key for reader temporary information.
-func BuildLogReaderTempInfoKey(logId int64, readerName string) string {
-	return fmt.Sprintf("%s/%d/%s", ReaderTempInfoPrefix, logId, readerName)
+func (b *KeyBuilder) BuildLogReaderTempInfoKey(logId int64, readerName string) string {
+	return fmt.Sprintf("%s/%d/%s", b.ReaderTempInfoPrefix(), logId, readerName)
 }
 
 // BuildLogAllReaderTempInfosKey builds the key for all reader temporary information.
-func BuildLogAllReaderTempInfosKey(logId int64) string {
-	return fmt.Sprintf("%s/%d/", ReaderTempInfoPrefix, logId)
+func (b *KeyBuilder) BuildLogAllReaderTempInfosKey(logId int64) string {
+	return fmt.Sprintf("%s/%d/", b.ReaderTempInfoPrefix(), logId)
 }
 
-// BuildAllSegmentsCleanupStatusKey builds a key for all segment cleanup status
-func BuildAllSegmentsCleanupStatusKey(logId int64) string {
-	return fmt.Sprintf("%s/%d", SegmentCleanupStatusPrefix, logId)
+// BuildAllSegmentsCleanupStatusKey builds a key for all segment cleanup status.
+func (b *KeyBuilder) BuildAllSegmentsCleanupStatusKey(logId int64) string {
+	return fmt.Sprintf("%s/%d", b.SegmentCleanupStatusPrefix(), logId)
 }
 
-// BuildSegmentCleanupStatusKey builds a key for segment cleanup status
-func BuildSegmentCleanupStatusKey(logId int64, segmentId int64) string {
-	return fmt.Sprintf("%s/%d/%d", SegmentCleanupStatusPrefix, logId, segmentId)
+// BuildSegmentCleanupStatusKey builds a key for segment cleanup status.
+func (b *KeyBuilder) BuildSegmentCleanupStatusKey(logId int64, segmentId int64) string {
+	return fmt.Sprintf("%s/%d/%d", b.SegmentCleanupStatusPrefix(), logId, segmentId)
 }
